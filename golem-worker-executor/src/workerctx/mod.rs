@@ -128,6 +128,11 @@ pub trait EntityInvocationBodyHook: Send + Sync {
 #[async_trait]
 pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
+
+    /// Runs first in the spawned supervisor of a completed historical reconstruction, before the
+    /// supervisor polls the body or the recorded terminal.
+    #[cfg(feature = "test-utils")]
+    async fn before_completed_supervisor(&self, _start_index: OplogIndex) {}
 }
 
 /// Where a replaying accessor durable call is paused relative to its scope admission.

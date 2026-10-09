@@ -1745,6 +1745,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             invocation_id,
             function_type,
             parent_start_index,
+            recorded_parent_start_index,
             is_live,
             admission,
             oplog,
@@ -1838,12 +1839,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let child_initiation = parent_start_index
                 .and_then(|parent| ctx.state.active_custom_invocations.get(&parent))
                 .map(|parent| CustomChildInitiation::new(parent.initiating_children.clone()));
+            // A root custom invocation of an entity body records the entity invocation `Start` as
+            // its parent, like every other durable call of that body, so replay can tell it from
+            // a top-level call of the primary agent. The custom invocation tree itself (ids,
+            // child initiation, active invocations) keeps using the custom parent.
+            let recorded_parent_start_index =
+                parent_start_index.or_else(|| ctx.entity_parent_start_index());
             Ok::<_, anyhow::Error>((
                 HostRequest::Custom(request),
                 function_name,
                 invocation_id,
                 function_type,
                 parent_start_index,
+                recorded_parent_start_index,
                 ctx.state.durable_call_is_live(),
                 CustomStoreAdmission {
                     primary_runtime: *ctx.runtime() == OwnerRuntime::Agent,
@@ -1887,7 +1895,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 .claim_custom_start_for_store(
                     &function_name,
                     &function_type,
-                    parent_start_index,
+                    recorded_parent_start_index,
                     invocation_id,
                     &request,
                     admission.store_continued_live,
@@ -1951,7 +1959,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 worker
                     .add_and_commit_oplog(OplogEntry::Start {
                         timestamp: Timestamp::now_utc(),
-                        parent_start_index,
+                        parent_start_index: recorded_parent_start_index,
                         function_name,
                         invocation_id: Some(start_invocation_id),
                         observational_owner: None,

@@ -403,8 +403,7 @@ const makeContainer = (host: HostContainer): Container => {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a new empty container. Gives a {@link BlobstoreHostError}
- * if a container with the same name already exists.
+ * Create a container if it does not exist, or open the existing container.
  *
  * @since 1.5.0
  * @category constructors
@@ -435,11 +434,10 @@ export const getContainer = (
   })
 
 /**
- * Convenience: open an existing container by name, falling back to
- * `createContainer(name)` if it does not exist.
+ * Open the named container, creating it first if it does not exist.
+ * The host's container creation operation is already idempotent.
  *
- * Idempotent — safe to call from `defineAgent` `impl` after a
- * snapshot load.
+ * Safe to call during agent initialization or snapshot restoration.
  *
  * @since 1.5.0
  * @category constructors

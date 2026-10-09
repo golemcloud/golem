@@ -30,7 +30,7 @@ use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationR
 use crate::worker::owner_lane::OwnerInvocationId;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequest,
@@ -297,7 +297,6 @@ impl EntityInvocationDurability {
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
         entity: AgentEntity,
-        calling_principal: Principal,
         principal: Principal,
         call_mode: EntityCallMode,
         operation: EntityInvocationDescriptor,
@@ -317,7 +316,6 @@ impl EntityInvocationDurability {
         let parent_start_index = parent.start_index();
         let metadata = EntityInvocationRequest {
             entity: entity.clone(),
-            calling_principal: calling_principal.clone(),
             call_mode,
             operation,
             principal,
@@ -567,6 +565,9 @@ impl EntityInvocationDurability {
         let parent_start_index = parent.start_index();
         let owner =
             store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
+        let calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: owner.agent_id.clone(),
+        });
         let idempotency_key = golem_common::model::IdempotencyKey::derived(
             &key_context.caller_key,
             key_context.logical_position.unwrap_or(handle.start_index()),
@@ -624,7 +625,7 @@ impl EntityInvocationDurability {
             invocation_id,
             parent_start_index,
             activation,
-            metadata.calling_principal,
+            calling_principal,
             execution_mode,
             idempotency_key,
             metadata.assume_idempotence,
@@ -1068,7 +1069,19 @@ impl EntityInvocationDurability {
             };
             let supervisor_body_resources = body_resources.clone();
             let monitor_reconstruction = historical_reconstruction.clone();
+            let runtime =
+                store.with(|mut access| get_ctx(access.data_mut()).runtime_suspension.clone());
+            let supervisor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
+            #[cfg(feature = "test-utils")]
+            let supervisor_hook = store
+                .with(|mut access| get_ctx(access.data_mut()).entity_reconstruction_claim_hook())
+                .map(|hook| (hook, invocation.start_index()));
             let completed_supervisor = executor_tasks.spawn_entity(async move {
+                let _activity = supervisor_activity;
+                #[cfg(feature = "test-utils")]
+                if let Some((hook, start_index)) = supervisor_hook {
+                    hook.before_completed_supervisor(start_index).await;
+                }
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(
@@ -1114,7 +1127,9 @@ impl EntityInvocationDurability {
             });
             let (completed_tx, completed_rx) = oneshot::channel();
             let monitor_body_resources = body_resources.clone();
+            let monitor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
             let _monitor = executor_tasks.spawn_entity(async move {
+                let _activity = monitor_activity;
                 let completed = match completed_supervisor.await {
                     Ok(Some(completed)) => completed,
                     Ok(None) => return,
@@ -1184,6 +1199,14 @@ impl EntityInvocationDurability {
 
         tokio::pin!(body);
         if handle.is_live() {
+            let neutral = store.with(|mut access| {
+                get_ctx(access.data_mut())
+                    .runtime_suspension
+                    .as_ref()
+                    .and_then(|runtime| {
+                        runtime.neutral_entity(store.runtime_activity()?, &invocation)
+                    })
+            });
             let body_result = match cancellation {
                 Some(cancellation) => {
                     tokio::select! {
@@ -1194,6 +1217,7 @@ impl EntityInvocationDurability {
                 }
                 None => Some(body.as_mut().await),
             };
+            drop(neutral);
             let Some(body_result) = body_result else {
                 on_completed_cancelled();
                 let _ = body.as_mut().await;
@@ -1244,6 +1268,7 @@ impl EntityInvocationDurability {
             ));
         }
 
+        let mut neutral = None;
         let replay = async {
             Ok(
                 match Box::pin(handle.replay_reconstruction_access(store, get_ctx)).await? {
@@ -1254,6 +1279,14 @@ impl EntityInvocationDurability {
                         EntityReconstructionResolution::Cancelled(recorded)
                     }
                     ReconstructionReplayOutcome::Incomplete(handle) => {
+                        neutral = store.with(|mut access| {
+                            get_ctx(access.data_mut())
+                                .runtime_suspension
+                                .as_ref()
+                                .and_then(|runtime| {
+                                    runtime.neutral_entity(store.runtime_activity()?, &invocation)
+                                })
+                        });
                         EntityReconstructionResolution::Incomplete(handle)
                     }
                     ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => {
@@ -1282,6 +1315,7 @@ impl EntityInvocationDurability {
             cancellation.as_ref(),
         )
         .await;
+        drop(neutral);
         let reconstruction = match reconstruction {
             Ok(reconstruction) => ensure_body_claimed_retained_descendants(
                 &replay_state,
@@ -1526,7 +1560,6 @@ fn entity_request_identity(
 ) -> EntityInvocationRequestIdentity {
     EntityInvocationRequestIdentity {
         entity: request.entity.clone(),
-        calling_principal: request.calling_principal.clone(),
         call_mode: request.call_mode,
         operation: (&request.operation).into(),
         plan_position: match &request.plan {
@@ -2144,9 +2177,6 @@ mod tests {
         let owner = invocation().owner_id().clone();
         desert_rust::serialize_to_byte_vec(&EntityInvocationRequest {
             entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
-            calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id.clone(),
-            }),
             call_mode: EntityCallMode::Synchronous,
             operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
                 attempt_ordinal: 1,

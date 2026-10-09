@@ -148,6 +148,7 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
             .collect(),
         auth_details: None,
         phantom_agent: false,
+        phantom_id_binding: None,
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
@@ -158,6 +159,319 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
         openapi_provider_method: None,
     });
     agent
+}
+
+fn selector_test_path(path: &str) -> Vec<golem_common::model::agent::PathSegment> {
+    use golem_common::model::agent::{LiteralSegment, PathSegment, PathVariable};
+    path.split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if let Some(name) = s.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                if let Some(name) = name.strip_prefix('*') {
+                    PathSegment::RemainingPathVariable(PathVariable {
+                        variable_name: name.into(),
+                    })
+                } else {
+                    PathSegment::PathVariable(PathVariable {
+                        variable_name: name.into(),
+                    })
+                }
+            } else {
+                PathSegment::Literal(LiteralSegment { value: s.into() })
+            }
+        })
+        .collect()
+}
+
+fn selector_test_agent(path: &str, optional: bool) -> AgentTypeSchema {
+    use golem_common::model::agent::{
+        CorsOptions, HttpEndpointDetails, HttpMethod, PhantomIdBinding, PhantomIdBindingDetails,
+    };
+    let mut agent = router_agent("selected", "/unused");
+    agent.kind = golem_common::schema::AgentTypeKind::Regular;
+    agent.mode = AgentMode::Durable;
+    let mount = agent.http_mount.as_mut().unwrap();
+    mount.path_prefix = selector_test_path(path);
+    mount.phantom_agent = true;
+    mount.phantom_id_binding = Some(PhantomIdBinding::Path(PhantomIdBindingDetails {
+        name: "instance".into(),
+        optional,
+    }));
+    let mut method = provider_method("compare");
+    method.http_endpoint = vec![HttpEndpointDetails {
+        http_method: HttpMethod::Get(Empty {}),
+        path_suffix: vec![],
+        header_vars: vec![],
+        query_vars: vec![],
+        auth_details: None,
+        cors_options: CorsOptions {
+            allowed_patterns: vec![],
+        },
+        durable_streams: None,
+    }];
+    agent.methods = vec![method];
+    agent
+}
+
+#[test]
+fn required_phantom_mount_emits_only_the_selector_path() {
+    use golem_service_base::custom_api::{PhantomSelection, RouteBehaviour};
+    for phantom in [false, true] {
+        let mut agent = selector_test_agent("/decisions/{instance}/state", false);
+        agent.http_mount.as_mut().unwrap().phantom_agent = phantom;
+        let mut errors = vec![];
+        let routes = http_context(vec![agent]).compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let calls: Vec<_> = routes
+            .iter()
+            .filter_map(|route| match &route.behaviour {
+                RouteBehaviour::CallAgent(call) => Some((route, call)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0.path.len(), 3);
+        assert_eq!(
+            calls[0].1.phantom_selection,
+            PhantomSelection::Path { index: 0.into() }
+        );
+    }
+}
+
+#[test]
+fn phantom_mount_validation_preserves_application_binding_ownership() {
+    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails, QueryVariable};
+    use golem_common::schema::NamedField;
+    let valid = selector_test_agent("/decisions/{instance}", true);
+    let mut invalid = vec![];
+    for path in ["/decisions", "/{instance}/{instance}", "/{*instance}"] {
+        let mut agent = valid.clone();
+        agent.http_mount.as_mut().unwrap().path_prefix = selector_test_path(path);
+        invalid.push(agent);
+    }
+    let mut agent = valid.clone();
+    agent.constructor.input_schema =
+        InputSchema::parameters([NamedField::user_supplied("instance", SchemaType::string())]);
+    invalid.push(agent);
+    let mut agent = valid.clone();
+    agent.methods[0].http_endpoint[0].path_suffix = selector_test_path("/{instance}");
+    invalid.push(agent);
+    let mut agent = valid.clone();
+    agent.http_mount.as_mut().unwrap().phantom_id_binding =
+        Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+            name: "instance".into(),
+            optional: true,
+        }));
+    agent.methods[0].http_endpoint[0].query_vars = vec![QueryVariable {
+        query_param_name: "instance".into(),
+        variable_name: "application_field".into(),
+    }];
+    invalid.push(agent);
+    let mut agent = valid;
+    agent.constructor.input_schema =
+        InputSchema::parameters([NamedField::user_supplied("decision", SchemaType::string())]);
+    invalid.push(agent);
+    for agent in invalid {
+        let mut errors = vec![];
+        http_context(vec![agent]).compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+        );
+        assert!(!errors.is_empty());
+    }
+}
+
+#[test]
+fn optional_phantom_mount_rebinds_captures_and_stream_families() {
+    use golem_common::schema::{NamedField, OutputSchema};
+    use golem_service_base::custom_api::{
+        ConstructorParameter, MethodParameter, PhantomSelection, RouteBehaviour,
+    };
+    for streams in [false, true] {
+        let mut agent =
+            selector_test_agent("/decisions/{decision}/{instance}/literal/{tenant}", true);
+        agent.constructor.input_schema = InputSchema::parameters([
+            NamedField::user_supplied("decision", SchemaType::string()),
+            NamedField::user_supplied("tenant", SchemaType::string()),
+        ]);
+        agent.methods[0].input_schema = InputSchema::parameters([
+            NamedField::user_supplied("left", SchemaType::u32()),
+            NamedField::user_supplied("right", SchemaType::u32()),
+        ]);
+        agent.methods[0].http_endpoint[0].path_suffix =
+            selector_test_path("/compare/{left}/middle/{right}");
+        if streams {
+            let mut fields = agent.methods[0].input_schema.fields().to_vec();
+            fields.push(NamedField::user_supplied(
+                "events",
+                SchemaType::stream(Some(SchemaType::u32())),
+            ));
+            agent.methods[0].input_schema = InputSchema::parameters(fields);
+            agent.methods[0].output_schema = OutputSchema::Unit;
+        }
+        let mut context = http_context(vec![agent]);
+        context
+            .registered_agent_types
+            .values_mut()
+            .next()
+            .unwrap()
+            .webhook_domain_and_segments = Some((
+            Domain("example.com".into()),
+            vec!["callbacks".into(), "selected".into()],
+        ));
+        let mut errors = vec![];
+        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            routes
+                .iter()
+                .filter(|r| matches!(r.behaviour, RouteBehaviour::WebhookCallback(_)))
+                .count(),
+            1
+        );
+        let mut counts = [0, 0];
+        for route in &routes {
+            let RouteBehaviour::CallAgent(call) = &route.behaviour else {
+                continue;
+            };
+            let absent = match call.phantom_selection {
+                PhantomSelection::Path { index } => {
+                    assert_eq!(u32::from(index), 1);
+                    false
+                }
+                PhantomSelection::Original => true,
+                _ => panic!("unexpected selection"),
+            };
+            counts[usize::from(absent)] += 1;
+            assert_eq!(call.base_path_variables, if absent { 4 } else { 5 });
+            let constructors: Vec<_> = call
+                .constructor_parameters
+                .iter()
+                .map(|p| match p {
+                    ConstructorParameter::Path {
+                        path_segment_index, ..
+                    } => u32::from(*path_segment_index),
+                })
+                .collect();
+            assert_eq!(constructors, if absent { vec![0, 1] } else { vec![0, 2] });
+            let methods: Vec<_> = call
+                .method_parameters
+                .iter()
+                .filter_map(|p| match p {
+                    MethodParameter::Path {
+                        path_segment_index, ..
+                    } => Some(u32::from(*path_segment_index)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(methods, if absent { vec![2, 3] } else { vec![3, 4] });
+        }
+        assert_eq!(counts, if streams { [17, 17] } else { [1, 1] });
+        let ids: HashSet<_> = routes.iter().map(|r| r.route_id).collect();
+        assert_eq!(ids.len(), routes.len());
+    }
+}
+
+#[test]
+fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_precedence() {
+    use golem_common::model::agent::HttpMethod;
+    use golem_common::schema::NamedField;
+    for optional in [false, true] {
+        let mut selected = selector_test_agent("/x/{instance}/tail", optional);
+        selected.methods[0].http_endpoint[0].path_suffix = selector_test_path("/{*rest}");
+        selected.methods[0].input_schema =
+            InputSchema::parameters([NamedField::user_supplied("rest", SchemaType::string())]);
+        let mut errors = vec![];
+        http_context(vec![selected]).compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+        );
+        assert_eq!(errors.is_empty(), !optional, "{errors:?}");
+    }
+    for same_method in [false, true] {
+        let selected = selector_test_agent("/x/{instance}/tail", true);
+        let mut literal = selector_test_agent("/x/tail", false);
+        literal.type_name = AgentTypeName("literal".into());
+        literal.http_mount.as_mut().unwrap().phantom_id_binding = None;
+        if !same_method {
+            literal.methods[0].http_endpoint[0].http_method = HttpMethod::Post(Empty {});
+        }
+        let mut errors = vec![];
+        http_context(vec![selected, literal]).compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+        );
+        assert_eq!(errors.is_empty(), !same_method, "{errors:?}");
+    }
+    let mut selected = selector_test_agent("/x/{instance}", true);
+    selected.methods[0].http_endpoint[0].path_suffix = selector_test_path("/{value}");
+    selected.methods[0].input_schema =
+        InputSchema::parameters([NamedField::user_supplied("value", SchemaType::string())]);
+    let mut errors = vec![];
+    http_context(vec![selected]).compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn query_phantom_mount_compiles_requiredness_and_reserves_stream_controls() {
+    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+    use golem_service_base::custom_api::{PhantomSelection, RouteBehaviour};
+    for optional in [false, true] {
+        for name in ["instance", "offset", "live", "cursor"] {
+            for streams in [false, true] {
+                let mut agent = selector_test_agent("/decisions", false);
+                agent.http_mount.as_mut().unwrap().phantom_id_binding =
+                    Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+                        name: name.into(),
+                        optional,
+                    }));
+                if streams {
+                    agent.methods[0].output_schema = golem_common::schema::OutputSchema::Single(
+                        Box::new(SchemaType::stream(Some(SchemaType::u32()))),
+                    );
+                }
+                let mut errors = vec![];
+                let routes = http_context(vec![agent]).compile_http_api_routes(
+                    &HashMap::new(),
+                    &mut errors,
+                    &mut vec![],
+                );
+                if streams && name != "instance" {
+                    assert!(
+                        errors
+                            .iter()
+                            .any(|e| e.to_string().contains("query control")),
+                        "{errors:?}"
+                    );
+                    assert!(
+                        !routes
+                            .iter()
+                            .any(|r| matches!(r.behaviour, RouteBehaviour::CallAgent(_)))
+                    );
+                } else {
+                    assert!(errors.is_empty(), "{errors:?}");
+                    for route in &routes {
+                        if let RouteBehaviour::CallAgent(call) = &route.behaviour {
+                            assert_eq!(
+                                call.phantom_selection,
+                                PhantomSelection::Query {
+                                    name: name.into(),
+                                    optional
+                                }
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn provider_method(name: &str) -> golem_common::schema::AgentMethodSchema {
@@ -908,6 +1222,7 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },

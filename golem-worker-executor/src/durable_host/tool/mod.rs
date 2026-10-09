@@ -50,7 +50,9 @@ use crate::durable_host::entity::{
     record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
-use crate::durable_host::stream_transport::{LiveStreamEndpoint, byte_output_stream_pair};
+use crate::durable_host::stream_transport::{
+    LiveStreamEndpoint, accounted_byte_output_stream_pair,
+};
 use crate::durable_host::tool::attachment::{
     AttachmentConsumer, AttachmentController, AttachmentMemory, AttachmentObserver,
     AttachmentProducer, AttachmentStreamProducer, attachment_pair, discard_producer,
@@ -91,7 +93,7 @@ use crate::workerctx::WorkerCtxExecutable;
 use anyhow::{Context, anyhow};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentPrincipal, Principal, ResolvedOwnerContext};
+use golem_common::model::agent::{Principal, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{
@@ -646,6 +648,7 @@ fn capable_result_await_cohort(
 struct ToolExecutionState {
     result: Option<ToolInvokeResponse>,
     failure: Option<String>,
+    producer: Option<wasmtime::component::RuntimeActivityId>,
 }
 
 struct ToolExecution {
@@ -677,6 +680,7 @@ impl ToolExecution {
             state: Mutex::new(ToolExecutionState {
                 result: None,
                 failure: None,
+                producer: None,
             }),
             changed: Notify::new(),
             get_active: AtomicBool::new(false),
@@ -775,6 +779,8 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
         self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> impl Future<Output = wasmtime::Result<()>> + Send {
+        self.execution.state.lock().unwrap().producer = accessor.runtime_activity();
+        self.execution.changed.notify_waiters();
         let execution: Pin<Box<dyn Future<Output = wasmtime::Result<()>> + Send + '_>> =
             Box::pin(async move {
                 let result = execute_accepted_tool_call(
@@ -1305,7 +1311,6 @@ struct ToolInvocationAttempt {
     key_context: EntityInvocationKeyContext,
     parent: crate::worker::owner_lane::OwnerInvocationId,
     attempt_ordinal: u64,
-    calling_principal: Principal,
 }
 
 #[derive(Clone)]
@@ -1332,14 +1337,6 @@ impl ToolCallTarget {
                 }
             },
         }
-    }
-
-    fn calling_principal<Ctx: WorkerCtx>(&self, ctx: &DurableWorkerCtx<Ctx>) -> Principal {
-        let agent_id = match self {
-            Self::Ambient(rpc) => rpc.owner.owner_id.agent_id.clone(),
-            Self::Underlying(_) => ctx.state.owned_agent_id.agent_id.clone(),
-        };
-        Principal::Agent(AgentPrincipal { agent_id })
     }
 
     fn accepted_identity(
@@ -1386,12 +1383,10 @@ impl ToolInvocationAttempt {
             .target
             .accepted_identity()
             .expect("validated tool call target");
-        let calling_principal = self.calling_principal.clone();
         let input = self.input.as_ref().ok().map(strip_typed_streams);
         ToolInvocationClaimIdentity {
             accepted: input.clone().map(|input| EntityInvocationRequestIdentity {
                 entity,
-                calling_principal,
                 call_mode,
                 operation: EntityInvocationDescriptorIdentity::Tool(
                     ToolInvocationDescriptorIdentity {
@@ -1469,7 +1464,6 @@ where
                 .ok_or_else(|| anyhow!("underlying-tool has no next chain layer"))?;
         }
         let (parent, attempt_ordinal) = next_tool_attempt_ordinal(ctx)?;
-        let calling_principal = target.calling_principal(ctx);
         let key_context = EntityInvocationKeyContext::capture(ctx, attempt_ordinal)?;
         Ok(ToolInvocationAttempt {
             target,
@@ -1478,7 +1472,6 @@ where
             key_context,
             parent,
             attempt_ordinal,
-            calling_principal,
         })
     })
 }
@@ -1693,7 +1686,6 @@ where
         key_context: _,
         parent,
         attempt_ordinal,
-        calling_principal,
     } = attempt;
     let tool_name = target.tool_name()?;
     let input = match input {
@@ -1972,7 +1964,6 @@ where
                 parent,
                 call_mode,
                 activation,
-                calling_principal,
                 principal,
                 descriptor,
                 input,
@@ -4386,7 +4377,6 @@ where
                             parent: durability.parent().clone(),
                             call_mode: durability.call_mode(),
                             activation: durability.scope().activation().clone(),
-                            calling_principal: durability.scope().calling_principal().clone(),
                             principal: durability.principal().clone(),
                             descriptor,
                             input,
@@ -4440,7 +4430,6 @@ where
                 context.parent.clone(),
                 &key_context,
                 context.activation.entity(),
-                context.calling_principal.clone(),
                 context.principal.clone(),
                 context.call_mode,
                 context.descriptor.clone(),
@@ -4701,14 +4690,38 @@ where
             None
         };
 
+    let runtime = accessor.with(|mut access| access.get().runtime_suspension.clone());
+    let executions = plans
+        .iter()
+        .filter_map(|plan| match plan {
+            FutureToolInvokeGet::Active(execution) => Some(execution.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let responses = futures::future::join_all(plans.into_iter().map(|plan| async move {
         match plan {
             FutureToolInvokeGet::Ready(response) => Ok(response),
             FutureToolInvokeGet::Failed(error) => Err(anyhow!(error)),
             FutureToolInvokeGet::Active(execution) => execution.result().await.map(Box::new),
         }
-    }))
+    }));
+    tokio::pin!(responses);
+    let mut neutral = None;
+    let responses = futures::future::poll_fn(|cx| {
+        neutral = runtime.as_ref().and_then(|runtime| {
+            let dependencies = executions
+                .iter()
+                .filter_map(|execution| {
+                    let state = execution.state.lock().unwrap();
+                    (state.result.is_none() && state.failure.is_none()).then_some(state.producer)
+                })
+                .collect::<Option<Vec<_>>>()?;
+            runtime.neutral_runtime(accessor.runtime_activity()?, &dependencies)
+        });
+        responses.as_mut().poll(cx)
+    })
     .await;
+    drop(neutral);
     if let Some(lane_wait) = lane_wait {
         lane_wait.wait().await;
     }
@@ -4864,8 +4877,14 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = access.get().stream_runtime_teardown_probe();
-                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown)
-                    .map_err(wasmtime::Error::msg)?;
+                let runtime_source = access
+                    .get()
+                    .runtime_suspension
+                    .as_ref()
+                    .map(|runtime| runtime.source());
+                let (sink, stream) =
+                    accounted_byte_output_stream_pair(capacity, runtime_teardown, runtime_source)
+                        .map_err(wasmtime::Error::msg)?;
                 let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
                 reader.pipe(&mut access, sink)?;
                 stream
@@ -4876,7 +4895,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         };
         let (stdout, stdout_drain) = create_output(stdout_handle)?;
         let (stderr, stderr_drain) = create_output(stderr_handle)?;
-        let (target, parent, attempt_ordinal, key_context, calling_principal) = accessor
+        let (target, parent, attempt_ordinal, key_context) = accessor
             .with(|mut access| {
                 let ctx = access.get();
                 let rpc = tool_rpc_for_current_owner(ctx, tool_name)?;
@@ -4891,15 +4910,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     .checked_add(1)
                     .ok_or_else(|| anyhow!("tool invocation attempt ordinal overflow"))?;
                 let target = ToolCallTarget::Ambient(rpc);
-                let calling_principal = target.calling_principal(ctx);
                 let key_context = EntityInvocationKeyContext::capture(ctx, attempt_ordinal)?;
-                Ok::<_, anyhow::Error>((
-                    target,
-                    parent,
-                    attempt_ordinal,
-                    key_context,
-                    calling_principal,
-                ))
+                Ok::<_, anyhow::Error>((target, parent, attempt_ordinal, key_context))
             })
             .map_err(wasmtime::Error::from_anyhow)?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
@@ -4915,7 +4927,6 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     key_context,
                     parent,
                     attempt_ordinal,
-                    calling_principal,
                 },
                 command_path,
                 stdin,

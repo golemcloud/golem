@@ -156,7 +156,6 @@ pub async fn test_commit_jumps_with_failed_registration<Ctx: WorkerCtx>(
     commit_replay_jumps(worker, &replay, None, regions).await
 }
 
-use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{
@@ -289,7 +288,6 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
-use tokio::sync::RwLock as TRwLock;
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -555,6 +553,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
+    pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
@@ -805,6 +804,20 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn suspension_policy(
+        &self,
+    ) -> Option<(
+        WakeupScheduler,
+        crate::services::golem_config::SuspendConfig,
+    )> {
+        (self.agent_mode() == AgentMode::Durable).then(|| {
+            (
+                self.state.wakeup_scheduler(),
+                self.state.config.suspend.clone(),
+            )
+        })
+    }
+
     #[cfg(feature = "test-utils")]
     pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
         self.owner_execution
@@ -834,7 +847,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 parent,
                 call_mode,
                 activation: scope.activation().clone(),
-                calling_principal: scope.calling_principal().clone(),
                 principal: self.invocation_principal(),
                 descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
                     golem_common::model::entity::ToolInvocationDescriptor {
@@ -1202,8 +1214,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
         let suspend_threshold = match execution_status.read().unwrap().agent_mode() {
-            AgentMode::Durable => config.suspend.suspend_after,
-            AgentMode::Ephemeral => config.suspend.ephemeral_max_sleep,
+            AgentMode::Durable => None,
+            AgentMode::Ephemeral => Some(config.suspend.ephemeral_max_sleep),
         };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
@@ -1320,6 +1332,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             primary_invocation_start_index: None,
             invocation_principal: None,
             owner_execution,
+            runtime_suspension: None,
             _owner_resources: owner_resources,
             entity_reconstruction_claim_hook,
             replay_admission_hook,
@@ -5158,6 +5171,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         )
                         .await?;
 
+                        self.state.automatic_update_unsettled = false;
                         debug!("Finalizing automatic update to revision {target_revision}");
                     }
 
@@ -8416,40 +8430,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn suspend_admission_truth_table() {
-        let cases = [
-            // (live_host_calls, suspendable_waits, open_durable_scope, pending_p3_tx, expected)
-            (0, 0, false, false, true),
-            (2, 2, false, false, true),
-            // A live host call not parked in a suspendable wait blocks suspension.
-            (1, 0, false, false, false),
-            (3, 2, false, false, false),
-            // An open durable scope blocks suspension even when all calls are parked.
-            (0, 0, true, false, false),
-            (2, 2, true, false, false),
-            // A pending P3 HTTP request transmission blocks suspension.
-            (0, 0, false, true, false),
-            (2, 2, false, true, false),
-            (1, 0, true, true, false),
-        ];
-        for (live_host_calls, suspendable_waits, open_durable_scope, pending_p3_tx, expected) in
-            cases
-        {
-            assert_eq!(
-                PrivateDurableWorkerState::suspend_admissible(
-                    live_host_calls,
-                    suspendable_waits,
-                    open_durable_scope,
-                    pending_p3_tx,
-                ),
-                expected,
-                "live_host_calls: {live_host_calls}, suspendable_waits: {suspendable_waits}, \
-                 open_durable_scope: {open_durable_scope}, pending_p3_tx: {pending_p3_tx}"
-            );
-        }
-    }
-
     fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
         (
             OwnedAgentId {
@@ -10977,6 +10957,9 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
+    /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
+    p2_timer_deadlines: HashMap<u32, std::time::Instant>,
+
     /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
     /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
     /// from the oplog instead of invoking the native host call, so the native
@@ -11056,11 +11039,6 @@ struct PrivateDurableWorkerState {
     /// Used to finalize deferred parent deletion when a child pollable is dropped.
     rpc_pollable_to_parent: HashMap<u32, u32>,
 
-    // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
-    promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
-    // Map from resource_id to the dyn_pollables that wrap it
-    promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
-
     /// The **global fallback** retry point: the index attached to an `Error` entry for a trap that
     /// happens outside any in-flight durable call. It is maintained by `begin_function` /
     /// transaction begin and the explicit HTTP/RPC retry-point writes, so it normally tracks the
@@ -11102,20 +11080,13 @@ struct PrivateDurableWorkerState {
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
-    /// Number of live durable host calls currently in flight. Shared wait scheduling uses this
-    /// to defer voluntary suspension while work outside registered waits is progressing.
+    /// Number of live durable host calls currently in flight, including marker persistence.
     live_host_calls: Arc<AtomicUsize>,
 
     /// Activity tracking for Golem-spawned store background tasks. The invocation completion
     /// path drains the store's event loop until no spawned task is active (see
     /// [`tail_work::TailWorkTracker`]) before `AgentInvocationFinished` is written.
     tail_work: tail_work::TailWorkTracker,
-
-    /// Suspend-capable waits currently parked by sleep, promise, and RPC APIs. Deadline waits use
-    /// their wall-clock deadline (if any); RPC waits use a bounded resume delay so their transport
-    /// can be checked again after the worker resumes.
-    suspendable_waits: suspendable_wait::SuspendableWaitRegistry,
-    next_suspendable_wait_id: AtomicU64,
 
     /// Latched when the current invocation's wall-clock deadline
     /// (`limits.max_invocation_duration`) has been exceeded. Shared with the deadline timer task
@@ -11148,6 +11119,10 @@ struct PrivateDurableWorkerState {
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
     pending_update: tokio::sync::Mutex<Option<HydratedUpdate>>,
+
+    /// Remains set after finalization takes `pending_update`, until success is committed. Fresh
+    /// wallet-independent calls must not extend target-only history while that outcome is pending.
+    automatic_update_unsettled: bool,
 
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
@@ -11426,6 +11401,7 @@ impl PrivateDurableWorkerState {
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
+            p2_timer_deadlines: HashMap::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
@@ -11461,16 +11437,19 @@ impl PrivateDurableWorkerState {
             runtime_retry_policy_mutations: BTreeMap::new(),
             rpc_pollable_to_parent: HashMap::new(),
             shard_service,
-            promise_backed_pollables: TRwLock::new(HashMap::new()),
-            promise_dyn_pollables: TRwLock::new(HashMap::new()),
+            automatic_update_unsettled: pending_update.as_ref().is_some_and(|update| {
+                matches!(
+                    update.description,
+                    UpdateDescription::Automatic { .. }
+                        | UpdateDescription::SnapshotAssistedAutomatic { .. }
+                )
+            }),
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
             active_durable_scopes: Vec::new(),
             live_host_calls: Arc::new(AtomicUsize::new(0)),
             tail_work,
-            suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
-            next_suspendable_wait_id: AtomicU64::new(1),
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
@@ -11693,46 +11672,6 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    pub(crate) fn suspendable_waits(&self) -> suspendable_wait::SuspendableWaitRegistry {
-        self.suspendable_waits.clone()
-    }
-
-    pub(crate) fn next_suspendable_wait_id(&self) -> u64 {
-        self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
-    }
-
-    fn register_passive_suspendable_wait(&self) -> suspendable_wait::SuspendableWaitRegistration {
-        suspendable_wait::SuspendableWaitRegistration::new(
-            self.next_suspendable_wait_id(),
-            None,
-            self.suspendable_waits(),
-        )
-    }
-
-    fn safe_to_suspend(&mut self) -> bool {
-        let markers_settled = self.settle_completed_marker_events();
-        markers_settled
-            && Self::suspend_admissible(
-                self.live_host_calls.load(Ordering::Acquire),
-                self.suspendable_waits.lock().unwrap().len(),
-                !self.active_durable_scopes.is_empty(),
-                !self.pending_p3_http_request_transmissions.is_empty(),
-            )
-    }
-
-    /// Shared scheduling heuristic for voluntary suspension, not a recoverability boundary.
-    /// Explicit interruption and arbitrary Store loss still reconstruct from durable history.
-    /// Defer automatic yielding until every live call is in a registered wait, no durable
-    /// scope is open, and no P3 HTTP request transmission is pending.
-    fn suspend_admissible(
-        live_host_calls: usize,
-        suspendable_waits: usize,
-        open_durable_scope: bool,
-        pending_p3_http_transmission: bool,
-    ) -> bool {
-        live_host_calls == suspendable_waits && !open_durable_scope && !pending_p3_http_transmission
-    }
-
     fn wakeup_scheduler(&self) -> WakeupScheduler {
         WakeupScheduler {
             promise_service: self.promise_service.clone(),
@@ -11755,15 +11694,6 @@ impl PrivateDurableWorkerState {
         self.dropped_call_event_backlog
             .pop_front()
             .or_else(|| self.dropped_call_events.1.try_recv().ok())
-    }
-
-    /// Releases only marker events known to have completed successfully. Every other event stays
-    /// worker-owned and in its original order for the next ordinary asynchronous drain.
-    fn settle_completed_marker_events(&mut self) -> bool {
-        while let Ok(event) = self.dropped_call_events.1.try_recv() {
-            self.dropped_call_event_backlog.push_back(event);
-        }
-        concurrent::settle_completed_marker_events(&mut self.dropped_call_event_backlog)
     }
 
     fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {
