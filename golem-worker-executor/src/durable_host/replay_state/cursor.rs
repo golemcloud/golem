@@ -420,7 +420,10 @@ impl CursorTx<'_> {
             self.publish_deferred_events(retained.deferred_events);
             let handle = match retained.terminal {
                 Some((terminal_idx, terminal)) => {
-                    let receiver = self.st.concurrent_resolver.register(idx);
+                    let receiver = self
+                        .st
+                        .concurrent_resolver
+                        .register(idx, start_parent(&retained.entry));
                     let resolution = self.terminal_resolution(idx, terminal_idx, &terminal);
                     let resolved = self.st.concurrent_resolver.resolve_if_pending(
                         idx,
@@ -432,7 +435,10 @@ impl CursorTx<'_> {
                     self.notify_progress = true;
                     ReplayCallHandle::new(idx, receiver)
                 }
-                None => self.register_claimed_start(idx).await?,
+                None => {
+                    self.register_claimed_start(idx, start_parent(&retained.entry))
+                        .await?
+                }
             };
             return Ok(Some((handle, Box::new(retained.entry))));
         }
@@ -680,9 +686,6 @@ impl CursorTx<'_> {
             if self.is_awaited_terminal(read_idx, &entry) {
                 // An `End`/`Cancelled` owned by a concurrently-replaying call: commit it and hand it
                 // back to its awaiter, then keep draining. Never returned to this caller.
-                if let Some(start_index) = terminal_start_index(&entry) {
-                    self.st.body_members.remove(&start_index);
-                }
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 continue;
             }
@@ -891,22 +894,44 @@ impl CursorTx<'_> {
         )
     }
 
+    /// The owner named by the entry buffered at the cursor head, when the buffer holds the next
+    /// entry after the cursor and the head path stops at it (the claim's head fast path leaves it
+    /// there).
+    pub(super) fn buffered_head_owner(&self) -> Option<HeadOwner> {
+        let next = self.cursor.last_replayed_index().next();
+        self.st
+            .replay_buffer
+            .front()
+            .filter(|(index, entry)| *index == next && !self.is_drained_at_head(*index, entry))
+            .map(|(_, entry)| head_owner(entry))
+    }
+
+    /// Whether the head path drains `entry` at `index` instead of stopping at it: a hint, a
+    /// `Start` claimed ahead of the cursor, or a terminal a registered awaiter owns. A scan that
+    /// passes the cursor head uses it to find the entry the head path would stop at.
+    pub(super) fn is_drained_at_head(&self, index: OplogIndex, entry: &OplogEntry) -> bool {
+        is_auto_skippable_hint(entry)
+            || self.st.claimed_starts.contains(&index)
+            || self.is_awaited_terminal(index, entry)
+    }
+
     /// Gathers the facts [`missing_start_waits_for`] decides on for a `Start` claim that found no
-    /// match, and returns the subscription to wait on when the rule says the claim waits. The
-    /// claim was issued from the Store whose call chain starts at `claim_parent`.
+    /// match, and returns the subscription to wait on when the rule says the claim waits. `head`
+    /// is the owner named by the entry at the cursor head, and the claim was issued from the
+    /// Store whose call chain starts at `claim_parent`.
     ///
-    /// Every fact comes from state the cursor already holds: the head buffered by the claim's
-    /// head fast path, [`CursorState::body_members`], the retained `Start`s and the active-body
+    /// Every fact comes from state the cursor already holds: the parents recorded by the claimed
+    /// `Start`s that are still awaiting their terminal, the retained `Start`s and the active-body
     /// set. No oplog entry is read.
     pub(super) fn active_body_owning_head(
         &self,
+        head: Option<HeadOwner>,
         claim_parent: Option<OplogIndex>,
     ) -> Option<tokio::sync::watch::Receiver<HashSet<OplogIndex>>> {
         if self.cursor.is_live() {
             return None;
         }
-        let (_, head) = self.st.replay_buffer.front()?;
-        let head_parent = match head_owner(head) {
+        let head_parent = match head? {
             HeadOwner::EntityBody(owner) | HeadOwner::ParentStart(owner) => owner,
             HeadOwner::Unattributed | HeadOwner::Agent => return None,
         };
@@ -915,54 +940,22 @@ impl CursorTx<'_> {
         if active_bodies.is_empty() {
             return None;
         }
-        let retained_parent = |index: OplogIndex| match self.st.retained_starts.get(&index) {
-            Some(RetainedStart {
-                entry:
-                    OplogEntry::Start {
-                        parent_start_index, ..
-                    },
-                ..
-            }) => *parent_start_index,
-            _ => None,
+        let parent_of = |index: OplogIndex| {
+            self.st
+                .concurrent_resolver
+                .claimed_parent(index)
+                .or_else(|| {
+                    self.st
+                        .retained_starts
+                        .get(&index)
+                        .and_then(|retained| start_parent(&retained.entry))
+                })
         };
-        let head_body = nearest_active_body(
-            head_parent,
-            &active_bodies,
-            &self.st.body_members,
-            retained_parent,
-        );
+        let head_body = nearest_active_body(head_parent, &active_bodies, parent_of);
         let claim_is_live = claim_parent.is_some_and(|parent| parent > self.cursor.replay_target());
-        let claiming_body = claim_parent.and_then(|parent| {
-            nearest_active_body(
-                parent,
-                &active_bodies,
-                &self.st.body_members,
-                retained_parent,
-            )
-        });
+        let claiming_body =
+            claim_parent.and_then(|parent| nearest_active_body(parent, &active_bodies, parent_of));
         missing_start_waits_for(head_body, claiming_body, claim_is_live).map(|_| bodies)
-    }
-
-    /// Records a claimed `Start` in [`CursorState::body_members`] when its parent is an active
-    /// entity body or is recorded there itself. A claim resolved on the spot already had its
-    /// terminal drained, so it is not recorded.
-    fn record_body_member(&mut self, start_index: OplogIndex, entry: &OplogEntry) {
-        let OplogEntry::Start {
-            parent_start_index: Some(parent),
-            ..
-        } = entry
-        else {
-            return;
-        };
-        if self.resolved_retained_claim == Some(start_index) {
-            return;
-        }
-        let body = match self.st.body_members.get(parent) {
-            Some(body) => *body,
-            None if self.cursor.reconstruction_claims.is_body_active(*parent) => *parent,
-            None => return,
-        };
-        self.st.body_members.insert(start_index, body);
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -1623,6 +1616,7 @@ impl CursorTx<'_> {
     async fn register_claimed_start(
         &mut self,
         start_idx: OplogIndex,
+        parent_start_index: Option<OplogIndex>,
     ) -> Result<ReplayCallHandle, WorkerExecutorError> {
         let prefetched = if let Some(marker) = self.completion_marker(start_idx) {
             let marker_idx = marker.index();
@@ -1686,7 +1680,10 @@ impl CursorTx<'_> {
             None
         };
 
-        let receiver = self.st.concurrent_resolver.register(start_idx);
+        let receiver = self
+            .st
+            .concurrent_resolver
+            .register(start_idx, parent_start_index);
         if let Some((terminal_idx, resolution)) = prefetched {
             self.st
                 .concurrent_resolver
@@ -1727,17 +1724,6 @@ impl CursorTx<'_> {
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
     ) -> Result<StartClaimAttempt, WorkerExecutorError> {
-        let attempt = self.claim_first_matching_start(matches_identity).await?;
-        if let StartClaimAttempt::Claimed(handle, entry) = &attempt {
-            self.record_body_member(handle.start_idx(), entry);
-        }
-        Ok(attempt)
-    }
-
-    async fn claim_first_matching_start(
-        &mut self,
-        matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
-    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
         // Retained `Start`s precede everything at or beyond the cursor head, so claiming them
         // first keeps same-identity claims in oplog order.
         if let Some((handle, entry)) = self.claim_retained_start(&matches_identity, None).await? {
@@ -1753,7 +1739,9 @@ impl CursorTx<'_> {
             .try_get_oplog_entry_leaving_unclaimed_starts(&matches_identity)
             .await?
         {
-            let handle = self.register_claimed_start(start_idx).await?;
+            let handle = self
+                .register_claimed_start(start_idx, start_parent(&entry))
+                .await?;
             return Ok(StartClaimAttempt::Claimed(handle, Box::new(entry)));
         }
         if self.blocked_on_completion_delivery {
@@ -1796,7 +1784,9 @@ impl CursorTx<'_> {
                     return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
                 }
                 self.st.claimed_starts.insert(index);
-                let handle = self.register_claimed_start(index).await?;
+                let handle = self
+                    .register_claimed_start(index, start_parent(&entry))
+                    .await?;
                 Ok(StartClaimAttempt::Claimed(handle, entry))
             }
             OplogEntryLookupResult::NotFound { .. } => Ok(StartClaimAttempt::Missing),
@@ -1809,20 +1799,6 @@ impl CursorTx<'_> {
     /// external payload may require blob I/O. A completed scan returns `Missing`; payload loading
     /// or decoding failure remains an error.
     pub(super) async fn claim_start_matching_request(
-        &mut self,
-        matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
-        expected_request: &RequestClaimIdentity,
-    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
-        let attempt = self
-            .claim_first_matching_request_start(matches_identity, expected_request)
-            .await?;
-        if let StartClaimAttempt::Claimed(handle, entry) = &attempt {
-            self.record_body_member(handle.start_idx(), entry);
-        }
-        Ok(attempt)
-    }
-
-    async fn claim_first_matching_request_start(
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
         expected_request: &RequestClaimIdentity,
@@ -1902,7 +1878,9 @@ impl CursorTx<'_> {
             })?;
             if payload_matches {
                 self.st.claimed_starts.insert(index);
-                let handle = self.register_claimed_start(index).await?;
+                let handle = self
+                    .register_claimed_start(index, start_parent(&entry))
+                    .await?;
                 return Ok(StartClaimAttempt::Claimed(handle, entry));
             }
 
@@ -2038,7 +2016,10 @@ impl CursorTx<'_> {
         if !matches!(outcome, StartClaimAttempt::Missing) {
             return Ok(outcome);
         }
-        if let Some(bodies) = self.active_body_owning_head(claim.expected_parent_start_index()) {
+        if let Some(bodies) = self.active_body_owning_head(
+            self.buffered_head_owner(),
+            claim.expected_parent_start_index(),
+        ) {
             return Ok(StartClaimAttempt::Blocked(BlockedOn::ActiveBody(bodies)));
         }
         if !recover_missing {
@@ -2302,7 +2283,6 @@ impl ReplayState {
                 claimed_custom_invocation_ids: HashSet::new(),
                 custom_subtrees: HashMap::new(),
                 retained_starts: std::collections::BTreeMap::new(),
-                body_members: HashMap::new(),
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
@@ -3952,7 +3932,7 @@ fn positional_reader_accepts(scope: Option<OplogIndex>) -> impl FnMut(&OplogEntr
     }
 }
 
-fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {
+pub(super) fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {
     entry.is_hint() && !matches!(entry, OplogEntry::CompletionDelivered { .. })
 }
 
@@ -4169,23 +4149,30 @@ pub(super) fn head_owner(entry: &OplogEntry) -> HeadOwner {
     }
 }
 
+/// The `parent_start_index` of a `Start` entry.
+pub(super) fn start_parent(entry: &OplogEntry) -> Option<OplogIndex> {
+    match entry {
+        OplogEntry::Start {
+            parent_start_index, ..
+        } => *parent_start_index,
+        _ => None,
+    }
+}
+
 /// The nearest active entity body that encloses the record at `index`: `index` itself when it is
-/// an active body, the body recorded for it in `body_members` while that body is active, or the
-/// body that encloses the parent of a retained `Start` (`retained_parent`).
+/// an active body, and otherwise the nearest active body that encloses its parent. `parent_of`
+/// gives the parent recorded by a `Start` the cursor still holds. A parent always precedes its
+/// child, so the walk only moves to earlier indices and ends.
 pub(super) fn nearest_active_body(
     mut index: OplogIndex,
     active_bodies: &HashSet<OplogIndex>,
-    body_members: &HashMap<OplogIndex, OplogIndex>,
-    retained_parent: impl Fn(OplogIndex) -> Option<OplogIndex>,
+    parent_of: impl Fn(OplogIndex) -> Option<OplogIndex>,
 ) -> Option<OplogIndex> {
     loop {
         if active_bodies.contains(&index) {
             return Some(index);
         }
-        if let Some(body) = body_members.get(&index) {
-            return active_bodies.contains(body).then_some(*body);
-        }
-        index = retained_parent(index)?;
+        index = parent_of(index).filter(|parent| *parent < index)?;
     }
 }
 

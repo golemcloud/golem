@@ -554,6 +554,7 @@ impl ReplayState {
                             }
                             Ok(StartClaimAttempt::Missing) => {
                                 if let Some(bodies) = tx.active_body_owning_head(
+                                    tx.buffered_head_owner(),
                                     owned_claim.expected_parent_start_index(),
                                 ) {
                                     return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
@@ -958,13 +959,19 @@ impl ReplayState {
                         }
 
                         let replay_target = tx.cursor.replay_target();
-                        let exact = tx
+                        // The scan passes the cursor head without buffering it. It notes the owner
+                        // of the entry the head path would stop at, so a missing id is classified
+                        // against the head without another oplog read.
+                        let cursor_index = tx.cursor.last_replayed_index();
+                        let mut scanned_head = None;
+                        let view = &*tx;
+                        let exact = view
                             .cursor
                             .scan_oplog(
                                 OplogIndex::INITIAL,
                                 replay_target.next(),
-                                &tx.st.skipped_regions,
-                                tx.st
+                                &view.st.skipped_regions,
+                                view.st
                                     .skipped_regions
                                     .find_next_deleted_region(OplogIndex::INITIAL),
                                 OplogIndex::NONE,
@@ -978,7 +985,15 @@ impl ReplayState {
                                 },
                                 |_, _, _| true,
                                 None,
-                                |_, idx, index: &mut Option<OplogIndex>| *index = Some(idx),
+                                |entry, idx, index: &mut Option<OplogIndex>| {
+                                    *index = Some(idx);
+                                    if scanned_head.is_none()
+                                        && idx > cursor_index
+                                        && !view.is_drained_at_head(idx, entry)
+                                    {
+                                        scanned_head = Some(super::cursor::head_owner(entry));
+                                    }
+                                },
                             )
                             .await;
 
@@ -1117,17 +1132,10 @@ impl ReplayState {
                                 return Ok((None, None, Some(Missing::StoreAlreadyLive)));
                             }
                             OplogEntryLookupResult::NotFound { .. } => {
-                                // The exact scan reads past the head without buffering it. Drain
-                                // the head like any claim's head path does, so the missing id is
-                                // classified against the entry that is actually at the head.
-                                tx.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
-                                    .await?;
-                                if tx.cursor.is_live() {
-                                    return Ok((None, None, Some(Missing::ReplayEnded)));
-                                }
-                                if let Some(bodies) =
-                                    tx.active_body_owning_head(expected_parent_start_index)
-                                {
+                                if let Some(bodies) = tx.active_body_owning_head(
+                                    tx.buffered_head_owner().or(scanned_head),
+                                    expected_parent_start_index,
+                                ) {
                                     return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
                                 }
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(

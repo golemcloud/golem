@@ -8804,26 +8804,36 @@ async fn missing_start_claim_of_the_owning_body_does_not_wait_on_its_own_head() 
 }
 
 #[test]
-fn nearest_active_body_resolves_scopes_nested_entities_and_retained_starts() {
+fn nearest_active_body_prefers_the_innermost_active_body() {
     use super::cursor::nearest_active_body;
 
     let i = OplogIndex::from_u64;
-    let active = HashSet::from([i(2), i(6)]);
-    // Scope 3 of body 2, entity 6 nested in body 2, scope 7 of entity 6, and scope 4 of a body
-    // that already settled.
-    let members = HashMap::from([(i(3), i(2)), (i(6), i(2)), (i(7), i(6)), (i(4), i(5))]);
-    let retained = HashMap::from([(i(9), i(3)), (i(10), i(1))]);
-    let retained_parent = |index: OplogIndex| retained.get(&index).copied();
-    let nearest = |index| nearest_active_body(i(index), &active, &members, retained_parent);
+    // Body 2 encloses scope 3 and the nested entity 6; entity 6 encloses scope 7; scope 4
+    // belongs to body 5, which already settled. Each record names its parent.
+    let parents = HashMap::from([
+        (i(3), i(2)),
+        (i(6), i(3)),
+        (i(7), i(6)),
+        (i(8), i(7)),
+        (i(4), i(5)),
+        (i(5), i(1)),
+    ]);
+    let parent_of = |index: OplogIndex| parents.get(&index).copied();
 
+    let active = HashSet::from([i(2), i(6)]);
+    let nearest = |index| nearest_active_body(i(index), &active, parent_of);
     assert_eq!(nearest(2), Some(i(2)));
     assert_eq!(nearest(3), Some(i(2)));
     assert_eq!(nearest(6), Some(i(6)));
     assert_eq!(nearest(7), Some(i(6)));
-    assert_eq!(nearest(9), Some(i(2)));
+    assert_eq!(nearest(8), Some(i(6)));
     assert_eq!(nearest(4), None);
-    assert_eq!(nearest(10), None);
     assert_eq!(nearest(1), None);
+
+    // After the outer body settles, the nested entity still encloses its own scopes.
+    let active = HashSet::from([i(6)]);
+    assert_eq!(nearest_active_body(i(8), &active, parent_of), Some(i(6)));
+    assert_eq!(nearest_active_body(i(3), &active, parent_of), None);
 }
 
 #[test]
@@ -8932,13 +8942,17 @@ async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_it
 #[test]
 async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_head() {
     // The guest starts a custom durable invocation whose Start was never recorded while the
-    // completed reconstruction has not drained the body's Start(3).
-    let (rs, handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
+    // completed reconstruction has not drained the body's Start(3). Nothing is buffered at the
+    // head, as after a positional read: the claim classifies the head from its own exact-id scan
+    // and reads every index once.
+    let (rs, handle, mut reconstruction, oplog) = replay_with_undrained_reconstruction(vec![
         start_with_parent(2),
         end_for(3, 1),
         end_for(2, 2),
     ])
     .await;
+    rs.cursor.state.lock().await.replay_buffer.clear();
+    oplog.reads.lock().unwrap().clear();
     let mut claim = tokio::spawn({
         let rs = rs.clone();
         async move {
@@ -8954,6 +8968,11 @@ async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_hea
         }
     });
     assert_claim_parked(&mut claim).await;
+    assert_eq!(
+        *oplog.reads.lock().unwrap(),
+        (1..=5).map(OplogIndex::from_u64).collect::<Vec<_>>(),
+        "the parked custom claim read the oplog beyond its exact-id scan"
+    );
 
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
@@ -9023,4 +9042,79 @@ async fn missing_start_claim_of_a_nested_entity_waits_while_the_enclosing_body_o
     ));
     nested_reconstruction.body_settled();
     outer_reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_start_claim_waits_for_a_nested_entity_after_the_outer_body_settles() {
+    // [NoOp(1), Start(entity A=2), Start(entity C=3, parent 2), Start(scope S=4, parent 3),
+    //  Start(5, parent 4), End(5→6), End(4→7), End(3→8), End(2→9)] — C claimed its scope S, so
+    // the head is the child Start(5). A's body settled, C's body is still active. The claim
+    // waits for C, which encloses the head through S, and resolves C from the claims the cursor
+    // holds, without reading S or C again.
+    let outer_parent = OplogIndex::from_u64(1);
+    let (outer_start, outer_identity) = rejected_tool_reconstruction_start(outer_parent);
+    let nested_parent = OplogIndex::from_u64(2);
+    let (nested_start, nested_identity) = rejected_tool_reconstruction_start(nested_parent);
+    let (rs, oplog) = replay_state_and_oplog_over(vec![
+        noop(),
+        outer_start,
+        nested_start,
+        start_with_parent(3),
+        start_with_parent(4),
+        end_for(5, 1),
+        end_for(4, 2),
+        end_for(3, 3),
+        end_for(2, 4),
+    ])
+    .await;
+    let mut outer = claim_rejected_tool_reconstruction(&rs, outer_parent, &outer_identity).await;
+    let mut outer_reconstruction = outer
+        .take_historical_reconstruction()
+        .expect("outer reconstruction guard");
+    let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent, &nested_identity).await;
+    assert_eq!(nested.start_idx(), OplogIndex::from_u64(3));
+    let mut nested_reconstruction = nested
+        .take_historical_reconstruction()
+        .expect("nested reconstruction guard");
+    let scope = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope.start_idx(), OplogIndex::from_u64(4));
+    outer_reconstruction.body_settled();
+    oplog.reads.lock().unwrap().clear();
+
+    let mut claim = spawn_start_claim(
+        &rs,
+        StartClaim::unowned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    );
+    assert_claim_parked(&mut claim).await;
+    let reads = oplog.reads.lock().unwrap().clone();
+    assert!(
+        reads.iter().all(|index| *index > OplogIndex::from_u64(4)),
+        "the parked claim read already consumed ancestors: {reads:?}"
+    );
+
+    assert!(matches!(
+        rs.await_resolution_outcome(outer).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(9)
+    ));
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    drop(scope);
+    assert!(matches!(
+        rs.await_resolution_outcome(nested).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+    nested_reconstruction.body_settled();
 }
