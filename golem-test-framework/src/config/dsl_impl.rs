@@ -511,7 +511,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .resolve_env_name(&component.environment_id, &registry_client)
             .await?;
 
-        let method_parameters = params.value().clone();
+        let method_parameters = params.into_parts().1;
 
         let client = self
             .deps
@@ -578,7 +578,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
-        let method_parameters = params.value().clone();
+        let method_parameters = params.into_parts().1;
 
         let client = self
             .deps

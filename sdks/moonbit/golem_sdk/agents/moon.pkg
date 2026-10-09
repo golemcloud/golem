@@ -7,6 +7,9 @@ import {
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/interface/wasi/logging/logging",
   "moonbitlang/core/hashmap",
+  "moonbitlang/core/json",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/buffer",
 }
 
 import {

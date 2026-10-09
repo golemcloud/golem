@@ -24,12 +24,10 @@
  */
 import { Cause, Effect, Scope } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
-import { revertAgent, RevertTarget, type AgentsHostError } from "../Agents.js"
 import { AgentHostClient } from "../host/AgentHostClient.js"
 import { DurabilityModeClient } from "../host/DurabilityModeClient.js"
-import { currentIndex, type OplogHostError } from "../Oplog.js"
+import { currentIndex, setIndex, type OplogHostError } from "../Oplog.js"
 import { OplogClient } from "../host/OplogClient.js"
-import { SelfAgentId } from "../SelfAgentId.js"
 
 // ---------------------------------------------------------------------------
 // trap reason formatter
@@ -347,131 +345,96 @@ export const atomically = <A, E, R>(
 // ---------------------------------------------------------------------------
 
 /**
- * Decide whether a {@link Cause.Cause} should trigger a self-revert.
- * Defects (`Die`) surface programmer bugs and should NOT silently
- * preempt the agent; only typed failures and interruption do.
+ * Rewind within the invocation. Successful host control transfer never returns;
+ * a returning host is a defect, not a suspended fiber or a successful rollback.
  */
-const shouldRevertCause = <E>(cause: Cause.Cause<E>): boolean => {
-  for (const reason of cause.reasons) {
-    if (Cause.isFailReason(reason) || Cause.isInterruptReason(reason)) return true
-  }
-  return false
-}
-
-/**
- * Issue a self-revert to the captured oplog checkpoint and then
- * suspend forever. The host is expected to preempt and restart the
- * fiber; `Effect.never` keeps the fiber alive until that preemption
- * lands.
- */
-const revertAndSuspend = (
-  self: ApiHost.AgentId,
+const rollback = (
   checkpointIdx: ApiHost.OplogIndex,
-): Effect.Effect<never, AgentsHostError, AgentHostClient> =>
-  revertAgent(self, RevertTarget.toOplogIndex(checkpointIdx)).pipe(Effect.andThen(Effect.never))
+): Effect.Effect<never, OplogHostError, OplogClient> =>
+  setIndex(checkpointIdx).pipe(
+    Effect.andThen(Effect.die(new Error("Unreachable: reverted to checkpoint"))),
+  )
 
 /**
- * Run a fallible Effect; if it fails (typed failure) or is
- * interrupted, revert this agent's oplog to the index captured before
- * the body ran. The host preempts and restarts the agent from the
- * checkpoint, so any durable side effects performed inside `effect`
- * "never happened" from the post-revert perspective.
- *
- * **Details**
- *
- * Defects (`Effect.die` / unexpected throws) are **not** routed to
- * revert — they propagate as defects, matching the spirit of the
- * official SDKs' `unwrap-or-revert`.
- *
- * Mirrors `golem-ts-sdk` / `golem-rust-sdk`. The returned Effect's
- * typed failures are: oplog/agent host bookkeeping errors only — the
- * body's `E` channel is suppressed because the failure branch never
- * resumes (revert is followed by `Effect.never`).
+ * Capture a checkpoint and run an Effect, rewinding within the current
+ * invocation on typed failure. Defects and interruption propagate unchanged.
+ * Rollback never returns a value. External side effects are not undone.
  *
  * @since 1.5.0
  * @category combinators
  */
 export const unwrapOrRevert = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<
-  A,
-  OplogHostError | AgentsHostError,
-  R | SelfAgentId | OplogClient | AgentHostClient
-> =>
+): Effect.Effect<A, OplogHostError, R | OplogClient> =>
   Effect.gen(function* () {
-    const checkpointIdx = yield* currentIndex
-    const self = yield* SelfAgentId
-    return yield* effect.pipe(
-      Effect.catchCause((cause) =>
-        shouldRevertCause(cause)
-          ? revertAndSuspend(self, checkpointIdx)
-          : (Effect.failCause(cause) as Effect.Effect<never, never, never>),
-      ),
-    ) as Effect.Effect<A, never, R>
+    const cp = yield* checkpoint
+    return yield* cp.runOrRevert(effect)
   })
 
 /**
- * Tagged result of {@link checkpoint}. The full `Cause.Cause<E>` is
- * preserved on the `reverted` branch — this honestly reflects that
- * the body may have been interrupted (no `E` value) or failed with a
- * typed error.
+ * An invocation-local checkpoint. Rollback restarts execution at its
+ * captured oplog index, rather than issuing a management revert.
  *
  * @since 1.5.0
  * @category models
  */
-export type CheckpointResult<A, E> =
-  | { readonly _tag: "ok"; readonly value: A }
-  | { readonly _tag: "reverted"; readonly cause: Cause.Cause<E> }
+export class Checkpoint {
+  constructor(private readonly index: ApiHost.OplogIndex) {}
+
+  /**
+   * Rewind to the captured index. Successful rollback never returns.
+   * @since 1.5.0
+   * @category operations
+   */
+  get revert(): Effect.Effect<never, OplogHostError, OplogClient> {
+    return rollback(this.index)
+  }
+
+  /**
+   * Return success or rewind on typed failure. Defects and interruption propagate.
+   * @since 1.5.0
+   * @category combinators
+   */
+  runOrRevert<A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, OplogHostError, R | OplogClient> {
+    return Effect.catchCause(effect, (cause) =>
+      cause.reasons.every(Cause.isFailReason)
+        ? this.revert
+        : Effect.failCause(cause as Cause.Cause<never>),
+    )
+  }
+
+  /**
+   * Rewind when the condition is false.
+   * @since 1.5.0
+   * @category operations
+   */
+  assertOrRevert(condition: boolean): Effect.Effect<void, OplogHostError, OplogClient> {
+    return condition ? Effect.void : this.revert
+  }
+}
 
 /**
- * Run `effect`; on success return `{ _tag: "ok", value }`. On typed
- * failure or interruption, issue a self-revert to the captured oplog
- * index AND return `{ _tag: "reverted", cause }`. Defects are
- * propagated as defects (no revert).
- *
- * **Details**
- *
- * In real Golem runtimes the `revertAgent` call typically preempts
- * before the tagged result is observed; this combinator is most
- * useful inside test runtimes that do not preempt on revert and for
- * callers that want to inspect the post-revert state.
+ * Capture the current oplog index when this Effect runs. Use the checkpoint
+ * only within the invocation that created it; do not store it in agent state.
  *
  * @since 1.5.0
- * @category combinators
+ * @category constructors
  */
-export const checkpoint = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<
-  CheckpointResult<A, E>,
-  OplogHostError | AgentsHostError,
-  R | SelfAgentId | OplogClient | AgentHostClient
-> =>
-  Effect.gen(function* () {
-    const checkpointIdx = yield* currentIndex
-    const self = yield* SelfAgentId
-    const exit = yield* Effect.exit(effect)
-    if (exit._tag === "Success") {
-      return { _tag: "ok", value: exit.value } as const
-    }
-    if (!shouldRevertCause(exit.cause)) {
-      // Pure defect path — propagate the cause unchanged.
-      return yield* Effect.failCause(exit.cause) as unknown as Effect.Effect<
-        CheckpointResult<A, E>,
-        never,
-        never
-      >
-    }
-    yield* revertAgent(self, RevertTarget.toOplogIndex(checkpointIdx))
-    return { _tag: "reverted", cause: exit.cause } as const
-  })
+export const checkpoint: Effect.Effect<Checkpoint, OplogHostError, OplogClient> = Effect.map(
+  currentIndex,
+  (index) => new Checkpoint(index),
+)
 
 /**
  * Saga-flavoured combinator: acquire a value, run a body with it, and
  * register a `compensate` Effect that runs only on body failure
- * (alongside a self-revert). The compensator is intended for external
+ * (before checkpoint rollback). The compensator is intended for external
  * side effects that the durable revert cannot undo (e.g. an HTTP call
  * to a remote system). `acquire` failures bubble up directly without
- * compensation; defects bubble up unchanged.
+ * compensation; defects and interruption bubble up unchanged. Typed compensation
+ * failures are ignored; compensation defects prevent rollback.
  *
  * @since 1.5.0
  * @category combinators
@@ -480,23 +443,21 @@ export const compensable = <A, B, E, R>(input: {
   readonly acquire: Effect.Effect<A, E, R>
   readonly body: (a: A) => Effect.Effect<B, E, R>
   readonly compensate: (a: A) => Effect.Effect<void, unknown, R>
-}): Effect.Effect<
-  B,
-  E | OplogHostError | AgentsHostError,
-  R | SelfAgentId | OplogClient | AgentHostClient
-> =>
+}): Effect.Effect<B, E | OplogHostError, R | OplogClient> =>
   Effect.gen(function* () {
     const checkpointIdx = yield* currentIndex
-    const self = yield* SelfAgentId
     const a = yield* input.acquire
-    const exit = yield* Effect.exit(input.body(a))
-    if (exit._tag === "Success") return exit.value
-    if (!shouldRevertCause(exit.cause)) {
-      // Defect — propagate unchanged, no compensation.
-      return yield* Effect.failCause(exit.cause) as unknown as Effect.Effect<B, never, never>
-    }
-    // Run the user-supplied compensator; failures are swallowed so
-    // the revert path always reaches the host.
-    yield* input.compensate(a).pipe(Effect.ignore)
-    return yield* revertAndSuspend(self, checkpointIdx)
+    return yield* Effect.catchCause(input.body(a), (cause) => {
+      if (!cause.reasons.every(Cause.isFailReason)) {
+        return Effect.failCause(cause as Cause.Cause<never>)
+      }
+      return input.compensate(a).pipe(
+        Effect.catchCause((cause) =>
+          cause.reasons.every(Cause.isFailReason)
+            ? Effect.void
+            : Effect.failCause(cause as Cause.Cause<never>),
+        ),
+        Effect.andThen(rollback(checkpointIdx)),
+      )
+    })
   })

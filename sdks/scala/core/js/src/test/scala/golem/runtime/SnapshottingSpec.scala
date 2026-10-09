@@ -243,12 +243,21 @@ object SnapshottingSpec extends ZIOSpecDefault {
       }
     ),
     suite("custom snapshot roundtrip")(
+      test("simple byte and JSON modes reject multipart data instead of dropping parts") {
+        val parts = MultipartSnapshot(zio.blocks.schema.json.Json.Null, Map.empty)
+        ZIO.fromFuture { implicit ec =>
+          for {
+            byteError <- customDefn.snapshotHandlers.get.load(parts, restoreContext).failed
+            jsonError <- autoDefn.snapshotHandlers.get.load(parts, restoreContext).failed
+          } yield assertTrue(byteError.isInstanceOf[SnapshotError], jsonError.isInstanceOf[SnapshotError])
+        }
+      },
       test("save produces application/octet-stream payload") {
         ZIO.fromFuture { implicit ec =>
           val instance = new CustomSnapshotAgentImpl("direct")
           for {
             _       <- instance.setValue(42)
-            payload <- customDefn.snapshotHandlers.get.save(instance)
+            payload <- customDefn.snapshotHandlers.get.save(instance).map(_.asInstanceOf[SnapshotPayload])
           } yield assertTrue(
             payload.mimeType == "application/octet-stream",
             payload.bytes.nonEmpty
@@ -260,10 +269,10 @@ object SnapshottingSpec extends ZIOSpecDefault {
           val instance = new CustomSnapshotAgentImpl("direct")
           for {
             _        <- instance.setValue(42)
-            payload  <- customDefn.snapshotHandlers.get.save(instance)
-            restored <- customDefn.snapshotHandlers.get.load(payload.bytes, restoreContext)
+            payload  <- customDefn.snapshotHandlers.get.save(instance).map(_.asInstanceOf[SnapshotPayload])
+            restored <- customDefn.snapshotHandlers.get.load(payload, restoreContext)
             v        <- restored.getValue()
-            resaved  <- customDefn.snapshotHandlers.get.save(restored)
+            resaved  <- customDefn.snapshotHandlers.get.save(restored).map(_.asInstanceOf[SnapshotPayload])
           } yield assertTrue(v == 42, resaved.bytes.toSeq == payload.bytes.toSeq)
         }
       },
@@ -277,15 +286,17 @@ object SnapshottingSpec extends ZIOSpecDefault {
             Principal.GolemUser(golem.Uuid(BigInt(3), BigInt(4))),
             None
           )
-          customDefn.snapshotHandlers.get.load(Array[Byte](0, 0, 0, 42), context).map { restored =>
-            val received = restored.asInstanceOf[CustomSnapshotAgentImpl].restoredContext
-            assertTrue(
-              received.identity[String](0) == "identity",
-              received.agentId == context.agentId,
-              received.phantomId == Some(phantom),
-              received.restoredPrincipal == context.restoredPrincipal
-            )
-          }
+          customDefn.snapshotHandlers.get
+            .load(SnapshotPayload(Array[Byte](0, 0, 0, 42), "application/octet-stream"), context)
+            .map { restored =>
+              val received = restored.asInstanceOf[CustomSnapshotAgentImpl].restoredContext
+              assertTrue(
+                received.identity[String](0) == "identity",
+                received.agentId == context.agentId,
+                received.phantomId == Some(phantom),
+                received.restoredPrincipal == context.restoredPrincipal
+              )
+            }
         }
       },
       test("erased restoration decodes context without invoking the normal initialization path") {
@@ -297,7 +308,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
             _          = CustomSnapshotAgentImpl.normalInitializationCount = 0
             restored  <- FutureInterop.fromPromise(
                           customDefn.restoreAny(
-                            Array[Byte](0, 0, 0, 42),
+                            SnapshotPayload(Array[Byte](0, 0, 0, 42), "application/octet-stream"),
                             "custom-snapshot-agent-id",
                             identity,
                             None,
@@ -321,7 +332,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
           for {
             restored <- FutureInterop.fromPromise(
                           configDefn.restoreAny(
-                            Array.emptyByteArray,
+                            SnapshotPayload(Array.emptyByteArray, "application/octet-stream"),
                             "config-snapshot-agent",
                             identity,
                             None,
@@ -332,7 +343,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
             failed     <- FutureInterop
                         .fromPromise(
                           configDefn.restoreAny(
-                            Array[Byte](1),
+                            SnapshotPayload(Array[Byte](1), "application/octet-stream"),
                             "config-snapshot-agent",
                             identity,
                             None,
@@ -378,7 +389,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
             CustomSnapshotAgentImpl.normalInitializationCount == 0,
             runtimeState == (true, Some(principal)),
             decoded._1 == principal,
-            decoded._2.toSeq == Array[Byte](0, 0, 0, 42).toSeq
+            decoded._2.asInstanceOf[SnapshotPayload].bytes.toSeq == Array[Byte](0, 0, 0, 42).toSeq
           )
         }
       },
@@ -402,7 +413,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
             decoded = Guest
                         .decodeSnapshotPayload(fromUint8Array(saved.payload), saved.mimeType)
                         .fold(error => throw new RuntimeException(error), result => result)
-            state        = new String(decoded._2, "UTF-8")
+            state        = new String(decoded._2.asInstanceOf[SnapshotPayload].bytes, "UTF-8")
             runtimeState = Guest.stateForTesting
             _            = Guest.resetForTesting()
           } yield assertTrue(
@@ -462,7 +473,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
           for {
             _       <- instance.increment()
             _       <- instance.increment()
-            payload <- autoDefn.snapshotHandlers.get.save(instance)
+            payload <- autoDefn.snapshotHandlers.get.save(instance).map(_.asInstanceOf[SnapshotPayload])
           } yield {
             val json = new String(payload.bytes, "UTF-8")
             assertTrue(
@@ -479,7 +490,7 @@ object SnapshottingSpec extends ZIOSpecDefault {
             _        <- instance.increment()
             _        <- instance.increment()
             payload  <- autoDefn.snapshotHandlers.get.save(instance)
-            restored <- autoDefn.snapshotHandlers.get.load(payload.bytes, restoreContext)
+            restored <- autoDefn.snapshotHandlers.get.load(payload, restoreContext)
             v        <- restored.increment() // counter was 2, now should be 3
           } yield assertTrue(v == 3)
         }

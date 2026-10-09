@@ -552,8 +552,8 @@ function assertDenseModelArray(value: unknown, name: string): asserts value is u
 export function assertSchemaValueRepresentable(
   value: SchemaValue,
   allowNativeStreams = false,
+  seen = new Set<unknown>(),
 ): void {
-  const seen = new Set<unknown>()
   const visit = (v: SchemaValue): void => {
     switch (v.tag) {
       case "s8":

@@ -40,7 +40,6 @@ import * as Oplog from "../src/Oplog.js"
 import { method } from "../src/Method.js"
 import * as Quota from "../src/Quota.js"
 import * as Retry from "../src/Retry.js"
-import { SelfAgentId } from "../src/SelfAgentId.js"
 import * as Webhook from "../src/Webhook.js"
 
 const ClientProbe = defineAgent({
@@ -156,16 +155,8 @@ type AssertEqual<X, Y> =
 // Durability
 // ---------------------------------------------------------------------------
 {
-  // checkpoint adds AgentHostClient | OplogClient | SelfAgentId | DurabilityModeClient
-  // (DurabilityModeClient appears via Durability.atomically; AgentHostClient via revertAgent)
-  const probe = Effect.succeed(42)
-  const _cp = Durability.checkpoint(probe)
-  // Type assignability: the resulting R MUST include exactly these tags.
-  const _expected: Effect.Effect<
-    Durability.CheckpointResult<number, never>,
-    Oplog.OplogHostError | Agents.AgentsHostError,
-    SelfAgentId | OplogClient | AgentHostClient
-  > = _cp
+  const _cp = Durability.checkpoint
+  const _expected: Effect.Effect<Durability.Checkpoint, Oplog.OplogHostError, OplogClient> = _cp
   void _expected
 }
 

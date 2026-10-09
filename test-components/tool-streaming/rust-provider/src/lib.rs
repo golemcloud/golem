@@ -1664,6 +1664,27 @@ impl Streaming for StreamingImpl {
                 let _ = stdout.finish().await;
                 return Ok(summary);
             }
+            "entity-custom-root" => {
+                // A positional atomic region of this body, then a root custom invocation of this
+                // body: both are recorded under the entity invocation.
+                while let Some(item) = stdin.next().await {
+                    if let Ok(chunk) = item {
+                        summary.chunks_read += 1;
+                        summary.bytes_read += chunk.len() as u64;
+                    }
+                }
+                let _ = stdout.finish().await;
+                golem_rust::atomically_async(|| async {}).await;
+                golem_rust::durability::Durability::<(), String>::new(
+                    "golem-it",
+                    "entity-custom-root",
+                    golem_rust::durability::DurableFunctionType::WriteLocal,
+                    &(),
+                )
+                .run_infallible_async(|| async {})
+                .await;
+                return Ok(summary);
+            }
             "stream-failure-success" => {
                 let _ = stdout
                     .fail(ByteStreamFailure::Failed(

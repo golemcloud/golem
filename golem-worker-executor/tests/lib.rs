@@ -345,6 +345,12 @@ test_component!(
     "golem-it:tool-streaming-effect-caller"
 );
 test_component!(
+    snapshot_sqlite_effect,
+    "snapshot_sqlite_effect",
+    "golem_it_snapshot_sqlite_effect",
+    "golem-it:snapshot-sqlite-effect"
+);
+test_component!(
     agent_counters,
     "agent_counters",
     "it_agent_counters_release",
