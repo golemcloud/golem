@@ -1026,3 +1026,146 @@ fn skipped_generic_field_does_not_require_wire_traits() {
     assert_eq!(fields[0].name, "before");
     assert_eq!(fields[1].name, "after");
 }
+
+mod preparation {
+    use super::*;
+    use golem_schema::schema::wit::direct::{IntoWire, WirePreflight, WireWriter};
+    use std::cell::RefCell;
+    use std::future::Future;
+    use std::rc::Rc;
+    use std::task::{Context, Poll, Waker};
+    use test_r::test;
+
+    struct Probe {
+        events: Rc<RefCell<Vec<&'static str>>>,
+        reject_preflight: bool,
+        suspend: bool,
+    }
+
+    struct Guard(Rc<RefCell<Vec<&'static str>>>);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.borrow_mut().push("cleanup");
+        }
+    }
+
+    impl IntoWire for Probe {
+        fn preflight(&self, _: &mut WirePreflight) -> Result<(), WireError> {
+            self.events.borrow_mut().push("preflight");
+            if self.reject_preflight {
+                Err(WireError::ForbiddenResource("probe"))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn prepare_wire(&self) -> Result<(), WireError> {
+            self.events.borrow_mut().push("prepare");
+            let _guard = Guard(self.events.clone());
+            if self.suspend {
+                std::future::pending::<()>().await;
+            }
+            Ok(())
+        }
+
+        fn write_wire(&self, writer: &mut WireWriter) -> Result<i32, WireError> {
+            self.events.borrow_mut().push("write");
+            false.write_wire(writer)
+        }
+    }
+
+    #[test]
+    async fn custom_preparation_runs_only_after_whole_value_preflight() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut values = vec![
+            Probe {
+                events: events.clone(),
+                reject_preflight: false,
+                suspend: false,
+            },
+            Probe {
+                events: events.clone(),
+                reject_preflight: true,
+                suspend: false,
+            },
+        ];
+        assert!(matches!(
+            encode_async(&values).await,
+            Err(WireError::ForbiddenResource("probe"))
+        ));
+        assert_eq!(*events.borrow(), ["preflight", "preflight"]);
+        events.borrow_mut().clear();
+        values[1].reject_preflight = false;
+        encode_async(&values).await.unwrap();
+        assert_eq!(
+            *events.borrow(),
+            [
+                "preflight",
+                "preflight",
+                "prepare",
+                "cleanup",
+                "prepare",
+                "cleanup",
+                "write",
+                "write"
+            ]
+        );
+    }
+
+    #[test]
+    fn cancellation_drops_custom_preparation_without_transfer() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let values = vec![Probe {
+            events: events.clone(),
+            reject_preflight: false,
+            suspend: true,
+        }];
+        {
+            let mut future = std::pin::pin!(encode_async(&values));
+            assert!(matches!(
+                future
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Pending
+            ));
+            assert_eq!(*events.borrow(), ["preflight", "prepare"]);
+        }
+        assert_eq!(*events.borrow(), ["preflight", "prepare", "cleanup"]);
+    }
+
+    #[test]
+    async fn asynchronous_alias_rejection_preserves_every_handle() {
+        let secret = GuestSecretHandle::new(unsafe { wire::Secret::from_handle(71) });
+        let quota = GuestQuotaTokenHandle::new(unsafe { wire::QuotaToken::from_handle(83) });
+        let values = (secret.clone(), vec![quota.clone(), quota.clone()]);
+        assert!(matches!(
+            encode_async(&values).await,
+            Err(WireError::AliasedResource("quota-token"))
+        ));
+        assert!(secret.is_present());
+        assert!(quota.is_present());
+        assert_eq!(secret.take().unwrap().take_handle(), 71);
+        assert_eq!(quota.take().unwrap().take_handle(), 83);
+    }
+
+    #[test]
+    async fn no_preparation_flag_never_skips_preflight() {
+        struct PreflightOnly;
+        impl IntoWire for PreflightOnly {
+            const NEEDS_PREPARATION: bool = false;
+
+            fn preflight(&self, _: &mut WirePreflight) -> Result<(), WireError> {
+                Err(WireError::ForbiddenResource("probe"))
+            }
+
+            fn write_wire(&self, _: &mut WireWriter) -> Result<i32, WireError> {
+                panic!("failed preflight must prevent writing")
+            }
+        }
+        assert!(matches!(
+            encode_async(&vec![PreflightOnly]).await,
+            Err(WireError::ForbiddenResource("probe"))
+        ));
+    }
+}

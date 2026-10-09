@@ -64,13 +64,23 @@ fn slice_fixedarray_to_bytes(arr : FixedArray[Byte], start : Int) -> Bytes {
 ///|
 fn parse_snapshot_envelope(
   snapshot : @host.Snapshot,
-) -> (@common.Principal, Bytes) raise SnapshotLoadError {
-  if snapshot.mime_type == "application/json" {
-    let chars : Array[Char] = []
-    for i in 0..<snapshot.payload.length() {
-      chars.push(Int::unsafe_to_char(snapshot.payload[i].to_int()))
+) -> (@common.Principal, @agents.SnapshotData) raise SnapshotLoadError {
+  if snapshot.mime_type.split(";").next() is Some(kind) &&
+    kind.trim().to_string().to_lower() == "multipart/mixed" {
+    return match
+      @agents.decode_multipart_snapshot(
+        Bytes::from_fixedarray(snapshot.payload),
+        snapshot.mime_type,
+      ) {
+      Ok((principal, parts)) =>
+        (principal, @agents.SnapshotData::Multipart(parts))
+      Err(message) => raise SnapshotLoadError(message)
     }
-    let json_str = String::from_array(chars)
+  }
+  if snapshot.mime_type == "application/json" {
+    let json_str = @utf8.decode(Bytes::from_fixedarray(snapshot.payload)) catch {
+      _ => raise SnapshotLoadError("Invalid snapshot JSON UTF-8")
+    }
     let json = @json.parse(json_str) catch {
       e => raise SnapshotLoadError("Failed to parse snapshot JSON: \{e}")
     }
@@ -105,10 +115,7 @@ fn parse_snapshot_envelope(
       None => raise SnapshotLoadError("Missing 'state' in snapshot envelope")
     }
     let state_str = state_json.stringify()
-    let state_bytes = Bytes::from_array(
-      state_str.to_array().map(fn(c) { c.to_int().to_byte() }),
-    )
-    (principal, state_bytes)
+    (principal, @agents.SnapshotData::Json(@utf8.encode(state_str)))
   } else {
     let data = snapshot.payload
     if data.length() == 0 {
@@ -118,7 +125,10 @@ fn parse_snapshot_envelope(
     match version {
       1 => {
         let state_bytes = slice_fixedarray_to_bytes(data, 1)
-        (@common.Principal::Anonymous, state_bytes)
+        (
+          @common.Principal::Anonymous,
+          @agents.SnapshotData::Binary(state_bytes),
+        )
       }
       2 => {
         if data.length() < 5 {
@@ -140,11 +150,10 @@ fn parse_snapshot_envelope(
             "Binary snapshot too short for principal data",
           )
         }
-        let principal_chars : Array[Char] = []
-        for i in 0..<principal_len {
-          principal_chars.push(Int::unsafe_to_char(data[5 + i].to_int()))
+        let principal_bytes = Bytes::from_fixedarray(data)[5:5 + principal_len]
+        let principal_str = @utf8.decode(principal_bytes) catch {
+          _ => raise SnapshotLoadError("Invalid principal JSON UTF-8")
         }
-        let principal_str = String::from_array(principal_chars)
         let principal_json = @json.parse(principal_str) catch {
           e =>
             raise SnapshotLoadError(
@@ -158,7 +167,7 @@ fn parse_snapshot_envelope(
             )
         }
         let state_bytes = slice_fixedarray_to_bytes(data, 5 + principal_len)
-        (principal, state_bytes)
+        (principal, @agents.SnapshotData::Binary(state_bytes))
       }
       other =>
         raise SnapshotLoadError("Unsupported binary snapshot version: \{other}")

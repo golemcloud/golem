@@ -1424,8 +1424,7 @@ async fn storage_full_while_seeding_a_restored_tree_is_classified_like_initial_f
 }
 
 #[test]
-async fn an_initial_file_seed_that_the_sandbox_refuses_with_a_permission_error_fails_with_not_permitted()
- {
+async fn a_host_permission_failure_while_seeding_initial_files_invalidates_the_generation() {
     let store = InitialFileStore::new().await;
     // An install of initial files invalidates the generation when a step fails, whatever the
     // error.
@@ -1442,7 +1441,7 @@ async fn an_initial_file_seed_that_the_sandbox_refuses_with_a_permission_error_f
         .await
         .unwrap_err();
     assert!(
-        matches!(failure.source, Error::Access(AccessError::NotPermitted)),
+        matches!(failure.source, Error::RuntimeInvalidated),
         "{}",
         failure.source
     );
@@ -1461,11 +1460,9 @@ async fn an_initial_file_seed_that_the_sandbox_refuses_with_a_permission_error_f
 }
 
 #[test]
-async fn a_restored_tree_seed_that_the_sandbox_refuses_with_a_permission_error_fails_with_not_permitted_and_keeps_the_generation()
- {
+async fn a_host_permission_failure_while_seeding_a_restored_tree_invalidates_the_generation() {
     let store = InitialFileStore::new().await;
-    // The seed of a restored tree runs outside an install, so the refused seed does not
-    // invalidate the generation.
+    // A host permission failure is terminal even outside an initial-file install.
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     control.push_seed(Err(sandbox_error(
@@ -1484,13 +1481,13 @@ async fn a_restored_tree_seed_that_the_sandbox_refuses_with_a_permission_error_f
     .await
     .unwrap_err();
     assert!(
-        matches!(failure.source, Error::Access(AccessError::NotPermitted)),
+        matches!(failure.source, Error::RuntimeInvalidated),
         "{}",
         failure.source
     );
     assert_eq!(call_count(&control, "seed("), 1);
     assert!(
-        !failure
+        failure
             .filesystem
             .generation
             .as_ref()

@@ -53,7 +53,7 @@ pub(crate) const UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS: &str =
 pub(crate) const UPDATE_SNAPSHOT_RESTORE_FAILED: &str = "UPDATE_SNAPSHOT_RESTORE_FAILED";
 /// The target revision of an update does not exist.
 pub(crate) const UPDATE_TARGET_NOT_FOUND: &str = "UPDATE_TARGET_NOT_FOUND";
-/// The component service refused the target revision of an update.
+/// The component service or this executor refused the target revision of an update.
 pub(crate) const UPDATE_TARGET_REFUSED: &str = "UPDATE_TARGET_REFUSED";
 
 /// The baseline of a start: the column of the outcome table, without the head of a plain
@@ -127,6 +127,10 @@ pub(crate) enum RawStartError<'a> {
     StaleSource(&'a SourceFound),
     /// The target revision of the pending update could not be fetched.
     TargetFetch(&'a WorkerExecutorError),
+    /// The target component could not be loaded or compiled.
+    TargetLoad(&'a WorkerExecutorError),
+    /// The executor does not support the target revision; the text says why.
+    TargetUnsupported(&'a str),
     /// The target revision changes the mode of the agent type; the text says how.
     ModeChange(&'a str),
     /// The baseline names a filesystem snapshot, and this executor keeps none.
@@ -405,6 +409,8 @@ impl FetchProblem {
 enum StartProblem {
     StaleSource,
     Target(FetchProblem),
+    TargetExecutor,
+    TargetUnsupported,
     ModeChange,
     Disabled,
     Restore(RestoreClass),
@@ -440,6 +446,13 @@ impl StartProblem {
         match error {
             RawStartError::StaleSource(_) => Self::StaleSource,
             RawStartError::TargetFetch(error) => Self::Target(FetchProblem::of(error)),
+            RawStartError::TargetLoad(error) => match error {
+                WorkerExecutorError::Runtime { .. }
+                | WorkerExecutorError::RecoveryRequired { .. }
+                | WorkerExecutorError::Interrupted { .. } => Self::TargetExecutor,
+                _ => Self::Target(FetchProblem::of(error)),
+            },
+            RawStartError::TargetUnsupported(_) => Self::TargetUnsupported,
             RawStartError::ModeChange(_) => Self::ModeChange,
             RawStartError::Disabled => Self::Disabled,
             RawStartError::Filesystem(error) => match error {
@@ -525,6 +538,7 @@ enum Code {
     SnapshotRestoreDiskFull,
     TargetNotFound,
     TargetRefused(ComponentServiceRefusal),
+    TargetUnsupported,
 }
 
 impl Code {
@@ -571,6 +585,7 @@ impl Code {
                  ({kind}); check the executor's access to the component service and the target \
                  revision, then request the update again"
             ),
+            Self::TargetUnsupported => UPDATE_TARGET_REFUSED.to_string(),
         }
     }
 }
@@ -649,6 +664,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         // loads the snapshot again.
         Column::ManualPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
+            Problem::TargetUnsupported => coded(Code::TargetUnsupported),
             Problem::ModeChange
             | Problem::RestoreConflict
             | Problem::ManualLoadFailed
@@ -676,6 +692,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         Column::InitialFiles => Cell::Pass,
         Column::AutomaticPending(base) => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
+            Problem::TargetUnsupported => coded(Code::TargetUnsupported),
             Problem::ModeChange => fail,
             Problem::Disabled
             | Problem::Restore(_)
@@ -693,6 +710,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         },
         Column::AssistedPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
+            Problem::TargetUnsupported => coded(Code::TargetUnsupported),
             Problem::StaleSource
             | Problem::ModeChange
             | Problem::RestoreConflict
@@ -825,6 +843,8 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
             _ => format!("Automatic update failed: {}", raw_text(error)),
         },
         RawStartError::TargetFetch(_)
+        | RawStartError::TargetLoad(_)
+        | RawStartError::TargetUnsupported(_)
         | RawStartError::Disabled
         | RawStartError::Filesystem(_)
         | RawStartError::Finish(_)
@@ -840,8 +860,10 @@ fn raw_text(error: &RawStartError<'_>) -> String {
             found.revision, found.start_index
         ),
         RawStartError::TargetFetch(error)
+        | RawStartError::TargetLoad(error)
         | RawStartError::Instantiation(error)
         | RawStartError::Replay { error, .. } => error.to_string(),
+        RawStartError::TargetUnsupported(reason) => reason.to_string(),
         RawStartError::ModeChange(text) => text.to_string(),
         RawStartError::Disabled => SnapshotsDisabled.to_string(),
         RawStartError::Filesystem(error) | RawStartError::Finish(error) => error.to_string(),
@@ -877,6 +899,7 @@ impl RawStartError<'_> {
                 reconstruction_startup_error(error)
             }
             RawStartError::TargetFetch(error)
+            | RawStartError::TargetLoad(error)
             | RawStartError::Instantiation(error)
             | RawStartError::Replay { error, .. } => (*error).clone(),
             RawStartError::Load(
@@ -889,6 +912,7 @@ impl RawStartError<'_> {
                 WorkerExecutorError::Interrupted { kind: *kind }
             }
             RawStartError::StaleSource(_)
+            | RawStartError::TargetUnsupported(_)
             | RawStartError::ModeChange(_)
             | RawStartError::Disabled
             | RawStartError::Load(_)
@@ -961,6 +985,264 @@ mod tests {
         head(PendingUpdateKind::Automatic, 12, 10)
     }
 
+    #[test]
+    fn cancelled_compilation_keeps_the_update_pending() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let join_error = runtime.block_on(async {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.await.unwrap();
+            // A blocking task can be cancelled only before it starts. Occupy the sole thread.
+            let compilation = tokio::task::spawn_blocking(|| ());
+            compilation.abort();
+            release_tx.send(()).unwrap();
+            blocker.await.unwrap();
+            compilation.await.unwrap_err()
+        });
+        assert!(join_error.is_cancelled());
+        let error = crate::services::component::compilation_join_error(join_error);
+        let action = decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::TargetLoad(&error),
+        );
+        assert!(
+            matches!(
+                action,
+                StartAction::Error(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Restart
+                })
+            ),
+            "cancelled compilation must interrupt startup without failing the update: {action:?}"
+        );
+    }
+
+    #[test]
+    async fn panicked_compilation_keeps_the_update_pending() {
+        let join_error = tokio::task::spawn_blocking(|| panic!("compile task panic"))
+            .await
+            .unwrap_err();
+        assert!(join_error.is_panic());
+        let error = crate::services::component::compilation_join_error(join_error);
+        let action = decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::TargetLoad(&error),
+        );
+        assert!(
+            matches!(
+                action,
+                StartAction::Error(WorkerExecutorError::Runtime { .. })
+            ),
+            "a compiler panic must retry startup without failing the update: {action:?}"
+        );
+    }
+
+    #[test]
+    fn target_load_executor_errors_preserve_every_pending_update() {
+        let errors = [
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Restart,
+            },
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Interrupt(Timestamp::from(1_000)),
+            },
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Suspend(Timestamp::from(2_000)),
+            },
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            },
+            WorkerExecutorError::RecoveryRequired {
+                retry_from: Some(OplogIndex::from_u64(5)),
+                details: "retry target load".to_string(),
+            },
+            WorkerExecutorError::runtime("compile task panic"),
+        ];
+        let automatic = automatic_head();
+        let manual = manual_head();
+        let assisted = assisted_head();
+        let cases = [
+            (BaselineRole::InitialFiles, automatic.clone()),
+            (BaselineRole::ManualPromoted, automatic.clone()),
+            (BaselineRole::AssistedPromoted, automatic),
+            (
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
+                manual,
+            ),
+            (
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+                assisted,
+            ),
+        ];
+        for (role, head) in cases {
+            for error in &errors {
+                let action = decide_now(&role, Some(&head), RawStartError::TargetLoad(error));
+                assert!(
+                    matches!(&action, StartAction::Error(passed) if passed == error),
+                    "executor failures must pass through for {role:?}: {action:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_runtime_failures_and_component_parse_failures_still_fail_updates() {
+        let runtime = WorkerExecutorError::runtime("metadata could not be parsed");
+        let parse = WorkerExecutorError::ComponentParseFailed {
+            component_id: component_id(),
+            component_revision: revision(3),
+            reason: "invalid component".to_string(),
+        };
+        for problem in [
+            RawStartError::TargetFetch(&runtime),
+            RawStartError::TargetLoad(&parse),
+        ] {
+            assert!(matches!(
+                decide_now(
+                    &BaselineRole::InitialFiles,
+                    Some(&automatic_head()),
+                    problem
+                ),
+                StartAction::FailUpdate { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn shared_memory_target_is_refused_without_a_snapshot_fault() {
+        let bytes = wat::parse_str(
+            "(component (core module $m (memory 1 1 shared)) (core instance (instantiate $m)))",
+        )
+        .unwrap();
+        let metadata =
+            golem_common::model::component_metadata::ComponentMetadata::analyse_component(
+                &bytes,
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap();
+        assert!(metadata.has_shared_linear_memory());
+        let reason = crate::services::component::component_support_error(&metadata)
+            .expect("shared memory must fail metadata support validation");
+
+        let engine = wasmtime::Engine::new(
+            &golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache(),
+        )
+        .unwrap();
+        let compilation_error = wasmtime::component::Component::from_binary(&engine, &bytes)
+            .err()
+            .expect("the production engine must reject shared memory");
+        assert!(!compilation_error.to_string().is_empty());
+        let automatic = automatic_head();
+        let manual = manual_head();
+        let assisted = assisted_head();
+        let cases = [
+            (BaselineRole::InitialFiles, automatic.clone()),
+            (BaselineRole::ManualPromoted, automatic.clone()),
+            (BaselineRole::AssistedPromoted, automatic),
+            (
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
+                manual,
+            ),
+            (
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+                assisted,
+            ),
+        ];
+        for (role, head) in cases {
+            let (entry, reject) = failed_entry(decide_now(
+                &role,
+                Some(&head),
+                RawStartError::TargetUnsupported(reason),
+            ));
+            let (target, details, assisted, attempt, fault) = entry_fields(&entry);
+            assert_eq!(target, revision(3));
+            assert_eq!(attempt, Some(head.admission_index));
+            assert_eq!(
+                assisted,
+                matches!(head.kind, PendingUpdateKind::SnapshotAssistedAutomatic(_))
+                    .then_some(assisted_details())
+            );
+            assert_eq!(fault, None);
+            assert_eq!(reject, None);
+            assert_eq!(
+                details,
+                "UPDATE_TARGET_REFUSED: The target revision uses WebAssembly threads, which Golem does not support"
+            );
+            assert!(matches!(
+                decide(
+                    &role,
+                    Some(&head),
+                    RawStartError::TargetUnsupported(reason),
+                    &agent_id(),
+                    true
+                ),
+                StartAction::ShardLost
+            ));
+        }
+    }
+
+    #[test]
+    fn unsupported_target_preserves_a_non_thread_refusal_reason() {
+        let reason = "The target revision requires a disabled Wasm feature";
+        for (role, head) in [
+            (BaselineRole::InitialFiles, automatic_head()),
+            (
+                BaselineRole::ManualPending(Arc::new(manual_head())),
+                manual_head(),
+            ),
+            (
+                BaselineRole::AssistedPending(Arc::new(assisted_head())),
+                assisted_head(),
+            ),
+        ] {
+            let (entry, reject) = failed_entry(decide_now(
+                &role,
+                Some(&head),
+                RawStartError::TargetUnsupported(reason),
+            ));
+            let (_, details, _, attempt, fault) = entry_fields(&entry);
+            assert_eq!(
+                details,
+                "UPDATE_TARGET_REFUSED: The target revision requires a disabled Wasm feature"
+            );
+            assert_eq!(attempt, Some(head.admission_index));
+            assert_eq!(fault, None);
+            assert_eq!(reject, None);
+        }
+    }
+
+    #[test]
+    fn ordinary_instantiation_errors_are_not_target_refusals() {
+        let error = WorkerExecutorError::worker_creation_failed(
+            agent_id(),
+            crate::services::linear_memory::SHARED_LINEAR_MEMORY_ERROR,
+        );
+        assert!(super::super::is_infrastructure_recovery_error(&error));
+        let action = decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::Instantiation(&error),
+        );
+        assert!(
+            matches!(
+                action,
+                StartAction::Error(WorkerExecutorError::AgentCreationFailed { .. })
+            ),
+            "only the typed unsupported-target outcome refuses an update: {action:?}"
+        );
+    }
+
     fn storage() -> FilesystemStorageError {
         FilesystemStorageError::verification("seed initial file", Path::new("<scripted>"))
     }
@@ -1028,7 +1310,7 @@ mod tests {
                     false,
                 ) => "Fx",
                 (Some(Code::TargetNotFound), None, false) => "Fn",
-                (Some(Code::TargetRefused(_)), None, false) => "Fz",
+                (Some(Code::TargetRefused(_) | Code::TargetUnsupported), None, false) => "Fz",
                 _ => "?",
             },
             Cell::Visible => "V",
@@ -1061,8 +1343,13 @@ mod tests {
             Column::AssistedPromoted,
         ];
         let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-        let table: [(Problem, [&str; 7]); 33] = [
+        let table: [(Problem, [&str; 7]); 35] = [
             (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
+            (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
+            (
+                Problem::TargetUnsupported,
+                ["P", "Fz", "P", "P", "Fz", "Fz", "P"],
+            ),
             (
                 Problem::Target(FetchProblem::Unavailable),
                 ["P", "P", "P", "P", "P", "P", "P"],

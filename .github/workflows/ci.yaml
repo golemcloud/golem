@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.6"
+  WASM_RQUICKJS_VERSION: "0.4.10"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -116,7 +116,7 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -1290,6 +1290,11 @@ jobs:
       - name: Extract built Effect SDK
         if: matrix.chunk.needs-effect
         run: tar -xzf tmp/effect-sdk-artifacts/golem-effect-sdk.tar.gz
+
+      - name: Install Effect SDK dependencies
+        if: matrix.chunk.needs-effect
+        working-directory: sdks/effect
+        run: npm ci
 
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node

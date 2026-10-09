@@ -18,7 +18,10 @@ package golem.bridge.runtime
 
 import golem.bridge.runtime.json.Json
 
-/** A single application-JSON configuration override entry of a create-agent request. */
+/**
+ * A single application-JSON configuration override entry of a create-agent
+ * request.
+ */
 final case class AgentConfigEntry(path: List[String], value: Json)
 
 /** Body of a `POST /v1/agents/create-agent` request. */
@@ -83,37 +86,91 @@ final case class InvocationReceipt(agentId: AgentId, idempotencyKey: String)
  */
 object BridgeProtocol {
 
-  def encodeCreateAgentRequest(request: CreateAgentRequest): Json = {
-    val base = Vector[(String, Json)](
-      "appName"       -> Json.string(request.appName),
-      "envName"       -> Json.string(request.envName),
-      "agentTypeName" -> Json.string(request.agentTypeName),
-      "parameters"    -> SchemaValueCodec.toJson(request.parameters)
+  def encodeCreateAgentRequest(request: CreateAgentRequest): Json =
+    Json.obj(createFields(request)(Json.string, SchemaValueCodec.toJson, encodeConfig))
+
+  def encodeAgentInvocationRequest(request: AgentInvocationRequest): Json =
+    Json.obj(invocationFields(request)(Json.string, SchemaValueCodec.toJson, encodeConfig))
+
+  def renderCreateAgentRequest(request: CreateAgentRequest): String =
+    renderFields(createFields(request)(writeString, writeSchema, writeConfig))
+
+  def renderAgentInvocationRequest(request: AgentInvocationRequest): String =
+    renderFields(invocationFields(request)(writeString, writeSchema, writeConfig))
+
+  private def createFields[A](request: CreateAgentRequest)(
+    string: String => A,
+    schema: SchemaValue => A,
+    config: List[AgentConfigEntry] => A
+  ): Vector[(String, A)] = {
+    val base = Vector(
+      "appName"       -> string(request.appName),
+      "envName"       -> string(request.envName),
+      "agentTypeName" -> string(request.agentTypeName),
+      "parameters"    -> schema(request.parameters)
     )
     val withPhantom = request.phantomId match {
-      case Some(id) => base :+ ("phantomId" -> Json.string(id))
+      case Some(id) => base :+ ("phantomId" -> string(id))
       case None     => base
     }
-    val config = Json.arr(request.config.map(encodeConfigEntry).toVector)
-    Json.obj(withPhantom :+ ("config" -> config))
+    withPhantom :+ ("config" -> config(request.config))
   }
 
-  def encodeAgentInvocationRequest(request: AgentInvocationRequest): Json = {
-    var fields = Vector[(String, Json)](
-      "appName"          -> Json.string(request.appName),
-      "envName"          -> Json.string(request.envName),
-      "agentTypeName"    -> Json.string(request.agentTypeName),
-      "parameters"       -> SchemaValueCodec.toJson(request.parameters),
-      "config"           -> Json.arr(request.config.map(encodeConfigEntry).toVector),
-      "methodName"       -> Json.string(request.methodName),
-      "methodParameters" -> SchemaValueCodec.toJson(request.methodParameters),
-      "mode"             -> Json.string(request.mode)
+  private def invocationFields[A](request: AgentInvocationRequest)(
+    string: String => A,
+    schema: SchemaValue => A,
+    config: List[AgentConfigEntry] => A
+  ): Vector[(String, A)] = {
+    var fields = Vector(
+      "appName"          -> string(request.appName),
+      "envName"          -> string(request.envName),
+      "agentTypeName"    -> string(request.agentTypeName),
+      "parameters"       -> schema(request.parameters),
+      "config"           -> config(request.config),
+      "methodName"       -> string(request.methodName),
+      "methodParameters" -> schema(request.methodParameters),
+      "mode"             -> string(request.mode)
     )
-    request.phantomId.foreach(id => fields = fields :+ ("phantomId" -> Json.string(id)))
-    request.scheduleAt.foreach(at => fields = fields :+ ("scheduleAt" -> Json.string(at)))
-    request.idempotencyKey.foreach(k => fields = fields :+ ("idempotencyKey" -> Json.string(k)))
-    Json.obj(fields)
+    request.phantomId.foreach(id => fields = fields :+ ("phantomId" -> string(id)))
+    request.scheduleAt.foreach(at => fields = fields :+ ("scheduleAt" -> string(at)))
+    request.idempotencyKey.foreach(k => fields = fields :+ ("idempotencyKey" -> string(k)))
+    fields
   }
+
+  private def writeString(value: String): java.lang.StringBuilder => Unit =
+    output => { output.append(Json.string(value).render); () }
+
+  private def writeSchema(value: SchemaValue): java.lang.StringBuilder => Unit =
+    output => SchemaValueCodec.writeJson(value, output)
+
+  private def renderFields(fields: Vector[(String, java.lang.StringBuilder => Unit)]): String = {
+    val output = new java.lang.StringBuilder("{")
+    fields.zipWithIndex.foreach { case ((name, write), index) =>
+      if (index != 0) output.append(',')
+      writeString(name)(output)
+      output.append(':')
+      write(output)
+    }
+    output.append('}').toString
+  }
+
+  private def writeConfig(entries: List[AgentConfigEntry]): java.lang.StringBuilder => Unit = output => {
+    output.append('[')
+    entries.zipWithIndex.foreach { case (entry, index) =>
+      if (index != 0) output.append(',')
+      output.append("{\"path\":[")
+      entry.path.zipWithIndex.foreach { case (part, index) =>
+        if (index != 0) output.append(',')
+        writeString(part)(output)
+      }
+      output.append("],\"value\":").append(entry.value.render).append('}')
+    }
+    output.append(']')
+    ()
+  }
+
+  private def encodeConfig(entries: List[AgentConfigEntry]): Json =
+    Json.arr(entries.map(encodeConfigEntry).toVector)
 
   private def encodeConfigEntry(entry: AgentConfigEntry): Json =
     Json.obj(
@@ -141,7 +198,7 @@ object BridgeProtocol {
   /** Decode a present `TypedSchemaValue` against its returned schema graph. */
   private def decodeResultValue(json: Json): Either[String, Option[SchemaValue]] =
     Json.field(json, "result") match {
-      case None => Right(None)
+      case None        => Right(None)
       case Some(typed) =>
         for {
           _     <- Json.asObject(typed)
@@ -152,7 +209,7 @@ object BridgeProtocol {
 
   private def optionalBigInt(json: Json, name: String): Either[String, Option[BigInt]] =
     Json.field(json, name) match {
-      case None => Right(None)
+      case None        => Right(None)
       case Some(field) =>
         Json.asNumberLiteral(field).flatMap { literal =>
           try Right(Some(BigDecimal(literal).toBigInt))

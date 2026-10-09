@@ -1,0 +1,5 @@
+error: Both load_snapshot_parts and save_snapshot_parts must be implemented together
+  --> tests/ui/fail/multipart_snapshot_incomplete.rs:10:21
+   |
+10 | impl PartsAgent for PartsImpl {
+   |                     ^^^^^^^^^

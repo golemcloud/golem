@@ -423,6 +423,12 @@ data/control pair or control-only checkpoint. Partial bodies and SSE data withou
 advance the checkpoint. The SDK retains the pending batch and item/byte index and fetches again
 only after draining it. `now` is resolved once by catch-up. Up-to-date and empty results are not
 EOF; only the closed flag ends a stream, after delivering the final payload. HTTP 410 is an error.
+HTTP `Stream-Closed` is set only by case-insensitive `true`; other textual values, including
+empty, are unset. Duplicate, non-textual and oversized headers remain protocol errors.
+`Stream-Up-To-Date` retains its separate strict flag parser. Golem gateway stream and session
+metadata responses emit `Stream-Closed: true` when applicable and otherwise omit it; session
+manifest `closed` fields remain JSON booleans. Successful SSE reads use JSON control flags,
+not the HTTP flag parser.
 
 Append `Start` records the resource ID, exact sequence, payload and close flag; the writer
 descriptor supplies the producer ID and epoch. JSON values

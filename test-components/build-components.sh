@@ -5,7 +5,7 @@ IFS=$'\n\t'
 # Spread the multi-component applications across chunks to balance compilation cost.
 rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" "trapped-leaf-observer" "agent-updates-v1" "agent-mcp" "agent-updates-v4" "tool-runtime-bypass" "agent-sdk-rust" "agent-counters" "agent-updates-v3" "initial-file-system" "scalability" "output-redaction" "host-api-tests" "agent-updates-v2" "oplog-processor" "audit-middleware" "agent-invocation-context" "http-tests")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
-effect_test_apps=("tool-streaming-effect")
+effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect")
 scala_test_apps=("tool-streaming-scala")
 moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
 benchmark_apps=("benchmarks")
@@ -73,7 +73,7 @@ print_groups_json() {
   printf '%s{"name":"effect","needs-node":true,"needs-effect":true}' "$sep"
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
-  printf ',{"name":"benchmarks","needs-node":true,"needs-moonbit":false}]\n'
+  printf ',{"name":"benchmarks","needs-node":true,"needs-effect":true,"needs-moonbit":false}]\n'
 }
 
 clean_only=false
