@@ -699,6 +699,11 @@ fn decode(graph: &SchemaGraph, ty: &SchemaType, raw: &str) -> Result<SchemaValue
         SchemaType::Bool { .. } if raw.eq_ignore_ascii_case("false") => {
             serde_json::Value::Bool(false)
         }
+        // The canonical JSON form of a 64-bit integer is a string, so a plain number goes in as
+        // its digits. The quoted form still parses below.
+        SchemaType::U64 { .. } | SchemaType::S64 { .. } if !raw.starts_with('"') => {
+            serde_json::Value::String(raw.into())
+        }
         _ => serde_json::from_str(raw).map_err(|e| format!("invalid value {raw:?}: {e}"))?,
     };
     crate::schema::render::from_untrusted_json_value(graph, ty, &json)

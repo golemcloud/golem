@@ -1048,3 +1048,40 @@ fn a_value_from_a_variable_counts_as_given_for_constraints() {
         "{both:?}"
     );
 }
+
+#[test]
+fn sixty_four_bit_integers_are_written_as_plain_numbers() {
+    let mut b = body();
+    b.positionals.fixed = vec![
+        positional("offset", SchemaType::u64()),
+        positional("delta", SchemaType::s64()),
+    ];
+    b.options
+        .push(option("limit", OptionShape::Scalar(SchemaType::u64())));
+    let t = tool(b);
+    assert_eq!(
+        values(&t, &["201", "-5", "--limit", "18446744073709551615"]),
+        vec![
+            SchemaValue::U64(201),
+            SchemaValue::S64(-5),
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U64(u64::MAX)))
+            },
+        ]
+    );
+    // The quoted form, a 64-bit integer's canonical JSON, still parses.
+    assert_eq!(
+        values(&t, &["\"201\"", "\"-5\""])[..2],
+        [SchemaValue::U64(201), SchemaValue::S64(-5)]
+    );
+    for args in [
+        vec!["18446744073709551616", "0"],
+        vec!["0", "9223372036854775808"],
+        vec!["-1", "0"],
+        vec!["1.5", "0"],
+        vec!["many", "0"],
+        vec!["007", "0"],
+    ] {
+        assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
+    }
+}
