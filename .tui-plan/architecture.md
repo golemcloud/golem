@@ -48,6 +48,13 @@ Only placement and ratios are preferences. Scope, filters, route depth,
 buffers, cursors, and query text are session data. A context change resets the
 latter and preserves the former.
 
+Agent scope is transferred only by an explicit action. Oplog retains the exact
+one-Agent or included-set route and never adopts a hidden Agent-table
+selection when its root is opened. Metrics retains the transferred Agent
+scope in its page state while preserving environment scope as an explicit
+choice. Stream accepts either the exact full-Agent route or exactly one
+included Agent; a mixed set cannot be connected accidentally.
+
 ## Providers and Caching
 
 - Reuse neutral data-returning command-handler helpers where CLI and TUI share

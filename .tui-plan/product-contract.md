@@ -129,6 +129,10 @@ that field unavailable instead of presenting zero warnings.
   followed by Scope, Time, Live/Paused, and Refresh.
 - First entry defaults to Agent Dashboard, environment scope, and 15 minutes.
   Presets are 5m, 15m, 1h, 6h, 24h, and 7d plus custom absolute from/to.
+- An Agent handoff retains the exact selected Agent or included set until the
+  user explicitly returns Metrics to environment scope. Switching to Server
+  metrics leaves that Agent scope dormant rather than applying it to server
+  series.
 - Dashboard panels form a scrollable responsive grid: stats plus two columns
   when wide, one panel per row at medium width, and one focused panel when
   narrow.

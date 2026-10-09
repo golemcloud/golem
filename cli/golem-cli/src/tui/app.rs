@@ -2505,6 +2505,18 @@ impl TuiApp {
                 self.close_palette();
                 self.toggle_stream_session(event_tx);
             }
+            ActionId::OpenAgentScopeInOplog => {
+                self.close_palette();
+                self.open_agent_scope_in_oplog(event_tx);
+            }
+            ActionId::OpenAgentScopeInMetrics => {
+                self.close_palette();
+                self.open_agent_scope_in_metrics(event_tx);
+            }
+            ActionId::UseEnvironmentMetricsScope => {
+                self.close_palette();
+                self.use_environment_metrics_scope(event_tx);
+            }
             ActionId::CycleAgentMode => {
                 self.cycle_agent_mode(event_tx);
                 self.close_palette();
@@ -2626,6 +2638,16 @@ impl TuiApp {
             }
             ActionId::ToggleAgentStream if self.stream_target_candidate().is_none() => {
                 ActionAvailability::Unavailable("select one exact Agent")
+            }
+            ActionId::OpenAgentScopeInOplog | ActionId::OpenAgentScopeInMetrics
+                if self.agent_handoff_scope().is_empty() =>
+            {
+                ActionAvailability::Unavailable("select or include at least one Agent")
+            }
+            ActionId::OpenAgentScopeInOplog | ActionId::OpenAgentScopeInMetrics
+                if self.agent_handoff_scope().len() > activity::HARD_AGENT_LIMIT =>
+            {
+                ActionAvailability::Unavailable("include at most 20 Agents")
             }
             ActionId::OpenContextPicker if self.context_switch_busy() => {
                 ActionAvailability::Unavailable("context switch already running")
@@ -3114,11 +3136,17 @@ impl TuiApp {
                 .or_else(|| self.stream.target.clone());
         }
         if self.ops.active() == OpsDestination::Agents {
-            return self.ops.current_agent().cloned().or_else(|| {
-                self.filtered_agents()
+            if let Some(agent) = self.ops.current_agent() {
+                return Some(agent.clone());
+            }
+            return match self.agents.included.len() {
+                0 => self
+                    .filtered_agents()
                     .get(self.agents.selected)
-                    .map(|agent| agent.identity())
-            });
+                    .map(|agent| agent.identity()),
+                1 => self.agents.included.iter().next().cloned(),
+                _ => None,
+            };
         }
         if self.ops.active() == OpsDestination::Oplog {
             return self
@@ -3127,6 +3155,58 @@ impl TuiApp {
                 .and_then(|route| (route.agents.len() == 1).then(|| route.agents[0].clone()));
         }
         self.stream.target.clone()
+    }
+
+    fn agent_handoff_scope(&self) -> Vec<AgentIdentity> {
+        if let Some(agent) = self.ops.current_agent() {
+            return vec![agent.clone()];
+        }
+        let mut agents = if self.agents.included.is_empty() {
+            self.filtered_agents()
+                .get(self.agents.selected)
+                .map(|agent| vec![agent.identity()])
+                .unwrap_or_default()
+        } else {
+            self.agents.included.iter().cloned().collect::<Vec<_>>()
+        };
+        agents.sort_by(|left, right| {
+            left.component
+                .cmp(&right.component)
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+        });
+        agents
+    }
+
+    fn open_agent_scope_in_oplog(&mut self, event_tx: Option<&TuiEventSender>) {
+        let agents = self.agent_handoff_scope();
+        if agents.is_empty() || agents.len() > activity::HARD_AGENT_LIMIT {
+            return;
+        }
+        self.ops.open_oplog(OplogRoute {
+            agents,
+            focus: None,
+            from_unix_nanos: None,
+            to_unix_nanos: None,
+        });
+        self.invalidate_activity();
+        self.refresh_activity(event_tx);
+    }
+
+    fn open_agent_scope_in_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
+        let agents = self.agent_handoff_scope();
+        if agents.is_empty() || agents.len() > activity::HARD_AGENT_LIMIT {
+            return;
+        }
+        self.metrics.source = crate::model::local_observability::LocalMetricSource::Agents;
+        self.metrics.agent_scope = agents;
+        self.active_workspace = Workspace::Ops;
+        self.ops.select(OpsDestination::Metrics);
+        self.reload_metrics(event_tx);
+    }
+
+    fn use_environment_metrics_scope(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.metrics.agent_scope.clear();
+        self.reload_metrics(event_tx);
     }
 
     fn stream_session_active(&self) -> bool {
@@ -3185,46 +3265,16 @@ impl TuiApp {
     }
 
     fn activity_scope(&self) -> Option<Vec<ActivityAgent>> {
-        if let Some(route) = self.ops.current_oplog() {
-            return Some(
-                route
-                    .agents
-                    .iter()
-                    .map(|agent| ActivityAgent {
-                        component: agent.component.clone(),
-                        agent_id: agent.agent_id.clone(),
-                    })
-                    .collect(),
-            );
-        }
-        if let Some(agent) = self.ops.current_agent() {
-            return Some(vec![ActivityAgent {
-                component: agent.component.clone(),
-                agent_id: agent.agent_id.clone(),
-            }]);
-        }
-        let mut agents = if self.agents.included.is_empty() {
-            self.filtered_agents()
-                .get(self.agents.selected)
-                .map(|agent| vec![agent.identity()])
-                .unwrap_or_default()
-        } else {
-            self.agents.included.iter().cloned().collect::<Vec<_>>()
-        };
-        agents.sort_by(|left, right| {
-            left.component
-                .cmp(&right.component)
-                .then_with(|| left.agent_id.cmp(&right.agent_id))
-        });
-        Some(
-            agents
-                .into_iter()
+        self.ops.current_oplog().map(|route| {
+            route
+                .agents
+                .iter()
                 .map(|agent| ActivityAgent {
-                    component: agent.component,
-                    agent_id: agent.agent_id,
+                    component: agent.component.clone(),
+                    agent_id: agent.agent_id.clone(),
                 })
-                .collect(),
-        )
+                .collect()
+        })
     }
 
     fn refresh_activity(&mut self, event_tx: Option<&TuiEventSender>) {
@@ -3233,7 +3283,8 @@ impl TuiApp {
         }
         let Some(agents) = self.activity_scope() else {
             self.activity.error = Some(
-                "Oplog requires the selected Agent or an explicit included Agent set".to_string(),
+                "Oplog has no Agent scope; use an Agent action to open the selected Agent or included set"
+                    .to_string(),
             );
             return;
         };
@@ -3805,6 +3856,7 @@ impl TuiApp {
 
     fn open_overview_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
         self.metrics.source = crate::model::local_observability::LocalMetricSource::Agents;
+        self.metrics.agent_scope.clear();
         self.metrics.mode = MetricsMode::Dashboard;
         self.metrics.range = metrics::MetricsRange::Minutes15;
         self.metrics.live = true;
@@ -4068,12 +4120,15 @@ impl TuiApp {
 
     fn metrics_query(&self, load: MetricsLoad) -> Option<MetricsQuery> {
         let source = self.metrics.source;
-        let agent_ids = match (source, self.ops.current_agent()) {
-            (crate::model::local_observability::LocalMetricSource::Agents, Some(agent)) => {
-                vec![agent.agent_id.clone()]
-            }
-            _ => Vec::new(),
-        };
+        let agent_ids = (source == crate::model::local_observability::LocalMetricSource::Agents)
+            .then(|| {
+                self.metrics
+                    .agent_scope
+                    .iter()
+                    .map(|agent| agent.agent_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         Some(MetricsQuery {
             source,
             mode: self.metrics.mode,
@@ -10922,8 +10977,9 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     };
     PaneHeader {
         title: &format!(
-            "Metrics · {mode} · {sources} · scope environment · time [{}] · {live}{freshness}{loading}",
-            app.metrics.range.label()
+            "Metrics · {mode} · {sources} · scope {} · time [{}] · {live}{freshness}{loading}",
+            app.metrics.scope_label(),
+            app.metrics.range.label(),
         ),
         focus: PaneFocus::Active,
         left_connector: Some("├"),
@@ -14123,6 +14179,8 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
                 ActionId::ToggleAgentDetails,
                 ActionId::CycleAgentMode,
                 ActionId::ToggleAgentStream,
+                ActionId::OpenAgentScopeInOplog,
+                ActionId::OpenAgentScopeInMetrics,
             ],
         );
         push_raw_help(&mut lines, width, "type", "Find within loaded agents");
@@ -14156,6 +14214,20 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             "Columns and collection actions",
         );
         push_raw_help(&mut lines, width, "ctrl+x l", "Resize or hide details");
+    } else if app.ops_document_focused() {
+        push_action_section_for_app(
+            &mut lines,
+            app,
+            width,
+            "Agent",
+            &[
+                ActionId::ToggleAgentStream,
+                ActionId::OpenAgentScopeInOplog,
+                ActionId::OpenAgentScopeInMetrics,
+            ],
+        );
+        push_raw_help(&mut lines, width, "up / down", "Scroll Agent details");
+        push_raw_help(&mut lines, width, "esc", "Return to Agents");
     } else {
         push_section_break(&mut lines, width, "Ops subject");
         push_raw_help(&mut lines, width, "up / down", "Scroll Overview");
@@ -16075,6 +16147,9 @@ enum ActionId {
     CycleAgentMode,
     ToggleAgentDetails,
     ToggleAgentStream,
+    OpenAgentScopeInOplog,
+    OpenAgentScopeInMetrics,
+    UseEnvironmentMetricsScope,
     NextOpsDestination,
     PreviousOpsDestination,
     CycleAgentFindScope,
@@ -16496,6 +16571,36 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
+        id: ActionId::OpenAgentScopeInOplog,
+        label: "Open Agent Scope in Oplog",
+        description: "Use the selected Agent or included set",
+        shortcut: None,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::OpenAgentScopeInMetrics,
+        label: "Open Agent Scope in Metrics",
+        description: "Use the selected Agent or included set",
+        shortcut: None,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::UseEnvironmentMetricsScope,
+        label: "Use Environment Metrics Scope",
+        description: "Clear the retained Agent scope",
+        shortcut: None,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
+        execution_kind: ActionExecution::Internal,
+        palette_visible: true,
+    },
+    ActionDefinition {
         id: ActionId::NextOpsDestination,
         label: "Next Ops Destination",
         description: "Open the next Ops destination",
@@ -16730,6 +16835,23 @@ fn action_visible_for_state(id: ActionId, app: &TuiApp) -> bool {
         | ActionId::CycleAgentMode
         | ActionId::ToggleAgentDetails
         | ActionId::CycleAgentFindScope => app.ops_agents_focused(),
+        ActionId::OpenAgentScopeInOplog | ActionId::OpenAgentScopeInMetrics => {
+            app.active_workspace == Workspace::Ops && app.ops.active() == OpsDestination::Agents
+        }
+        ActionId::ToggleAgentStream => {
+            app.active_workspace == Workspace::Ops
+                && matches!(
+                    app.ops.active(),
+                    OpsDestination::Agents | OpsDestination::Oplog | OpsDestination::Stream
+                )
+        }
+        ActionId::UseEnvironmentMetricsScope => {
+            app.active_workspace == Workspace::Ops
+                && app.ops.active() == OpsDestination::Metrics
+                && app.metrics.source
+                    == crate::model::local_observability::LocalMetricSource::Agents
+                && !app.metrics.agent_scope.is_empty()
+        }
         ActionId::StartServer => matches!(
             app.server.run.status,
             ServerStatus::Stopped | ServerStatus::Failed
@@ -17876,7 +17998,7 @@ mod tests {
         assert_eq!(visible_count(ActionCategory::GoTo), 15);
         assert_eq!(visible_count(ActionCategory::Run), 12);
         assert_eq!(visible_count(ActionCategory::View), 7);
-        assert_eq!(visible_count(ActionCategory::Explore), 9);
+        assert_eq!(visible_count(ActionCategory::Explore), 12);
         assert_eq!(visible_count(ActionCategory::Tui), 2);
     }
 
@@ -19037,6 +19159,198 @@ mod tests {
     }
 
     #[test]
+    fn included_agent_scope_opens_a_sorted_retained_oplog_route() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.included = [
+            AgentIdentity {
+                component: "orders".to_string(),
+                agent_id: "order-1".to_string(),
+            },
+            AgentIdentity {
+                component: "cart".to_string(),
+                agent_id: "cart-2".to_string(),
+            },
+        ]
+        .into_iter()
+        .collect();
+
+        app.execute_action(ActionId::OpenAgentScopeInOplog, None);
+
+        assert_eq!(app.ops.active(), OpsDestination::Oplog);
+        assert_eq!(
+            app.ops.current_oplog(),
+            Some(&OplogRoute {
+                agents: vec![
+                    AgentIdentity {
+                        component: "cart".to_string(),
+                        agent_id: "cart-2".to_string(),
+                    },
+                    AgentIdentity {
+                        component: "orders".to_string(),
+                        agent_id: "order-1".to_string(),
+                    },
+                ],
+                focus: None,
+                from_unix_nanos: None,
+                to_unix_nanos: None,
+            })
+        );
+    }
+
+    #[test]
+    fn agent_scope_is_retained_by_metrics_until_explicitly_cleared() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.included = [
+            AgentIdentity {
+                component: "orders".to_string(),
+                agent_id: "order-1".to_string(),
+            },
+            AgentIdentity {
+                component: "cart".to_string(),
+                agent_id: "cart-1".to_string(),
+            },
+        ]
+        .into_iter()
+        .collect();
+
+        app.execute_action(ActionId::OpenAgentScopeInMetrics, None);
+
+        assert_eq!(app.ops.active(), OpsDestination::Metrics);
+        assert_eq!(
+            app.metrics
+                .agent_scope
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cart-1", "order-1"]
+        );
+        assert_eq!(
+            app.metrics_query(MetricsLoad::Replace)
+                .expect("metrics query")
+                .agent_ids,
+            vec!["cart-1", "order-1"]
+        );
+        assert!(
+            palette_actions(PaletteScope::Context, &app)
+                .iter()
+                .any(|action| action.id == ActionId::UseEnvironmentMetricsScope)
+        );
+        let frame = render_app_text_at(&app, 160, 28);
+        assert!(frame.contains("scope 2 Agents"), "{frame}");
+
+        app.execute_action(ActionId::UseEnvironmentMetricsScope, None);
+
+        assert!(app.metrics.agent_scope.is_empty());
+        assert!(
+            app.metrics_query(MetricsLoad::Replace)
+                .expect("metrics query")
+                .agent_ids
+                .is_empty()
+        );
+        assert!(
+            palette_actions(PaletteScope::Context, &app)
+                .iter()
+                .all(|action| action.id != ActionId::UseEnvironmentMetricsScope)
+        );
+    }
+
+    #[test]
+    fn full_agent_route_handoffs_only_that_exact_agent() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.included = app
+            .agents
+            .agents
+            .iter()
+            .map(AgentListItem::identity)
+            .collect();
+        let exact = AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-2".to_string(),
+        };
+        app.ops.open_agent(exact.clone());
+
+        let actions = palette_actions(PaletteScope::Context, &app);
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.id == ActionId::OpenAgentScopeInOplog)
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.id == ActionId::OpenAgentScopeInMetrics)
+        );
+
+        app.execute_action(ActionId::OpenAgentScopeInMetrics, None);
+
+        assert_eq!(app.metrics.agent_scope, vec![exact]);
+        assert_eq!(app.metrics.scope_label(), "Agent cart-2");
+    }
+
+    #[test]
+    fn agent_handoff_actions_enforce_the_oplog_scope_limit() {
+        let mut app = test_app();
+        app.agents.included = (0..=activity::HARD_AGENT_LIMIT)
+            .map(|index| AgentIdentity {
+                component: "cart".to_string(),
+                agent_id: format!("cart-{index}"),
+            })
+            .collect();
+
+        assert_eq!(
+            app.action_availability(action(ActionId::OpenAgentScopeInOplog)),
+            ActionAvailability::Unavailable("include at most 20 Agents")
+        );
+        assert_eq!(
+            app.action_availability(action(ActionId::OpenAgentScopeInMetrics)),
+            ActionAvailability::Unavailable("include at most 20 Agents")
+        );
+    }
+
+    #[test]
+    fn stream_uses_one_included_agent_and_rejects_a_mixed_set() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        let included = AgentIdentity {
+            component: "orders".to_string(),
+            agent_id: "order-1".to_string(),
+        };
+        app.agents.included.insert(included.clone());
+
+        assert_eq!(app.stream_target_candidate(), Some(included));
+
+        app.agents.included.insert(AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+        });
+        assert!(app.stream_target_candidate().is_none());
+        assert_eq!(
+            app.action_availability(action(ActionId::ToggleAgentStream)),
+            ActionAvailability::Unavailable("select one exact Agent")
+        );
+    }
+
+    #[test]
+    fn plain_oplog_navigation_does_not_adopt_hidden_agent_selection() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.ops.select(OpsDestination::Oplog);
+
+        app.refresh_activity(None);
+
+        assert!(app.activity_scope().is_none());
+        assert!(
+            app.activity
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("has no Agent scope"))
+        );
+    }
+
+    #[test]
     fn agent_dataset_picker_uses_loaded_component_and_type_choices() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
@@ -19404,6 +19718,10 @@ mod tests {
     fn overview_cards_render_responsively_and_handoff_explicit_scope() {
         let mut app = test_app();
         app.ops.select(OpsDestination::Overview);
+        app.metrics.agent_scope = vec![AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+        }];
         let mut environment = sample_ops_environment_snapshot("12");
         environment.deployment = Some(OpsDeploymentSnapshot {
             deployment_revision: "12".to_string(),
@@ -19460,6 +19778,7 @@ mod tests {
         assert_eq!(app.metrics.source, LocalMetricSource::Agents);
         assert_eq!(app.metrics.mode, MetricsMode::Dashboard);
         assert_eq!(app.metrics.range, metrics::MetricsRange::Minutes15);
+        assert!(app.metrics.agent_scope.is_empty());
     }
 
     #[test]
@@ -20937,7 +21256,7 @@ mod tests {
         let frame = render_app_text(&app);
         assert_eq!(app.ops.active(), OpsDestination::Oplog);
         assert!(frame.contains("Oplog · [Grouped]"), "{frame}");
-        assert!(frame.contains("Select an Agent"), "{frame}");
+        assert!(frame.contains("Oplog has no Agent scope"), "{frame}");
         assert!(!frame.contains("[ Commands ]"), "{frame}");
     }
 

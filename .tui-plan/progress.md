@@ -1,5 +1,26 @@
 # Progress
 
+## 2026-10-09: Explicit Agent Scope Handoffs
+
+- Added contextual Agent actions that transfer the exact full-Agent route or
+  the sorted included set to Oplog and Metrics, capped at the Oplog contract's
+  20-Agent limit.
+- Made Oplog scope strictly route-owned. Opening the destination root no longer
+  adopts a stale or hidden Agent-table selection; users hand scope over
+  explicitly and the destination retains it.
+- Made Metrics retain Agent scope independently of its active route, show that
+  scope in the header, and offer an explicit command to return to environment
+  scope. Overview's environment-wide Agent signals always clear a prior Agent
+  scope before opening Metrics.
+- Aligned Stream with the same contract: it accepts a full Agent route, one
+  selected Agent, or exactly one included Agent, and rejects a mixed set.
+- Covered sorted set routing, exact-Agent precedence, query propagation,
+  environment reset, palette visibility, scope limits, Stream targeting, and
+  root Oplog behavior.
+
+Still open in this slice: the remaining destination/state previews, final
+terminal visual acceptance, and the larger `OpsApp` ownership cleanup.
+
 ## 2026-10-09: Preset And Absolute Metrics Ranges
 
 - Replaced blind `ctrl+t` cycling with a stable Metrics time-range chooser.
@@ -14,9 +35,9 @@
 - Covered preset selection, invalid ordering, exact custom propagation, Live
   behavior, editing help/cursor styling, and 1×1-safe rendering.
 
-Still open in this slice: explicit single/included-Agent handoff actions, the
-remaining destination/state previews, final terminal visual acceptance, and
-the larger `OpsApp` ownership cleanup.
+Still open after this checkpoint: explicit single/included-Agent handoff
+actions, the remaining destination/state previews, final terminal visual
+acceptance, and the larger `OpsApp` ownership cleanup.
 
 ## 2026-10-09: Metric Bucket To Oplog Handoff
 

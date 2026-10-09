@@ -22,6 +22,7 @@ use crate::model::local_observability::{
     LocalMetricScope, LocalMetricSeries, LocalMetricSeriesRequest, LocalMetricSource,
     LocalMetricTimeRange, LocalObservabilityCapability, LocalObservabilityStatus,
 };
+use crate::tui::ops::AgentIdentity;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -212,6 +213,7 @@ pub(in crate::tui) struct MetricsState {
     pub(in crate::tui) loading: bool,
     pub(in crate::tui) capability: Option<LocalObservabilityCapability>,
     pub(in crate::tui) source: LocalMetricSource,
+    pub(in crate::tui) agent_scope: Vec<AgentIdentity>,
     pub(in crate::tui) mode: MetricsMode,
     pub(in crate::tui) range: MetricsRange,
     pub(in crate::tui) live: bool,
@@ -241,6 +243,7 @@ impl Default for MetricsState {
             loading: false,
             capability: None,
             source: LocalMetricSource::Agents,
+            agent_scope: Vec::new(),
             mode: MetricsMode::Dashboard,
             range: MetricsRange::Minutes15,
             live: true,
@@ -265,6 +268,17 @@ impl Default for MetricsState {
 }
 
 impl MetricsState {
+    pub(in crate::tui) fn scope_label(&self) -> String {
+        if self.source != LocalMetricSource::Agents {
+            return "environment".to_string();
+        }
+        match self.agent_scope.as_slice() {
+            [] => "environment".to_string(),
+            [agent] => format!("Agent {}", agent.agent_id),
+            agents => format!("{} Agents", agents.len()),
+        }
+    }
+
     pub(in crate::tui) fn selected_family_name(&self) -> Option<String> {
         self.families
             .get(self.selected_family)
