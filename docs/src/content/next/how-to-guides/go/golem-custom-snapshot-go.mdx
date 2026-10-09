@@ -58,6 +58,20 @@ type Snapshotter interface {
 
 When the state implements `Snapshotter`, its bytes are stored **verbatim** by the host (opaque payload) and handed back on restore — bypassing the reflective JSON path entirely.
 
+## Step 3 (optional): rebuild runtime-only state (`OnRestore`)
+
+A restore does **not** run the constructor passed to `Implement`: whatever it did (an RPC, an HTTP request) is already in the history the snapshot replaces, and the restore runs read-only. The state starts from its zero value, the snapshot is loaded into it, and then the `OnRestore` hook runs, if registered. Use it to rebuild what the snapshot does not carry (clients, caches, derived fields):
+
+```go
+agent.OnRestore(func(ic *golem.InitContext[session.ID, state, golem.NoConfig], s *state) error {
+    // rebuild runtime-only fields of s, e.g. from ic.ID().User;
+    // ic also has AgentID(), Principal() and Config()
+    return nil
+})
+```
+
+An error from the hook fails the restore, like an error from `Load`. The restored state must behave like the state it replaces: the calls recorded after the snapshot are replayed on it, and a different result is a divergence.
+
 ## Full example: session agent with custom snapshot
 
 ### Definition (`agents/session/session.go`)
@@ -147,7 +161,8 @@ func init() {
 - `Snapshotter` is the **only** way to capture unexported state — the default reflective path sees exported fields only.
 - Implement `Save` and `Load` as a pair on the state (usually pointer receiver); the host calls `Save` to capture and `Load` to restore.
 - `Save`/`Load` return an `error`; a non-nil `Load` error fails the snapshot-based update.
-- The SDK stores the agent's principal (`ctx.Principal()`) beside your payload and restores it before the constructor runs again; `Save`/`Load` see only your own bytes.
+- A restore never runs the constructor: the state starts from its zero value, `Load` (or the JSON default) fills it, and `OnRestore` rebuilds the rest. Do not rely on fields the constructor sets unless they are in the snapshot or rebuilt in `OnRestore`.
+- The SDK stores the agent's principal (`ctx.Principal()`) beside your payload and restores it for the agent; `Save`/`Load` see only your own bytes.
 
 ### Related Guides
 | Guide | Description |

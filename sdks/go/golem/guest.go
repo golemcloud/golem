@@ -112,38 +112,64 @@ func toAgentError(err error) common.AgentError {
 }
 
 // initializeAgent builds the worker's single agent instance from its type name
-// and constructor parameters. It backs both entry points that can bring an
-// agent to life: the host's `initialize` call for a new agent, and
-// `load-snapshot`, which restores an agent onto a fresh instance.
+// and constructor parameters, running the constructor. It backs the host's
+// `initialize` call for a new agent.
 func initializeAgent(agentType string, input types.SchemaValueTree, principal Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
+	inst, idVal, res := beginAgent(agentType, input, principal)
+	if inst == nil {
+		return res
+	}
+	inst.state = inst.def.newState(idVal, inst.agentID, principal)
+	return res
+}
+
+// restoreAgent brings the agent back on a fresh instance from a snapshot. It
+// does not run the constructor: see [restoreState].
+func restoreAgent(agentType string, input types.SchemaValueTree, principal Principal, snap apihost.Snapshot) error {
+	inst, idVal, res := beginAgent(agentType, input, principal)
+	if inst == nil {
+		return agentErrorToGo(res.Err())
+	}
+	state, err := restoreState(inst.def, idVal, inst.agentID, principal, snap)
+	if err != nil {
+		active = nil
+		return err
+	}
+	inst.state = state
+	return nil
+}
+
+// beginAgent checks the agent type, decodes its id and publishes the instance,
+// still without state. It is published first so a constructor or a restore hook
+// that reads config populates the same per-worker config cache the methods use;
+// neither sees the not-yet-built state, so the nil state is unobservable. A nil
+// instance means failure, reported in the result.
+func beginAgent(agentType string, input types.SchemaValueTree, principal Principal) (*instance, reflect.Value, witTypes.Result[witTypes.Unit, common.AgentError]) {
+	fail := func(e common.AgentError) (*instance, reflect.Value, witTypes.Result[witTypes.Unit, common.AgentError]) {
+		return nil, reflect.Value{}, witTypes.Err[witTypes.Unit](e)
+	}
 	// Route structured logging (slog, and via it the standard log package)
 	// through the host logging channel so it carries a real level + context.
 	// Build-tag-gated to the wasm target so native `go test` never links the
 	// host call (see loginstall_*.go).
 	installDefaultLogger()
 	if _, ds := defs.discover(); agentDefErrors(ds, agentType) != "" {
-		return witTypes.Err[witTypes.Unit](customError("agent definition errors:\n" + agentDefErrors(ds, agentType)))
+		return fail(customError("agent definition errors:\n" + agentDefErrors(ds, agentType)))
 	}
 	e := defs.agents[agentType]
 	if e == nil {
-		return witTypes.Err[witTypes.Unit](common.MakeAgentErrorInvalidType("unknown agent type: " + agentType))
+		return fail(common.MakeAgentErrorInvalidType("unknown agent type: " + agentType))
 	}
 	if active != nil {
-		return witTypes.Err[witTypes.Unit](customError("agent already initialized"))
+		return fail(customError("agent already initialized"))
 	}
 	idVal := reflect.New(e.idType).Elem()
 	if err := decodeParams(input, e.idFields, idVal, principal); err != nil {
-		return witTypes.Err[witTypes.Unit](common.MakeAgentErrorInvalidInput(err.Error()))
+		return fail(common.MakeAgentErrorInvalidInput(err.Error()))
 	}
-	// Publish the instance before running the constructor so a constructor that
-	// reads config (via ctx.Config()) populates the same per-worker config cache
-	// the methods use. The constructor sees only its InitContext, never the
-	// not-yet-built state, so the nil state during this window is unobservable.
-	agentID := os.Getenv(agentIDEnvVar)
-	inst := &instance{def: e, agentID: agentID, principal: principal}
+	inst := &instance{def: e, agentID: os.Getenv(agentIDEnvVar), principal: principal}
 	active = inst
-	inst.state = e.newState(idVal, agentID, principal)
-	return witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
+	return inst, idVal, witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 }
 
 func init() {
@@ -218,7 +244,7 @@ func init() {
 	loadExports.Exports.Load = func(snap apihost.Snapshot) witTypes.Result[witTypes.Unit, string] {
 		// Snapshot recovery runs on a FRESH instance: the host does not call
 		// initialize first, it hands us the snapshot and expects the agent to
-		// come back on its own. The agent's identity comes from GOLEM_AGENT_ID;
+		// come back on its own, without its constructor running again. The agent's identity comes from GOLEM_AGENT_ID;
 		// parsing it through the host yields the type name and constructor
 		// parameters, which is exactly what initialize needs.
 		if active != nil {
@@ -236,10 +262,7 @@ func init() {
 		if err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
-		if res := initializeAgent(agentType, ctorParams, principal); res.IsErr() {
-			return witTypes.Err[witTypes.Unit](agentErrorToGo(res.Err()).Error())
-		}
-		if err := loadState(active.state, state); err != nil {
+		if err := restoreAgent(agentType, ctorParams, principal, state); err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
 		return witTypes.Ok[witTypes.Unit, string](witTypes.Unit{})

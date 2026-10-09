@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 )
@@ -38,8 +39,8 @@ const (
 	snapshotJSONMIME = "application/json"
 )
 
-// The agent's principal travels with its state, since a restore runs the
-// constructor again without an initialize call to supply it. The layout is the
+// The agent's principal travels with its state, since a restore has no
+// initialize call to supply it. The layout is the
 // Rust SDK's: a JSON snapshot is {"version":1,"principal":…,"state":…}; a raw one
 // is a version byte (2), the principal's length as a big-endian uint32, the
 // principal, then the Snapshotter's bytes.
@@ -108,6 +109,25 @@ func splitSnapshot(snap host.Snapshot) (Principal, host.Snapshot, error) {
 	}
 	p, err := unmarshalPrincipal(b[5 : 5+n])
 	return p, host.Snapshot{Payload: b[5+n:], MimeType: snap.MimeType}, err
+}
+
+// restoreState rebuilds an agent's state from a snapshot without running its
+// constructor, as the other SDKs do: whatever the constructor did — a call to
+// another agent, an HTTP request — is already in the history the snapshot
+// replaces, and must not happen again. The state starts from its zero value,
+// the snapshot is loaded into it, and the [AgentImpl.OnRestore] hook, if any,
+// rebuilds what the snapshot does not carry.
+func restoreState(e *agentEntry, idVal reflect.Value, agentID string, principal Principal, snap host.Snapshot) (any, error) {
+	state := e.zeroState()
+	if err := loadState(state, snap); err != nil {
+		return nil, err
+	}
+	if e.restore != nil {
+		if err := e.restore(state, idVal, agentID, principal); err != nil {
+			return nil, fmt.Errorf("restoring %s: %w", e.name, err)
+		}
+	}
+	return state, nil
 }
 
 // loadState restores an agent instance's state from a host snapshot. state must

@@ -15,5 +15,6 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 
 var (
 	Bump  = Agent.Method[golem.Unit, int64]("bump", golem.Desc("Increase the counter and return it"))
-	Value = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current counter"))
+	Value  = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current counter"))
+	Origin = Agent.Method[golem.Unit, string]("origin", golem.Desc("Return how the running state was built"))
 )

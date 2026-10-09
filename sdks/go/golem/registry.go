@@ -53,8 +53,13 @@ type agentEntry struct {
 	idType   reflect.Type
 	idFields []engine.Field
 	newState func(idVal reflect.Value, agentID string, principal Principal) any
-	methods  map[string]*methodEntry
-	order    []string
+	// zeroState returns a fresh zero state for a snapshot restore to load into:
+	// a restore does not run the constructor.
+	zeroState func() any
+	// restore is the optional [AgentImpl.OnRestore] hook, run after the load.
+	restore func(state any, idVal reflect.Value, agentID string, principal Principal) error
+	methods map[string]*methodEntry
+	order   []string
 	// router is set when the entry is an HTTP router rather than an ordinary
 	// agent; see [DefineHTTPRouter].
 	router *routerEntry
@@ -308,7 +313,33 @@ func implementInto[Id any, S any, Cfg any](
 		return &AgentImpl[Id, S, Cfg]{d: d, e: e}
 	}
 	e.newState = newState
+	e.zeroState = func() any { return new(S) }
 	return &AgentImpl[Id, S, Cfg]{d: d, e: e}
+}
+
+// OnRestore registers fn to run when the agent is restored from a snapshot. A
+// restore does not run the constructor, as in the other SDKs: the state starts
+// from its zero value, the snapshot is loaded into it ([Snapshotter.Load], or
+// the JSON of its exported fields), and then fn runs. Use it to rebuild what the
+// snapshot does not carry — clients, caches, unexported fields the constructor
+// sets up. ic carries the id, the principal and the config, as in the
+// constructor. An error fails the restore.
+func (i *AgentImpl[Id, S, Cfg]) OnRestore(fn func(ic *InitContext[Id, S, Cfg], state *S) error) Registered {
+	if i == nil || i.e == nil {
+		return Registered{}
+	}
+	switch {
+	case fn == nil:
+		i.d.RecordErr(i.e.name, "", "OnRestore requires a non-nil function")
+	case i.e.restore != nil:
+		i.d.RecordErr(i.e.name, "", "OnRestore already registered")
+	default:
+		i.e.restore = func(state any, idVal reflect.Value, agentID string, principal Principal) error {
+			ic := &InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID, principal: principal}
+			return fn(ic, state.(*S))
+		}
+	}
+	return Registered{}
 }
 
 // bindMethodInto registers one method handler on an agent entry: it validates the

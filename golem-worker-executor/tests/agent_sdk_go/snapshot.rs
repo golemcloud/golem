@@ -41,7 +41,8 @@ inherit_test_dep!(
 /// With a snapshot taken every 2nd invocation, snapshots are recorded in the
 /// oplog; after a restart the worker recovers from a snapshot and the counter —
 /// held in an unexported field, so only reachable through the SDK's Save/Load —
-/// is intact.
+/// is intact. The restore does not run the constructor: the state starts from
+/// its zero value and the `OnRestore` hook rebuilds the runtime-only field.
 ///
 /// The Go runtime's scheduling-latency sampler used to make this diverge: its
 /// clock reads are placed by a per-goroutine lifetime transition counter that
@@ -69,7 +70,15 @@ async fn go_custom_snapshot_round_trips_unexported_state(
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
 
-    for _ in 0..10 {
+    // Before the bumps, so a later snapshot covers it: a call after the last
+    // snapshot is replayed on the restored state and must return the same.
+    let origin = executor
+        .invoke_and_await_agent(&component, &agent_id, "origin", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(origin, "constructed;");
+
+    for _ in 0..9 {
         executor
             .invoke_and_await_agent(&component, &agent_id, "bump", data_value!())
             .await?;
@@ -92,13 +101,21 @@ async fn go_custom_snapshot_round_trips_unexported_state(
         .await?
         .into_typed::<i64>()?;
     assert_snapshot_recovery_loaded(&mut events).await;
+    let origin = executor
+        .invoke_and_await_agent(&component, &agent_id, "origin", data_value!())
+        .await?
+        .into_typed::<String>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
     assert_eq!(
-        value, 10,
+        value, 9,
         "unexported counter must survive snapshot recovery"
+    );
+    assert_eq!(
+        origin, "restored",
+        "a snapshot restore runs the OnRestore hook, not the constructor"
     );
     Ok(())
 }

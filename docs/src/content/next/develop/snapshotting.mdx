@@ -216,7 +216,7 @@ You can implement custom saving and restoration to control exactly how agent sta
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the state type. Unlike the other SDKs, loading is not a separate factory: the SDK first builds the state with the constructor passed to `Implement`, from the agent's ID, and then calls `Load` on it:
+        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the state type. A restore does not run the constructor passed to `Implement`: the SDK calls `Load` on a zero state, then runs the optional `OnRestore` hook, which receives the same `*golem.InitContext` as a configured constructor (ID, agent ID, principal, config) and rebuilds what the snapshot does not carry:
 
         ```go
         type state struct{ value int64 }
@@ -231,6 +231,13 @@ You can implement custom saving and restoration to control exactly how agent sta
             }
             s.value = int64(binary.BigEndian.Uint64(data))
             return nil
+        }
+
+        func init() {
+            agent.OnRestore(func(ic *golem.InitContext[ID, state, golem.NoConfig], s *state) error {
+                // rebuild runtime-only fields here, e.g. from ic.ID()
+                return nil
+            })
         }
         ```
     </Tabs.Tab>

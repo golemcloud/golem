@@ -15,6 +15,9 @@
 package golem
 
 import (
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,4 +157,85 @@ func TestSnapshotPolicyMapsToWit(t *testing.T) {
 			})
 		})
 	}
+}
+
+type restoreID struct{ Name string }
+
+type rState struct {
+	Count    int64
+	greeting string // runtime-only: rebuilt by the restore hook
+}
+
+// TestRestoreSkipsTheConstructor — a restore loads into a zero state and runs
+// the OnRestore hook; the constructor, whose effects are already in the
+// history the snapshot replaces, does not run.
+func TestRestoreSkipsTheConstructor(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
+		constructed := 0
+		impl := implementInto[restoreID, rState, NoConfig](d, def, simpleNewState[restoreID, rState](func(restoreID) *rState {
+			constructed++
+			return &rState{Count: 100}
+		}), false)
+		impl.OnRestore(func(ic *InitContext[restoreID, rState, NoConfig], s *rState) error {
+			s.greeting = "hello " + ic.ID().Name + " from " + ic.AgentID()
+			return nil
+		})
+		impl.Handle(def.Method[Unit, int64]("count"), func(ctx *Context[rState], _ Unit) int64 { return ctx.State.Count })
+		noDefErrs(t, d)
+
+		snap, err := saveState(&rState{Count: 7, greeting: "lost"}, snapPrincipal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, state, err := splitSnapshot(snap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := d.agents["R"]
+		idVal := reflect.ValueOf(restoreID{Name: "ada"})
+		got, err := restoreState(e, idVal, `R("ada")`, snapPrincipal, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := got.(*rState)
+		if constructed != 0 {
+			t.Errorf("the constructor ran %d times on restore", constructed)
+		}
+		if s.Count != 7 || s.greeting != `hello ada from R("ada")` {
+			t.Errorf("restored state = %+v", *s)
+		}
+	})
+}
+
+// TestRestoreHookErrorFailsTheRestore — an OnRestore error is the restore's.
+func TestRestoreHookErrorFailsTheRestore(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
+		impl := implementInto[restoreID, rState, NoConfig](d, def, simpleNewState[restoreID, rState](func(restoreID) *rState {
+			return &rState{}
+		}), false)
+		impl.OnRestore(func(*InitContext[restoreID, rState, NoConfig], *rState) error {
+			return errors.New("dependency gone")
+		})
+		snap, _ := saveState(&rState{}, snapPrincipal)
+		_, state, _ := splitSnapshot(snap)
+		_, err := restoreState(d.agents["R"], reflect.ValueOf(restoreID{}), "R()", snapPrincipal, state)
+		if err == nil || !strings.Contains(err.Error(), "dependency gone") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestOnRestoreTwiceIsADefinitionError(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
+		impl := implementInto[restoreID, rState, NoConfig](d, def, simpleNewState[restoreID, rState](func(restoreID) *rState {
+			return &rState{}
+		}), false)
+		hook := func(*InitContext[restoreID, rState, NoConfig], *rState) error { return nil }
+		impl.OnRestore(hook)
+		impl.OnRestore(hook)
+		mustDefErr(t, d, "OnRestore already registered")
+	})
 }

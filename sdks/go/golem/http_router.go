@@ -155,15 +155,16 @@ func defineRouterInto[Cfg any](d *definitions, spec RouterSpec) *HTTPRouter[Cfg]
 		return r
 	}
 	e := &agentEntry{
-		name:     spec.Name,
-		desc:     spec.Description,
-		mode:     common.AgentModeEphemeral,
-		mount:    &Mount{Path: spec.Mount, Auth: spec.Auth, CORS: spec.CORS},
-		snapshot: SnapshotDisabled,
-		idType:   reflect.TypeFor[routerID](),
-		methods:  map[string]*methodEntry{},
-		newState: func(reflect.Value, string, Principal) any { return &routerState{} },
-		router:   &routerEntry{staticFiles: spec.StaticFiles, fileHeaders: spec.FileResponseHeaders},
+		name:      spec.Name,
+		desc:      spec.Description,
+		mode:      common.AgentModeEphemeral,
+		mount:     &Mount{Path: spec.Mount, Auth: spec.Auth, CORS: spec.CORS},
+		snapshot:  SnapshotDisabled,
+		idType:    reflect.TypeFor[routerID](),
+		methods:   map[string]*methodEntry{},
+		newState:  func(reflect.Value, string, Principal) any { return &routerState{} },
+		zeroState: func() any { return &routerState{} },
+		router:    &routerEntry{staticFiles: spec.StaticFiles, fileHeaders: spec.FileResponseHeaders},
 	}
 	d.agents[spec.Name] = e
 	d.order = append(d.order, spec.Name)
