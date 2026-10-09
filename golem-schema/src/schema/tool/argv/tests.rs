@@ -930,7 +930,7 @@ fn an_inherited_global_option_takes_a_variable_below_a_subcommand() {
 }
 
 #[test]
-fn flags_take_true_false_and_counts_from_variables() {
+fn flags_take_the_usual_words_and_counts_from_variables() {
     let mut b = body();
     let mut verbose = flag(
         "verbose",
@@ -958,8 +958,23 @@ fn flags_take_true_false_and_counts_from_variables() {
             "{args:?} {variables:?}"
         );
     }
+    for (words, verbose) in [
+        (["1", "true", "yes", "on", "y", "t", "YES", "On"], true),
+        (["0", "false", "no", "off", "n", "f", "NO", "Off"], false),
+    ] {
+        for word in words {
+            assert_eq!(
+                values_with(&t, &[], &[("VERBOSE", word)])[0],
+                SchemaValue::Bool(verbose),
+                "VERBOSE={word}"
+            );
+        }
+    }
     for (variable, value, flag) in [
-        ("VERBOSE", "yes", "--verbose"),
+        ("VERBOSE", "maybe", "--verbose"),
+        ("VERBOSE", "2", "--verbose"),
+        ("VERBOSE", "", "--verbose"),
+        ("VERBOSE", " yes", "--verbose"),
         ("LEVEL", "4", "--level"),
         ("LEVEL", "many", "--level"),
     ] {
@@ -968,7 +983,7 @@ fn flags_take_true_false_and_counts_from_variables() {
             error
                 .as_deref()
                 .is_some_and(|e| e.contains(flag) && e.contains(variable)),
-            "{variable}={value}: {error:?}"
+            "{variable}={value:?}: {error:?}"
         );
     }
 }

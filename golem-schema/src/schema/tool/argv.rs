@@ -612,9 +612,12 @@ fn declared_variable<'a>(
 
 fn flag_from_variable(flag: &FlagSpec, value: &str) -> Result<(u32, Option<bool>), String> {
     match flag.shape {
-        FlagShape::BoolFlag(_) if value.eq_ignore_ascii_case("true") => Ok((0, Some(true))),
-        FlagShape::BoolFlag(_) if value.eq_ignore_ascii_case("false") => Ok((0, Some(false))),
-        FlagShape::BoolFlag(_) => Err(format!("invalid value {value:?}: expected true or false")),
+        FlagShape::BoolFlag(_) => match bool_word(value) {
+            Some(state) => Ok((0, Some(state))),
+            None => Err(format!(
+                "invalid value {value:?}: expected true or false (also 1/0, yes/no, on/off)"
+            )),
+        },
         FlagShape::CountFlag(max) => {
             let count: u32 = value
                 .parse()
@@ -624,6 +627,20 @@ fn flag_from_variable(flag: &FlagSpec, value: &str) -> Result<(u32, Option<bool>
             }
             Ok((count, None))
         }
+    }
+}
+
+/// The state that a variable gives to a bool flag. Only the usual words have a meaning; other
+/// text is refused and not guessed.
+fn bool_word(value: &str) -> Option<bool> {
+    const TRUE: [&str; 6] = ["1", "true", "yes", "on", "y", "t"];
+    const FALSE: [&str; 6] = ["0", "false", "no", "off", "n", "f"];
+    if TRUE.iter().any(|word| value.eq_ignore_ascii_case(word)) {
+        Some(true)
+    } else if FALSE.iter().any(|word| value.eq_ignore_ascii_case(word)) {
+        Some(false)
+    } else {
+        None
     }
 }
 
