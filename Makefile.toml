@@ -2331,7 +2331,7 @@ rm -rf build-out
 
 [tasks.build-benchmark-components]
 description = "Rebuilds and verifies the test WASM components required by the CI benchmark suite"
-dependencies = ["wit", "build-sdk-ts"]
+dependencies = ["wit", "build-sdk-ts", "build-sdk-effect"]
 script_runner = "@duckscript"
 script = '''
 golem_cli = get_env GOLEM_CLI
