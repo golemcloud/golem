@@ -15,6 +15,8 @@
 use crate::Tracing;
 use crate::oplog_blob_archive::new_s3_test;
 use golem_common::config::DbSqliteConfig;
+use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_service_base::db::sqlite::SqlitePool;
@@ -28,7 +30,7 @@ use golem_worker_executor::metrics::storage::{
 };
 use golem_worker_executor::services::blob_store::DefaultBlobStoreService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
@@ -150,32 +152,14 @@ async fn blobstore_rejects_root_container_names_without_retrying(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    for root in ["", ".", "./", "././"] {
-        for (operation, source, destination) in [
-            ("create-container", root, "destination"),
-            ("get-container", root, "destination"),
-            ("delete-container", root, "destination"),
-            ("container-exists", root, "destination"),
-            ("copy-object", root, "destination"),
-            ("copy-object", "source", root),
-            ("move-object", root, "destination"),
-            ("move-object", "source", root),
-        ] {
-            let result = executor
-                .invoke_and_await_agent(
-                    &component,
-                    &agent_id,
-                    "blobstore_probe",
-                    data_value!(operation, source, "object", destination, "object"),
-                )
-                .await?
-                .into_typed::<Result<(), String>>()?;
-            let error = result.expect_err("a namespace root is not a container");
-            assert!(
-                error.to_ascii_lowercase().contains("invalid"),
-                "unexpected error for {operation}({root:?}): {error}"
-            );
-        }
+    for (root, operation, result) in
+        probe_the_root_container_names(&executor, &component, &agent_id, "destination").await?
+    {
+        let error = result.expect_err("a namespace root is not a container");
+        assert!(
+            error.to_ascii_lowercase().contains("invalid"),
+            "unexpected error for {operation}({root:?}): {error}"
+        );
     }
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -670,42 +654,16 @@ async fn check_the_root_container_names(
         )
         .await?;
 
-    let mut results = Vec::new();
-    for root_name in ["", ".", "./", "././"] {
-        // The root name is the container of the first four probes, and then the source
-        // container and the destination container of a copy and of a move.
-        let probes = [
-            ("create-container", root_name, root_name),
-            ("get-container", root_name, root_name),
-            ("delete-container", root_name, root_name),
-            ("container-exists", root_name, root_name),
-            ("copy-object", root_name, container_name.as_str()),
-            ("copy-object", container_name.as_str(), root_name),
-            ("move-object", root_name, container_name.as_str()),
-            ("move-object", container_name.as_str(), root_name),
-        ];
+    let results =
+        probe_the_root_container_names(&executor, &component, &agent_id, &container_name).await?;
 
-        for (operation, source_container, destination_container) in probes {
-            let result = executor
-                .invoke_and_await_agent(
-                    &component,
-                    &agent_id,
-                    "blobstore_probe",
-                    data_value!(
-                        operation,
-                        source_container,
-                        "object",
-                        destination_container,
-                        "object"
-                    ),
-                )
-                .await?
-                .into_typed::<Result<(), String>>()?;
-
-            results.push((root_name, operation, result));
-        }
-    }
-
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "permanent root-container errors must not produce retry entries: {oplog:?}"
+    );
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
@@ -718,4 +676,41 @@ async fn check_the_root_container_names(
     );
 
     Ok(())
+}
+
+/// Gives the answer of each host function of `wasi:blobstore/blobstore` that takes a container
+/// name to each spelling of the root name: as the container of the first four probes, and then as
+/// the source and the destination container of a copy and of a move whose other end is
+/// `container`.
+async fn probe_the_root_container_names(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentId,
+    container: &str,
+) -> anyhow::Result<Vec<(&'static str, &'static str, Result<(), String>)>> {
+    let mut results = Vec::new();
+    for root in ["", ".", "./", "././"] {
+        for (operation, source, destination) in [
+            ("create-container", root, root),
+            ("get-container", root, root),
+            ("delete-container", root, root),
+            ("container-exists", root, root),
+            ("copy-object", root, container),
+            ("copy-object", container, root),
+            ("move-object", root, container),
+            ("move-object", container, root),
+        ] {
+            let result = executor
+                .invoke_and_await_agent(
+                    component,
+                    agent_id,
+                    "blobstore_probe",
+                    data_value!(operation, source, "object", destination, "object"),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            results.push((root, operation, result));
+        }
+    }
+    Ok(results)
 }
