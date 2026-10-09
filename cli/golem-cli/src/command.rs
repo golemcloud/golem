@@ -775,6 +775,10 @@ pub enum GolemCliSubcommand {
     /// Open a command prompt on an existing agent through its bound bash tool. This is an
     /// interactive command; the global `--format` flag is ignored.
     ///
+    /// `deploy` binds the bash tool to every agent type, with access to the agent's files,
+    /// unless the environment leaves it out of `defaultTools` in the application manifest or
+    /// the manifest declares `tools.bash` itself.
+    ///
     /// Each command is one call of the tool's `run` operation in a fresh shell: variables,
     /// functions, aliases, options and `$?` do not carry over. Only the directory a command ended
     /// in does; it is passed as `--cwd` to the next one. Anything that must last belongs in the

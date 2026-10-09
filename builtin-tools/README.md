@@ -86,6 +86,12 @@ release under `tools.middleware.<name>.release`. Native tools compiled into the 
 registry/executor startup inventories and are ambient, so they have no top-level release
 declaration. See `golem-native-tool/README.md` for that path.
 
+The default tools are the exception: the CLI selects, grants and binds them for every deployment.
+An environment chooses them with `defaultTools`: all of them by default, `[]` for none, or a list
+of names. `bash` is the only one; see `bash/README.md`.
+The list is `DEFAULT_TOOLS` in `golem-common/src/base_model/tool.rs`. An entry there must name a
+release that `BUILTIN_EXPORTS` provisions, at the same version.
+
 For example, this selects the built-in `read-file` release and makes it available to an agent:
 
 ```yaml

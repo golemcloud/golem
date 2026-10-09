@@ -11,6 +11,15 @@ use std::time::Duration;
 use test_r::{test, timeout};
 
 const BASH_ONLY: &str = r#"BashOnlyOwner("isolated")"#;
+
+// Further lines of an environment: a binding that keeps every secret from the default bash tool.
+const NO_SECRETS_FOR_BASH: &str =
+    "tools:\n      bash:\n        secretKeysReadable: []\n        secretKeysRevealable: []";
+
+// Further lines of the tool bindings of one agent type: a binding that lists one secret for the
+// default bash tool.
+const ONE_SECRET_FOR_BASH: &str =
+    "bash:\n        secretKeysReadable:\n          - credentials.github.token";
 const DENIED_FILES: &str = r#"DeniedFilesOwner("denied")"#;
 const MARKER: &str = "\u{276f}";
 
@@ -180,6 +189,94 @@ async fn ssh_validates_the_tool_before_running() {
     assert_not_run(&incompatible, "is not a compatible bash tool");
     let marker = invoke(&ctx, OWNER, "", "test ! -e /tmp/ssh/marker").await;
     assert_eq!(marker.exit_code, 0, "{marker:?}");
+}
+
+// The manifest of this application never mentions bash.
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_needs_no_bash_in_the_manifest_unless_default_tools_are_off() {
+    let mut ctx = builtin_bash::context_without_bash_in_the_manifest("defaultTools: []").await;
+    ctx.add_env_var("GOLEM_CLI_AGENT_HINTS", "0");
+
+    // With the default tools off there is no bash to connect to.
+    let off = ssh(&ctx, &[OWNER, "-c", "printf ok"], "").await;
+    assert_not_run(&off, "`bash` is not bound to");
+
+    // A plan does not create the grant that the tool needs: it leaves the tool out, together
+    // with the bindings that the environment and an agent type give it.
+    builtin_bash::write_manifest_without_bash(&ctx, ONE_SECRET_FOR_BASH, NO_SECRETS_FOR_BASH);
+    let planned = ctx.cli(["deploy", "--plan"]).await;
+    assert!(planned.success_or_dump());
+    assert!(planned.stdout_contains("Skipping default tool bash"));
+    let still_off = ssh(&ctx, &[OWNER, "-c", "printf ok"], "").await;
+    assert_not_run(&still_off, "`bash` is not bound to");
+    builtin_bash::write_manifest_without_bash(&ctx, "", "");
+
+    // A deployment adds the tool, and the agents that exist already get it: the one with a
+    // sibling binding and the one that the manifest does not list at all.
+    let deployed = builtin_bash::deploy(&ctx).await;
+    assert!(deployed.stdout_contains("Granted default tool bash"));
+    // Its binding is the only change of this deployment: the files, and the config keys and
+    // secrets that the agent reads.
+    assert!(deployed.stdout_contains("filesystemAccess: allowed"));
+    assert!(deployed.stdout_contains_ordered([
+        "configKeysReadable:",
+        "kind: all",
+        "secretKeysReadable:",
+        "kind: all",
+        "secretKeysRevealable:",
+        "kind: all",
+    ]));
+    for owner in [OWNER, BASH_ONLY] {
+        let on = ssh(&ctx, &[owner, "-c", "printf ok"], "").await;
+        assert_output(&on, 0, "ok", "");
+    }
+
+    // The tool has the agent's files: it reads what the sibling tool wrote for the same owner.
+    let shared = ssh(
+        &ctx,
+        &[
+            OWNER,
+            "-c",
+            "mkdir -p /tmp/default && fixture write /tmp/default/one via-sibling >/dev/null && cat /tmp/default/one",
+        ],
+        "",
+    )
+    .await;
+    assert_output(&shared, 0, "via-sibling", "");
+
+    // The grant is made once: a later deployment has nothing to say about the tool.
+    let again = builtin_bash::deploy(&ctx).await;
+    assert!(!again.stdout_contains("default tool"));
+
+    // A binding on the environment limits what the tool reads, for every agent type. A list that
+    // names the tool selects it, as no list does.
+    builtin_bash::write_manifest_without_bash(
+        &ctx,
+        "",
+        &format!("defaultTools: [bash]\n    {NO_SECRETS_FOR_BASH}"),
+    );
+    let limited = builtin_bash::deploy(&ctx).await;
+    assert!(limited.stdout_contains("kind: keys"));
+    assert!(!limited.stdout_contains("default tool"));
+    for owner in [OWNER, BASH_ONLY] {
+        let on = ssh(&ctx, &[owner, "-c", "printf ok"], "").await;
+        assert_output(&on, 0, "ok", "");
+    }
+
+    // A binding under one agent type narrows the environment binding for that agent type. A
+    // key that it lists and the environment does not allow is reported, and the tool runs.
+    builtin_bash::write_manifest_without_bash(&ctx, ONE_SECRET_FOR_BASH, NO_SECRETS_FOR_BASH);
+    let narrowed = builtin_bash::deploy(&ctx).await;
+    let place = "environments.local.tools.bash.secretKeysReadable does not allow them";
+    assert!(narrowed.stdout_contains(place) || narrowed.stderr_contains(place));
+    // The agent type lists no revealable secrets, so there is no report about them.
+    let not_listed = "tools.bash.secretKeysRevealable does not allow them";
+    assert!(!narrowed.stdout_contains(not_listed) && !narrowed.stderr_contains(not_listed));
+    for owner in [OWNER, BASH_ONLY] {
+        let on = ssh(&ctx, &[owner, "-c", "printf ok"], "").await;
+        assert_output(&on, 0, "ok", "");
+    }
 }
 
 #[test]

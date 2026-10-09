@@ -298,6 +298,8 @@ Runtime discovery and admission use the consumer deployment snapshot and the cal
 
 Golem can ship two kinds of system-provided tool. A component-implemented built-in tool is a protected, immutable, grantable release. It behaves like any other registry release at consumption time: select its exact published coordinate with `tools.<name>.release`, then add a separate `agents.<agent-type>.tools.<name>` binding to make it available to that agent. Selecting a release does not itself bind the tool to an agent.
 
+The [default tools](#default-tools) are the exception: the CLI selects and binds them automatically.
+
 A native tool is compiled into the Golem host and provisioned as ambient. Do not declare it in the top-level `tools` map and do not specify a release coordinate. It is available to agents in the environment by default; an agent binding with the native tool's name can narrow its parameters and policies.
 
 Ambient tool names must not collide with application tools or selected account-owned tool releases. If a later Golem release adds an ambient tool with a name your application already uses, existing deployment snapshots remain unchanged, but preparing the next deployment fails until you resolve the name collision. Golem does not silently choose one implementation over another. This check applies to the entire ambient catalog, even when the manifest has no agent binding for that name.
@@ -330,6 +332,103 @@ The tool requires a URL on each call. It also accepts `--timeout-ms` (default `1
 `web-fetch` returns the final URL, HTTP status, original content type when present, textual content, and whether the result was truncated. Non-success HTTP statuses are returned normally with supported textual bodies. HTML is returned as decoded source unless `--convert-html-to-text` is enabled. Binary responses, invalid text encodings, unsafe redirects, redirect cycles, and elapsed deadlines return typed errors.
 
 Completed results and typed errors are durable and replay without another HTTP request. If execution is interrupted before the result is recorded, recovery may retry the GET request; endpoints should therefore tolerate repeated GETs.
+
+### Default tools
+
+`golem deploy` automatically adds the built-in `bash` tool to every deployment. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the binding does not limit the agent's config keys and secrets. The `bash` tool reads neither today: it works with the agent's files and environment variables. [`golem ssh`](/next/cli/agents#shell-access-golem-ssh) connects to this tool.
+
+With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it. Those commands can read and change the agent's files, and they can read all environment variables of the agent, also a secret that is kept in one. A key scope of a binding does not hide an environment variable. To turn the default tools off for an environment, set `defaultTools` to an empty list:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    defaultTools: []
+```
+
+`defaultTools` selects the default tools of an environment. It has three forms:
+
+- No text, or `"*"`: all default tools. A default tool that a later CLI version adds is included.
+- `[]`: no default tool.
+- A list of names, for example `[bash]`: only those tools. A default tool that a later CLI version adds is not included.
+
+`bash` is the only default tool now. A name that is not a default tool is a manifest error.
+
+A binding named `bash` under `environments.<environment-name>.tools` merges with the default binding and applies to every agent type of that environment. For `filesystemAccess`, `denied` wins:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      bash:
+        filesystemAccess: denied
+```
+
+Such a binding can also set the key scopes `configKeysReadable`, `secretKeysReadable` and `secretKeysRevealable`. A key scope limits what a tool reads from the agent's config and secrets. The `bash` tool reads neither today, so a key scope changes nothing for it now. Each scope has three forms:
+
+- No text, or `"*"`: no limit on that scope. This is the default.
+- `[]`: no key of that scope.
+- A list of paths: only those keys.
+
+To allow no config key and no secret for `bash` in one environment:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      bash:
+        configKeysReadable: []
+        secretKeysReadable: []
+        secretKeysRevealable: []
+```
+
+To allow one secret only, while the config keys stay without a limit:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      bash:
+        secretKeysReadable:
+          - credentials.github.token
+```
+
+A binding named `bash` under `agents.<agent-type>.tools` is optional. An agent type without one uses the environment binding. An agent type with one gets only what both bindings allow, so it can narrow the environment binding and cannot widen it:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      bash:
+        secretKeysReadable:
+          - credentials.github.token
+          - credentials.gitlab.token
+
+agents:
+  ReviewAgent:
+    tools:
+      bash:
+        secretKeysReadable:
+          - credentials.github.token
+```
+
+If the binding of an agent type lists a key that the environment binding does not allow, `golem deploy` prints a warning that names the key, and the tool does not get it. Add the key to the environment binding first. An environment binding with no text for a scope allows every key of that scope. The CLI gives the same warning when an agent type sets `filesystemAccess: allowed` and the environment binding denies the files.
+
+A `tools.bash` declaration in the manifest replaces the default as a whole. The CLI then adds no release and no binding for `bash`: the manifest selects the release and binds it to each agent type, as for every other registry release.
+
+An [MCP import](/next/invoke/mcp#importing-tools-from-another-mcp-server) cannot supply a tool with the name of a default tool. `golem deploy` reads the tools of the imports before it changes anything, and it stops with a message when one of them is named `bash`. Give the import a `prefix`, exclude the tool from the import, or leave `bash` out of `defaultTools`. If the CLI cannot read the tools of an import, it prints a warning and continues without this comparison.
+
+An ambient native tool of the server with the name of a default tool takes the place of the default tool, because it can be another version of the tool. The CLI then makes no grant and no binding for the default tool, and it prints one line that says so. A binding named `bash` under an agent type then narrows the native tool.
+
+The grant for a default tool needs no confirmation and is not part of the grant plan. `golem deploy --plan` and `golem deploy --stage` make no grant, so an environment without the grant is planned or staged without the tool, and the next normal deployment adds it. If the server does not have the release, the CLI prints one warning and the deployment continues without the tool.
+
+An agent that exists already gets a default tool on its next call after the deployment, as long as the deployment contains the agent's component revision. An agent on an older component revision gets it when the agent is updated, for example with `golem deploy --update-agents auto`.
+
+A build does not use the default tools: `bridge.<language>.<mode>.tools: "*"` generates clients only for the tools that the manifest declares. To generate a client for `bash`, declare `tools.bash`.
 
 ### Bridge generation
 
@@ -709,6 +808,12 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_4_0
   }}>
     ***Optional boolean*** to allow security overrides during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.defaultTools",
+  }}>
+    ***Optional `"*"` or list of default tool names***, `"*"` by default. Selects the [default tools](#default-tools) that the CLI adds to every deployment of the environment and binds to every agent type: `"*"` for all of them, `[]` for none, or a list of names for only those tools.
   </Field>
 
   <Field meta={{

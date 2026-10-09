@@ -34,7 +34,9 @@ use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
-use golem_common::model::tool::{TOOL_METADATA_WIT_VERSION, ToolName, ToolSource};
+use golem_common::model::tool::{
+    BUILTIN_BASH_TOOL_VERSION, TOOL_METADATA_WIT_VERSION, ToolName, ToolSource,
+};
 use golem_common::model::tool_middleware::{
     TOOL_MIDDLEWARE_METADATA_WIT_VERSION, ToolMiddlewareName, ToolMiddlewareSource,
 };
@@ -81,7 +83,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "bash",
         artifact_id: "bash",
         export_name: "bash",
-        release_version: "0.2.1",
+        release_version: BUILTIN_BASH_TOOL_VERSION,
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
@@ -751,6 +753,7 @@ async fn deploy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::tool::DEFAULT_TOOLS;
     use test_r::test;
 
     #[test]
@@ -762,6 +765,22 @@ mod tests {
             {
                 assert_eq!(previous, descriptor.artifact_id);
             }
+        }
+    }
+
+    #[test]
+    fn default_tools_are_provisioned_tool_releases() {
+        for default_tool in DEFAULT_TOOLS {
+            assert!(
+                BUILTIN_EXPORTS.iter().any(|descriptor| {
+                    descriptor.kind == BuiltinExportKind::Tool
+                        && descriptor.export_name == default_tool.name
+                        && descriptor.release_version == default_tool.version
+                }),
+                "default tool {}@{} is not a built-in tool release",
+                default_tool.name,
+                default_tool.version
+            );
         }
     }
 }

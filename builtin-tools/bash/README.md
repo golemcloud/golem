@@ -1,13 +1,48 @@
 # Bash built-in tool
 
 This standalone Golem application builds the `bash` component, which the registry provisions as
-the grantable `bash@0.2.0` system tool. It exports one command, `run`, for finite shell execution. A
+the grantable `bash@0.2.1` system tool. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
 ## Enable and invoke
 
-Select the exact release and explicitly bind it to an agent in the consumer's manifest:
+`golem deploy` automatically adds this tool to every deployment as a default tool: it selects the
+release, grants it to the environment and binds it to every agent type with
+`filesystemAccess: allowed` and no key scope. The tool reads no config key and no secret today: it
+works with the agent's files and environment variables.
+
+With this default, everyone who may invoke an agent of the environment can run shell commands on
+it. Those commands can read and change the agent's files, and they can read all environment
+variables of the agent, also a secret that is kept in one. To turn the default tools off for an
+environment:
+
+```yaml
+environments:
+  production:
+    defaultTools: []
+```
+
+`defaultTools` is `"*"` for all default tools, which is also the default, or a list of their names.
+
+A binding for `bash` under an environment merges with the default and applies to every agent type
+of that environment. A key scope in the binding (`[]` for none, or a list of paths for some) limits
+config keys and secrets, which this tool does not read today; it does not hide an environment
+variable. A binding under one agent type is optional and
+can only narrow the environment binding: `golem deploy` warns about a key that it lists and the
+environment binding does not allow. For file access `denied` wins:
+
+```yaml
+environments:
+  production:
+    tools:
+      bash:
+        filesystemAccess: denied
+```
+
+A manifest that declares `tools.bash` replaces the default as a whole. The CLI then adds no release
+and no binding for `bash`, so the manifest selects the exact release and binds it to each agent, as
+for every other registry release:
 
 ```yaml
 tools:
@@ -15,7 +50,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: bash
-      version: "0.2.0"
+      version: "0.2.1"
 agents:
   MyAgent:
     tools:
@@ -23,8 +58,17 @@ agents:
         filesystemAccess: allowed
 ```
 
-The built-in inventory does not bind tools or grant file access automatically. Each sibling tool
-needs its own binding and filesystem grant. After deploying and creating the owner, invoke:
+`golem deploy` makes the grant for the default tool without a question. With `--plan` or `--stage`
+it makes no grant: an environment that has none yet is planned or staged without the tool, and the
+next normal deployment adds it. If the server does not have the release, the CLI prints one warning
+and deploys without the tool.
+
+An agent that exists already gets the tool on its next call after the deployment, as long as its
+component revision is part of that deployment. An agent on an older revision gets it when the agent
+is updated, for example with `golem deploy --update-agents auto`.
+
+Only `bash` is a default tool. Each sibling tool needs its own declaration, binding and filesystem
+grant. After deploying and creating the owner, invoke:
 
 ```shell
 golem tool invoke --agent 'MyAgent("one")' bash -- run 'printf ready; exit 7'

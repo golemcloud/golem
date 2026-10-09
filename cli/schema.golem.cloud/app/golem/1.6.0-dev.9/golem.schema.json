@@ -1342,6 +1342,24 @@
         },
         "tools": {
           "$ref": "#/definitions/environmentTools"
+        },
+        "defaultTools": {
+          "oneOf": [
+            {
+              "const": "*"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "not": {
+                  "const": "*"
+                }
+              }
+            }
+          ],
+          "default": "*",
+          "description": "The default built-in tools that the CLI adds to every deployment of this environment and binds to every agent type: `\"*\"` for all of them, `[]` for none, or a list of their names. `bash`, with access to the agent's files, is the only default tool now. A tool that the manifest declares under `tools` is never replaced."
         }
       }
     },
