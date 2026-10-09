@@ -47,8 +47,13 @@ function containsBoundary(parts: MultipartPart[], boundary: string): boolean {
 function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
   if (needle.length === 0) return 0;
   if (needle.length > haystack.length) return -1;
-  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) {
+  const lastStart = haystack.length - needle.length;
+  outer: for (
+    let i = haystack.indexOf(needle[0]);
+    i !== -1 && i <= lastStart;
+    i = haystack.indexOf(needle[0], i + 1)
+  ) {
+    for (let j = 1; j < needle.length; j++) {
       if (haystack[i + j] !== needle[j]) continue outer;
     }
     return i;
@@ -97,7 +102,8 @@ export function encodeMultipart(parts: MultipartPart[]): {
 
 export function decodeMultipart(data: Uint8Array, boundary: string): MultipartPart[] {
   const delimiter = textEncoder.encode(`${CRLF}--${boundary}`);
-  const crlfBytes = textEncoder.encode(CRLF);
+  const doubleCrlf = textEncoder.encode(`${CRLF}${CRLF}`);
+  const doubleLf = textEncoder.encode('\n\n');
   const lfByte = 0x0a; // \n
 
   // Normalise: strip leading CRLF or LF if present
@@ -137,18 +143,25 @@ export function decodeMultipart(data: Uint8Array, boundary: string): MultipartPa
     }
 
     // Find the blank line separating headers from body (CRLF CRLF or LF LF)
-    const headerEndCrlf = findDoubleNewline(section, sectionStart, crlfBytes);
-    const headerEndLf = findDoubleNewlineLf(section, sectionStart);
+    const headersAndBody = section.subarray(sectionStart);
+    const headerEndCrlf = indexOf(headersAndBody, doubleCrlf);
+    const headerEndLf = indexOf(
+      headersAndBody.subarray(
+        0,
+        headerEndCrlf === -1 ? headersAndBody.length : headerEndCrlf + doubleCrlf.length,
+      ),
+      doubleLf,
+    );
 
     let headerEnd: number;
     let bodyStart: number;
 
     if (headerEndCrlf !== -1 && (headerEndLf === -1 || headerEndCrlf <= headerEndLf)) {
-      headerEnd = headerEndCrlf;
-      bodyStart = headerEndCrlf + 4; // skip \r\n\r\n
+      headerEnd = sectionStart + headerEndCrlf;
+      bodyStart = headerEnd + 4; // skip \r\n\r\n
     } else if (headerEndLf !== -1) {
-      headerEnd = headerEndLf;
-      bodyStart = headerEndLf + 2; // skip \n\n
+      headerEnd = sectionStart + headerEndLf;
+      bodyStart = headerEnd + 2; // skip \n\n
     } else {
       throw new Error('Could not find end of headers in multipart part');
     }
@@ -213,39 +226,14 @@ function splitOnDelimiter(data: Uint8Array, delimiter: Uint8Array, start: number
   let pos = start;
 
   while (pos < data.length) {
-    const next = indexOf(data.slice(pos), delimiter);
+    const next = indexOf(data.subarray(pos), delimiter);
     if (next === -1) {
-      sections.push(data.slice(pos));
+      sections.push(data.subarray(pos));
       break;
     }
-    sections.push(data.slice(pos, pos + next));
+    sections.push(data.subarray(pos, pos + next));
     pos = pos + next + delimiter.length;
   }
 
   return sections;
-}
-
-function findDoubleNewline(data: Uint8Array, start: number, crlf: Uint8Array): number {
-  // Look for \r\n\r\n
-  for (let i = start; i <= data.length - 4; i++) {
-    if (
-      data[i] === crlf[0] &&
-      data[i + 1] === crlf[1] &&
-      data[i + 2] === crlf[0] &&
-      data[i + 3] === crlf[1]
-    ) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function findDoubleNewlineLf(data: Uint8Array, start: number): number {
-  // Look for \n\n
-  for (let i = start; i <= data.length - 2; i++) {
-    if (data[i] === 0x0a && data[i + 1] === 0x0a) {
-      return i;
-    }
-  }
-  return -1;
 }

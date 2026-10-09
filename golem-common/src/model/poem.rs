@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent::AgentFileContentHash;
+use crate::base_model::agent::{AgentFileContentHash, PhantomIdBinding, PhantomIdBindingDetails};
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::component::{AgentFilePath, ArchiveFilePath, CanonicalFilePath};
 use crate::model::{IdempotencyKey, Timestamp};
@@ -26,6 +26,63 @@ use std::borrow::Cow;
 pub enum NoContentResponse {
     #[oai(status = 204)]
     NoContent,
+}
+
+impl poem_openapi::types::Type for PhantomIdBinding {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> Cow<'static, str> {
+        "PhantomIdBinding".into()
+    }
+
+    fn schema_ref() -> MetaSchemaRef {
+        MetaSchemaRef::Reference(Self::name().into_owned())
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        PhantomIdBindingDetails::register(registry);
+        registry.create_schema::<Self, _>(Self::name().into_owned(), |registry| {
+            // Both variants share their fields; a derived Union would overwrite the
+            // discriminator wrapper because it names schemas after the payload type.
+            let mut schema =
+                registry.schemas[&PhantomIdBindingDetails::name().into_owned()].clone();
+            let mut discriminator = MetaSchema::new("string");
+            discriminator.enum_items = vec![Value::from("Path"), Value::from("Query")];
+            schema.title = Some("PhantomIdBinding".into());
+            schema.required.insert(0, "type");
+            schema
+                .properties
+                .insert(0, ("type", MetaSchemaRef::Inline(Box::new(discriminator))));
+            schema
+        });
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl poem_openapi::types::IsObjectType for PhantomIdBinding {}
+
+impl ParseFromJSON for PhantomIdBinding {
+    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+        let value = value.ok_or_else(poem_openapi::types::ParseError::expected_input)?;
+        serde_json::from_value(value).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+impl ToJSON for PhantomIdBinding {
+    fn to_json(&self) -> Option<Value> {
+        serde_json::to_value(self).ok()
+    }
 }
 
 impl poem_openapi::types::Type for Timestamp {
@@ -360,6 +417,50 @@ mod tests {
     use crate::model::{AgentFilePermissions, AgentStatus, Empty, IdempotencyKey};
     use poem_openapi::types::ToJSON;
     use test_r::test;
+
+    #[test]
+    fn phantom_binding_openapi_matches_serde() {
+        use crate::base_model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+        use poem_openapi::types::{ParseFromJSON, Type};
+
+        let mut registry = poem_openapi::registry::Registry::default();
+        PhantomIdBinding::register(&mut registry);
+        let schema = &registry.schemas["PhantomIdBinding"];
+        assert_eq!(schema.required, vec!["type", "name", "optional"]);
+        let poem_openapi::registry::MetaSchemaRef::Inline(discriminator) = &schema.properties[0].1
+        else {
+            panic!("discriminator must be inline");
+        };
+        assert_eq!(
+            discriminator.enum_items,
+            vec![serde_json::json!("Path"), serde_json::json!("Query")]
+        );
+        for optional in [false, true] {
+            for path in [false, true] {
+                let details = PhantomIdBindingDetails {
+                    name: "instance".into(),
+                    optional,
+                };
+                let binding = if path {
+                    PhantomIdBinding::Path(details)
+                } else {
+                    PhantomIdBinding::Query(details)
+                };
+                let value = serde_json::json!({ "type": if path { "Path" } else { "Query" }, "name": "instance", "optional": optional });
+                assert_eq!(binding.to_json(), Some(value.clone()));
+                assert_eq!(
+                    PhantomIdBinding::parse_from_json(Some(value)).unwrap(),
+                    binding
+                );
+            }
+        }
+        assert!(
+            PhantomIdBinding::parse_from_json(Some(
+                serde_json::json!({ "type": "Other", "name": "instance", "optional": false })
+            ))
+            .is_err()
+        );
+    }
 
     #[test]
     fn worker_status_serialization_poem_serde_equivalence() {

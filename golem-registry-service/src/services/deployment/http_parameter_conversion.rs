@@ -473,6 +473,7 @@ mod test {
             ],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -507,6 +508,7 @@ mod test {
             })],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -534,6 +536,7 @@ mod test {
             })],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -561,6 +564,7 @@ mod test {
             })],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -723,6 +727,7 @@ mod test {
             ],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -762,6 +767,7 @@ mod test {
             ],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
@@ -943,6 +949,7 @@ mod test {
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },

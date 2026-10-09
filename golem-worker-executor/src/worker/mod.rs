@@ -40,6 +40,7 @@ mod state_actor;
 pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
+pub(crate) mod suspension;
 pub(crate) mod tasks;
 
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
@@ -7796,13 +7797,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Persists stream-bearing result mappings and returns the transport value.
-    pub async fn materialize_durable_streaming_result(
+    pub(crate) async fn materialize_durable_streaming_result(
         &self,
         idempotency_key: &IdempotencyKey,
         value: golem_common::schema::SchemaValue,
         graph: &golem_common::schema::SchemaGraph,
         root: &golem_common::schema::SchemaType,
         component_revision: ComponentRevision,
+        runtime_source: Option<suspension::RuntimeSource>,
+        preparation: Option<suspension::ExternalActivity>,
     ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
         let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
             if contains_stream(&value) {
@@ -7827,12 +7830,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
-        .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
+        .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?)
+        .with_runtime_source(runtime_source);
         if requires_attachment {
             streams = streams.require_root_attachment_before_production();
         }
         streams
-            .materialize_result(value, graph, root, component_revision)
+            .materialize_result_accounted(value, graph, root, component_revision, preparation)
             .await
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
@@ -9041,6 +9045,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) fn card_event_boundary_lock(&self) -> Arc<Mutex<()>> {
         self.card_event_boundary_lock.clone()
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub async fn test_hold_invalidated_card_boundary(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        let guard = self.card_event_boundary_lock.clone().lock_owned().await;
+        self.published_authority_generation
+            .fetch_add(1, Ordering::AcqRel);
+        guard
     }
 
     pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {

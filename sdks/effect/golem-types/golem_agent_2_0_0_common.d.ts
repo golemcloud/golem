@@ -62,6 +62,19 @@ declare module 'golem:agent/common@2.0.0' {
     cachePolicy: CachePolicy;
     usesPrincipal: boolean;
   };
+  export type PhantomIdBindingDetails = {
+    name: string;
+    optional: boolean;
+  };
+  export type PhantomIdBinding =
+  {
+    tag: 'path'
+    val: PhantomIdBindingDetails
+  } |
+  {
+    tag: 'query'
+    val: PhantomIdBindingDetails
+  };
   export type FileResponseHeader = {
     name: string;
     value: string;
@@ -183,6 +196,7 @@ declare module 'golem:agent/common@2.0.0' {
     pathPrefix: PathSegment[];
     authDetails?: AuthDetails;
     phantomAgent: boolean;
+    phantomIdBinding?: PhantomIdBinding;
     corsOptions: CorsOptions;
     webhookSuffix: PathSegment[];
     staticBindings: FileMapping[];
