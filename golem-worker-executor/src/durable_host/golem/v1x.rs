@@ -1298,9 +1298,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         revert_target: golem_api_1_x::host::RevertAgentTarget,
     ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
         let agent_id: AgentId = agent_id.into();
+        let is_self = agent_id == self.owned_agent_id.agent_id;
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-        let mut resolved_revert = if self.state.is_live() {
+        let mut resolved_revert = if self.state.is_live() && !is_self {
             match &target {
                 golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(_) => None,
                 golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) => {
@@ -1339,6 +1340,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
         let denied = self.state.is_live()
+            && !is_self
             && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource).await?;
 
         let mut handle =
@@ -1365,12 +1367,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if denied {
+            if is_self || denied {
                 break 'result handle
                     .complete(
                         self,
                         HostResponseGolemApiUnit {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                            result: Err(if is_self {
+                                "Self-revert is not supported; revert this agent through the external API or CLI"
+                                    .to_string()
+                            } else {
+                                AGENT_OPERATION_PERMISSION_DENIED.to_string()
+                            }),
                         },
                     )
                     .await?;

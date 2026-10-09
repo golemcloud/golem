@@ -69,6 +69,7 @@ const HostFeaturesSpec = defineAgent({
   }),
   methods: {
     oplogIndex: method({ input: {}, success: Schema.String }),
+    checkpointRollback: method({ input: { url: Schema.String }, success: Schema.Number }),
     withAtomic: method({ input: { by: Schema.Number }, success: Schema.Number }),
     withPersistNothing: method({ input: { by: Schema.Number }, success: Schema.Number }),
     idempotencyKey: method({ input: {}, success: Schema.String }),
@@ -110,6 +111,21 @@ const HostFeaturesSpec = defineAgent({
 })
 
 const hostFeatureMethods = (state: Ref.Ref<{ count: number }>) => ({
+  checkpointRollback: ({ url }: { url: string }) =>
+    Effect.gen(function* () {
+      yield* Ref.update(state, (s) => ({ count: s.count + 13 }))
+      const cp = yield* Durability.checkpoint
+      return yield* cp.runOrRevert(
+        Effect.gen(function* () {
+          const updated = yield* Ref.updateAndGet(state, (s) => ({ count: s.count + 7 }))
+          const response = yield* Effect.promise(() => fetch(url))
+          const outcome = yield* Effect.promise(() => response.text())
+          if (outcome !== "ok") return yield* Effect.fail("retry checkpoint")
+          return updated.count
+        }),
+      )
+    }),
+
   oplogIndex: () =>
     Effect.gen(function* () {
       const idx = yield* Oplog.currentIndex
