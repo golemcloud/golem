@@ -175,7 +175,10 @@ async fn effect_duplex_websocket_crash_continuation(
             loop {
                 let response = responses.message().await?.expect("first output");
                 if let Some(invocation_response::Response::OutputItem(item)) = response.response {
-                    assert_eq!(item.value.unwrap().value, Some(schema_value::Value::StringValue("hello".to_string())));
+                    assert_eq!(
+                        item.value.unwrap().value,
+                        Some(schema_value::Value::StringValue("hello".to_string()))
+                    );
                     break;
                 }
             }
@@ -202,7 +205,8 @@ async fn effect_duplex_websocket_crash_continuation(
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             anyhow::Ok(())
-        }).await??;
+        })
+        .await??;
         if crash {
             executor.simulated_crash(&worker).await?;
         }
