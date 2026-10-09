@@ -1617,7 +1617,7 @@ mod normalized_path {
     ///
     /// The type gives the path itself to a caller that reads it, and that caller has a
     /// `&Path` (`Deref`). A caller that makes a key has to name the type, and the four
-    /// backends do: `S3BlobStorage::key_of`, `FileSystemBlobStorage::path_of`,
+    /// backends do: `S3BlobStorage::key_of`, `FileSystemBlobStorage::blob_of` and `directory_of`,
     /// `InMemoryBlobStorage::blob_key`, and the parts of the key that the in-memory and the
     /// SQLite backends bind.
     #[derive(Debug, Clone, PartialEq, Eq)]
