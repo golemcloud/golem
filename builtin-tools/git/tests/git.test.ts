@@ -3,6 +3,7 @@ import fs from "node:fs";
 import {
   chmod,
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   readlink,
@@ -28,6 +29,7 @@ import {
   limitedDiffOutput,
   localConfig,
   parseIdentity,
+  relativePaths,
   repository,
   restoreIndexPaths,
   stage,
@@ -65,6 +67,47 @@ test("each repeated -C directory must exist before the next is applied", async (
   const file = path.join(dir, "file");
   await writeFile(file, "not a directory");
   await assert.rejects(validatedCwd([file]), /not a directory/);
+});
+
+test("-C directories resolve from the start directory", () => {
+  const unix = (value: string) => value.split("\\").join("/");
+  assert.equal(unix(effectiveCwd([], "/work/repo")), "/work/repo");
+  assert.equal(unix(effectiveCwd(["repo"], "/work")), "/work/repo");
+  assert.equal(unix(effectiveCwd(["repo", ".."], "/work")), "/work");
+  assert.equal(unix(effectiveCwd(["/elsewhere"], "/work")), "/elsewhere");
+  assert.equal(unix(effectiveCwd([], "work")), "/work");
+});
+
+test("the start directory must exist before any -C directory is applied", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "golem-git-tool-start-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, "repo"));
+  assert.equal(await validatedCwd([], dir), dir);
+  assert.equal(await validatedCwd(["repo"], dir), path.join(dir, "repo"));
+  await assert.rejects(
+    validatedCwd(["repo"], path.join(dir, "missing")),
+    /does not exist/,
+  );
+  const file = path.join(dir, "file");
+  await writeFile(file, "not a directory");
+  await assert.rejects(validatedCwd([], file), /not a directory/);
+  // An absolute -C replaces the start directory, so that one need not exist.
+  assert.equal(
+    await validatedCwd([path.join(dir, "repo")], path.join(dir, "missing")),
+    path.join(dir, "repo"),
+  );
+});
+
+test("a repository and its path arguments are found from the start directory", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, "src"));
+  const inside = await repository([], path.join(dir, "src"));
+  assert.equal(inside.dir, dir);
+  assert.equal(inside.cwd, path.join(dir, "src"));
+  assert.deepEqual(relativePaths(inside, ["main.ts"]), ["src/main.ts"]);
+  const parent = await repository([".."], path.join(dir, "src"));
+  assert.equal(parent.cwd, dir);
 });
 
 test("author syntax is strict", () => {

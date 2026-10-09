@@ -30,15 +30,26 @@ export type LogEntry = {
 export type BranchEntry = { name: string; current: boolean; oid: string };
 export type MutationResult = { summary: string; paths: string[] };
 
-export function effectiveCwd(directories: readonly string[]): string {
-  return directories.reduce((cwd, value) => path.resolve(cwd, value), "/");
+// `start` is where the caller is; each `-C` directory resolves from the one before it,
+// and the first one from `start`.
+export function effectiveCwd(
+  directories: readonly string[],
+  start = "/",
+): string {
+  return directories.reduce(
+    (cwd, value) => path.resolve(cwd, value),
+    path.resolve("/", start),
+  );
 }
 
 export async function validatedCwd(
   directories: readonly string[],
+  start = "/",
 ): Promise<string> {
-  let cwd = "/";
-  for (const value of directories) {
+  // As in Git, the caller's directory is only entered when nothing replaces it: an absolute
+  // `-C` works even if that directory is gone.
+  let cwd = path.resolve("/", start);
+  for (const value of directories.length ? directories : ["."]) {
     const next = path.resolve(cwd, value);
     let metadata;
     try {
@@ -56,8 +67,9 @@ export async function validatedCwd(
 
 export async function repository(
   directories: readonly string[],
+  start = "/",
 ): Promise<Repository> {
-  const cwd = await validatedCwd(directories);
+  const cwd = await validatedCwd(directories, start);
   const dir = await git.findRoot({ fs, filepath: cwd });
   const gitdir = path.join(dir, ".git");
   const metadata = await lstat(gitdir);
