@@ -1571,7 +1571,7 @@ mod tests {
             .expect("managed snapshots on storage without copy-on-write must be refused");
         assert!(
             format!("{error:#}").contains(
-                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
             ),
             "{error:#}"
         );
