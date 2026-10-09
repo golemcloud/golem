@@ -239,7 +239,7 @@ choice for methods returning `{ success, error }`.
 - Saga atomic regions make each durable step recoverable; they do not make external systems ACID.
 - Await every outgoing HTTP execute and compensation request; do not start either one in a detached
   Effect.
-- Keep the agent durable and use the default durable persistence level for oplog recovery.
+- Keep the agent durable so the oplog can recover saga steps.
 
 ## Authoritative API Sources
 

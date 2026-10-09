@@ -9,8 +9,10 @@ import {
   hero,
   paths,
   cloudSection,
+  today,
   previewBanner,
   meteringExplainer,
+  limits,
   pricingPreludeHtml,
   pricingCards,
   headroomCallout,
@@ -32,6 +34,7 @@ import {
         <span class="eyebrow">{hero.eyebrow}</span>
         <h1 class="hero-title">{hero.heading}</h1>
         <p class="hero-lede" set:html={hero.ledeHtml} />
+        <p class="hero-status" set:html={hero.statusHtml} />
       </div>
     </section>
 
@@ -69,7 +72,14 @@ import {
           <h2 class="section-heading">{cloudSection.heading}</h2>
         </header>
 
-        <!-- 3A. Developer Preview banner -->
+        <!-- 3A. Golem Cloud today -->
+        <aside class="today-block">
+          <h3>{today.heading}</h3>
+          <p set:html={today.leadHtml} />
+          <pre class="today-cmd"><code>{today.command}</code></pre>
+        </aside>
+
+        <!-- 3B. Developer Preview banner -->
         <aside class="preview-banner">
           <span class="preview-pill">{previewBanner.pill}</span>
           <p set:html={previewBanner.bodyHtml} />
@@ -83,6 +93,22 @@ import {
             {meteringExplainer.dimensions.map((d) => <li set:html={d.html} />)}
           </ul>
           <p class="metering-footer" set:html={meteringExplainer.footerHtml} />
+        </aside>
+
+        <!-- 3D. Limits and fair use -->
+        <aside class="limits-block">
+          <h3>{limits.heading}</h3>
+          <p set:html={limits.leadHtml} />
+          <dl class="limits-list">
+            {
+              limits.rows.map((row) => (
+                <div>
+                  <dt>{row.label}</dt>
+                  <dd set:html={row.behaviorHtml} />
+                </div>
+              ))
+            }
+          </dl>
         </aside>
 
         <!-- 3C. Pricing cards -->
@@ -407,6 +433,98 @@ import {
     color: var(--text);
     margin: 0;
     letter-spacing: -0.02em;
+  }
+
+  .hero-status {
+    margin-top: 1rem;
+    display: inline-block;
+    font-size: 0.95rem;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+    border-radius: 999px;
+    padding: 0.35rem 0.9rem;
+  }
+
+  /* Golem Cloud today */
+  .today-block {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.7rem;
+    margin: 0 0 1.5rem;
+  }
+  .today-block h3,
+  .limits-block h3 {
+    font-size: 1.1rem;
+    color: var(--accent);
+    margin: 0 0 0.7rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .today-block p,
+  .limits-block p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0 0 0.9rem;
+  }
+  .today-cmd {
+    margin: 0;
+    font-size: 0.85rem;
+  }
+  @media (max-width: 480px) {
+    .today-block,
+    .limits-block {
+      padding: 1.2rem 1.1rem;
+    }
+    .today-cmd {
+      font-size: 0.74rem;
+      padding: 0.9rem;
+    }
+  }
+  .limits-block :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* Limits and fair use */
+  .limits-block {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.7rem;
+    margin: 0 0 2.5rem;
+  }
+  .limits-list {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+    margin: 0;
+  }
+  .limits-list > div {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+    padding: 0.7rem 0;
+    border-top: 1px solid var(--border);
+  }
+  @media (min-width: 720px) {
+    .limits-list > div {
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr);
+      gap: 1.5rem;
+    }
+  }
+  .limits-list dt {
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.93rem;
+  }
+  .limits-list dd {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.93rem;
+    line-height: 1.55;
   }
 
   /* Developer Preview banner */
@@ -764,6 +882,7 @@ import {
   }
   .compare-table {
     width: 100%;
+    min-width: 560px;
     border-collapse: collapse;
     font-size: 0.92rem;
   }
@@ -793,7 +912,8 @@ import {
     font-size: 0.85rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    white-space: nowrap;
+    min-width: 10rem;
+    width: 28%;
   }
   .compare-table tbody td {
     color: var(--text-secondary);
