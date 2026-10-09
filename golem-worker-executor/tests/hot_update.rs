@@ -6245,11 +6245,8 @@ async fn an_automatic_update_after_a_file_write_without_filesystem_snapshots_sur
             .await
     });
     control.await_reached().await;
-    let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
-    let interrupt = spawn(async move { executor_clone.interrupt(&worker_id_clone).await });
+    executor.interrupt(&worker_id).await?;
     control.resume();
-    interrupt.await??;
     let _ = invocation.await?;
     executor
         .wait_for_status(
