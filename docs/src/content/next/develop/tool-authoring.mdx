@@ -132,6 +132,22 @@ Prefer structure over parsing strings yourself:
 
 The command tree is metadata, not a spawned shell. A component cannot currently run an arbitrary native executable. Implement operations with code and libraries compiled into the component, or call an external service through supported network APIs.
 
+### Give a tool the caller's directory
+
+A tool is not a child process of its caller. It does not inherit a working directory or an environment; it receives only its input record. To start where the caller is, declare an option for the directory and name the `PWD` variable on it:
+
+```rust
+#[arg(cwd = "option", env = "PWD", default = "/")]
+```
+
+```typescript
+.option("cwd", z.string(), { default: "/", env: "PWD" })
+```
+
+An option or flag that the command line leaves out, and that declares an environment variable, takes the value of that variable when the caller supplies variables. The built-in Bash tool does: a tool called from a script or from a `golem ssh` session gets the shell's exported variables, and `PWD` is always the directory the shell is in. A value on the command line still wins, and the default applies when the caller supplies no such variable. A value that comes from a variable counts as given, also for the command's constraints. Resolve relative path arguments against this option inside the tool.
+
+Callers that are not a shell supply no variables: `golem tool invoke`, generated typed clients and MCP. For them the option is an ordinary input that they pass or leave at its default.
+
 ## Call through a typed client
 
 Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, and MoonBit code generators project equivalent clients. For a tool implemented in another component or language, add it to bridge generation:
