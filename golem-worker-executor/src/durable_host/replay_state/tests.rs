@@ -35,6 +35,8 @@ type StoredExternalPayload = (PayloadId, Vec<u8>, Vec<u8>);
 #[derive(Debug)]
 struct InMemoryOplog {
     entries: std::sync::Mutex<Vec<OplogEntry>>,
+    /// Every index served by `read_exact`, in order.
+    reads: std::sync::Mutex<Vec<OplogIndex>>,
     external_payloads: tokio::sync::Mutex<Vec<StoredExternalPayload>>,
 }
 
@@ -42,6 +44,7 @@ impl InMemoryOplog {
     fn new() -> Self {
         Self {
             entries: std::sync::Mutex::new(Vec::new()),
+            reads: std::sync::Mutex::new(Vec::new()),
             external_payloads: tokio::sync::Mutex::new(Vec::new()),
         }
     }
@@ -166,6 +169,7 @@ impl Oplog for InMemoryOplog {
                 )
             });
             result.insert(OplogIndex::from_u64(i), entry.clone());
+            self.reads.lock().unwrap().push(OplogIndex::from_u64(i));
         }
         result
     }
@@ -1219,14 +1223,25 @@ fn fork_start() -> OplogEntry {
 }
 
 async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
+    replay_state_and_oplog_over(entries).await.0
+}
+
+async fn replay_state_and_oplog_over(
+    entries: Vec<OplogEntry>,
+) -> (ReplayState, Arc<InMemoryOplog>) {
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in entries {
         oplog.add(entry).await.unwrap();
     }
-    let oplog: Arc<dyn Oplog> = oplog;
-    test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
-        .await
-        .expect("failed to build replay state")
+    let rs = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
+    (rs, oplog)
 }
 
 fn replay_linear_memory() -> crate::services::linear_memory::LinearMemoryTracker {
@@ -8610,18 +8625,19 @@ async fn replay_with_undrained_reconstruction(
     ReplayState,
     ReplayCallHandle,
     crate::durable_host::concurrent::HistoricalReconstruction,
+    Arc<InMemoryOplog>,
 ) {
     let parent = OplogIndex::from_u64(1);
     let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
     let mut entries = vec![noop(), entity_start];
     entries.extend(body_entries);
-    let rs = replay_state_over(entries).await;
+    let (rs, oplog) = replay_state_and_oplog_over(entries).await;
     let mut handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
     let reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
-    (rs, handle, reconstruction)
+    (rs, handle, reconstruction, oplog)
 }
 
 fn spawn_start_claim(
@@ -8658,7 +8674,7 @@ async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
     // a clock call that was never recorded. Its head path consumes the claimed entity Start and
     // stops at the body's Start(3). The body is active, so the claim waits, and after the
     // reconstruction drained the cursor it reports the end of replay.
-    let (rs, handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+    let (rs, handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
         start_with_parent(2),
         end_for(3, 1),
         end_for(2, 2),
@@ -8690,7 +8706,7 @@ async fn missing_request_claim_waits_while_an_active_body_owns_the_head_entry() 
     // [NoOp(1), Start(entity=2), NoOp(3, entity 2), End(2→4)] — the head is a positional entry
     // of the active body. The request-matching claim waits until the body consumed it, then the
     // entity terminal drains and the claim reports the end of replay.
-    let (rs, handle, mut reconstruction) =
+    let (rs, handle, mut reconstruction, _oplog) =
         replay_with_undrained_reconstruction(vec![anchored_noop(2), end_for(2, 2)]).await;
     let mut claim = spawn_start_claim(
         &rs,
@@ -8720,7 +8736,7 @@ async fn missing_request_claim_waits_while_an_active_body_owns_the_head_entry() 
 
 #[test]
 async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_consuming_it() {
-    let (rs, _handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+    let (rs, _handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
         start_with_parent(2),
         end_for(3, 1),
         end_for(2, 2),
@@ -8750,7 +8766,7 @@ async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_
 async fn missing_start_claim_is_divergence_with_a_top_level_sibling_start_at_the_head() {
     // [NoOp(1), Start(entity=2), Start(3, top level), ..] — an active body exists, but the head
     // is another top-level call of the primary, so the missing Start is decided at once.
-    let (rs, _handle, mut reconstruction) =
+    let (rs, _handle, mut reconstruction, _oplog) =
         replay_with_undrained_reconstruction(vec![start_now(), end_for(3, 1), end_for(2, 2)]).await;
     let claim = spawn_start_claim(
         &rs,
@@ -8770,7 +8786,7 @@ async fn missing_start_claim_is_divergence_with_a_top_level_sibling_start_at_the
 async fn missing_start_claim_of_the_owning_body_does_not_wait_on_its_own_head() {
     // The body itself claims a call that it never recorded while its own entry is at the head.
     // Nothing but the body can consume that entry, so the claim is decided at once.
-    let (rs, _handle, mut reconstruction) =
+    let (rs, _handle, mut reconstruction, _oplog) =
         replay_with_undrained_reconstruction(vec![anchored_noop(2), end_for(2, 2)]).await;
     let claim = spawn_start_claim(
         &rs,
@@ -8788,54 +8804,41 @@ async fn missing_start_claim_of_the_owning_body_does_not_wait_on_its_own_head() 
 }
 
 #[test]
-fn missing_start_waits_for_the_nearest_active_body_enclosing_the_head() {
+fn nearest_active_body_resolves_scopes_nested_entities_and_retained_starts() {
+    use super::cursor::nearest_active_body;
+
+    let i = OplogIndex::from_u64;
+    let active = HashSet::from([i(2), i(6)]);
+    // Scope 3 of body 2, entity 6 nested in body 2, scope 7 of entity 6, and scope 4 of a body
+    // that already settled.
+    let members = HashMap::from([(i(3), i(2)), (i(6), i(2)), (i(7), i(6)), (i(4), i(5))]);
+    let retained = HashMap::from([(i(9), i(3)), (i(10), i(1))]);
+    let retained_parent = |index: OplogIndex| retained.get(&index).copied();
+    let nearest = |index| nearest_active_body(i(index), &active, &members, retained_parent);
+
+    assert_eq!(nearest(2), Some(i(2)));
+    assert_eq!(nearest(3), Some(i(2)));
+    assert_eq!(nearest(6), Some(i(6)));
+    assert_eq!(nearest(7), Some(i(6)));
+    assert_eq!(nearest(9), Some(i(2)));
+    assert_eq!(nearest(4), None);
+    assert_eq!(nearest(10), None);
+    assert_eq!(nearest(1), None);
+}
+
+#[test]
+fn missing_start_waits_for_the_body_enclosing_the_head_unless_it_issued_the_claim() {
     use super::cursor::missing_start_waits_for;
 
     let i = OplogIndex::from_u64;
-    let target = i(20);
-    let active = HashSet::from([i(2), i(6)]);
-    // The head names the body directly, or through a scope of that body.
+    assert_eq!(missing_start_waits_for(Some(i(2)), None, false), Some(i(2)));
     assert_eq!(
-        missing_start_waits_for(&[i(2)], &[], &active, target),
+        missing_start_waits_for(Some(i(2)), Some(i(6)), false),
         Some(i(2))
     );
-    assert_eq!(
-        missing_start_waits_for(&[i(3), i(2)], &[], &active, target),
-        Some(i(2))
-    );
-    // A body nested in another active body owns its own entries.
-    assert_eq!(
-        missing_start_waits_for(&[i(7), i(6)], &[i(1)], &active, target),
-        Some(i(6))
-    );
-    // No active body encloses the head.
-    assert_eq!(missing_start_waits_for(&[], &[], &active, target), None);
-    assert_eq!(missing_start_waits_for(&[i(4)], &[], &active, target), None);
-    // The claim comes from inside the owning body, directly or through one of its scopes.
-    assert_eq!(
-        missing_start_waits_for(&[i(3), i(2)], &[i(2)], &active, target),
-        None
-    );
-    assert_eq!(
-        missing_start_waits_for(&[i(3), i(2)], &[i(5), i(2)], &active, target),
-        None
-    );
-    // A claim from another body waits for the owner of the head.
-    assert_eq!(
-        missing_start_waits_for(&[i(3), i(2)], &[i(6)], &active, target),
-        Some(i(2))
-    );
-    // An entity nested in the head's body is another Store: its claim waits too, although the
-    // head's body is in its chain.
-    assert_eq!(
-        missing_start_waits_for(&[i(3), i(2)], &[i(7), i(6), i(2)], &active, target),
-        Some(i(2))
-    );
-    // A claim whose chain was appended live keeps its strict classification.
-    assert_eq!(
-        missing_start_waits_for(&[i(3), i(2)], &[i(21)], &active, target),
-        None
-    );
+    assert_eq!(missing_start_waits_for(Some(i(2)), Some(i(2)), false), None);
+    assert_eq!(missing_start_waits_for(Some(i(2)), None, true), None);
+    assert_eq!(missing_start_waits_for(None, None, false), None);
 }
 
 #[test]
@@ -8844,7 +8847,7 @@ async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head
     //  End(3→6), End(2→7)] — the body claimed its scope Start(3), so the head is the child
     // Start(4). It names the scope, not the entity, as its parent; the claim still waits for the
     // body that encloses the scope.
-    let (rs, handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+    let (rs, handle, mut reconstruction, oplog) = replay_with_undrained_reconstruction(vec![
         start_with_parent(2),
         start_with_parent(3),
         end_for(4, 1),
@@ -8861,6 +8864,7 @@ async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head
         .await
         .unwrap();
     assert_eq!(scope.start_idx(), OplogIndex::from_u64(3));
+    oplog.reads.lock().unwrap().clear();
 
     let mut claim = spawn_start_claim(
         &rs,
@@ -8870,6 +8874,13 @@ async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head
         ),
     );
     assert_claim_parked(&mut claim).await;
+    // The owner of the head is resolved from the claimed scope, not by reading the scope Start
+    // or the entity Start again.
+    let reads = oplog.reads.lock().unwrap().clone();
+    assert!(
+        reads.iter().all(|index| *index > OplogIndex::from_u64(3)),
+        "the parked claim read already consumed ancestors: {reads:?}"
+    );
 
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
@@ -8887,7 +8898,7 @@ async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head
 #[test]
 async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_its_own_head() {
     // As above, but the body itself claims a call under its scope that it never recorded.
-    let (rs, _handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+    let (rs, _handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
         start_with_parent(2),
         start_with_parent(3),
         end_for(4, 1),
@@ -8922,7 +8933,7 @@ async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_it
 async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_head() {
     // The guest starts a custom durable invocation whose Start was never recorded while the
     // completed reconstruction has not drained the body's Start(3).
-    let (rs, handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+    let (rs, handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
         start_with_parent(2),
         end_for(3, 1),
         end_for(2, 2),

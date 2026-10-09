@@ -553,12 +553,9 @@ impl ReplayState {
                                 Ok((None, None, Some(Missing::StoreAlreadyLive)))
                             }
                             Ok(StartClaimAttempt::Missing) => {
-                                if let Some(bodies) = tx
-                                    .active_body_owning_head(
-                                        owned_claim.expected_parent_start_index(),
-                                    )
-                                    .await
-                                {
+                                if let Some(bodies) = tx.active_body_owning_head(
+                                    owned_claim.expected_parent_start_index(),
+                                ) {
                                     return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
                                 }
                                 match tx.deleted_region_contains_start(&owned_claim).await? {
@@ -1128,9 +1125,8 @@ impl ReplayState {
                                 if tx.cursor.is_live() {
                                     return Ok((None, None, Some(Missing::ReplayEnded)));
                                 }
-                                if let Some(bodies) = tx
-                                    .active_body_owning_head(expected_parent_start_index)
-                                    .await
+                                if let Some(bodies) =
+                                    tx.active_body_owning_head(expected_parent_start_index)
                                 {
                                     return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
                                 }

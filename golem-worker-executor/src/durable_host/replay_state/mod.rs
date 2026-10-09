@@ -469,6 +469,12 @@ struct CursorState {
     /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
     /// target shrink / rollback deletes their region.
     retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
+    /// Claimed `Start`s recorded inside an entity body, mapped to the nearest entity body that was
+    /// active when they were claimed. A `Start` is recorded when its parent is an active body or
+    /// is itself recorded here, so the scopes and calls of a body, and the entities nested in it,
+    /// resolve to their body without an oplog read. An entry leaves the map when the cursor
+    /// drains the terminal of its `Start`. See [`missing_start_waits_for`](cursor::missing_start_waits_for).
+    body_members: HashMap<OplogIndex, OplogIndex>,
 }
 
 /// One entry of [`CursorState::retained_starts`].

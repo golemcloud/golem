@@ -680,6 +680,9 @@ impl CursorTx<'_> {
             if self.is_awaited_terminal(read_idx, &entry) {
                 // An `End`/`Cancelled` owned by a concurrently-replaying call: commit it and hand it
                 // back to its awaiter, then keep draining. Never returned to this caller.
+                if let Some(start_index) = terminal_start_index(&entry) {
+                    self.st.body_members.remove(&start_index);
+                }
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 continue;
             }
@@ -892,10 +895,10 @@ impl CursorTx<'_> {
     /// match, and returns the subscription to wait on when the rule says the claim waits. The
     /// claim was issued from the Store whose call chain starts at `claim_parent`.
     ///
-    /// The head was buffered by the claim's head fast path. No oplog entry is read while no body
-    /// is active. Otherwise the parent chains are read only down to the earliest active body,
-    /// because a parent always precedes its children.
-    pub(super) async fn active_body_owning_head(
+    /// Every fact comes from state the cursor already holds: the head buffered by the claim's
+    /// head fast path, [`CursorState::body_members`], the retained `Start`s and the active-body
+    /// set. No oplog entry is read.
+    pub(super) fn active_body_owning_head(
         &self,
         claim_parent: Option<OplogIndex>,
     ) -> Option<tokio::sync::watch::Receiver<HashSet<OplogIndex>>> {
@@ -909,47 +912,57 @@ impl CursorTx<'_> {
         };
         let mut bodies = self.cursor.reconstruction_claims.subscribe_bodies();
         let active_bodies = bodies.borrow_and_update().clone();
-        let floor = *active_bodies.iter().min()?;
-        let head_chain = self
-            .parent_chain(Some(head_parent), floor, Some(&active_bodies))
-            .await;
-        let claim_chain = self
-            .parent_chain(claim_parent, floor, Some(&active_bodies))
-            .await;
-        missing_start_waits_for(
-            &head_chain,
-            &claim_chain,
+        if active_bodies.is_empty() {
+            return None;
+        }
+        let retained_parent = |index: OplogIndex| match self.st.retained_starts.get(&index) {
+            Some(RetainedStart {
+                entry:
+                    OplogEntry::Start {
+                        parent_start_index, ..
+                    },
+                ..
+            }) => *parent_start_index,
+            _ => None,
+        };
+        let head_body = nearest_active_body(
+            head_parent,
             &active_bodies,
-            self.cursor.replay_target(),
-        )
-        .map(|_| bodies)
+            &self.st.body_members,
+            retained_parent,
+        );
+        let claim_is_live = claim_parent.is_some_and(|parent| parent > self.cursor.replay_target());
+        let claiming_body = claim_parent.and_then(|parent| {
+            nearest_active_body(
+                parent,
+                &active_bodies,
+                &self.st.body_members,
+                retained_parent,
+            )
+        });
+        missing_start_waits_for(head_body, claiming_body, claim_is_live).map(|_| bodies)
     }
 
-    /// `first` followed by the parent of each recorded `Start` in turn. The chain ends at an
-    /// index below `floor`, at an index in `stop_at`, at an index after the replay target (a
-    /// live append, which is not read), or at an entry that is not a `Start`.
-    async fn parent_chain(
-        &self,
-        first: Option<OplogIndex>,
-        floor: OplogIndex,
-        stop_at: Option<&HashSet<OplogIndex>>,
-    ) -> Vec<OplogIndex> {
-        let replay_target = self.cursor.replay_target();
-        let mut chain = Vec::new();
-        let mut next = first.filter(|index| *index >= floor);
-        while let Some(index) = next {
-            chain.push(index);
-            if index > replay_target || stop_at.is_some_and(|stop_at| stop_at.contains(&index)) {
-                break;
-            }
-            next = match self.cursor.oplog.read(index).await {
-                OplogEntry::Start {
-                    parent_start_index, ..
-                } => parent_start_index.filter(|parent| *parent >= floor),
-                _ => None,
-            };
+    /// Records a claimed `Start` in [`CursorState::body_members`] when its parent is an active
+    /// entity body or is recorded there itself. A claim resolved on the spot already had its
+    /// terminal drained, so it is not recorded.
+    fn record_body_member(&mut self, start_index: OplogIndex, entry: &OplogEntry) {
+        let OplogEntry::Start {
+            parent_start_index: Some(parent),
+            ..
+        } = entry
+        else {
+            return;
+        };
+        if self.resolved_retained_claim == Some(start_index) {
+            return;
         }
-        chain
+        let body = match self.st.body_members.get(parent) {
+            Some(body) => *body,
+            None if self.cursor.reconstruction_claims.is_body_active(*parent) => *parent,
+            None => return,
+        };
+        self.st.body_members.insert(start_index, body);
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -1714,6 +1727,17 @@ impl CursorTx<'_> {
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
     ) -> Result<StartClaimAttempt, WorkerExecutorError> {
+        let attempt = self.claim_first_matching_start(matches_identity).await?;
+        if let StartClaimAttempt::Claimed(handle, entry) = &attempt {
+            self.record_body_member(handle.start_idx(), entry);
+        }
+        Ok(attempt)
+    }
+
+    async fn claim_first_matching_start(
+        &mut self,
+        matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
+    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
         // Retained `Start`s precede everything at or beyond the cursor head, so claiming them
         // first keeps same-identity claims in oplog order.
         if let Some((handle, entry)) = self.claim_retained_start(&matches_identity, None).await? {
@@ -1785,6 +1809,20 @@ impl CursorTx<'_> {
     /// external payload may require blob I/O. A completed scan returns `Missing`; payload loading
     /// or decoding failure remains an error.
     pub(super) async fn claim_start_matching_request(
+        &mut self,
+        matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
+        expected_request: &RequestClaimIdentity,
+    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
+        let attempt = self
+            .claim_first_matching_request_start(matches_identity, expected_request)
+            .await?;
+        if let StartClaimAttempt::Claimed(handle, entry) = &attempt {
+            self.record_body_member(handle.start_idx(), entry);
+        }
+        Ok(attempt)
+    }
+
+    async fn claim_first_matching_request_start(
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool + Sync,
         expected_request: &RequestClaimIdentity,
@@ -2000,10 +2038,7 @@ impl CursorTx<'_> {
         if !matches!(outcome, StartClaimAttempt::Missing) {
             return Ok(outcome);
         }
-        if let Some(bodies) = self
-            .active_body_owning_head(claim.expected_parent_start_index())
-            .await
-        {
+        if let Some(bodies) = self.active_body_owning_head(claim.expected_parent_start_index()) {
             return Ok(StartClaimAttempt::Blocked(BlockedOn::ActiveBody(bodies)));
         }
         if !recover_missing {
@@ -2267,6 +2302,7 @@ impl ReplayState {
                 claimed_custom_invocation_ids: HashSet::new(),
                 custom_subtrees: HashMap::new(),
                 retained_starts: std::collections::BTreeMap::new(),
+                body_members: HashMap::new(),
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
@@ -4133,30 +4169,42 @@ pub(super) fn head_owner(entry: &OplogEntry) -> HeadOwner {
     }
 }
 
+/// The nearest active entity body that encloses the record at `index`: `index` itself when it is
+/// an active body, the body recorded for it in `body_members` while that body is active, or the
+/// body that encloses the parent of a retained `Start` (`retained_parent`).
+pub(super) fn nearest_active_body(
+    mut index: OplogIndex,
+    active_bodies: &HashSet<OplogIndex>,
+    body_members: &HashMap<OplogIndex, OplogIndex>,
+    retained_parent: impl Fn(OplogIndex) -> Option<OplogIndex>,
+) -> Option<OplogIndex> {
+    loop {
+        if active_bodies.contains(&index) {
+            return Some(index);
+        }
+        if let Some(body) = body_members.get(&index) {
+            return active_bodies.contains(body).then_some(*body);
+        }
+        index = retained_parent(index)?;
+    }
+}
+
 /// Decides whether a `Start` claim that found no match while the cursor replays waits instead of
 /// reporting the missing `Start`, and returns the entity body it waits for.
 ///
-/// `head_chain` is the owner named by the entry at the cursor head followed by its ancestors, and
-/// `claim_chain` is the expected parent of the claim followed by its ancestors. The claim waits
-/// for the nearest active body that encloses the head entry: that body, or the supervisor that
-/// drains its recorded terminal, can still consume the head, and the claim's `Start` may then
-/// turn out to be recorded after it or not at all. The claim does not wait when no active body
-/// encloses the head, when that body issued the claim (only that body can consume its own entry,
-/// so it would wait for itself), or when the claim's chain contains a live append after the
-/// replay target. The body that issued the claim is the nearest active body in its chain: an
-/// entity nested in the head's body is another Store, so its claim waits like any other.
+/// `head_body` is the nearest active body that encloses the entry at the cursor head, and
+/// `claiming_body` the nearest active body that encloses the claim's parent. The claim waits for
+/// `head_body`: that body, or the supervisor that drains its recorded terminal, can still consume
+/// the head, and the claim's `Start` may then turn out to be recorded after it or not at all. The
+/// claim does not wait when no active body encloses the head, when that body issued the claim
+/// (only that body can consume its own entry, so it would wait for itself), or when the claim's
+/// parent was appended live after the replay target. An entity nested in the head's body is
+/// another Store, so its claim waits like any other.
 pub(super) fn missing_start_waits_for(
-    head_chain: &[OplogIndex],
-    claim_chain: &[OplogIndex],
-    active_bodies: &HashSet<OplogIndex>,
-    replay_target: OplogIndex,
+    head_body: Option<OplogIndex>,
+    claiming_body: Option<OplogIndex>,
+    claim_is_live: bool,
 ) -> Option<OplogIndex> {
-    let body = *head_chain
-        .iter()
-        .find(|index| active_bodies.contains(index))?;
-    let claim_is_live = claim_chain.iter().any(|index| *index > replay_target);
-    let claiming_body = claim_chain
-        .iter()
-        .find(|index| active_bodies.contains(index));
-    (!claim_is_live && claiming_body != Some(&body)).then_some(body)
+    let body = head_body?;
+    (!claim_is_live && claiming_body != Some(body)).then_some(body)
 }
