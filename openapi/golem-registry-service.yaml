@@ -1577,13 +1577,20 @@ paths:
       - RegistryService
       - AgentSecrets
       - Environment
-      summary: List all agent secrets of the environment
+      summary: List agent secret metadata with optional sensitive values
       parameters:
       - name: environment_id
         schema:
           type: string
           format: uuid
         in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: include_values
+        schema:
+          type: boolean
+        in: query
         required: true
         deprecated: false
         explode: true

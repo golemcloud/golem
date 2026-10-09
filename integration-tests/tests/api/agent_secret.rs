@@ -87,8 +87,19 @@ async fn create_agent_secret_with_value(deps: &EnvBasedTestDependencies) -> anyh
     }
 
     {
-        let all_environment_secrets = client.list_environment_agent_secrets(&env.id.0).await?;
+        let all_environment_secrets = client
+            .list_environment_agent_secrets(&env.id.0, true)
+            .await?;
         assert!(all_environment_secrets.values.contains(&result));
+
+        let metadata = client
+            .list_environment_agent_secrets(&env.id.0, false)
+            .await?;
+        assert_eq!(metadata.values.len(), 1);
+        assert_eq!(metadata.values[0].id, result.id);
+        assert_eq!(metadata.values[0].path, result.path);
+        assert_eq!(metadata.values[0].secret_type, result.secret_type);
+        assert_eq!(metadata.values[0].secret_value, None);
     }
 
     Ok(())
@@ -206,7 +217,9 @@ async fn secret_path_is_canonicalized_when_reading(
     }
 
     {
-        let all_environment_secrets = client.list_environment_agent_secrets(&env.id.0).await?;
+        let all_environment_secrets = client
+            .list_environment_agent_secrets(&env.id.0, true)
+            .await?;
         assert!(all_environment_secrets.values.contains(&result));
     }
 
@@ -521,7 +534,9 @@ async fn create_agent_secret_with_value_type_mismatch_should_fail(
         ))
     );
 
-    let all = client.list_environment_agent_secrets(&env.id.0).await?;
+    let all = client
+        .list_environment_agent_secrets(&env.id.0, true)
+        .await?;
 
     assert_eq!(all.values, Vec::new());
 

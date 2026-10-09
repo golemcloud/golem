@@ -1,5 +1,35 @@
 # Progress
 
+## 2026-10-09: Lazy Typed Configuration Inventory
+
+- Replaced the eager generic resource serializer with retained Environment,
+  Account, and Server scopes. Each scope remembers its kind, item, and pane
+  focus; a kind is loaded only when opened and can be reloaded independently.
+- Added typed Environment projections for secret metadata, retry policies,
+  resource definitions, domains, security schemes, plugin grants, tool grants,
+  and middleware grants. Configuration requests Agent Secret metadata without
+  values, and security/token projections cannot contain secrets. A manual
+  reload also evicts the existing CLI plugin-grant cache before reading again.
+- Added typed Account projections for identity and roles, current and
+  historical usage, effective limits and overrides, owned and received
+  permission shares, API-token metadata, owned plugins, tool and middleware
+  releases, and concrete or polymorphic cards.
+- Added Server projections for the resolved localServer manifest and source,
+  nested-session command/status, connected endpoints and observed ports,
+  storage paths, memory, and local observability capability. Built-in defaults
+  remain distinct from external targets; unavailable process-local facts state
+  why they cannot be observed.
+- Added three-pane keyboard navigation with a visible scope selector, retained
+  per-scope state, scrollable details, explicit loading/empty/error states, and
+  responsive wide, narrow, short, and 1×1 rendering coverage.
+- Made Agent Secret list callers explicitly choose whether secret values are
+  included, regenerated OpenAPI/client documentation, and added integration
+  coverage for metadata-only responses.
+
+Still open in this slice: Overview cards, aggregate metric bucket-to-Oplog
+range handoff, custom absolute metric ranges, complete preview fixtures, and
+final terminal visual acceptance.
+
 ## 2026-10-09: Typed Deployment History And Compare
 
 - Added a Current & Recent deployment landing backed by the existing typed,
@@ -21,9 +51,7 @@
   cancel in-flight history/detail reads and clear retained deployment routes
   and cached projections.
 
-Still open in this slice: Environment/Account/Server Configuration depth,
-Overview cards, aggregate metric bucket-to-Oplog range handoff, custom absolute
-metric ranges, complete preview fixtures, and final terminal visual acceptance.
+This checkpoint was followed by the typed Configuration inventory above.
 
 ## 2026-10-09: Typed Persistent Agent Stream
 

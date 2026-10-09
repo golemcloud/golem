@@ -922,13 +922,29 @@ impl TuiApp {
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Configuration =>
             {
-                self.move_resource_selection(false)
+                self.move_resource_selection(false, event_tx)
             }
             KeyCode::Down
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Configuration =>
             {
-                self.move_resource_selection(true)
+                self.move_resource_selection(true, event_tx)
+            }
+            KeyCode::Left
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration
+                    && key.modifiers.is_empty() =>
+            {
+                self.resources.select_scope(self.resources.scope.previous());
+                self.refresh_resources(event_tx, false);
+            }
+            KeyCode::Right
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration
+                    && key.modifiers.is_empty() =>
+            {
+                self.resources.select_scope(self.resources.scope.next());
+                self.refresh_resources(event_tx, false);
             }
             KeyCode::Esc if self.agent_details_focused() => {
                 self.agents.focus = AgentOverviewFocus::List
@@ -1083,7 +1099,7 @@ impl TuiApp {
                     OpsDestination::Agents => self.refresh_agents(event_tx),
                     OpsDestination::Oplog => self.refresh_activity(event_tx),
                     OpsDestination::Metrics => self.refresh_metrics(event_tx),
-                    OpsDestination::Configuration => self.refresh_resources(event_tx),
+                    OpsDestination::Configuration => self.refresh_resources(event_tx, true),
                     OpsDestination::Stream => {}
                 }
             }
@@ -2594,7 +2610,7 @@ impl TuiApp {
                 self.metrics.focus = self.metrics.focus.next()
             }
             Workspace::Ops if self.ops.active() == OpsDestination::Configuration => {
-                self.resources.focus_rows = !self.resources.focus_rows
+                self.resources.cycle_focus(true)
             }
             Workspace::Ops => self.cycle_ops_pane_focus(),
         }
@@ -2618,7 +2634,7 @@ impl TuiApp {
                 self.metrics.focus = self.metrics.focus.previous()
             }
             Workspace::Ops if self.ops.active() == OpsDestination::Configuration => {
-                self.resources.focus_rows = !self.resources.focus_rows
+                self.resources.cycle_focus(false)
             }
             Workspace::Ops => self.cycle_ops_pane_focus(),
         }
@@ -2871,7 +2887,7 @@ impl TuiApp {
             }
             OpsDestination::Oplog => self.refresh_activity(event_tx),
             OpsDestination::Metrics => self.refresh_metrics(event_tx),
-            OpsDestination::Configuration => self.refresh_resources(event_tx),
+            OpsDestination::Configuration => self.refresh_resources(event_tx, false),
             OpsDestination::Stream => self.stream.mark_visible(),
         }
     }
@@ -3364,36 +3380,48 @@ impl TuiApp {
         self.activity.selected = position.unwrap_or(0);
     }
 
-    fn resource_scope(&self) -> Option<ResourceScope> {
-        match self.ops.active() {
-            OpsDestination::Configuration => Some(ResourceScope::Environment),
-            _ => None,
-        }
-    }
-
-    fn refresh_resources(&mut self, event_tx: Option<&TuiEventSender>) {
-        if self.resources.loading {
+    fn refresh_resources(&mut self, event_tx: Option<&TuiEventSender>, force: bool) {
+        let kind = self.resources.selected_kind();
+        if self.resources.loading == Some(kind) {
             return;
         }
-        let Some(scope) = self.resource_scope() else {
-            self.resources.error = Some("Configuration is unavailable for this scope".to_string());
+        if !force && self.resources.is_loaded(kind) {
             return;
-        };
+        }
         let Some(event_tx) = event_tx.cloned() else {
             return;
         };
         let Some(context_executor) = self.context_executor.clone() else {
-            self.resources.error = Some("TUI context executor is not available".to_string());
             return;
         };
 
-        self.resources.generation = self.resources.generation.saturating_add(1);
-        let generation = self.resources.generation;
-        self.resources.loading = true;
-        self.resources.error = None;
-        self.resources.scope = scope;
-        self.resources.context_id = Some(context_executor.current_context_id());
+        let (generation, scope, kind) = self
+            .resources
+            .begin_load(context_executor.current_context_id());
         let environment_reference = self.selected_target.environment_reference.clone();
+        let server = resources::ServerResourceSnapshot {
+            status: self.server.run.status.title().to_string(),
+            command: (self.server.run.id > 0).then(|| command_display(&self.server.run.args)),
+            router_port: self
+                .server
+                .run
+                .bound_ports
+                .as_ref()
+                .map(|ports| ports.router_port),
+            custom_request_port: self
+                .server
+                .run
+                .bound_ports
+                .as_ref()
+                .map(|ports| ports.custom_request_port),
+            mcp_port: self
+                .server
+                .run
+                .bound_ports
+                .as_ref()
+                .map(|ports| ports.mcp_port),
+            exit_code: self.server.run.exit_code,
+        };
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
             event_tx.control(),
@@ -3403,6 +3431,9 @@ impl TuiApp {
                     launch_context.into_context(),
                     environment_reference.as_ref(),
                     scope,
+                    kind,
+                    server,
+                    force,
                 )
                 .await
             },
@@ -3422,41 +3453,20 @@ impl TuiApp {
         if Some(context_id) != self.resources.context_id {
             return;
         }
-        self.resources.loading = false;
-        match result {
-            Ok(payload) => {
-                self.resources.scope = payload.scope;
-                self.resources.rows = payload.rows;
-                self.resources.rebuild_kinds();
-                self.resources.error = None;
-            }
-            Err(error) => self.resources.error = Some(agent_refresh_error(error, logs)),
-        }
+        self.resources.finish(
+            generation,
+            context_id,
+            result.map_err(|error| anyhow::anyhow!(agent_refresh_error(error, logs))),
+        );
     }
 
     fn invalidate_resources(&mut self) {
-        self.resources = ResourcesState {
-            generation: self.resources.generation.saturating_add(1),
-            ..ResourcesState::default()
-        };
+        self.resources.invalidate();
     }
 
-    fn move_resource_selection(&mut self, down: bool) {
-        if self.resources.focus_rows {
-            let last = self.resources.visible_rows().len().saturating_sub(1);
-            self.resources.selected_row = if down {
-                self.resources.selected_row.saturating_add(1).min(last)
-            } else {
-                self.resources.selected_row.saturating_sub(1)
-            };
-        } else {
-            let last = self.resources.kinds.len().saturating_sub(1);
-            self.resources.selected_kind = if down {
-                self.resources.selected_kind.saturating_add(1).min(last)
-            } else {
-                self.resources.selected_kind.saturating_sub(1)
-            };
-            self.resources.selected_row = 0;
+    fn move_resource_selection(&mut self, down: bool, event_tx: Option<&TuiEventSender>) {
+        if self.resources.move_selection(down) {
+            self.refresh_resources(event_tx, false);
         }
     }
 
@@ -4008,7 +4018,7 @@ impl TuiApp {
             {
                 self.metrics.focus = self.metrics.focus.next()
             }
-            OpsDestination::Configuration => self.resources.focus_rows = !self.resources.focus_rows,
+            OpsDestination::Configuration => self.resources.cycle_focus(true),
             OpsDestination::Overview
             | OpsDestination::Agents
             | OpsDestination::Metrics
@@ -10634,35 +10644,29 @@ fn render_ops_resources(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
-    let scope = match app.resources.scope {
-        ResourceScope::Deployment => "Deployment",
-        ResourceScope::Environment => "Environment",
-    };
-    let loading = if app.resources.loading {
+    let scopes = ResourceScope::ALL
+        .into_iter()
+        .map(|scope| {
+            if scope == app.resources.scope {
+                format!("[{}]", scope.label())
+            } else {
+                scope.label().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
+    let loading = if app.resources.loading.is_some() {
         " · refreshing…"
     } else {
         ""
     };
     PaneHeader {
-        title: &format!("Configuration · {scope}{loading}"),
+        title: &format!("Configuration · {scopes}{loading}"),
         focus: PaneFocus::Active,
         left_connector: Some("├"),
         ending: PaneEnding::Top,
     }
     .render(frame, header, &theme());
-
-    if let Some(error) = &app.resources.error {
-        render_metrics_notice(frame, body, NoticeKind::Warning, error);
-        return;
-    }
-    if app.resources.loading && app.resources.kinds.is_empty() {
-        render_metrics_notice(frame, body, NoticeKind::Info, "Loading resource catalog…");
-        return;
-    }
-    if app.resources.kinds.is_empty() {
-        render_metrics_notice(frame, body, NoticeKind::Empty, "No resources in this scope");
-        return;
-    }
 
     let areas = if body.width >= 96 {
         Layout::default()
@@ -10697,24 +10701,32 @@ fn render_resource_kinds(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .areas(area);
     PaneHeader {
         title: "Kinds",
-        focus: if app.resources.focus_rows {
-            PaneFocus::Idle
-        } else {
+        focus: if app.resources.focus() == resources::ResourceFocus::Kinds {
             PaneFocus::Active
+        } else {
+            PaneFocus::Idle
         },
         left_connector: Some("├"),
         ending: PaneEnding::Top,
     }
     .render(frame, header, &theme());
-    let lines = app
-        .resources
-        .kinds
+    let lines = resources::ResourceKind::for_scope(app.resources.scope)
         .iter()
         .enumerate()
-        .map(|(index, (kind, count))| {
+        .map(|(index, kind)| {
+            let status = if app.resources.loading == Some(*kind) {
+                "…".to_string()
+            } else if app.resources.kind_error(*kind).is_some() {
+                "!".to_string()
+            } else {
+                app.resources
+                    .kind_count(*kind)
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "—".to_string())
+            };
             metric_selection_line(
-                format!("{kind}  {count}"),
-                index == app.resources.selected_kind,
+                format!("{}  {status}", kind.label()),
+                index == app.resources.selected_kind_index(),
                 body.width,
             )
         })
@@ -10728,8 +10740,8 @@ fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
     PaneHeader {
-        title: app.resources.selected_kind_name().unwrap_or("Items"),
-        focus: if app.resources.focus_rows {
+        title: app.resources.selected_kind().label(),
+        focus: if app.resources.focus() == resources::ResourceFocus::Items {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
@@ -10738,15 +10750,38 @@ fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         ending: PaneEnding::Top,
     }
     .render(frame, header, &theme());
+    if app.resources.loading == Some(app.resources.selected_kind())
+        && !app.resources.is_loaded(app.resources.selected_kind())
+    {
+        render_metrics_notice(frame, body, NoticeKind::Info, "Loading this resource kind…");
+        return;
+    }
+    if let Some(error) = app.resources.current_error() {
+        render_metrics_notice(frame, body, NoticeKind::Warning, error);
+        return;
+    }
+    if app.resources.visible_rows().is_empty() {
+        render_metrics_notice(
+            frame,
+            body,
+            NoticeKind::Empty,
+            "No items in this resource kind",
+        );
+        return;
+    }
     let lines = app
         .resources
         .visible_rows()
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(index, row)| {
             metric_selection_line(
-                row.name.clone(),
-                index == app.resources.selected_row,
+                if row.summary.is_empty() {
+                    row.name.clone()
+                } else {
+                    format!("{}  {}", row.name, row.summary)
+                },
+                index == app.resources.selected_row_index(),
                 body.width,
             )
         })
@@ -10762,36 +10797,44 @@ fn render_resource_detail(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let selected = app
         .resources
         .visible_rows()
-        .get(app.resources.selected_row)
-        .copied();
+        .get(app.resources.selected_row_index());
     PaneHeader {
         title: "Details",
-        focus: PaneFocus::Idle,
+        focus: if app.resources.focus() == resources::ResourceFocus::Details {
+            PaneFocus::Active
+        } else {
+            PaneFocus::Idle
+        },
         left_connector: Some("├"),
         ending: PaneEnding::Top,
     }
     .render(frame, header, &theme());
-    let lines = selected
-        .map(|row| {
-            vec![
-                Line::from(Span::styled(
-                    row.name.clone(),
-                    Style::default()
-                        .fg(theme().text)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::default(),
-                Line::from(Span::styled(
-                    row.detail.clone(),
+    let lines = selected.map_or_else(Vec::new, |row| {
+        let mut lines = vec![
+            Line::from(Span::styled(
+                row.name.clone(),
+                Style::default()
+                    .fg(theme().text)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::default(),
+        ];
+        for field in &row.fields {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}  ", field.label),
                     Style::default().fg(theme().text_secondary),
-                )),
-            ]
-        })
-        .unwrap_or_default();
+                ),
+                Span::styled(field.value.clone(), Style::default().fg(theme().text)),
+            ]));
+        }
+        lines
+    });
     frame.render_widget(
         Paragraph::new(lines)
             .style(surface_style())
-            .wrap(Wrap { trim: false }),
+            .wrap(Wrap { trim: false })
+            .scroll((app.resources.details_scroll(), 0)),
         body,
     );
 }
@@ -12797,9 +12840,20 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
     } else if app.ops.active() == OpsDestination::Configuration {
         push_section_break(&mut lines, width, "Configuration");
-        push_raw_help(&mut lines, width, "tab / shift+tab", "Focus kinds or items");
-        push_raw_help(&mut lines, width, "up / down", "Select a kind or item");
-        push_raw_help(&mut lines, width, "ctrl+r", "Refresh now");
+        push_raw_help(
+            &mut lines,
+            width,
+            "left / right",
+            "Environment, Account, or Server",
+        );
+        push_raw_help(
+            &mut lines,
+            width,
+            "tab / shift+tab",
+            "Focus kinds, items, or details",
+        );
+        push_raw_help(&mut lines, width, "up / down", "Select or scroll details");
+        push_raw_help(&mut lines, width, "ctrl+r", "Reload selected kind");
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
     } else if app.ops_agents_focused() {
         push_action_section_for_app(
@@ -18377,23 +18431,82 @@ mod tests {
     fn resources_render_as_kind_items_and_safe_details_at_all_sizes() {
         let mut app = test_app();
         app.ops.select(OpsDestination::Configuration);
-        app.resources.scope = ResourceScope::Environment;
-        app.resources.rows = vec![resources::ResourceRow {
-            kind: "Secrets".to_string(),
-            name: "/payments/token".to_string(),
-            detail: "revision 7".to_string(),
-        }];
-        app.resources.rebuild_kinds();
+        let context_id = TuiContextId::new(7);
+        let (generation, scope, kind) = app.resources.begin_load(context_id);
+        app.resources.finish(
+            generation,
+            context_id,
+            Ok(ResourcesRefreshPayload {
+                scope,
+                kind,
+                rows: vec![resources::ResourceRow {
+                    name: "/payments/token".to_string(),
+                    summary: "revision 7".to_string(),
+                    fields: vec![resources::ResourceField {
+                        label: "Value".to_string(),
+                        value: "Masked".to_string(),
+                    }],
+                }],
+            }),
+        );
 
         let frame = render_app_text_at(&app, 120, 30);
-        assert!(frame.contains("Configuration · Environment"), "{frame}");
+        assert!(frame.contains("Configuration · [Environment]"), "{frame}");
         assert!(frame.contains("Secrets"), "{frame}");
         assert!(frame.contains("/payments/token"), "{frame}");
         assert!(frame.contains("revision 7"), "{frame}");
 
-        for (width, height) in [(60, 18), (24, 8), (1, 1)] {
-            render_app_text_at(&app, width, height);
+        for (scope, expected) in [
+            (ResourceScope::Environment, "[Environment]"),
+            (ResourceScope::Account, "[Account]"),
+            (ResourceScope::Server, "[Server]"),
+        ] {
+            app.resources.select_scope(scope);
+            if !app.resources.is_loaded(app.resources.selected_kind()) {
+                let (generation, scope, kind) = app.resources.begin_load(context_id);
+                app.resources.finish(
+                    generation,
+                    context_id,
+                    Ok(ResourcesRefreshPayload {
+                        scope,
+                        kind,
+                        rows: vec![resources::ResourceRow {
+                            name: expected.to_string(),
+                            summary: "typed projection".to_string(),
+                            fields: vec![resources::ResourceField {
+                                label: "Status".to_string(),
+                                value: "available".to_string(),
+                            }],
+                        }],
+                    }),
+                );
+            }
+            let frame = render_app_text_at(&app, 120, 30);
+            assert!(frame.contains(expected), "{frame}");
+            for (width, height) in [(100, 12), (60, 18), (24, 8), (1, 1)] {
+                render_app_text_at(&app, width, height);
+            }
         }
+    }
+
+    #[test]
+    fn configuration_keys_switch_scopes_and_cycle_all_three_panes() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Ops;
+        app.ops.select(OpsDestination::Configuration);
+
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.resources.scope, ResourceScope::Account);
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.resources.scope, ResourceScope::Environment);
+
+        assert_eq!(app.resources.focus(), resources::ResourceFocus::Kinds);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.resources.focus(), resources::ResourceFocus::Items);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.resources.focus(), resources::ResourceFocus::Details);
+        app.handle_key(key(KeyCode::BackTab));
+        assert_eq!(app.resources.focus(), resources::ResourceFocus::Items);
     }
 
     #[test]

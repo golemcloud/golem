@@ -81,6 +81,7 @@ pub struct Context {
     manifest_environment_deployment_options: Option<DeploymentOptions>,
     manifest_version_source: Option<AppVersionSource>,
     manifest_local_server: Option<ResolvedLocalServer>,
+    manifest_local_server_source: Option<PathBuf>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
     http_parallelism: usize,
@@ -169,6 +170,11 @@ impl Context {
         }
 
         let app_source_mode = preloaded_app.source_mode;
+        let manifest_local_server_source = preloaded_app
+            .application_preload
+            .as_ref()
+            .and_then(|app| app.local_server.as_ref())
+            .map(|local_server| local_server.source.clone());
         let manifest_local_server = preloaded_app.resolved_local_server;
         let application_preload = preloaded_app.application_preload;
 
@@ -367,6 +373,7 @@ impl Context {
             manifest_environment_deployment_options,
             manifest_version_source,
             manifest_local_server,
+            manifest_local_server_source,
             yes,
             dev_mode: global_flags.dev_mode,
             show_secrets: global_flags.show_secrets,
@@ -478,6 +485,10 @@ impl Context {
 
     pub fn manifest_local_server(&self) -> Option<&ResolvedLocalServer> {
         self.manifest_local_server.as_ref()
+    }
+
+    pub fn manifest_local_server_source(&self) -> Option<&Path> {
+        self.manifest_local_server_source.as_deref()
     }
 
     pub fn uses_local_server(&self) -> bool {

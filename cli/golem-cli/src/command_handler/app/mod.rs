@@ -1905,7 +1905,7 @@ impl AppCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let current_agent_secrets = clients
             .agent_secrets
-            .list_environment_agent_secrets(&deploy_diff.environment.environment_id.0)
+            .list_environment_agent_secrets(&deploy_diff.environment.environment_id.0, true)
             .await
             .map_service_error()?
             .values;

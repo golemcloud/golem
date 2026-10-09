@@ -99,7 +99,7 @@ impl AgentSecretsApi {
         Ok(Json(result))
     }
 
-    /// List all agent secrets of the environment
+    /// List agent secret metadata with optional sensitive values
     #[oai(
         path = "/envs/:environment_id/agent-secrets",
         method = "get",
@@ -109,6 +109,7 @@ impl AgentSecretsApi {
     async fn list_environment_agent_secrets(
         &self,
         environment_id: Path<EnvironmentId>,
+        include_values: Query<bool>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<AgentSecretDto>>> {
         let record = recorded_http_api_request!(
@@ -119,7 +120,7 @@ impl AgentSecretsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_environment_agent_secrets_internal(environment_id.0, auth)
+            .list_environment_agent_secrets_internal(environment_id.0, include_values.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -129,6 +130,7 @@ impl AgentSecretsApi {
     async fn list_environment_agent_secrets_internal(
         &self,
         environment_id: EnvironmentId,
+        include_values: bool,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<AgentSecretDto>>> {
         let result = self
@@ -138,7 +140,13 @@ impl AgentSecretsApi {
 
         let converted = result
             .into_iter()
-            .map(|value| AgentSecretDto::try_from(DomainAgentSecretDto::from(value)))
+            .map(|value| {
+                let mut value = DomainAgentSecretDto::from(value);
+                if !include_values {
+                    value.secret_value = None;
+                }
+                AgentSecretDto::try_from(value)
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::msg)?;
 

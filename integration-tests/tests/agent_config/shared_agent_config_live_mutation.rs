@@ -111,7 +111,9 @@ async fn agent_reads_updated_environment_secret(
         })
     );
 
-    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client
+        .list_environment_agent_secrets(&env.id.0, true)
+        .await?;
     let secret = secrets
         .values
         .iter()
@@ -233,7 +235,9 @@ async fn repeated_secret_reveal_invocation_replays_pinned_original_value(
     user.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10))
         .await?;
 
-    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client
+        .list_environment_agent_secrets(&env.id.0, true)
+        .await?;
     let secret = secrets
         .values
         .iter()
@@ -346,7 +350,9 @@ async fn agent_fails_on_deleted_environment_secret(
         })
     );
 
-    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client
+        .list_environment_agent_secrets(&env.id.0, true)
+        .await?;
     let secret = secrets
         .values
         .iter()
@@ -420,7 +426,9 @@ async fn agent_reads_recreated_environment_secret(
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
-    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client
+        .list_environment_agent_secrets(&env.id.0, true)
+        .await?;
     let secret = secrets
         .values
         .iter()
@@ -503,7 +511,9 @@ async fn agent_reads_secret_after_canonicalized_update(
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
-    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client
+        .list_environment_agent_secrets(&env.id.0, true)
+        .await?;
     let secret = secrets
         .values
         .iter()

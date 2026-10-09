@@ -3689,7 +3689,7 @@ paths:
       - RegistryService
       - AgentSecrets
       - Environment
-      summary: List all agent secrets of the environment
+      summary: List agent secret metadata with optional sensitive values
       operationId: list_environment_agent_secrets
       parameters:
       - in: path
@@ -3701,6 +3701,14 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: include_values
+        required: true
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
       responses:
         '200':
           description: ''

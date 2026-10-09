@@ -53,9 +53,9 @@
 
 - [x] Add current deployment and recent revision landing.
 - [x] Add full history, revision details, and typed compare.
-- [ ] Add Environment configuration kinds with typed masked projections.
-- [ ] Add full Account catalogue with typed projections.
-- [ ] Add resolved/observed Server configuration and capability kinds.
+- [x] Add Environment configuration kinds with typed masked projections.
+- [x] Add full Account catalogue with typed projections.
+- [x] Add resolved/observed Server configuration and capability kinds.
 
 ## Overview and acceptance
 

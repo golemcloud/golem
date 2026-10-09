@@ -299,7 +299,7 @@ impl SecretCommandHandler {
 
         let results = clients
             .agent_secrets
-            .list_environment_agent_secrets(&environment.environment_id.0)
+            .list_environment_agent_secrets(&environment.environment_id.0, true)
             .await
             .map_service_error()?
             .values;
