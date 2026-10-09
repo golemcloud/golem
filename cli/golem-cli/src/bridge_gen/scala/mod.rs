@@ -943,11 +943,11 @@ impl ScalaBridgeGenerator {
             format!("{GUEST_CODEC}.encodeValue")
         };
 
-        if let OutputSchema::Single(ty) = &method.output_schema {
-            if self.guest_direct_type(ty, &mut Vec::new()) {
-                let ty = self.type_reference(ty)?;
-                writer.line(format!("private lazy val __outputCodec = _root_.golem.schema.wire.ConcreteCodec.derived[{ty}]"));
-            }
+        if let OutputSchema::Single(ty) = &method.output_schema
+            && self.guest_direct_type(ty, &mut Vec::new())
+        {
+            let ty = self.type_reference(ty)?;
+            writer.line(format!("private lazy val __outputCodec = _root_.golem.schema.wire.ConcreteCodec.derived[{ty}]"));
         }
         let (ret_ty, decode_block) = self.guest_output_return(&method.output_schema)?;
         let uses_streams = method.uses_streams(&self.agent_type.schema);
@@ -3991,8 +3991,15 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains("_root_.golem.schema.SchemaValue.StringValue(message)"));
-        assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
+        assert!(client_source.contains("_root_.golem.schema.wire.ConcreteCodec.record"));
+        assert!(client_source.contains(
+            "_root_.golem.schema.wire.ConcreteCodec.derived[_root_.scala.Predef.String]"
+        ));
+        assert!(client_source.contains("__inputCodec.encodeValue(_root_.scala.Vector(message))"));
+        assert!(client_source.contains(
+            "_root_.golem.host.SchemaWireInterop.ownedValueTreeToJsAsync(methodParameters(message))"
+        ));
+        assert!(!client_source.contains("_root_.golem.schema.SchemaValue.StringValue(message)"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
         assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
         assert!(client_source.contains("def cancelable("));
@@ -4000,7 +4007,9 @@ mod tests {
         assert!(client_source.contains("def scheduleCancelableAt("));
         assert!(client_source.contains("resolved.scheduleCancelableInvocation"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
-        assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue"));
+        assert!(client_source.contains(
+            "__outputCodec.decode(_root_.golem.host.SchemaWireInterop.valueTreeFromJs(__tree))"
+        ));
         assert!(!client_source.contains("golem.bridge.runtime"));
         assert!(!client_source.contains("Bridge.createAgent"));
     }
