@@ -1180,6 +1180,11 @@ jobs:
         if: matrix.chunk.needs-effect
         run: tar -xzf tmp/effect-sdk-artifacts/golem-effect-sdk.tar.gz
 
+      - name: Install Effect SDK dependencies
+        if: matrix.chunk.needs-effect
+        working-directory: sdks/effect
+        run: npm ci
+
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node
         uses: ./.github/actions/setup-js-wasm-tools
