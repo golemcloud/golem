@@ -8,7 +8,6 @@ import type { HostServices } from "../host/HostLive.js"
 import type { EndpointDef } from "../Http.js"
 import { isMultimodal, type Multimodal } from "../Multimodal.js"
 import { Principal, type PrincipalInputSchema } from "../Principal.js"
-import { SelfAgentId } from "../SelfAgentId.js"
 import { isElementSpec, tryGetter, type ElementSpec } from "../Unstructured.js"
 import {
   makeWireDecoder,
@@ -106,9 +105,9 @@ type HandlerServices<S extends MethodSpec<any, any, any>, CfgTag> =
   S extends MethodSpec<any, any, any, any, infer ReadOnly>
     ? ReadOnly extends true | ReadOnlyOption
       ? HasPrincipalInput<S["input"]> extends true
-        ? Principal | SelfAgentId | HostServices | CfgTag
-        : SelfAgentId | HostServices | CfgTag
-      : Principal | SelfAgentId | HostServices | CfgTag
+        ? Principal | HostServices | CfgTag
+        : HostServices | CfgTag
+      : Principal | HostServices | CfgTag
     : never
 
 type UnsupportedBinding<N extends string, A extends string, S extends string> = string extends N

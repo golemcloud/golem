@@ -5,7 +5,6 @@ import * as Durability from "../src/Durability.js"
 import { AgentHostLive } from "../src/host/AgentHostClient.js"
 import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { OplogLive } from "../src/host/OplogClient.js"
-import { SelfAgentId } from "../src/SelfAgentId.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 
 const self: Agents.AgentId = {
@@ -16,13 +15,11 @@ const self: Agents.AgentId = {
 const hostLayer = Layer.mergeAll(OplogLive, DurabilityModeLive, AgentHostLive)
 
 const provideSelf = <A, E, R>(eff: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  Effect.provide(
-    Effect.provideService(eff as Effect.Effect<A, E, R | SelfAgentId>, SelfAgentId, self),
-    hostLayer,
-  ) as Effect.Effect<A, E, never>
+  Effect.provide(eff, hostLayer) as Effect.Effect<A, E, never>
 
 beforeEach(() => {
   ApiHostMock.__resetAll()
+  ApiHostMock.__setSelfMetadata({ ...ApiHostMock.getSelfMetadata(), agentId: self })
 })
 afterEach(() => {
   ApiHostMock.__resetAll()

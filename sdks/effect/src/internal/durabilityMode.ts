@@ -393,11 +393,7 @@ const revertAndSuspend = (
  */
 export const unwrapOrRevert = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<
-  A,
-  OplogHostError | AgentsHostError,
-  R | SelfAgentId | OplogClient | AgentHostClient
-> =>
+): Effect.Effect<A, OplogHostError | AgentsHostError, R | OplogClient | AgentHostClient> =>
   Effect.gen(function* () {
     const checkpointIdx = yield* currentIndex
     const self = yield* SelfAgentId
@@ -444,7 +440,7 @@ export const checkpoint = <A, E, R>(
 ): Effect.Effect<
   CheckpointResult<A, E>,
   OplogHostError | AgentsHostError,
-  R | SelfAgentId | OplogClient | AgentHostClient
+  R | OplogClient | AgentHostClient
 > =>
   Effect.gen(function* () {
     const checkpointIdx = yield* currentIndex
@@ -480,11 +476,7 @@ export const compensable = <A, B, E, R>(input: {
   readonly acquire: Effect.Effect<A, E, R>
   readonly body: (a: A) => Effect.Effect<B, E, R>
   readonly compensate: (a: A) => Effect.Effect<void, unknown, R>
-}): Effect.Effect<
-  B,
-  E | OplogHostError | AgentsHostError,
-  R | SelfAgentId | OplogClient | AgentHostClient
-> =>
+}): Effect.Effect<B, E | OplogHostError | AgentsHostError, R | OplogClient | AgentHostClient> =>
   Effect.gen(function* () {
     const checkpointIdx = yield* currentIndex
     const self = yield* SelfAgentId

@@ -13,8 +13,8 @@
  * throws as {@link AgentsHostError}; user-supplied numeric inputs are
  * validated with {@link AgentsValidationError}.
  *
- * For the running agent's own `AgentId` (free of host-call cost), use
- * the `SelfAgentId` Context service instead.
+ * For just the running agent's own `AgentId`, use the uncached
+ * `SelfAgentId.SelfAgentId` effect.
  *
  * @since 1.5.0
  */
@@ -313,9 +313,9 @@ const isFilter = (v: unknown): v is Filter => v instanceof Filter
 // ---------------------------------------------------------------------------
 
 /**
- * Read the running agent's full metadata. Heavyweight (host call +
- * oplog entry per invocation); for just the agent-id, prefer the
- * `SelfAgentId` Context service.
+ * Read the running agent's full metadata through a durable host call
+ * on each execution. `SelfAgentId.SelfAgentId` reads only its identity
+ * through the same host API.
  *
  * @since 1.5.0
  * @category operations
