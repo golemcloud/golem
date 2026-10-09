@@ -625,6 +625,120 @@ async fn reads_final_payload_now_and_empty_open_long_poll() {
 }
 
 #[test]
+async fn stream_closed_values_apply_to_reads_appends_and_errors() {
+    for (value, closed) in [
+        (None, false),
+        (Some("true"), true),
+        (Some("True"), true),
+        (Some("TRUE"), true),
+        (Some("false"), false),
+        (Some("FALSE"), false),
+        (Some("yes"), false),
+        (Some("1"), false),
+        (Some(""), false),
+    ] {
+        let mut headers = vec![
+            ("content-type", "application/json"),
+            ("stream-next-offset", "tail"),
+            ("stream-cursor", "7"),
+            ("producer-epoch", "7"),
+            ("producer-seq", "11"),
+        ];
+        if let Some(value) = value {
+            headers.push(("stream-closed", value));
+        }
+        let server = Server::new(vec![
+            response(200, &headers, Body::from("[17]")),
+            response(200, &headers, Body::from("[23]")),
+            response(200, &headers, Body::empty()),
+            response(409, &headers, Body::empty()),
+        ])
+        .await;
+        let client = client();
+        let mut read = read_request(&server.url);
+        for (transport, payload) in [
+            (DurableStreamTransport::CatchUp, b"[17]"),
+            (DurableStreamTransport::LongPoll, b"[23]"),
+        ] {
+            read.transport = transport;
+            let batch = read_batch(&client, &read, None, 1024).await.unwrap();
+            assert_eq!(batch.payload, payload);
+            assert_eq!(batch.closed, closed, "{value:?}");
+            assert_eq!(batch.up_to_date, closed, "{value:?}");
+        }
+        let append = append_request(&server.url);
+        assert_eq!(
+            append_batch(&client, &append, None, 1024)
+                .await
+                .unwrap()
+                .closed,
+            closed,
+            "{value:?}"
+        );
+        assert_eq!(
+            append_batch(&client, &append, None, 1024)
+                .await
+                .unwrap_err()
+                .kind,
+            if closed {
+                DurableStreamErrorKind::Closed
+            } else {
+                DurableStreamErrorKind::ProtocolError
+            },
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+async fn protocol_flags_retain_structural_validation_and_strict_up_to_date() {
+    let mut cases = vec![
+        response(
+            200,
+            &[("stream-closed", "true"), ("stream-closed", "false")],
+            Body::from("[]"),
+        ),
+        response(
+            200,
+            &[("stream-closed", &"x".repeat(MAX_METADATA + 1))],
+            Body::from("[]"),
+        ),
+    ];
+    let mut nontext = response(200, &[], Body::from("[]"));
+    nontext
+        .headers_mut()
+        .insert("stream-closed", HeaderValue::from_bytes(&[0xff]).unwrap());
+    cases.push(nontext);
+    for value in ["false", "FALSE", "True", "yes", "1", ""] {
+        cases.push(response(
+            200,
+            &[("stream-up-to-date", value)],
+            Body::from("[]"),
+        ));
+    }
+    for response in &mut cases {
+        response
+            .headers_mut()
+            .insert("content-type", HeaderValue::from_static("application/json"));
+        response
+            .headers_mut()
+            .insert("stream-next-offset", HeaderValue::from_static("tail"));
+    }
+    let count = cases.len();
+    let server = Server::new(cases).await;
+    let client = client();
+    for _ in 0..count {
+        assert_eq!(
+            read_batch(&client, &read_request(&server.url), None, 1024)
+                .await
+                .unwrap_err()
+                .kind,
+            DurableStreamErrorKind::ProtocolError
+        );
+    }
+}
+
+#[test]
 async fn rejects_nonarray_missing_checkpoint_and_nonempty_now() {
     let server = Server::new(vec![
         response(
