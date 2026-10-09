@@ -8790,6 +8790,7 @@ enum CompletedReconstructionExclusiveCase {
     Divergence,
     ExecutorShutdownDuringBodyValidation,
     CrashReplaySupervisorWindow,
+    EntityCustomRootCrashReplay,
 }
 
 /// Crashes the agent while its original invocation is held at the success gate, and releases the
@@ -8960,6 +8961,15 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
             "exclusive-p2-crash-replay-window"
         }
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
+            "exclusive-p2-entity-custom-root"
+        }
+    };
+    let method = match case {
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
+            "hold_entity_custom_root_reconstruction_before_exclusive_clock"
+        }
+        _ => "hold_completed_reconstruction_before_exclusive_clock",
     };
     let agent_id = agent_id!("ToolStreamingCaller", case_name);
     let worker_id = executor
@@ -8984,12 +8994,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     executor
         .skip_next_wall_clock_now_durability(&owned_agent_id)
         .await?;
-    let invocation = executor.invoke_and_await_agent(
-        &caller_component,
-        &agent_id,
-        "hold_completed_reconstruction_before_exclusive_clock",
-        data_value!(),
-    );
+    let invocation =
+        executor.invoke_and_await_agent(&caller_component, &agent_id, method, data_value!());
     tokio::pin!(invocation);
 
     let validate_recovery = async {
@@ -9017,7 +9023,11 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .await?;
         }
 
-        if case == CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow {
+        if matches!(
+            case,
+            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+                | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay
+        ) {
             let mut supervisor = executor.gate_next_completed_reconstruction_supervisor(&worker_id);
             crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
             let start =
@@ -9145,7 +9155,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     .await?;
                 source_claim.release();
             }
-            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => unreachable!(),
+            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+            | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => unreachable!(),
             CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
@@ -9174,20 +9185,33 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         | CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            assert_replayed_reconstruction_invocation_settled(
-                &oplog,
-                "hold_completed_reconstruction_before_exclusive_clock",
-                reconstruction_start,
+            assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
+        }
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
+            invocation_result?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
+            let custom_roots = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "golem-it::entity-custom-root" =>
+                    {
+                        Some(params.parent_start_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                custom_roots,
+                vec![Some(reconstruction_start)],
+                "the body's root custom invocation must record the entity Start as its parent"
             );
         }
         CompletedReconstructionExclusiveCase::Divergence => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            assert_replayed_reconstruction_invocation_settled(
-                &oplog,
-                "hold_completed_reconstruction_before_exclusive_clock",
-                reconstruction_start,
-            );
+            assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
             let failed_updates = oplog
                 .iter()
                 .filter_map(|entry| match &entry.entry {
@@ -9240,6 +9264,26 @@ async fn completed_reconstruction_settles_while_exclusive_p2_waits(
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Success,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn crash_replay_clock_claim_waits_for_entity_custom_root_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay,
     )
     .await
 }

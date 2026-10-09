@@ -347,7 +347,7 @@ impl OwnerExecution {
     ) -> Result<(), WorkerExecutorError> {
         self.replay()
             .await?
-            .test_wait_for_claim_blocked_on_active_body()
+            .test_wait_for_claims_blocked_on_active_body(1)
             .await;
         Ok(())
     }

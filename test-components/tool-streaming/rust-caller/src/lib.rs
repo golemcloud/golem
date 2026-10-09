@@ -735,6 +735,7 @@ pub trait ToolStreamingCaller {
     );
     async fn reject_incomplete_attachment_upgrade_under_pressure(&self) -> Vec<String>;
     async fn hold_completed_reconstruction_before_exclusive_clock(&self);
+    async fn hold_entity_custom_root_reconstruction_before_exclusive_clock(&self);
     async fn clocked_capable_checkpoint(
         &self,
         path: String,
@@ -4464,6 +4465,28 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             raw_result(&result)
                 .await
                 .expect("completed reconstruction result before exclusive clock call");
+        };
+        let exclusive_clock = async {
+            let _ = std::time::SystemTime::now();
+        };
+        (tool, exclusive_clock).join().await;
+    }
+
+    async fn hold_entity_custom_root_reconstruction_before_exclusive_clock(&self) {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("entity-custom-root"),
+            Some(closed_raw_stdin()),
+            Some(stdout_target),
+            None,
+        );
+        let tool = async {
+            assert!(read_all(stdout).await.is_empty());
+            raw_result(&result)
+                .await
+                .expect("completed entity custom root before exclusive clock call");
         };
         let exclusive_clock = async {
             let _ = std::time::SystemTime::now();
