@@ -311,9 +311,14 @@ impl DefaultBlobStoreService {
     ///
     /// The container name follows the rules of `container_path`. An object name that is absolute
     /// or that has a `..` name gives the error too, so an object name never replaces or leaves
-    /// its container (`join_blob_path`).
+    /// its container (`join_blob_path`). A root object name cannot name an object.
     fn object_path(container_name: &str, object_name: &str) -> Result<PathBuf, BlobStoreError> {
         Self::container_path(container_name)?;
+        if blob_path_is_root(Path::new(object_name)) {
+            return Err(name_error(BlobNameError::NoName {
+                path: PathBuf::from(object_name),
+            }));
+        }
         join_blob_path(container_name, object_name).map_err(name_error)
     }
 
@@ -602,7 +607,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         start: u64,
         end: u64,
     ) -> Result<Vec<u8>, BlobStoreError> {
-        let path = Self::object_path(&container_name, &object_name)?;
+        Self::container_path(&container_name)?;
+        let path = join_blob_path(&container_name, &object_name).map_err(name_error)?;
         let data = self
             .blob_storage
             .with("blob_store", "get_data")
@@ -792,13 +798,16 @@ mod tests {
     use anyhow::Error;
     use async_trait::async_trait;
     use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::db::sqlite::SqlitePool;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
     use golem_service_base::storage::blob::{
         BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobRangeStream,
         BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
         NormalizedBlobPath, PutIfAbsent,
     };
+    use sqlx::sqlite::SqlitePoolOptions;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -822,6 +831,7 @@ mod tests {
         inner: InMemoryBlobStorage,
         fail_next_put: AtomicBool,
         block_next_put: AtomicBool,
+        nameless_listing: bool,
         put_started: tokio::sync::Notify,
         release_put: tokio::sync::Notify,
     }
@@ -832,6 +842,7 @@ mod tests {
                 inner: InMemoryBlobStorage::new(),
                 fail_next_put: AtomicBool::new(false),
                 block_next_put: AtomicBool::new(false),
+                nameless_listing: false,
                 put_started: tokio::sync::Notify::new(),
                 release_put: tokio::sync::Notify::new(),
             }
@@ -958,6 +969,9 @@ mod tests {
             namespace: BlobStorageNamespace,
             path: &NormalizedBlobPath<'_>,
         ) -> Result<Vec<PathBuf>, Error> {
+            if self.nameless_listing {
+                return Ok(vec![PathBuf::new()]);
+            }
             self.inner
                 .list_dir_at(target_label, op_label, namespace, path)
                 .await
@@ -1823,6 +1837,200 @@ mod tests {
     async fn fs_blob_store(path: &Path) -> impl BlobStoreService {
         let blob_storage = Arc::new(FileSystemBlobStorage::new(path).await.unwrap());
         DefaultBlobStoreService::new(blob_storage)
+    }
+
+    async fn sqlite_blob_store() -> impl BlobStoreService {
+        let sqlx_pool = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let pool = SqlitePool::new(sqlx_pool.clone(), sqlx_pool);
+        DefaultBlobStoreService::new(Arc::new(SqliteBlobStorage::new(pool).await.unwrap()))
+    }
+
+    #[test]
+    async fn list_objects_rejects_a_backend_path_without_a_name() {
+        let mut storage = FailingPutBlobStorage::new();
+        storage.nameless_listing = true;
+        let blob_store = DefaultBlobStoreService::new(Arc::new(storage));
+        let result = blob_store
+            .list_objects(EnvironmentId::new(), "container".to_string())
+            .await;
+        assert!(matches!(result, Err(BlobStoreError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn object_path_rejects_an_absolute_object_name() {
+        let result = DefaultBlobStoreService::object_path("container", "/object");
+        assert!(matches!(result, Err(BlobStoreError::InvalidInput(_))));
+    }
+
+    async fn test_root_object_is_invalid(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container".to_string())
+            .await
+            .unwrap();
+        blob_store
+            .write_data(
+                unlimited_limits(),
+                environment_id,
+                "container",
+                "object",
+                b"kept",
+            )
+            .await
+            .unwrap();
+        for root in ["", ".", "./", "././"] {
+            let errors = [
+                blob_store
+                    .write_data(
+                        unlimited_limits(),
+                        environment_id,
+                        "container",
+                        root,
+                        b"data",
+                    )
+                    .await
+                    .map(drop),
+                blob_store
+                    .delete_object(
+                        unlimited_limits(),
+                        environment_id,
+                        "container".to_string(),
+                        root.to_string(),
+                    )
+                    .await
+                    .map(drop),
+                blob_store
+                    .delete_objects(
+                        unlimited_limits(),
+                        environment_id,
+                        "container",
+                        &["object".to_string(), root.to_string()],
+                    )
+                    .await
+                    .map(drop),
+                blob_store
+                    .has_object(environment_id, "container".to_string(), root.to_string())
+                    .await
+                    .map(drop),
+                blob_store
+                    .object_info(environment_id, "container".to_string(), root.to_string())
+                    .await
+                    .map(drop),
+                blob_store
+                    .copy_object(
+                        unlimited_limits(),
+                        environment_id,
+                        "container".to_string(),
+                        root.to_string(),
+                        "container".to_string(),
+                        "object".to_string(),
+                    )
+                    .await
+                    .map(drop),
+                blob_store
+                    .copy_object(
+                        unlimited_limits(),
+                        environment_id,
+                        "container".to_string(),
+                        "object".to_string(),
+                        "container".to_string(),
+                        root.to_string(),
+                    )
+                    .await
+                    .map(drop),
+                blob_store
+                    .move_object(
+                        unlimited_limits(),
+                        environment_id,
+                        "container".to_string(),
+                        root.to_string(),
+                        "container".to_string(),
+                        "object".to_string(),
+                    )
+                    .await
+                    .map(drop),
+                blob_store
+                    .move_object(
+                        unlimited_limits(),
+                        environment_id,
+                        "container".to_string(),
+                        "object".to_string(),
+                        "container".to_string(),
+                        root.to_string(),
+                    )
+                    .await
+                    .map(drop),
+            ];
+            assert!(
+                errors
+                    .iter()
+                    .all(|result| matches!(result, Err(BlobStoreError::InvalidInput(_)))),
+                "{errors:?}"
+            );
+            assert!(
+                blob_store
+                    .container_exists(environment_id, "container".to_string())
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                blob_store
+                    .get_data(
+                        environment_id,
+                        "container".to_string(),
+                        "object".to_string(),
+                        0,
+                        3
+                    )
+                    .await
+                    .unwrap(),
+                b"kept"
+            );
+            assert!(!matches!(
+                blob_store
+                    .get_data(
+                        environment_id,
+                        "container".to_string(),
+                        root.to_string(),
+                        0,
+                        0
+                    )
+                    .await,
+                Err(BlobStoreError::InvalidInput(_))
+            ));
+        }
+    }
+
+    #[test]
+    async fn test_root_object_is_invalid_in_memory() {
+        test_root_object_is_invalid(&in_memory_blob_store()).await;
+    }
+
+    #[test]
+    async fn test_root_object_is_invalid_local() {
+        let tempdir = TempDir::new().unwrap();
+        test_root_object_is_invalid(&fs_blob_store(tempdir.path()).await).await;
+    }
+
+    #[test]
+    async fn test_root_object_is_invalid_sqlite() {
+        test_root_object_is_invalid(&sqlite_blob_store().await).await;
+    }
+
+    #[test]
+    async fn test_root_container_is_invalid_sqlite() {
+        test_a_root_container_name_is_invalid_input(&sqlite_blob_store().await).await;
+    }
+
+    #[test]
+    async fn test_missing_copy_and_move_are_permanent_local() {
+        let tempdir = TempDir::new().unwrap();
+        test_a_source_that_is_not_there_is_not_found(&fs_blob_store(tempdir.path()).await).await;
     }
 
     #[test]

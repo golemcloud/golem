@@ -175,6 +175,175 @@ async fn blobstore_rejects_root_container_names_without_retrying(
 
 #[test]
 #[tracing::instrument]
+async fn blobstore_rejects_root_object_names_without_hiding_the_container(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_blob_store_service: Some(Arc::new(|_| {
+                Arc::new(DefaultBlobStoreService::new(Arc::new(
+                    InMemoryBlobStorage::new(),
+                )))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "root-object-contract");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for (index, root) in ["", ".", "./", "././"].into_iter().enumerate() {
+        let container = format!("root-object-container-{index}");
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_container",
+                data_value!(container.clone()),
+            )
+            .await?;
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "write_data",
+                data_value!(container.clone(), "object", b"kept".to_vec()),
+            )
+            .await?;
+
+        for (operation, object, objects) in [
+            ("write-data", root, Vec::<String>::new()),
+            ("delete-object", root, Vec::<String>::new()),
+            (
+                "delete-objects",
+                "object",
+                vec!["object".to_string(), root.to_string()],
+            ),
+            ("has-object", root, Vec::<String>::new()),
+            ("object-info", root, Vec::<String>::new()),
+        ] {
+            let result = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "container_probe",
+                    data_value!(
+                        operation,
+                        container.clone(),
+                        object,
+                        objects,
+                        b"data".to_vec()
+                    ),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            let error = result.expect_err("a namespace root is not an object");
+            assert!(
+                error.to_ascii_lowercase().contains("invalid"),
+                "unexpected error for {operation}({root:?}): {error}"
+            );
+        }
+
+        let kept = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "get_data",
+                data_value!(container.clone(), "object"),
+            )
+            .await?
+            .into_typed::<Vec<u8>>()?;
+        assert_eq!(kept, b"kept", "a rejected batch deleted a valid object");
+
+        for (operation, source, destination) in [
+            ("copy-object", root, "object"),
+            ("copy-object", "object", root),
+            ("move-object", root, "object"),
+            ("move-object", "object", root),
+        ] {
+            let result = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "blobstore_probe",
+                    data_value!(
+                        operation,
+                        container.clone(),
+                        source,
+                        container.clone(),
+                        destination
+                    ),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            let error = result.expect_err("a namespace root is not an object");
+            assert!(
+                error.to_ascii_lowercase().contains("invalid"),
+                "unexpected error for {operation}({root:?}): {error}"
+            );
+        }
+
+        let read = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "container_probe",
+                data_value!(
+                    "get-data",
+                    container.clone(),
+                    root,
+                    Vec::<String>::new(),
+                    Vec::<u8>::new()
+                ),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        let error = read.expect_err("the root read must keep the missing-object result");
+        assert!(
+            error.to_ascii_lowercase().contains("not found"),
+            "unexpected root read error for {root:?}: {error}"
+        );
+
+        let container_exists = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "container_exists",
+                data_value!(container),
+            )
+            .await?
+            .into_typed::<bool>()?;
+        assert!(
+            container_exists,
+            "root write hid its container for {root:?}"
+        );
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "permanent root-object errors must not produce retry entries: {oplog:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn blobstore_missing_copy_and_move_return_without_retrying(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
