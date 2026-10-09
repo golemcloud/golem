@@ -989,7 +989,10 @@ impl ReplayState {
                                     *index = Some(idx);
                                     if scanned_head.is_none()
                                         && idx > cursor_index
-                                        && !view.is_drained_at_head(idx, entry)
+                                        && !super::cursor::is_drained_at_head(
+                                            entry,
+                                            view.head_drain_facts(idx, entry),
+                                        )
                                     {
                                         scanned_head = Some(super::cursor::head_owner(entry));
                                     }

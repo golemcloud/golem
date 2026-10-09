@@ -902,17 +902,18 @@ impl CursorTx<'_> {
         self.st
             .replay_buffer
             .front()
-            .filter(|(index, entry)| *index == next && !self.is_drained_at_head(*index, entry))
+            .filter(|(index, entry)| {
+                *index == next && !is_drained_at_head(entry, self.head_drain_facts(*index, entry))
+            })
             .map(|(_, entry)| head_owner(entry))
     }
 
-    /// Whether the head path drains `entry` at `index` instead of stopping at it: a hint, a
-    /// `Start` claimed ahead of the cursor, or a terminal a registered awaiter owns. A scan that
-    /// passes the cursor head uses it to find the entry the head path would stop at.
-    pub(super) fn is_drained_at_head(&self, index: OplogIndex, entry: &OplogEntry) -> bool {
-        is_auto_skippable_hint(entry)
-            || self.st.claimed_starts.contains(&index)
-            || self.is_awaited_terminal(index, entry)
+    /// Collects the facts [`is_drained_at_head`] decides on for `entry` at `index`.
+    pub(super) fn head_drain_facts(&self, index: OplogIndex, entry: &OplogEntry) -> HeadDrainFacts {
+        HeadDrainFacts {
+            claimed_ahead: self.st.claimed_starts.contains(&index),
+            awaited_terminal: self.is_awaited_terminal(index, entry),
+        }
     }
 
     /// Gathers the facts [`missing_start_waits_for`] decides on for a `Start` claim that found no
@@ -2557,12 +2558,13 @@ impl ReplayState {
         self.wait_for_reconstruction_fences().await
     }
 
-    /// Waits until a `Start` claim of this replay waits for an active entity body.
+    /// Waits until `Start` claims of this replay have started to wait for an active entity body
+    /// at least `waits` times. A claim that wakes and waits again counts once more.
     #[cfg(feature = "test-utils")]
-    pub(crate) async fn test_wait_for_claim_blocked_on_active_body(&self) {
-        let mut waits = self.cursor.active_body_waits.subscribe();
-        waits
-            .wait_for(|waits| *waits > 0)
+    pub(crate) async fn test_wait_for_claims_blocked_on_active_body(&self, waits: u64) {
+        let mut counted = self.cursor.active_body_waits.subscribe();
+        counted
+            .wait_for(|counted| *counted >= waits)
             .await
             .expect("the replay cursor owns the active-body wait counter");
     }
@@ -4147,6 +4149,22 @@ pub(super) fn head_owner(entry: &OplogEntry) -> HeadOwner {
             EntityAttribution::EntityBody(owner) => HeadOwner::EntityBody(owner),
         },
     }
+}
+
+/// What the cursor knows about an entry that a scan passes at or after the cursor head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct HeadDrainFacts {
+    /// The entry is a `Start` that a claim already took ahead of the cursor.
+    pub(super) claimed_ahead: bool,
+    /// The entry is an `End` or `Cancelled` that a registered awaiter owns.
+    pub(super) awaited_terminal: bool,
+}
+
+/// Whether the head path drains `entry` instead of stopping at it: a hint, a `Start` claimed
+/// ahead of the cursor, or a terminal a registered awaiter owns. A scan that passes the cursor
+/// head uses it to find the entry the head path would stop at.
+pub(super) fn is_drained_at_head(entry: &OplogEntry, facts: HeadDrainFacts) -> bool {
+    is_auto_skippable_hint(entry) || facts.claimed_ahead || facts.awaited_terminal
 }
 
 /// The `parent_start_index` of a `Start` entry.
