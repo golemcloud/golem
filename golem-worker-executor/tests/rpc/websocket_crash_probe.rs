@@ -207,6 +207,8 @@ async fn effect_duplex_websocket_crash_continuation(
             anyhow::Ok(())
         })
         .await??;
+        let mut direct_replay_wait =
+            crash.then(|| executor.signal_next_direct_replay_wait(&worker, ""));
         if crash {
             executor.simulated_crash(&worker).await?;
         }
@@ -238,9 +240,10 @@ async fn effect_duplex_websocket_crash_continuation(
             anyhow::Ok(())
         })
         .await??;
-        tokio::time::timeout(Duration::from_secs(10), async {
-            let mut values = Vec::new();
-            let mut closed = false;
+        let mut values = Vec::new();
+        let mut closed = false;
+        let mut finished = false;
+        let completion = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let response = responses.message().await?.expect("session completion");
                 match response.response {
@@ -256,6 +259,7 @@ async fn effect_duplex_websocket_crash_continuation(
                             ),
                             "{completion:?}"
                         );
+                        finished = true;
                         break;
                     }
                     _ => {}
@@ -269,7 +273,24 @@ async fn effect_duplex_websocket_crash_continuation(
             assert_eq!(peer.writes.recv().await.unwrap(), b"after");
             anyhow::Ok(())
         })
-        .await??;
+        .await;
+        if let Err(error) = &completion {
+            let direct_wait = match &mut direct_replay_wait {
+                Some(signal) => {
+                    Some(tokio::time::timeout(Duration::from_millis(100), signal.fired()).await)
+                }
+                None => None,
+            };
+            let entries = tokio::time::timeout(
+                Duration::from_secs(2),
+                executor.get_oplog(&worker, boundary.next()),
+            )
+            .await;
+            anyhow::bail!(
+                "duplex completion stalled: crash={crash}, error={error}, values={values:?}, closed={closed}, finished={finished}, direct_wait={direct_wait:?}, oplog={entries:#?}"
+            );
+        }
+        completion??;
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         assert_eq!(
             count_agent_invocation_pair_since(&entries, boundary),
