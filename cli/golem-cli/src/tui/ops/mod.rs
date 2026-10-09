@@ -15,6 +15,7 @@
 pub(super) mod activity;
 pub(super) mod deployments;
 pub(super) mod metrics;
+pub(super) mod overview;
 pub(super) mod resources;
 pub(super) mod stream;
 
@@ -104,6 +105,8 @@ pub(super) struct DeploymentCompareRoute {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum OpsRoute {
     Root,
+    OverviewServer,
+    OverviewIssues,
     Agent(AgentIdentity),
     Oplog(OplogRoute),
     Stream(AgentIdentity),
@@ -197,6 +200,22 @@ impl OpsApp {
     pub(super) fn open_agent(&mut self, agent: AgentIdentity) {
         self.active = OpsDestination::Agents;
         self.routes[OpsDestination::Agents.index()].push(OpsRoute::Agent(agent));
+    }
+
+    pub(super) fn open_overview_server(&mut self) {
+        self.active = OpsDestination::Overview;
+        let routes = &mut self.routes[OpsDestination::Overview.index()];
+        if !matches!(routes.last(), Some(OpsRoute::OverviewServer)) {
+            routes.push(OpsRoute::OverviewServer);
+        }
+    }
+
+    pub(super) fn open_overview_issues(&mut self) {
+        self.active = OpsDestination::Overview;
+        let routes = &mut self.routes[OpsDestination::Overview.index()];
+        if !matches!(routes.last(), Some(OpsRoute::OverviewIssues)) {
+            routes.push(OpsRoute::OverviewIssues);
+        }
     }
 
     pub(super) fn open_metrics_panel(&mut self, panel_id: String) {
@@ -362,5 +381,20 @@ mod tests {
         assert_eq!(app.current_route(), &super::OpsRoute::DeploymentRevision(8));
         assert!(app.pop_route());
         assert_eq!(app.current_route(), &super::OpsRoute::DeploymentHistory);
+    }
+
+    #[test]
+    fn overview_routes_are_retained_without_adding_destinations() {
+        let mut app = super::OpsApp::default();
+        app.open_overview_server();
+        assert_eq!(app.current_route(), &super::OpsRoute::OverviewServer);
+        assert!(app.pop_route());
+        assert_eq!(app.current_route(), &super::OpsRoute::Root);
+
+        app.open_overview_issues();
+        assert_eq!(app.current_route(), &super::OpsRoute::OverviewIssues);
+        app.select(super::OpsDestination::Agents);
+        app.select(super::OpsDestination::Overview);
+        assert_eq!(app.current_route(), &super::OpsRoute::OverviewIssues);
     }
 }

@@ -53,12 +53,10 @@ impl PreviewCase {
     }
 }
 
-const CASES: &[PreviewCase] = &[PreviewCase::new(
-    "ops-agents",
-    "Ops / agents overview",
-    120,
-    30,
-)];
+const CASES: &[PreviewCase] = &[
+    PreviewCase::new("ops-overview", "Ops / overview", 120, 30),
+    PreviewCase::new("ops-agents", "Ops / agents overview", 120, 30),
+];
 
 pub fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -534,16 +532,31 @@ mod tests {
     }
 
     #[test]
-    fn production_case_renders_at_representative_and_extreme_sizes() {
-        for (width, height) in [(160, 40), (120, 30), (100, 8), (32, 24), (12, 4), (1, 1)] {
-            let result =
-                std::panic::catch_unwind(|| render_preview_buffer("ops-agents", width, height));
-            match result {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => panic!("ops-agents failed at {width}x{height}: {error}"),
-                Err(_) => panic!("ops-agents panicked at {width}x{height}"),
+    fn production_cases_render_at_representative_and_extreme_sizes() {
+        for case_id in ["ops-overview", "ops-agents"] {
+            for (width, height) in [(160, 40), (120, 30), (100, 8), (32, 24), (12, 4), (1, 1)] {
+                let result =
+                    std::panic::catch_unwind(|| render_preview_buffer(case_id, width, height));
+                match result {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        panic!("{case_id} failed at {width}x{height}: {error}")
+                    }
+                    Err(_) => panic!("{case_id} panicked at {width}x{height}"),
+                }
             }
         }
+    }
+
+    #[test]
+    fn overview_fixture_contains_all_status_cards() {
+        let text = buffer_text(&render_preview_buffer("ops-overview", 120, 30).unwrap());
+        assert!(text.contains("Deployment"));
+        assert!(text.contains("Agent signals · last 15 minutes"));
+        assert!(text.contains("Local server & collector"));
+        assert!(text.contains("Stream"));
+        assert!(text.contains("Issues"));
+        assert!(text.contains("12 Agent Types"));
     }
 
     #[test]
@@ -576,6 +589,7 @@ mod tests {
     fn gallery_exposes_only_production_case_controls() {
         let html = gallery_html().unwrap();
         assert!(html.contains("Production preview"));
+        assert!(html.contains("data-case=\"ops-overview\""));
         assert!(html.contains("data-case=\"ops-agents\""));
         assert!(html.contains("id=\"case\""));
         assert!(html.contains("id=\"font\""));

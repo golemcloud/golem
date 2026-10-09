@@ -1,5 +1,29 @@
 # Progress
 
+## 2026-10-09: Independently Loading Ops Overview
+
+- Replaced the generic status document with five selectable cards for the
+  current deployment, Agent signals over the last 15 minutes, local server and
+  collector, persistent Stream state, and concise actionable issues.
+- Kept Overview reads independent of Metrics destination state. Agent signals
+  and collector capability have separate cancellable generations, retain the
+  last successful snapshot on refresh failure, and reject stale context work.
+- Added current deployment composition counts for components, Agent Types,
+  HTTP and MCP deployments, tools, middleware, and bindings. The card states
+  explicitly that deployment validation warnings are not retained by the
+  current read API rather than presenting an invented clean state.
+- Added retained Server/Collector and Issues routes under Overview. Cards and
+  issues open through keyboard or mouse and explicitly hand off to Deployment
+  history, Agent Metrics with the 15-minute range, Stream, Agents, or
+  Configuration without silently retargeting another destination.
+- Added the first dedicated Overview production preview plus wide, medium,
+  narrow, short, and 1×1 render coverage. Focused Overview routing, rendering,
+  handoff, and stale-result tests are green.
+
+Still open in this slice: aggregate metric bucket-to-Oplog range handoff,
+custom absolute metric ranges, the remaining destination/state previews, and
+final terminal visual acceptance.
+
 ## 2026-10-09: Lazy Typed Configuration Inventory
 
 - Replaced the eager generic resource serializer with retained Environment,

@@ -59,8 +59,8 @@
 
 ## Overview and acceptance
 
-- [ ] Add deployment, Agent signal, server/collector, Stream, and issue cards.
-- [ ] Add explicit cross-destination scope/range handoff.
+- [x] Add deployment, Agent signal, server/collector, Stream, and issue cards.
+- [~] Add explicit cross-destination scope/range handoff.
 - [ ] Add all page/state preview fixtures behind `tui-preview`.
 - [ ] Complete wide/medium/narrow/short/1×1 automated render coverage.
 - [ ] Complete focused tests, checks, generated artifacts, and manual demo run.

@@ -132,6 +132,8 @@ pub(super) enum RegionKind {
     OpsDetails,
     OpsDetailsSplit,
     OpsStream,
+    OverviewCard(usize),
+    OverviewIssue(usize),
     MetricsPanel(usize),
     MetricsChart,
     Scrollbar(ScrollbarTarget),

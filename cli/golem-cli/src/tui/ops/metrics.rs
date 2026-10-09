@@ -535,7 +535,7 @@ async fn load_series_samples(
     Ok(result)
 }
 
-fn current_range(preset: MetricsRange) -> LocalMetricTimeRange {
+pub(in crate::tui) fn current_range(preset: MetricsRange) -> LocalMetricTimeRange {
     let to = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

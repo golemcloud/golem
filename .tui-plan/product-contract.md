@@ -76,7 +76,9 @@ Overview is a status-and-routing surface with independently loading cards:
 
 Cards explicitly transfer scope or time range when opened. Server and collector
 details are nested under Overview rather than adding a Server tab. Loaded Agent
-rows are never presented as a total Agent count.
+rows are never presented as a total Agent count. The current deployment read
+contract does not retain deploy-time validation warnings, so Overview labels
+that field unavailable instead of presenting zero warnings.
 
 ## Agents
 
