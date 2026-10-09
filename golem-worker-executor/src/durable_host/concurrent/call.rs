@@ -161,8 +161,9 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     pub(super) retry: InFunctionRetryController,
-    /// Shared signal for process-equivalent executor teardown. See
-    /// [`DroppedCall::executor_shutdown`].
+    /// Shared signal for process-equivalent executor teardown. An unfinished call dropped after
+    /// this signal is intentionally left incomplete for replay rather than treated as guest
+    /// cancellation or a host-call programming error.
     pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     pub(super) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     /// Whether switching this call to live execution requires a recovered, synchronized agent
@@ -3207,13 +3208,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// because ownership differs by site: terminal paths clone it (the handle stays alive with
     /// its own permit until the terminal completes), while `Drop` moves it into the drop event
     /// so the call stays counted as in-flight until the event is drained.
+    /// Snapshot of the two teardown signals (process-equivalent executor shutdown and the
+    /// owning runtime's store teardown) for guards and delivery tokens that may outlive the
+    /// session.
+    fn teardown_probe(&self) -> TeardownProbe {
+        TeardownProbe::new(
+            self.executor_shutdown.clone(),
+            self.runtime_teardown.clone(),
+        )
+    }
+
     fn dropped_call_snapshot(&self, live_call_permit: Option<LiveCallPermit>) -> DroppedCall {
         DroppedCall {
             start_idx: self.start_idx,
             begin_index: self.begin_index(),
             function_type: self.retry.function_type().clone(),
             request_upload: self.request_upload.clone(),
-            executor_shutdown: self.executor_shutdown.clone(),
             atomic_lease: self.execution_scope.atomic_lease.clone(),
             trap_context: self.trap_context(),
             live_call_permit,
@@ -3969,7 +3979,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.dropped_call_snapshot(self.live_call_permit.clone()),
                 self.drop_sink.clone(),
                 self.cleanup_sink.clone(),
-                self.runtime_teardown.clone(),
+                self.teardown_probe(),
             );
             self.finished = true;
             let persist_result: Result<Pair::Resp, WorkerExecutorError> = if self.persisted {
@@ -4280,6 +4290,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         completion_marker_recorder,
                         self.trap_context(),
                         self.cleanup_sink.clone(),
+                        self.teardown_probe(),
                     )
                     .deliver_at_accessor_terminal(store)
                     .await?;
@@ -4398,6 +4409,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     completion_marker_recorder,
                     self.trap_context(),
                     self.cleanup_sink.clone(),
+                    self.teardown_probe(),
                 )
                 .deliver_at_accessor_terminal(store)
                 .await?;
@@ -4485,6 +4497,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     completion_marker_recorder,
                     self.trap_context(),
                     self.cleanup_sink.clone(),
+                    self.teardown_probe(),
                 );
                 Ok((
                     response,
@@ -4568,6 +4581,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         completion_marker_recorder,
                         self.trap_context(),
                         self.cleanup_sink.clone(),
+                        self.teardown_probe(),
                     ),
                 ))
             }
@@ -4885,7 +4899,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.dropped_call_snapshot(self.live_call_permit.clone()),
                     self.drop_sink.clone(),
                     self.cleanup_sink.clone(),
-                    self.runtime_teardown.clone(),
+                    self.teardown_probe(),
                 );
                 let result = async {
                     guard
@@ -6107,7 +6121,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
         if self.finished {
             return;
         }
-        if self.executor_shutdown.is_cancelled() || (self.runtime_teardown)() {
+        if self.teardown_probe().is_tearing_down() {
             self.execution_scope.release_atomic_lease();
             tracing::debug!(
                 start_idx = %self.start_idx,

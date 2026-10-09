@@ -306,7 +306,6 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
                 span_observer: None,
-                executor_shutdown: tokio_util::sync::CancellationToken::new(),
                 atomic_lease: None,
                 trap_context: DurableCallTrapContext {
                     retry_from: idx(4),
@@ -316,7 +315,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
             },
             NotCancellable::production_drop_sink(Some(tx.clone())),
             Some(tx),
-            Arc::new(|| false),
+            TeardownProbe::never(),
         );
         assert_eq!(counter.load(Ordering::Acquire), 1);
         let terminal = tokio::spawn(async move {
@@ -355,6 +354,33 @@ async fn live_delivery_token(
     permit_counter: Arc<AtomicUsize>,
     cleanup_tx: mpsc::UnboundedSender<DropEvent>,
 ) -> CompletionDelivery {
+    live_delivery_token_with_teardown(oplog, permit_counter, cleanup_tx, TeardownProbe::never())
+        .await
+}
+
+async fn live_delivery_token_with_teardown(
+    oplog: Arc<InMemoryOplog>,
+    permit_counter: Arc<AtomicUsize>,
+    cleanup_tx: mpsc::UnboundedSender<DropEvent>,
+    teardown: TeardownProbe,
+) -> CompletionDelivery {
+    CompletionDelivery {
+        state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
+            marker: marker_record_over(oplog).await,
+            trap_context: DurableCallTrapContext {
+                retry_from: idx(1),
+                in_atomic_region: false,
+            },
+            live_call_permit: Some(LiveCallPermit::new(permit_counter)),
+            cleanup_sink: Some(cleanup_tx),
+            pending_append: None,
+            teardown,
+        })),
+    }
+}
+
+/// A `CompletionDiscarded` marker record for call `Start` 1 whose appends land on `oplog`.
+async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord {
     let oplog_dyn: Arc<dyn Oplog> = oplog;
     // The replay state is built over a separately seeded [Start, End] oplog so the observed
     // oplog contains only what the token itself appends (and so an End gate installed on the
@@ -403,20 +429,9 @@ async fn live_delivery_token(
     .await
     .expect("failed to build replay state");
     let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
-    CompletionDelivery {
-        state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
-            marker: CompletionMarkerRecord {
-                start_idx: idx(1),
-                recorder,
-            },
-            trap_context: DurableCallTrapContext {
-                retry_from: idx(1),
-                in_atomic_region: false,
-            },
-            live_call_permit: Some(LiveCallPermit::new(permit_counter)),
-            cleanup_sink: Some(cleanup_tx),
-            pending_append: None,
-        })),
+    CompletionMarkerRecord {
+        start_idx: idx(1),
+        recorder,
     }
 }
 
@@ -627,6 +642,113 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
         }
         other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
     }
+}
+
+#[test]
+async fn completion_delivery_armed_drop_during_teardown_leaves_end_markerless() {
+    // A Store unload (simulated crash, interrupt, eviction) or an executor shutdown tears the
+    // delivering future with the token still armed. The guest never observed the completion,
+    // so no `CompletionDiscarded` marker may be recorded: replay must tail-gate the markerless
+    // `End` and deliver it. Only the permit is released; nothing is queued for the drain.
+    for executor_shutdown in [false, true] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let tearing_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = tearing_down.clone();
+        let teardown = TeardownProbe::new(
+            shutdown.clone(),
+            Arc::new(move || probe.load(Ordering::Acquire)),
+        );
+        let token =
+            live_delivery_token_with_teardown(oplog.clone(), counter.clone(), tx, teardown).await;
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        if executor_shutdown {
+            shutdown.cancel();
+        } else {
+            tearing_down.store(true, Ordering::Release);
+        }
+        drop(token);
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            counter.load(Ordering::Acquire),
+            0,
+            "the torn token must release the in-flight permit"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected)),
+            "no marker receipt may be queued for the drain"
+        );
+        assert!(
+            oplog.entries.lock().await.is_empty(),
+            "a teardown tear must not append a CompletionDiscarded marker"
+        );
+    }
+}
+
+#[test]
+async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
+    // The same tear can hit the guard before it is converted into a token (the delivery future
+    // is torn between the owned `End` append and `take_completion_delivery`). The queued
+    // `CleanupAfterTerminal` event must still carry the terminal join and the permit, but the
+    // armed discard marker must not be recorded.
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let tearing_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let probe = tearing_down.clone();
+    {
+        let mut guard = AccessTerminalGuard::<NotCancellable>::new(
+            DroppedCall {
+                start_idx: idx(1),
+                begin_index: idx(1),
+                function_type: DurableFunctionType::ReadLocal,
+                request_upload: PendingUpload::already_durable(),
+                span_finished: None,
+                span_observer: None,
+                atomic_lease: None,
+                trap_context: DurableCallTrapContext {
+                    retry_from: idx(1),
+                    in_atomic_region: false,
+                },
+                live_call_permit: Some(LiveCallPermit::new(counter.clone())),
+            },
+            NotCancellable::production_drop_sink(Some(tx.clone())),
+            Some(tx),
+            TeardownProbe::new(
+                tokio_util::sync::CancellationToken::new(),
+                Arc::new(move || probe.load(Ordering::Acquire)),
+            ),
+        );
+        let terminal = tokio::spawn(async { Ok(()) });
+        guard.cleanup_after_terminal(terminal, Some(marker_record_over(oplog.clone()).await));
+        tearing_down.store(true, Ordering::Release);
+    }
+    let event = rx
+        .try_recv()
+        .expect("expected a CleanupAfterTerminal drop event");
+    let DropEvent::CleanupAfterTerminal {
+        terminal,
+        live_call_permit,
+        ..
+    } = event
+    else {
+        panic!("expected CleanupAfterTerminal, got {event:?}");
+    };
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    terminal
+        .expect("the terminal join must still be handed to the drain")
+        .await
+        .expect("terminal task must not panic")
+        .expect("terminal must succeed");
+    drop(live_call_permit);
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+    assert!(
+        oplog.entries.lock().await.is_empty(),
+        "a teardown tear must not append a CompletionDiscarded marker"
+    );
 }
 
 #[test]
@@ -1410,7 +1532,6 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             request_upload: PendingUpload::already_durable(),
             span_finished: None,
             span_observer: Some(span_observer.clone()),
-            executor_shutdown: tokio_util::sync::CancellationToken::new(),
             atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: start_idx,
@@ -1420,7 +1541,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         },
         NotCancellable::production_drop_sink(Some(cleanup_tx.clone())),
         Some(cleanup_tx),
-        Arc::new(|| false),
+        TeardownProbe::never(),
     );
     assert_eq!(permit_counter.load(Ordering::Acquire), 1);
 
@@ -1661,7 +1782,10 @@ fn terminal_guard_distinguishes_guest_drop_from_owner_teardown() {
             call,
             Some(tx.clone()),
             None,
-            Arc::new(move || probe.load(Ordering::Acquire)),
+            TeardownProbe::new(
+                tokio_util::sync::CancellationToken::new(),
+                Arc::new(move || probe.load(Ordering::Acquire)),
+            ),
         );
         fenced.store(teardown, Ordering::Release);
         drop(guard);
@@ -2121,7 +2245,6 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
         span_observer: None,
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
         trap_context: DurableCallTrapContext {
             retry_from: idx(3),
@@ -2138,7 +2261,6 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
         span_observer: None,
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: None,
         trap_context: DurableCallTrapContext {
             retry_from: idx(8),
