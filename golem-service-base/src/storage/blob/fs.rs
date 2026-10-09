@@ -817,18 +817,34 @@ const DIRECTORY_ATTEMPTS: usize = 8;
 /// Makes the directory of `target` and runs `place`, which puts a file at `target`.
 ///
 /// A remove of an empty directory (`prune_empty_directories`) can take the directory away between
-/// the two steps, and `place` then gives [`ErrorKind::NotFound`]. The call then makes the
-/// directory again and runs `place` again, at most [`DIRECTORY_ATTEMPTS`] times in all.
+/// the two steps, and `place` then gives [`ErrorKind::NotFound`]. It can also take away a
+/// directory above it while the call makes the directory, and the make then gives that error. The
+/// call then makes the directory again and runs `place` again, at most [`DIRECTORY_ATTEMPTS`]
+/// times in all.
 fn in_directory_of<T>(
     target: &Path,
+    place: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    directory_attempts(
+        target,
+        |directory| std::fs::create_dir_all(directory),
+        place,
+    )
+}
+
+/// Runs `make` on the directory of `target` and then `place`, as `in_directory_of` does.
+fn directory_attempts<T>(
+    target: &Path,
+    mut make: impl FnMut(&Path) -> std::io::Result<()>,
     mut place: impl FnMut() -> std::io::Result<T>,
 ) -> std::io::Result<T> {
     let mut attempt = 1;
     loop {
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        match place() {
+        let placed = match target.parent() {
+            Some(parent) => make(parent).and_then(|()| place()),
+            None => place(),
+        };
+        match placed {
             Err(error) if error.kind() == ErrorKind::NotFound && attempt < DIRECTORY_ATTEMPTS => {
                 attempt += 1;
             }

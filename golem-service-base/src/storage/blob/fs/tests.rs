@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::{
-    Commit, CommitGate, FileSystemBlobStorage, PathEntry, STAGING_DIRECTORY, STAGING_FILE_AGE,
-    absent_on_not_found, add_files, add_names, blob_path_of, copy_staged, encoded_name,
-    first_error, listed_entry, remove_unless_dropped, staging_file_is_old, write_if_absent,
-    write_staged,
+    Commit, CommitGate, DIRECTORY_ATTEMPTS, FileSystemBlobStorage, PathEntry, STAGING_DIRECTORY,
+    STAGING_FILE_AGE, absent_on_not_found, add_files, add_names, blob_path_of, copy_staged,
+    directory_attempts, encoded_name, first_error, listed_entry, remove_unless_dropped,
+    staging_file_is_old, write_if_absent, write_staged,
 };
 use crate::storage::blob::{
     BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
@@ -1212,4 +1212,30 @@ async fn a_write_lands_when_a_remove_takes_its_directory_before_the_rename() {
             Some(b"source".to_vec()),
         )
     );
+}
+
+/// A remove of an empty directory can take away a directory above the directory of a write while
+/// the write makes it, and the make then gives `NotFound`. The write makes the directory again, as
+/// for a directory that goes before the file lands, and gives `NotFound` after the last attempt.
+#[test]
+fn a_write_makes_its_directory_again_when_a_remove_takes_a_directory_above_it() {
+    let make_that_fails = |failures: usize| {
+        let mut made = 0;
+        move |_: &Path| {
+            made += 1;
+            if made <= failures {
+                Err(not_found())
+            } else {
+                Ok(())
+            }
+        }
+    };
+    let target = Path::new("dir/blob");
+
+    let placed = directory_attempts(target, make_that_fails(1), || Ok("placed"))
+        .map_err(|error| error.kind());
+    let gone = directory_attempts(target, make_that_fails(DIRECTORY_ATTEMPTS), || Ok("placed"))
+        .map_err(|error| error.kind());
+
+    assert_eq!((placed, gone), (Ok("placed"), Err(ErrorKind::NotFound)));
 }
