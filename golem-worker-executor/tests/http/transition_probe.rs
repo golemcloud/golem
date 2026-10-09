@@ -267,10 +267,11 @@ async fn http_clock_recovery(
         &entry.entry,
         PublicOplogEntry::End(params) if params.start_index == retained_clock
     )));
-    assert!(repaired.iter().any(|entry| matches!(
-        &entry.entry,
-        PublicOplogEntry::CompletionDelivered(params) if params.start_index == retained_clock
-    )));
+    assert!(!repaired.iter().any(|entry| match &entry.entry {
+        PublicOplogEntry::CompletionDelivered(params) => params.start_index == retained_clock,
+        PublicOplogEntry::CompletionDiscarded(params) => params.start_index == retained_clock,
+        _ => false,
+    }));
     assert_eq!(second??.into_typed::<String>()?, "none");
     assert_eq!(
         before,

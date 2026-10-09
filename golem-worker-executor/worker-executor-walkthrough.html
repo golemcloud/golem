@@ -1228,7 +1228,7 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
   <div class="card"><h4>Observe</h4><p>The guest reads the result. For accessor calls this is recorded by <code>CompletionDelivered</code> / <code>CompletionDiscarded</code> as the <em>tail</em> operation of the host function. Host completion time and guest observation time are different facts; only the second is a guest input.</p></div>
 </div>
 
-<h3>Live path (accessor)</h3>
+<h3>Live path (guest-facing accessor)</h3>
 <ol class="steps">
   <li>Append <code>Start { function_name, request, durable_function_type, parent_start_index }</code>.</li>
   <li>Run the live action (the HTTP request, the KV read, the RPC dispatch…).</li>
@@ -1237,15 +1237,19 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
   <li>Append <code>CompletionDelivered { start_index }</code> — or <code>CompletionDiscarded</code> if the guest dropped the completion unread.</li>
 </ol>
 
+<h3 id="host-internal-results">Host-internal results have no guest boundary</h3>
+<p><code>DurableCallSession::invoke_host_internal_access</code> records and validates <code>Start</code>/<code>End</code>, then returns the recorded result directly to the host. It creates no guest-terminal observer, delivery token, delivery/discard marker, or markerless replay-tail gate. A Store-holding reader must never wait for progress whose only producer needs that Store's event loop.</p>
+<p>P3 <code>monotonic-clock::wait-for</code> records the outer wait's <code>Start</code> first and owns its internal <code>now</code> read as a child. Replay resolves the outer wait before the child: a cancelled outer wait parks without issuing the child; an incomplete outer wait owns cancellation cleanup before reconstructing the deadline from <strong>recorded now + duration</strong>. A completed outer wait requires a recorded completed child. Cancelling after the child's <code>End</code> settles the outer wait without an internal delivery marker. Only the outer wait has a real guest-delivery boundary.</p>
+
 <h3>Replay path: classification is total</h3>
-<p>Replay claims the matching <code>Start</code>, resolves its terminal through <code>ConcurrentReplayResolver</code>, and classifies the resolution with <code>classify_replay_resolution</code> (<code>concurrent/call.rs</code>). The function is total — every recorded shape has exactly one meaning — and shared by every path.</p>
+<p>Replay claims the matching <code>Start</code>, resolves its terminal through <code>ConcurrentReplayResolver</code>, and classifies the resolution with <code>classify_replay_resolution</code> (<code>concurrent/call.rs</code>). The function is total — every recorded shape has exactly one meaning — and shared by guest-delivery paths.</p>
 
 <div class="table-wrap">
 <table>
   <thead><tr><th scope="col">Recorded shape</th><th scope="col"><code>ReplayedResolution</code></th><th scope="col">Guest handoff</th></tr></thead>
   <tbody>
     <tr><td><code>End</code> + <code>CompletionDelivered</code></td><td><code>Delivered</code>, <code>AtMarker</code></td><td>Released exactly at the recorded marker boundary; <code>ReplayDeliveryBarrier</code> holds the cursor gate until then.</td></tr>
-    <tr><td><code>End</code>, no marker (accessor)</td><td><code>Delivered</code>, <code>AtReplayTail</code></td><td>A crash happened after host completion but before observation. The result is <em>withheld</em> until the cursor drains (<code>await_natural_tail_end</code>), then delivered live-armed as the guest's first post-replay observation. The effect is <strong>not</strong> re-run.</td></tr>
+    <tr><td><code>End</code>, no marker (guest-facing accessor)</td><td><code>Delivered</code>, <code>AtReplayTail</code></td><td>A crash happened after host completion but before observation. The result is <em>withheld</em> until the cursor drains (<code>await_natural_tail_end</code>), then delivered live-armed as the guest's first post-replay observation. The effect is <strong>not</strong> re-run.</td></tr>
     <tr><td><code>Cancelled { partial: Some }</code></td><td><code>Delivered</code>, <code>Immediate</code></td><td>Guest-initiated, deterministic drop point; the partial value is delivered with no gating.</td></tr>
     <tr><td><code>Cancelled { partial: None }</code> or <code>End</code> + <code>CompletionDiscarded</code></td><td><code>Undelivered</code></td><td>The guest never saw a value; the future is parked for the guest's own deterministic drop.</td></tr>
     <tr><td><code>Start</code> without terminal</td><td><code>Incomplete</code></td><td>See below: re-execute under the <em>same</em> <code>Start</code> if the function type allows, otherwise hard-error into scope recovery.</td></tr>

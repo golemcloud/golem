@@ -646,6 +646,21 @@ pub(crate) struct AccessClaimOptions {
     /// initiation captures the current custom-invocation task context.
     pub(crate) observational_owner: Option<OplogIndex>,
     pub(crate) scope_replay_recovery: ScopeReplayRecovery,
+    pub(crate) host_internal_owner: Option<HostInternalCallOwner>,
+    pub(crate) require_recorded_start: bool,
+}
+
+/// An internal call belongs to the outer call, not to a guest completion. Keeping the outer
+/// session alive covers cancellation even after the internal result has been consumed.
+pub(crate) struct HostInternalCallOwner {
+    start_index: OplogIndex,
+    execution_scope: CallExecutionScope,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccessResultDestination {
+    Guest,
+    Host,
 }
 
 type ScopeReplayReadiness = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
@@ -1721,6 +1736,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let parent_start_index = claim_options
             .parent_start_index
             .or(ambient_parent_start_index);
+        let parent_start_index = if let Some(owner) = &claim_options.host_internal_owner {
+            if owner.execution_scope.entity_parent_start_index != ctx.entity_parent_start_index() {
+                return Err(WorkerExecutorError::runtime(
+                    "host-internal call belongs to a different entity Store",
+                ));
+            }
+            Some(owner.start_index)
+        } else {
+            parent_start_index
+        };
         let observational_owner = resolve_observational_owner(
             ctx,
             claim_options.observational_owner,
@@ -2007,6 +2032,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     outcome @ (ReplayStartClaimOutcome::ReplayEnded
                     | ReplayStartClaimOutcome::DeletedRegion
                     | ReplayStartClaimOutcome::StoreAlreadyLive) => {
+                        if prepared.claim_options.require_recorded_start {
+                            return Err((
+                                WorkerExecutorError::unexpected_oplog_entry(
+                                    format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
+                                    "completed parent has no recorded host-internal child",
+                                ),
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            ));
+                        }
                         let primary_replay_tail = prepared.primary_runtime
                             && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
                         if !prepared.replaying_incomplete_entity && !primary_replay_tail {
@@ -3468,15 +3504,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
-    /// Deferred-delivery form of [`Self::invoke_access`] for values that cross another cancellable
-    /// boundary after their durable terminal.
-    pub(crate) async fn invoke_access_deferred<T, D, Ctx, A, E>(
+    pub(crate) fn host_internal_owner(&self) -> HostInternalCallOwner {
+        HostInternalCallOwner {
+            start_index: self.start_idx,
+            execution_scope: self.execution_scope.clone(),
+        }
+    }
+
+    /// Records a cancellable child whose result is consumed by the host. Its End is sufficient
+    /// for replay: there is no guest delivery token, terminal observer, or replay-tail gate.
+    /// The outer session must remain alive until the host continuation finishes.
+    pub(crate) async fn invoke_host_internal_access<T, D, Ctx, A, E>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        owner: HostInternalCallOwner,
+        completed_parent: bool,
         request: Pair::Req,
         function_type: DurableFunctionType,
         live_action: A,
-    ) -> Result<(Pair::Resp, CompletionDelivery), E>
+    ) -> Result<Pair::Resp, E>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -3489,30 +3535,88 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeDeferredStart)
                 .await;
         }
-        let call = Self::start_access(store, get_ctx, request, function_type).await?;
+        if completed_parent
+            && store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live())
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
+                "completed parent has no recorded host-internal child",
+            )
+            .into());
+        }
+        let options = AccessClaimOptions {
+            observational_owner: owner.execution_scope.observational_owner,
+            host_internal_owner: Some(owner),
+            require_recorded_start: completed_parent,
+            ..Default::default()
+        };
+        let mut call = Self::start_access_with_options(
+            store,
+            get_ctx,
+            function_type,
+            options,
+            async move |_| Ok(request),
+        )
+        .await?;
         if let Some(hook) = &hook {
             hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::AfterDeferredStart)
                 .await;
         }
         debug_assert!(
             call.retry.can_reexecute_on_incomplete_replay(),
-            "DurableCallSession::invoke_access_deferred is only valid for re-executable calls"
+            "host-internal calls must be re-executable"
         );
-        if call.is_live() {
-            call.run_live_action_access_deferred(store, get_ctx, live_action)
-                .await
-        } else {
-            match call.replay_access_deferred(store, get_ctx).await? {
-                DeferredCallReplayOutcome::Replayed(response, delivery) => Ok((response, delivery)),
-                DeferredCallReplayOutcome::Incomplete(call) => {
-                    call.run_live_action_access_deferred(store, get_ctx, live_action)
-                        .await
+        if !call.is_live() {
+            match call
+                .replay_access_to(
+                    store,
+                    get_ctx,
+                    AccessResultDestination::Host,
+                    completed_parent,
+                )
+                .await?
+            {
+                CallReplayOutcome::Replayed(response) => return Ok(response),
+                CallReplayOutcome::Incomplete(incomplete) => {
+                    call = incomplete;
                 }
             }
         }
+        let response = match live_action().await {
+            Ok(response) => response,
+            Err(error) => return Err(E::from_durable_call_trap(call.trap(error))),
+        };
+        if let Err(error) = drain_dropped_call_events_access(store, get_ctx).await {
+            call.abandon_for_trap();
+            return Err(E::from_durable_call_trap(error.into_marked_anyhow()));
+        }
+        let context = call.trap_context();
+        let (response, mut guard) = call
+            .complete_access_terminal(
+                store,
+                get_ctx,
+                response,
+                None,
+                AccessResultDestination::Host,
+            )
+            .await
+            .map_err(|source| {
+                E::from_durable_call_trap(
+                    TerminalCallError::new(source, context).into_marked_anyhow(),
+                )
+            })?;
+        guard.disarm();
+        if let Some(hook) = &hook {
+            hook.before_replay_access_start(
+                Pair::FQFN,
+                ReplayAdmissionStage::AfterHostInternalTerminal,
+            )
+            .await;
+        }
+        Ok(response)
     }
 
-    async fn run_live_action_access<T, D, Ctx, A, E>(
+    pub(crate) async fn run_live_action_access<T, D, Ctx, A, E>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -3528,28 +3632,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         match live_action().await {
             Ok(response) => self
                 .complete_access(store, get_ctx, response)
-                .await
-                .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow())),
-            Err(error) => Err(E::from_durable_call_trap(self.trap(error))),
-        }
-    }
-
-    async fn run_live_action_access_deferred<T, D, Ctx, A, E>(
-        mut self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        live_action: A,
-    ) -> Result<(Pair::Resp, CompletionDelivery), E>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-        E: DurableCallTrapError,
-        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
-    {
-        match live_action().await {
-            Ok(response) => self
-                .complete_access_deferred(store, get_ctx, response)
                 .await
                 .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow())),
             Err(error) => Err(E::from_durable_call_trap(self.trap(error))),
@@ -3830,12 +3912,37 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     async fn complete_access_impl_with_span<T, D, Ctx>(
-        mut self,
+        self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
         span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(Pair::Resp, CompletionDelivery), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let (response, mut guard) = self
+            .complete_access_terminal(
+                store,
+                get_ctx,
+                response,
+                span_finished,
+                AccessResultDestination::Guest,
+            )
+            .await?;
+        Ok((response, guard.take_completion_delivery()))
+    }
+
+    async fn complete_access_terminal<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
+        destination: AccessResultDestination,
+    ) -> Result<(Pair::Resp, AccessTerminalGuard<P>), WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -3854,7 +3961,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let ctx = get_ctx(access.data_mut());
                 (
                     ctx.state.oplog.clone(),
-                    ctx.state.completion_marker_recorder(),
+                    (destination == AccessResultDestination::Guest)
+                        .then(|| ctx.state.completion_marker_recorder()),
                 )
             });
             let mut guard = AccessTerminalGuard::<P>::new(
@@ -3919,7 +4027,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 guard.suppress_discard_marker();
                 return Err(err);
             }
-            Ok((response, guard.take_completion_delivery()))
+            Ok((response, guard))
         }
     }
 
@@ -3936,7 +4044,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// function against a gated oplog to keep that invariant observable.
     pub(super) async fn persist_access_terminal(
         oplog: Arc<dyn Oplog>,
-        completion_marker_recorder: CompletionMarkerRecorder,
+        completion_marker_recorder: Option<CompletionMarkerRecorder>,
         guard: &mut AccessTerminalGuard<P>,
         start_idx: OplogIndex,
         response: Pair::Resp,
@@ -3975,9 +4083,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // *during* `wait_terminal` still counts — the owned task appends the `End` regardless).
         guard.cleanup_after_terminal(
             terminal,
-            Some(CompletionMarkerRecord {
+            completion_marker_recorder.map(|recorder| CompletionMarkerRecord {
                 start_idx,
-                recorder: completion_marker_recorder,
+                recorder,
             }),
         );
         guard.wait_terminal().await?;
@@ -4084,9 +4192,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Accessor-window replay for non-scope-opening p3 durable calls.
     pub async fn replay_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.replay_access_to(store, get_ctx, AccessResultDestination::Guest, false)
+            .await
+    }
+
+    async fn replay_access_to<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        destination: AccessResultDestination,
+        require_completed: bool,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -4109,6 +4233,35 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .take()
             .expect("replay_access() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
+        if require_completed
+            && !matches!(
+                outcome,
+                ResolutionOutcome::Resolved(Resolution::Completed { .. })
+            )
+        {
+            self.finished = true;
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "completed host-internal child",
+                "completed parent has an unfinished host-internal child",
+            ));
+        }
+        if destination == AccessResultDestination::Host
+            && matches!(
+                outcome,
+                ResolutionOutcome::Resolved(
+                    Resolution::Completed {
+                        delivery_marker: Some(_),
+                        ..
+                    } | Resolution::CompletedButDiscarded { .. }
+                )
+            )
+        {
+            self.finished = true;
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "host-internal terminal without a guest delivery marker",
+                format!("delivery marker for host-internal Start {}", self.start_idx),
+            ));
+        }
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
                 self.finished = true;
@@ -4120,15 +4273,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
-                CompletionDelivery::replay_delivered(
-                    disposition,
-                    self.start_idx,
-                    completion_marker_recorder,
-                    self.trap_context(),
-                    self.cleanup_sink.clone(),
-                )
-                .deliver_at_accessor_terminal(store)
-                .await?;
+                if destination == AccessResultDestination::Guest {
+                    CompletionDelivery::replay_delivered(
+                        disposition,
+                        self.start_idx,
+                        completion_marker_recorder,
+                        self.trap_context(),
+                        self.cleanup_sink.clone(),
+                    )
+                    .deliver_at_accessor_terminal(store)
+                    .await?;
+                }
                 Ok(CallReplayOutcome::Replayed(response))
             }
             ReplayedResolution::Undelivered(terminal) => {

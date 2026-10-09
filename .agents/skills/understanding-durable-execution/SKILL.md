@@ -592,20 +592,31 @@ Every nondeterministic host function goes through `begin_durable_function` /
 `persist_durable_function_invocation` / `read_persisted_durable_function_invocation` with the same
 `Start`/`End` shape.
 
-Live (accessor path): append `Start` eagerly → run the live action → append `End` (or
+Live (guest-facing accessor path): append `Start` eagerly → run the live action → append `End` (or
 `Cancelled`) → hand the result to the guest → append `CompletionDelivered` (or
 `CompletionDiscarded` if the guest dropped the completion unread). The serialized direct path
 has no markers: its result is delivered when the host function returns. A trap while a call is
 in flight leaves `Start` incomplete (`abandon_for_trap`); a trap never writes `Cancelled`.
 
+**Host-internal results** use `DurableCallSession::invoke_host_internal_access`: Start/End
+remain durable and identity-validated, but End returns the recorded result directly to the host.
+There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless
+replay-tail gate. A Store-holding reader must never wait for progress whose only producer needs
+that Store's event loop. P3 `monotonic-clock::wait-for` records its outer Start first and owns the
+internal `now` read as a child. It resolves the outer replay before the child: a cancelled outer
+wait parks without issuing the child, while an incomplete outer wait owns cancellation cleanup
+before reconstructing the deadline from recorded `now + duration`. A completed outer requires
+a recorded completed child. Cancelling after the child's End settles the outer wait without an
+internal delivery marker. Only the outer wait has a real guest-delivery boundary.
+
 Replay: claim the matching `Start` (`StartClaim`, identity + optional request payload match),
 resolve its terminal through `ConcurrentReplayResolver`, then classify with
-`classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by every path:
+`classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:
 
 | Recorded | `ReplayedResolution` | Guest handoff |
 |---|---|---|
 | `End` + `CompletionDelivered` | `Delivered`, `AtMarker` | released exactly at the recorded marker boundary (`ReplayDeliveryBarrier` holds the cursor gate) |
-| `End`, no marker (accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
+| `End`, no marker (guest-facing accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
 | `Cancelled { partial: Some }` | `Delivered`, `Immediate` | guest-initiated, deterministic drop point; no gating |
 | `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | the guest never saw a value; the future is parked for the guest's deterministic drop |
 | `Start` without terminal | `Incomplete` | see below |

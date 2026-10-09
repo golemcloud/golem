@@ -3344,6 +3344,57 @@ async fn marked_completion_is_prefetched_without_advancing_past_intervening_entr
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn host_internal_end_does_not_wait_for_accessor_continuation() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 41),
+        start_now(),
+        end_for(4, 73),
+        noop(),
+    ])
+    .await;
+    let internal = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let (resolved, resolution_ready) = tokio::sync::oneshot::channel();
+    let continuation = rs.run_owned_cursor_op(move |state| async move {
+        let result = state.await_resolution_outcome(internal).await;
+        resolved.send(()).unwrap();
+        result
+    });
+    tokio::pin!(continuation);
+    assert!(futures::poll!(continuation.as_mut()).is_pending());
+    resolution_ready.await.unwrap();
+
+    // Model a direct host call holding the Store. The accessor continuation remains unpolled
+    // until this reader finishes; nothing may require that continuation to acknowledge End.
+    let direct = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        rs.await_resolution(direct).await.unwrap(),
+        Resolution::Completed { end_idx, delivery_marker: None, .. }
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert!(matches!(
+        continuation.await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed {
+            end_idx, delivery_marker: None, ..
+        }) if end_idx == OplogIndex::from_u64(3)
+    ));
+}
+
+#[test]
 async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
     // A completed before B was started, but A's callback was handed to the guest only after B
     // completed. Replay returns A's response to its host-side continuation at End, lets B advance,

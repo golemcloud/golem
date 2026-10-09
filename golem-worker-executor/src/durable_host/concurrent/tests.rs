@@ -1453,7 +1453,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             NotCancellable,
         >::persist_access_terminal(
             persist_oplog,
-            completion_marker_recorder,
+            Some(completion_marker_recorder),
             &mut guard,
             start_idx,
             response,
