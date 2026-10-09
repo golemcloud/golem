@@ -2061,7 +2061,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.2\",\"npm@10.9.9+golem.2\",\"npx@10.9.9+golem.2\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.3\",\"npm@10.9.9+golem.3\",\"npx@10.9.9+golem.3\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2069,7 +2069,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.2\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.3\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json

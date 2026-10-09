@@ -21,7 +21,7 @@ import { rm } from 'node:fs/promises';
 
 const TscClient = client(
   toolDefinition('tsc', { requiresFilesystem: true })
-    .version('5.9.2+golem.2')
+    .version('5.9.2+golem.3')
     .body((body) =>
       body
         .option('cwd', z.string(), { default: '/workspace' })
