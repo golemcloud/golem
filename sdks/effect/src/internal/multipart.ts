@@ -76,8 +76,13 @@ const generateBoundary = (): string => {
 const indexOf = (haystack: Uint8Array, needle: Uint8Array, from = 0): number => {
   if (needle.length === 0) return from
   if (needle.length > haystack.length - from) return -1
-  outer: for (let i = from; i <= haystack.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) {
+  const lastStart = haystack.length - needle.length
+  outer: for (
+    let i = haystack.indexOf(needle[0]!, from);
+    i !== -1 && i <= lastStart;
+    i = haystack.indexOf(needle[0]!, i + 1)
+  ) {
+    for (let j = 1; j < needle.length; j++) {
       if (haystack[i + j] !== needle[j]) continue outer
     }
     return i
@@ -158,31 +163,13 @@ const splitOnDelimiter = (
   while (cursor <= data.length) {
     const next = indexOf(data, delimiter, cursor)
     if (next === -1) {
-      sections.push(data.slice(cursor))
+      sections.push(data.subarray(cursor))
       break
     }
-    sections.push(data.slice(cursor, next))
+    sections.push(data.subarray(cursor, next))
     cursor = next + delimiter.length
   }
   return sections
-}
-
-/** Find the first `\r\n\r\n` at or after `start`; returns -1 on miss. */
-const findDoubleCrlf = (data: Uint8Array, start: number): number => {
-  for (let i = start; i + 3 < data.length; i++) {
-    if (data[i] === 0x0d && data[i + 1] === 0x0a && data[i + 2] === 0x0d && data[i + 3] === 0x0a) {
-      return i
-    }
-  }
-  return -1
-}
-
-/** Find the first `\n\n` at or after `start`; returns -1 on miss. */
-const findDoubleLf = (data: Uint8Array, start: number): number => {
-  for (let i = start; i + 1 < data.length; i++) {
-    if (data[i] === 0x0a && data[i + 1] === 0x0a) return i
-  }
-  return -1
 }
 
 /**
@@ -200,6 +187,8 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
   // body (and from each header line) if present.
   const delimiter = textEncoder.encode(`\n--${boundary}`)
   const firstDelimiter = textEncoder.encode(`--${boundary}`)
+  const doubleCrlf = textEncoder.encode(`${CRLF}${CRLF}`)
+  const doubleLf = textEncoder.encode("\n\n")
 
   // Strip leading CRLF or LF.
   let start = 0
@@ -223,8 +212,15 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
     if (section.length >= 2 && section[0] === 0x0d && section[1] === 0x0a) s = 2
     else if (section.length >= 1 && section[0] === 0x0a) s = 1
 
-    const headerEndCrlf = findDoubleCrlf(section, s)
-    const headerEndLf = findDoubleLf(section, s)
+    const headerEndCrlf = indexOf(section, doubleCrlf, s)
+    const headerEndLf = indexOf(
+      section.subarray(
+        0,
+        headerEndCrlf === -1 ? section.length : headerEndCrlf + doubleCrlf.length,
+      ),
+      doubleLf,
+      s,
+    )
     let headerEnd: number
     let bodyStart: number
     if (headerEndCrlf !== -1 && (headerEndLf === -1 || headerEndCrlf <= headerEndLf)) {
