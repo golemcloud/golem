@@ -127,8 +127,9 @@ atomic scopes.
 For bearer auth, pass a host secret capability in `ReadOptions::auth` or `WriteOptions::auth` as
 `Arc<schema::wit::wire::Secret>`. For configured `Secret<String>`, call `handle()` and transfer the
 returned `GuestSecretHandle` with `take()`; never call `get()` or reveal the token. HTTPS is
-required except when the host is exactly `localhost` or a loopback IP; a name such as
-`app.localhost` is not exempt. Redirects and URL credentials are rejected.
+required except when the host is `localhost`, a dot-delimited subdomain such as `app.localhost`,
+or a loopback IP. Localhost names are case-insensitive and may have one terminal DNS dot. The URL
+authority stays unchanged. Redirects and URL credentials are rejected.
 
 Build and deploy after adding the `httpApi` deployment:
 

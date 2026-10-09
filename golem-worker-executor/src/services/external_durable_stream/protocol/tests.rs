@@ -20,6 +20,7 @@ use axum::routing::any;
 use futures::StreamExt;
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use test_r::test;
 
@@ -155,32 +156,33 @@ impl Drop for Server {
 
 impl Server {
     async fn new(responses: Vec<HttpResponse<Body>>) -> Self {
+        Self::bind("127.0.0.1:0", responses).await
+    }
+
+    async fn bind(address: &str, responses: Vec<HttpResponse<Body>>) -> Self {
         let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = requests.clone();
-        let app = axum::Router::new().route(
-            "/stream",
-            any(move |request: axum::extract::Request| {
-                let responses = responses.clone();
-                let captured = captured.clone();
-                async move {
-                    let (parts, body) = request.into_parts();
-                    let body = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
-                    captured.lock().unwrap().push(Captured {
-                        method: parts.method,
-                        uri: parts.uri,
-                        headers: parts.headers,
-                        body,
-                    });
-                    responses
-                        .lock()
-                        .unwrap()
-                        .pop_front()
-                        .unwrap_or_else(|| response(500, &[], Body::empty()))
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let app = axum::Router::new().fallback(any(move |request: axum::extract::Request| {
+            let responses = responses.clone();
+            let captured = captured.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let body = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+                captured.lock().unwrap().push(Captured {
+                    method: parts.method,
+                    uri: parts.uri,
+                    headers: parts.headers,
+                    body,
+                });
+                responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| response(500, &[], Body::empty()))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind(address).await.unwrap();
         let url = format!("http://{}/stream", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -243,9 +245,161 @@ fn append_request(url: &str) -> DurableStreamAppendRequest {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn production_local_transport_preserves_authority_and_literal_destinations() {
+    let service = DefaultExternalDurableStreamService::new().unwrap();
+    for (address, hosts) in [
+        (
+            "127.0.0.1:0",
+            vec!["localhost", "app.localhost", "NeStEd.ApP.LoCaLhOsT."],
+        ),
+        ("[::1]:0", vec!["app.localhost", "[::1]"]),
+        ("127.99.2.1:0", vec!["127.99.2.1"]),
+    ] {
+        for host in hosts {
+            let server = Server::bind(
+                address,
+                vec![
+                    response(
+                        204,
+                        &[
+                            ("producer-epoch", "7"),
+                            ("producer-seq", "11"),
+                            ("stream-next-offset", "tail-17"),
+                            ("stream-closed", "true"),
+                        ],
+                        Body::empty(),
+                    ),
+                    response(
+                        200,
+                        &[
+                            ("content-type", "application/json"),
+                            ("stream-next-offset", "tail-17"),
+                            ("stream-closed", "true"),
+                        ],
+                        Body::from("[[1,2],9007199254740993]"),
+                    ),
+                ],
+            )
+            .await;
+            let port = Url::parse(&server.url).unwrap().port().unwrap();
+            let url = format!("http://{host}:{port}/stream");
+            let canonical = Url::parse(&url).unwrap();
+            let mut append = append_request(&url);
+            append.close = true;
+            let receipt = service
+                .append_batch(&append, Some("token"), 1024)
+                .await
+                .unwrap();
+            assert_eq!((receipt.epoch, receipt.sequence), (7, 11));
+            assert_eq!(receipt.next_offset.as_deref(), Some("tail-17"));
+            assert!(receipt.closed);
+            let batch = service
+                .read_batch(&read_request(&url), Some("token"), 1024)
+                .await
+                .unwrap();
+            assert_eq!(batch.payload, b"[[1,2],9007199254740993]");
+            assert_eq!(batch.next.offset, "tail-17");
+            assert!(batch.closed && batch.up_to_date);
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].method, Method::POST);
+            assert_eq!(requests[0].body.as_ref(), b"[[1,2],9007199254740993]");
+            assert_eq!(requests[1].method, Method::GET);
+            assert_eq!(requests[1].uri.query(), Some("offset=-1"));
+            for request in requests.iter() {
+                assert_eq!(
+                    request.headers["host"],
+                    format!("{}:{port}", canonical.host_str().unwrap())
+                );
+                assert_eq!(request.headers["authorization"], "Bearer token");
+            }
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn production_local_transport_bypasses_normal_proxy_but_https_retains_it() {
+    let proxy = Server::new(vec![response(502, &[], Body::empty())]).await;
+    let local = Server::new(vec![response(
+        204,
+        &[("producer-epoch", "7"), ("producer-seq", "11")],
+        Body::empty(),
+    )])
+    .await;
+    let mut service = DefaultExternalDurableStreamService::new().unwrap();
+    service.client = Client::builder()
+        .proxy(reqwest::Proxy::all(&proxy.url).unwrap())
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()
+        .unwrap();
+    let port = Url::parse(&local.url).unwrap().port().unwrap();
+    let url = format!("http://app.localhost:{port}/stream");
+    service
+        .append_batch(&append_request(&url), None, 1024)
+        .await
+        .unwrap();
+    assert_eq!(local.requests.lock().unwrap().len(), 1);
+    assert!(proxy.requests.lock().unwrap().is_empty());
+    for url in [
+        "https://app.localhost:9443/stream",
+        "https://remote.example.invalid:8443/stream",
+    ] {
+        assert_eq!(
+            service
+                .read_batch(&read_request(url), None, 1024)
+                .await
+                .unwrap_err()
+                .kind,
+            DurableStreamErrorKind::Transport
+        );
+    }
+    let requests = proxy.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.method == Method::CONNECT)
+    );
+    assert_eq!(requests[0].uri.to_string(), "app.localhost:9443");
+    assert_eq!(requests[1].uri.to_string(), "remote.example.invalid:8443");
+}
+
+#[test]
+async fn localhost_resolution_is_bounded_to_both_loopback_families() {
+    use reqwest::dns::Resolve;
+    let resolver = super::super::LocalhostResolver;
+    for host in ["localhost", "nested.app.localhost", "app.localhost."] {
+        let addresses: Vec<_> = resolver
+            .resolve(host.parse().unwrap())
+            .await
+            .unwrap()
+            .collect();
+        assert_eq!(addresses.len(), 2);
+        assert!(
+            addresses
+                .iter()
+                .all(|address| address.ip().is_loopback() && address.port() == 0)
+        );
+        assert!(addresses.iter().any(SocketAddr::is_ipv4));
+        assert!(addresses.iter().any(SocketAddr::is_ipv6));
+    }
+    for host in ["app.localhost.example.com", "notlocalhost", "localhost.."] {
+        assert!(resolver.resolve(host.parse().unwrap()).await.is_err());
+    }
+}
+
+#[test]
 fn validates_url_headers_and_transport_before_io() {
     for url in [
         "http://example.com/stream",
+        "http://app.localhost.example.com/stream",
+        "http://notlocalhost/stream",
+        "http://app.notlocalhost/stream",
+        "http://localhost../stream",
+        "http://app.localhost../stream",
         "https://user:secret@host/stream",
         "https://@host/stream",
         "https:///@host/stream",
@@ -262,14 +416,38 @@ fn validates_url_headers_and_transport_before_io() {
             DurableStreamErrorKind::InvalidRequest,
             "{url}"
         );
+        assert_eq!(
+            preflight_append(&append_request(url), 1024)
+                .unwrap_err()
+                .kind,
+            DurableStreamErrorKind::InvalidRequest,
+            "{url}"
+        );
+        assert_eq!(
+            validate_append(&append_request(url), 1024)
+                .unwrap_err()
+                .kind,
+            DurableStreamErrorKind::InvalidRequest,
+            "{url}"
+        );
     }
     for url in [
         "http://localhost/stream",
+        "http://app.localhost:9006/stream",
+        "http://nested.app.localhost/stream",
+        "http://ApP.LoCaLhOsT:9006/stream",
+        "http://localhost./stream",
+        "http://app.localhost./stream",
         "http://127.99.2.1/stream",
         "http://[::1]/stream",
         "https://example.com/stream?tenant=a",
     ] {
         assert!(validate_read(&read_request(url), 1024).is_ok(), "{url}");
+        assert!(
+            preflight_append(&append_request(url), 1024).is_ok(),
+            "{url}"
+        );
+        assert!(validate_append(&append_request(url), 1024).is_ok(), "{url}");
     }
     let mut request = read_request("https://example.com/stream");
     request.checkpoint.offset = "opaque+token".to_owned();
