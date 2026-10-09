@@ -131,6 +131,9 @@ pub(in crate::wasi_filesystem) fn p2_agent_error(error: AgentFilesystemError) ->
         AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted) => {
             ErrorCode::NotPermitted.into()
         }
+        AgentFilesystemError::Access(agent_filesystem::AccessError::ReadOnly) => {
+            ErrorCode::ReadOnly.into()
+        }
         AgentFilesystemError::Sandbox(error) => p2_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => ErrorCode::InsufficientSpace.into(),
@@ -215,6 +218,7 @@ pub(in crate::wasi_filesystem) fn p2_agent_open_request(
         follow: path_flags.contains(PathFlags::SYMLINK_FOLLOW),
         read: descriptor_flags.contains(DescriptorFlags::READ),
         write: descriptor_flags.contains(DescriptorFlags::WRITE),
+        mutate_directory: descriptor_flags.contains(DescriptorFlags::MUTATE_DIRECTORY),
         unsupported_sync: descriptor_flags.intersects(
             DescriptorFlags::FILE_INTEGRITY_SYNC
                 | DescriptorFlags::DATA_INTEGRITY_SYNC
@@ -760,6 +764,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "read_via_stream");
         if descriptor.with_node(|node| !matches!(node, OpenNode::File(_))) {
             return Err(ErrorCode::BadDescriptor.into());
+        }
+        if !p2_agent_flags(&descriptor)?.contains(DescriptorFlags::READ) {
+            return Err(ErrorCode::NotPermitted.into());
         }
         let stream: wasmtime_wasi::p2::DynInputStream = Box::new(AgentFileInputStream::new(
             generation_handle,
