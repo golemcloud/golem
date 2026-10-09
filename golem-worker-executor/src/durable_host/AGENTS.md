@@ -32,7 +32,10 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   (concurrent) calls whose results reach the guest: replay releases each completion at its recorded boundary
   (`CompletionDelivery::AtMarker`); a guest-facing accessor `End` without a marker is a
   crash-after-completion and is withheld until the natural replay tail (`AtReplayTail`), never
-  re-executed and never delivered early. The serialized direct path records no markers
+  re-executed and never delivered early. `CompletionDiscarded` means the *guest* dropped the
+  completion unread; an armed token or terminal guard torn by Store unload or executor shutdown
+  (`TeardownProbe`) must leave the `End` markerless, otherwise replay withholds a completion the
+  guest never saw. The serialized direct path records no markers
   (`DurableCallSession::replay` rejects `CompletionDelivered` for a non-accessor call) and
   delivers at the host return.
 - **Host-internal results** retain durable Start/End and cancellation tracking, but create no
