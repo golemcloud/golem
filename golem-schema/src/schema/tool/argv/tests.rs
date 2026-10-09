@@ -104,6 +104,12 @@ fn values(tool: &Tool, argv: &[&str]) -> Vec<SchemaValue> {
     fields
 }
 
+fn optional_string(value: Option<&str>) -> SchemaValue {
+    SchemaValue::Option {
+        inner: value.map(|value| Box::new(SchemaValue::String(value.into()))),
+    }
+}
+
 #[test]
 fn schema_directed_scalars_optional_strings_and_rejections() {
     let mut b = body();
@@ -639,4 +645,94 @@ fn tool_metadata_cannot_read_the_callers_environment() {
         panic!()
     };
     assert!(!help.contains("PATH"));
+}
+
+#[test]
+fn optional_arguments_declared_with_a_plain_type_can_be_omitted_or_supplied() {
+    let mut b = body();
+    let mut directory = positional("directory", SchemaType::string());
+    directory.required = false;
+    b.positionals.fixed = vec![directory];
+    b.options.push(option(
+        "initial-branch",
+        OptionShape::Scalar(SchemaType::string()),
+    ));
+    let t = tool(b);
+    for (args, directory, initial_branch) in [
+        (vec![], None, None),
+        (vec!["repo"], Some("repo"), None),
+        (vec!["--initial-branch", "main"], None, Some("main")),
+        (
+            vec!["--initial-branch", "main", "repo"],
+            Some("repo"),
+            Some("main"),
+        ),
+    ] {
+        assert_eq!(
+            values(&t, &args),
+            vec![optional_string(directory), optional_string(initial_branch)],
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn inherited_global_and_optional_scalar_options_with_a_plain_type_are_optional() {
+    let mut t = tool(body());
+    t.commands.nodes[0].body = None;
+    t.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+    t.commands.nodes[0]
+        .globals
+        .options
+        .push(option("profile", OptionShape::Scalar(SchemaType::string())));
+    let mut child = tool(body()).commands.nodes.remove(0);
+    child.name = "show".into();
+    child.body.as_mut().unwrap().options.push(option(
+        "color",
+        OptionShape::OptionalScalar(SchemaType::string()),
+    ));
+    t.commands.nodes.push(child);
+    for (args, profile, color) in [
+        (vec!["show"], None, None),
+        (vec!["--profile", "dev", "show"], Some("dev"), None),
+        (vec!["show", "--profile", "dev"], Some("dev"), None),
+        (vec!["show", "--color=always"], None, Some("always")),
+    ] {
+        assert_eq!(
+            values(&t, &args),
+            vec![optional_string(profile), optional_string(color)],
+            "{args:?}"
+        );
+    }
+    // A bare optional-scalar option still needs a declared bare-value default.
+    let bare = parsed(&t, &["show", "--color"]).err();
+    assert!(
+        bare.as_deref()
+            .is_some_and(|e| e.contains("bare-value default")),
+        "{bare:?}"
+    );
+}
+
+#[test]
+fn constraints_see_an_omitted_optional_argument_with_a_plain_type_as_absent() {
+    let mut b = body();
+    let mut from = positional("from", SchemaType::string());
+    from.required = false;
+    b.positionals.fixed = vec![from];
+    b.options
+        .push(option("author", OptionShape::Scalar(SchemaType::string())));
+    b.constraints.push(Constraint::Forbids(ForbidsC {
+        lhs_quant: Quantifier::All,
+        lhs: vec![Ref::Present("author".into())],
+        rhs: vec![Ref::Present("from".into())],
+    }));
+    let t = tool(b);
+    for args in [vec![], vec!["HEAD"], vec!["--author", "Ada"]] {
+        assert_eq!(parsed(&t, &args).err(), None, "{args:?}");
+    }
+    let both = parsed(&t, &["--author", "Ada", "HEAD"]).err();
+    assert!(
+        both.as_deref().is_some_and(|e| e.contains("constraint")),
+        "{both:?}"
+    );
 }

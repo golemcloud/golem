@@ -17,7 +17,9 @@
 //! Arguments are decoded into the canonical input record and checked against tool constraints.
 //! Metadata never reads the caller's environment; callers supply explicit argument values.
 
-use crate::schema::tool::canonical::CanonicalSurfaceRef;
+use crate::schema::tool::canonical::{
+    CanonicalSurfaceRef, canonical_option_type, canonical_positional_type,
+};
 use crate::schema::tool::constraints::validate_tool_constraints;
 use crate::schema::tool::{
     DuplicateKeyPolicy, FlagShape, FlagSpec, OptionShape, OptionSpec, Repetition, Tool,
@@ -418,10 +420,11 @@ fn collect_value(
                 .unwrap()
                 .positionals
                 .fixed[index];
+            let type_ = canonical_positional_type(p);
             match positionals.get(index) {
-                Some(v) => decode(graph, &p.type_, v),
+                Some(v) => decode(graph, &type_, v),
                 None if p.default.is_some() => Ok(p.default.clone().unwrap()),
-                None if !p.required => omitted(resolve(graph, &p.type_)?),
+                None if !p.required => omitted(resolve(graph, &type_)?),
                 None => Err(format!("missing required positional {}", p.name)),
             }
         }
@@ -480,18 +483,23 @@ fn collect_option(
         return Err(format!("--{} cannot be repeated", option.long));
     }
     match &option.shape {
-        OptionShape::Scalar(ty) => raw
-            .last()
-            .map(|v| decode(graph, ty, v))
-            .unwrap_or_else(|| omitted(resolve(graph, ty)?)),
-        OptionShape::OptionalScalar(ty) => match raw.last() {
-            Some(value) if value == "\0" => option
-                .default
-                .clone()
-                .ok_or_else(|| format!("--{} has no bare-value default", option.long)),
-            Some(value) => decode(graph, ty, value),
-            None => omitted(resolve(graph, ty)?),
-        },
+        OptionShape::Scalar(_) => {
+            let ty = canonical_option_type(option);
+            raw.last()
+                .map(|v| decode(graph, &ty, v))
+                .unwrap_or_else(|| omitted(resolve(graph, &ty)?))
+        }
+        OptionShape::OptionalScalar(_) => {
+            let ty = canonical_option_type(option);
+            match raw.last() {
+                Some(value) if value == "\0" => option
+                    .default
+                    .clone()
+                    .ok_or_else(|| format!("--{} has no bare-value default", option.long)),
+                Some(value) => decode(graph, &ty, value),
+                None => omitted(resolve(graph, &ty)?),
+            }
+        }
         OptionShape::RepeatableList(shape) => {
             let parts = expand(&raw, shape.repetition);
             Ok(SchemaValue::List {
