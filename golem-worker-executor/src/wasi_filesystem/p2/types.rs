@@ -762,6 +762,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         if descriptor.with_node(|node| !matches!(node, OpenNode::File(_))) {
             return Err(ErrorCode::BadDescriptor.into());
         }
+        if !p2_agent_flags(&descriptor)?.contains(DescriptorFlags::READ) {
+            return Err(ErrorCode::NotPermitted.into());
+        }
         let stream: wasmtime_wasi::p2::DynInputStream = Box::new(AgentFileInputStream::new(
             generation_handle,
             descriptor,

@@ -524,6 +524,56 @@ impl FileSystem for FileSystemImpl {
         let path = path.trim_start_matches('/');
         let other = other.trim_start_matches('/');
 
+        if operation == "read-capabilities" {
+            let metadata_only = root
+                .open_at(
+                    PathFlags::empty(),
+                    path,
+                    OpenFlags::empty(),
+                    DescriptorFlags::empty(),
+                )
+                .map_err(|error| format!("open metadata-only descriptor: {error:?}"))?;
+            let direct = metadata_only.read(1, 0);
+            if !matches!(
+                direct,
+                Err(wasi::filesystem::types::ErrorCode::NotPermitted)
+            ) {
+                return Err(format!(
+                    "metadata-only read must return NotPermitted, got {direct:?}"
+                ));
+            }
+            match metadata_only.read_via_stream(0) {
+                Err(wasi::filesystem::types::ErrorCode::NotPermitted) => {}
+                Err(error) => {
+                    return Err(format!(
+                        "metadata-only stream must return NotPermitted, got {error:?}"
+                    ));
+                }
+                Ok(_) => return Err("metadata-only stream construction must fail".to_string()),
+            }
+            let readable = root
+                .open_at(
+                    PathFlags::empty(),
+                    path,
+                    OpenFlags::empty(),
+                    DescriptorFlags::READ,
+                )
+                .map_err(|error| format!("open readable descriptor: {error:?}"))?;
+            let stream = readable
+                .read_via_stream(0)
+                .map_err(|error| format!("readable stream construction: {error:?}"))?;
+            let bytes = stream
+                .blocking_read(other.len() as u64)
+                .map_err(|error| format!("readable stream read: {error:?}"))?;
+            if bytes != other.as_bytes() {
+                return Err(format!(
+                    "readable stream returned {bytes:?}, expected {:?}",
+                    other.as_bytes()
+                ));
+            }
+            return Ok(());
+        }
+
         if operation == "unlink-file-at-mutable" {
             let directory = root
                 .open_at(
