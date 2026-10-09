@@ -156,6 +156,7 @@ fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
         let local_artifacts = [
             ("bash", "builtin-tools/bash.wasm"),
             ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
+            ("git_tool", "builtin-tools/git-tool.wasm"),
             ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
             ("otlp_exporter", "plugins/otlp-exporter.wasm"),
             ("typescript_tools", "builtin-tools/typescript-tools.wasm"),

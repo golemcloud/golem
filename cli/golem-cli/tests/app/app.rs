@@ -84,6 +84,52 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[timeout("2m")]
+async fn local_server_apfs_configuration_keeps_the_key_across_starts(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("apfs-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var("GOLEM_LOG_FILTER", "info");
+    let config_dir = ctx.cwd_path_join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    fs::write_str(
+        config_dir.join("worker-executor.toml"),
+        "[filesystem_storage.mode]\ntype = \"Apfs\"\n\
+         [filesystem_storage.mode.config]\nroot = \"toml-agents\"\n\
+         [filesystem_snapshots]\ntype = \"Managed\"",
+    )
+    .unwrap();
+    let agents = ctx.data_dir.path().join("env-agents");
+    ctx.add_env_var(
+        "GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
+        agents.to_str().unwrap(),
+    );
+    ctx.start_server().await;
+    let key_path = ctx
+        .data_dir
+        .path()
+        .join("filesystem-snapshots.repository-key");
+    let first_key = std::fs::read(&key_path).unwrap();
+    assert_eq!(first_key.len(), 128);
+    assert!(agents.join(".scratch").is_dir());
+    assert!(!ctx.cwd_path_join("toml-agents").exists());
+    let mut server = ctx.server_process.take().unwrap();
+    server.kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.start_server().await;
+    assert!(
+        first_key == std::fs::read(&key_path).unwrap(),
+        "a restart must keep the repository key"
+    );
+    assert!(
+        fs::read_to_string(&server_log)
+            .unwrap()
+            .contains("APFS storage is for local development and tests only",)
+    );
+}
+
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
 /// command help go to stderr with exit code 2.
 #[test]

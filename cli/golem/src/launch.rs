@@ -16,9 +16,10 @@ use crate::compat::{preflight_registry_db_compat, write_registry_db_compat};
 use crate::router::start_router;
 use crate::{StartedComponents, registry_db_path};
 use anyhow::Context;
+use figment::Figment;
+use figment::providers::{Format, Serialized, Toml};
 use golem_cli::fs;
-use golem_common::config::DbConfig;
-use golem_common::config::DbSqliteConfig;
+use golem_common::config::{DbConfig, DbSqliteConfig, env_config_provider};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -197,8 +198,17 @@ async fn start_components(
     .await?;
 
     let worker_executor = {
-        let config =
+        let mut config =
             worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
+        let filesystem = Figment::from(Serialized::defaults(&config))
+            .merge(Toml::file_exact(
+                golem_worker_executor::services::golem_config::make_config_loader()
+                    .config_file_name,
+            ))
+            .merge(env_config_provider());
+        let (storage, snapshots) = crate::filesystem_config::prepare(&args.data_dir, filesystem)?;
+        config.filesystem_storage = storage;
+        config.filesystem_snapshots = snapshots;
         run_worker_executor(config, join_set).await?
     };
 
