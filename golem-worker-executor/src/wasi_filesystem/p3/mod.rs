@@ -161,6 +161,9 @@ async fn authorize_paths<Ctx: WorkerCtx, U: 'static>(
 }
 
 fn p3_agent_storage_error(error: FilesystemStorageError) -> FilesystemError {
+    if error.is_sandbox_escape() {
+        return types::ErrorCode::Access.into();
+    }
     match error.io_error() {
         Some(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
             types::ErrorCode::CrossDevice.into()

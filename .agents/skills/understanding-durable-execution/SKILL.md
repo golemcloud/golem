@@ -1197,6 +1197,17 @@ a different oplog shape. The host-call observation counter is still incremented 
 fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
 the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
+Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
+capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
+filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
+return `not-permitted` without invalidation when a failed writable open rechecks a read-only regular
+file, or a failed hard link rechecks a directory at the source without following the final symlink.
+A failed cleanup prevents either policy recheck from replacing the storage failure. A failed recheck
+or an object that does not establish that guest-policy refusal leaves the original permission failure
+terminal. These rechecks use the current object and do not identify the object
+that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` and the permission
+failure table in the executor walkthrough.
+
 ## Concurrency and guest completion delivery
 
 `Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain

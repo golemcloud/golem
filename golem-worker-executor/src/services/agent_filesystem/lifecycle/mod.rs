@@ -2943,6 +2943,28 @@ async fn execute_open<Adapter: SandboxFilesystemAdapter>(
         match result {
             Ok(opened) => return Ok(opened),
             Err(error) => {
+                if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
+                    && !error.is_sandbox_escape()
+                    && !error.cleanup_failed()
+                    && open_requires_mutable_target(options)
+                {
+                    let follow = match options {
+                        OpenOptions::Existing { follow, .. } | OpenOptions::File { follow, .. } => {
+                            follow
+                        }
+                    };
+                    let attributes = {
+                        let sandbox = generation.sandbox.read().await;
+                        let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
+                        sandbox
+                            .get_path_attributes(target.clone(), sandbox_follow(follow))
+                            .await
+                    };
+                    if matches!(attributes, Ok(attributes) if attributes.kind == SandboxObjectKind::File && attributes.read_only)
+                    {
+                        return Err(Error::Access(AccessError::NotPermitted));
+                    }
+                }
                 if open_changes_filesystem(options) {
                     match open_postcondition(&generation, &target, options).await {
                         Ok(true) => {
@@ -3748,6 +3770,16 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
+        if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
+            && !error.is_sandbox_escape()
+            && !error.cleanup_failed()
+            && matches!(
+                namespace_path_state(&generation, source.clone()).await,
+                Ok(NamespacePathState::Present(attributes)) if attributes.kind == SandboxObjectKind::Directory
+            )
+        {
+            return Err(Error::Access(AccessError::NotPermitted));
+        }
         let evidence = if error_proves_no_effect(&error) {
             EffectEvidence::NoEffect
         } else {
@@ -4155,7 +4187,7 @@ fn classify_query_error<Adapter: SandboxFilesystemAdapter>(
         generation.invalidate();
         Error::RuntimeInvalidated
     } else {
-        returned_storage_error(source)
+        Error::Sandbox(source)
     }
 }
 
@@ -4326,20 +4358,8 @@ fn classified_error(cause: FailureCause, source: FilesystemStorageError) -> Erro
         FailureCause::PhysicalCapacity => Error::PhysicalCapacity(source),
         FailureCause::TerminalInfrastructure => Error::RuntimeInvalidated,
         FailureCause::Guest | FailureCause::TransientBackend | FailureCause::UnclassifiedIo => {
-            returned_storage_error(source)
+            Error::Sandbox(source)
         }
-    }
-}
-
-/// Gives the error that a call returns for a storage error that leaves the generation valid.
-///
-/// A permission error gives `AccessError::NotPermitted`, as the read-only checks of the lifecycle
-/// do. Another error gives `Error::Sandbox` with its source.
-fn returned_storage_error(source: FilesystemStorageError) -> Error {
-    if source.io_kind() == Some(std::io::ErrorKind::PermissionDenied) {
-        Error::Access(AccessError::NotPermitted)
-    } else {
-        Error::Sandbox(source)
     }
 }
 
@@ -4706,12 +4726,10 @@ fn classify_failure(error: &FilesystemStorageError, facts: FailureFacts) -> Fail
 
 /// Tells whether a storage error in the tree of the agent invalidates the generation.
 ///
-/// A terminal failure of the storage invalidates the generation. A permission error does not
-/// invalidate it, although `FilesystemStorageError::is_terminal_failure` counts it. A permission
-/// error refuses only one operation in the tree, and that operation returns it. The usage reads
-/// after a storage exhaustion read the storage of the executor, so they use `is_terminal_failure`.
+/// A sandbox escape refuses only the operation. Host storage failures, including permission
+/// failures without a verified guest-policy refusal, invalidate the generation.
 fn invalidates_generation(error: &FilesystemStorageError) -> bool {
-    error.io_kind() != Some(std::io::ErrorKind::PermissionDenied) && error.is_terminal_failure()
+    error.is_terminal_failure()
 }
 
 fn error_proves_no_effect(error: &FilesystemStorageError) -> bool {
