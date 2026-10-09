@@ -193,6 +193,7 @@ pub trait GolemHostApi {
         oplog_index: u64,
     ) -> Result<(), String>;
     fn revert_agent_result(&self, agent_id: AgentId, oplog_index: u64) -> Result<(), String>;
+    fn revert_last_invocations_result(&self, agent_id: AgentId, count: u64) -> Result<(), String>;
     async fn tool_rpc_invoke_result(
         &self,
         tool_name: String,
@@ -1025,6 +1026,14 @@ impl GolemHostApi for GolemHostApiImpl {
         host_api::revert_agent(
             &wire_agent_id(agent_id),
             host_api::RevertAgentTarget::RevertToOplogIndex(oplog_index),
+        )
+        .map_err(|error| format!("{error:?}"))
+    }
+
+    fn revert_last_invocations_result(&self, agent_id: AgentId, count: u64) -> Result<(), String> {
+        host_api::revert_agent(
+            &wire_agent_id(agent_id),
+            host_api::RevertAgentTarget::RevertLastInvocations(count),
         )
         .map_err(|error| format!("{error:?}"))
     }

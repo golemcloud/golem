@@ -163,6 +163,7 @@ pub(all) struct AgentInfo {
   methods : Array[MethodInfo]
   has_init : Bool
   has_snapshottable : Bool
+  has_multipart_snapshottable : Bool
   has_json_derives : Bool
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
@@ -243,6 +244,7 @@ pub(all) struct HttpMountInfo {
   path : String
   auth : Bool?
   phantom : Bool
+  phantom_id_binding : PhantomIdBindingInfo?
   cors : Array[String]
   webhook_suffix : String?
   router : Bool
@@ -302,6 +304,11 @@ pub(all) enum PathSegmentKind {
   PathVariable(String)
   RemainingPathVariable(String)
   SystemVariable(SystemVariableKind)
+} derive(Eq, @debug.Debug)
+
+pub(all) enum PhantomIdBindingInfo {
+  Path(String, Bool)
+  Query(String, Bool)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct QueryVarInfo {

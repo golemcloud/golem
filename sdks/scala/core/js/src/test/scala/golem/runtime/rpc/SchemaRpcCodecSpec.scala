@@ -304,6 +304,20 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
           val expected = SchemaWire.schemaGraphToWit(IntoSchema[Config].graph)
           assertTrue(graph == expected)
         },
+        test("typed graph preparation belongs to its codec and never shares mutable JS arrays") {
+          val codec    = IntoSchema[Config]
+          val first    = SchemaRpcCodec.encodeTyped(Config("first", 1))(codec)
+          val prepared = codec.wireGraph
+          first.graph.typeNodes(0) = SchemaRpcCodec.encodeTyped(17).graph.typeNodes(0)
+          val second = SchemaRpcCodec.encodeTyped(Config("second", 2))(codec)
+          val other  = SchemaRpcCodec.encodeTyped("other")
+          assertTrue(
+            codec.wireGraph eq prepared,
+            SchemaWireInterop.graphFromJs(second.graph) == SchemaWire.schemaGraphToWit(codec.graph),
+            SchemaRpcCodec.decodeTyped[Config](second) == Right(Config("second", 2)),
+            SchemaWireInterop.graphFromJs(other.graph) != prepared
+          )
+        },
         test("typedConfigValue carries path + typed-schema-value") {
           val entry = SchemaRpcCodec.typedConfigValue(List("db", "primary"), Config("h", 2))
           assertTrue(

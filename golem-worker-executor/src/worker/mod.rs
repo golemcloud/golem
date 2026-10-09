@@ -40,6 +40,7 @@ mod state_actor;
 pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
+pub(crate) mod suspension;
 pub(crate) mod tasks;
 
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
@@ -78,6 +79,7 @@ use crate::services::agent_filesystem::{
 };
 use crate::services::agent_filesystem_snapshots;
 use crate::services::card_interest::CardInterestIndex;
+use crate::services::component::component_support_error;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
@@ -164,7 +166,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
     PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, ShardAssignment,
-    ShardEpoch, ShardId, Timestamp, TimestampedAgentInvocation,
+    ShardEpoch, ShardId, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -302,7 +304,8 @@ enum TargetChargeAction {
     /// The target resolved: charge it with the resolved module size.
     ChargeTarget(ResolvedComponentCharge),
     /// The target cannot load for good (it does not exist, the component service
-    /// refused it, or any other error but an unavailable component service):
+    /// refused it, the executor does not support it, or metadata failed with any error
+    /// but an unavailable component service):
     /// `create_instance` will fail the update and load the current revision, so
     /// charge the current revision instead.
     FallBackToCurrent,
@@ -316,6 +319,7 @@ struct ResolvedComponentCharge {
     module_bytes: u64,
     initial_linear_memory_bytes: u64,
     reserved_linear_memory_bytes: u64,
+    supported: bool,
 }
 
 struct StartupComponentChargeRequirement {
@@ -349,10 +353,13 @@ const CONSUMER_DELETION_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30)
 /// outcome table: only an unavailable component service leaves the update pending, so
 /// only that is retried. Any other error fails the update at the start, which then
 /// loads the current revision, so the charge falls back to the current revision.
+/// An unsupported target also charges the current revision: startup refuses
+/// it before loading it, even when its advertised memory would not fit.
 fn classify_target_charge(
     result: &Result<ResolvedComponentCharge, WorkerExecutorError>,
 ) -> TargetChargeAction {
     match result {
+        Ok(charge) if !charge.supported => TargetChargeAction::FallBackToCurrent,
         Ok(charge) => TargetChargeAction::ChargeTarget(*charge),
         Err(error) => match start_outcome::FetchProblem::of(error) {
             start_outcome::FetchProblem::Unavailable => TargetChargeAction::Retry,
@@ -1168,6 +1175,13 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     fn all(&self) -> &All<Self::Ctx> {
         &self.deps
     }
+}
+
+/// An invocation hydrated from this owner's committed Pending entry. The payload is retained
+/// unchanged for Started; lowering may transform only a separate invocation clone.
+pub struct HydratedInvocation {
+    pub(crate) invocation: AgentInvocation,
+    pub(crate) payload: OplogPayload<AgentInvocationPayload>,
 }
 
 fn into_pending_invocation_parts(
@@ -5206,18 +5220,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn hydrate_pending_invocation(
         &self,
         pending: &PendingInvocationRef,
-    ) -> Result<TimestampedAgentInvocation, WorkerExecutorError> {
+    ) -> Result<HydratedInvocation, WorkerExecutorError> {
         let entry = self.oplog.read(pending.oplog_index).await;
         match entry {
             OplogEntry::PendingAgentInvocation {
-                timestamp,
                 idempotency_key,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
+                ..
             } => {
-                let agent_payload = self.oplog.download_payload(payload).await.map_err(|e| {
+                let agent_payload = self.oplog.download_payload(payload.clone()).await.map_err(|e| {
                     WorkerExecutorError::unknown(format!(
                         "Failed to download pending agent invocation payload at oplog index {}: {e}",
                         pending.oplog_index
@@ -5230,9 +5244,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 let invocation =
                     AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
-                Ok(TimestampedAgentInvocation {
-                    timestamp,
+                Ok(HydratedInvocation {
                     invocation,
+                    payload,
                 })
             }
             other => Err(WorkerExecutorError::unknown(format!(
@@ -5268,12 +5282,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         key: &IdempotencyKey,
         output: AgentInvocationOutput,
     ) {
+        let cached = InvocationResult::Cached {
+            result: Ok(output.clone()),
+        };
         let mut map = self.hydrated_invocation_results.write().await;
         map.insert(
             key.clone(),
-            InvocationResult::Cached {
-                result: Ok(output.clone()),
-            },
+            cached,
             self.last_known_status
                 .load()
                 .invocation_results
@@ -5429,6 +5444,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         module_bytes: target.component_size,
                         initial_linear_memory_bytes,
                         reserved_linear_memory_bytes: initial_linear_memory_bytes,
+                        supported: component_support_error(&target.metadata).is_none(),
                     }
                 });
             match classify_target_charge(&result) {
@@ -7789,13 +7805,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Persists stream-bearing result mappings and returns the transport value.
-    pub async fn materialize_durable_streaming_result(
+    pub(crate) async fn materialize_durable_streaming_result(
         &self,
         idempotency_key: &IdempotencyKey,
         value: golem_common::schema::SchemaValue,
         graph: &golem_common::schema::SchemaGraph,
         root: &golem_common::schema::SchemaType,
         component_revision: ComponentRevision,
+        runtime_source: Option<suspension::RuntimeSource>,
+        preparation: Option<suspension::ExternalActivity>,
     ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
         let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
             if contains_stream(&value) {
@@ -7820,12 +7838,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
-        .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
+        .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?)
+        .with_runtime_source(runtime_source);
         if requires_attachment {
             streams = streams.require_root_attachment_before_production();
         }
         streams
-            .materialize_result(value, graph, root, component_revision)
+            .materialize_result_accounted(value, graph, root, component_revision, preparation)
             .await
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
@@ -9036,6 +9055,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.card_event_boundary_lock.clone()
     }
 
+    #[cfg(feature = "test-utils")]
+    pub async fn test_hold_invalidated_card_boundary(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        let guard = self.card_event_boundary_lock.clone().lock_owned().await;
+        self.published_authority_generation
+            .fetch_add(1, Ordering::AcqRel);
+        guard
+    }
+
     pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {
         self.published_authority_generation.clone()
     }
@@ -9672,9 +9699,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else if let Some(oplog_idx) = status.invocation_results.get(key) {
             crate::metrics::workers::record_invocation_result_resolution("memory_exact");
             Some((
-                InvocationResult::Lazy {
+                Arc::new(InvocationResult::Lazy {
                     oplog_idx: *oplog_idx,
-                },
+                }),
                 *oplog_idx,
             ))
         } else if status.invocation_results.is_exact_complete() {
@@ -9686,24 +9713,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             self.resolve_old_invocation_result_index(&status, key)
                 .await
-                .map(|oplog_idx| (InvocationResult::Lazy { oplog_idx }, oplog_idx))
+                .map(|oplog_idx| (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx))
         };
         if let Some((mut result, result_oplog_idx)) = maybe_result {
-            result
-                .cache(
-                    &self.owned_agent_id,
-                    self.agent_mode(),
-                    self.initial_worker_metadata.fingerprint,
-                    self,
-                )
-                .await;
+            if matches!(result.as_ref(), InvocationResult::Lazy { .. }) {
+                Arc::make_mut(&mut result)
+                    .cache(
+                        &self.owned_agent_id,
+                        self.agent_mode(),
+                        self.initial_worker_metadata.fingerprint,
+                        self,
+                    )
+                    .await;
+            }
             self.hydrated_invocation_results.write().await.insert(
                 key.clone(),
                 result.clone(),
                 status.invocation_results.revert_generation(),
                 result_oplog_idx,
             );
-            lookup_result_from_cached_result(&status, key, result)
+            lookup_result_from_cached_result(&status, key, Arc::unwrap_or_clone(result))
         } else {
             let is_pending = status
                 .pending_invocations
@@ -10335,17 +10364,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn restart_on_oom(
+    async fn restart_with_memory_admission(
         this: Arc<Worker<Ctx>>,
         called_from_invocation_loop: bool,
         delay: Option<Duration>,
         oom_retry_count: u32,
         start_attempt: Option<Uuid>,
+        reason: UnloadReason,
     ) -> Result<Option<Uuid>, WorkerExecutorError> {
         this.stop_internal(
             called_from_invocation_loop,
             None,
-            UnloadRequest::ordinary(UnloadReason::OutOfMemory),
+            UnloadRequest::ordinary(reason),
             FinalWorkerState::Unloaded {
                 startup_failure: None,
             },
@@ -11543,14 +11573,17 @@ impl StartFilesystem {
     }
 }
 
-pub(crate) struct CreateWorkerInstanceError {
-    pub(crate) error: WorkerExecutorError,
-    pub(crate) filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
+pub(crate) enum CreateWorkerInstanceError {
+    ReacquireMemory,
+    Failed {
+        error: WorkerExecutorError,
+        filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
+    },
 }
 
 impl From<WorkerExecutorError> for CreateWorkerInstanceError {
     fn from(error: WorkerExecutorError) -> Self {
-        Self {
+        Self::Failed {
             error,
             filesystem_cleanup_failure: None,
         }
@@ -11834,7 +11867,13 @@ impl RunningWorker {
             | start_outcome::StartAction::Retry(_)
             | start_outcome::StartAction::Succeed) => {
                 let cleaned = cleanup(raw).await;
-                if cleaned.filesystem_cleanup_failure.is_some() {
+                if matches!(
+                    cleaned,
+                    CreateWorkerInstanceError::Failed {
+                        filesystem_cleanup_failure: Some(_),
+                        ..
+                    }
+                ) {
                     return cleaned;
                 }
                 CreateWorkerInstanceError::from(
@@ -11872,7 +11911,7 @@ impl RunningWorker {
                 (active_agent, generation)
             });
         let Some(entity_generation) = entity_generation else {
-            return Err(CreateWorkerInstanceError {
+            return Err(CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::Interrupted {
                     kind: InterruptKind::ShardLost,
                 },
@@ -11983,6 +12022,35 @@ impl RunningWorker {
                 },
             );
 
+            if let Some(head) = &pending_update_ref {
+                let metadata = parent
+                    .component_service()
+                    .get_metadata(component_id, Some(component_revision))
+                    .await;
+                if let Err(error) = &metadata
+                    && matches!(
+                        start_outcome::FetchProblem::of(error),
+                        start_outcome::FetchProblem::Unavailable
+                    )
+                {
+                    return Err(WorkerExecutorError::RecoveryRequired {
+                        retry_from: None,
+                        details: error.to_string(),
+                    }
+                    .into());
+                }
+                let problem = match &metadata {
+                    Ok(metadata) => component_support_error(&metadata.metadata)
+                        .map(start_outcome::RawStartError::TargetUnsupported),
+                    Err(error) => Some(start_outcome::RawStartError::TargetFetch(error)),
+                };
+                if let Some(problem) = problem {
+                    let action = Self::start_action(&parent, &role, Some(head), problem);
+                    Self::perform_start_action(&parent, action).await?;
+                    return Err(CreateWorkerInstanceError::ReacquireMemory);
+                }
+            }
+
             match parent
                 .component_service()
                 .get(&parent.engine(), component_id, component_revision)
@@ -12034,15 +12102,27 @@ impl RunningWorker {
                 Err(error) => match &pending_update_ref {
                     Some(pending_update_ref) => {
                         warn!(
-                            "Attempting update to revision {component_revision} failed with {error}"
+                            component_revision = %component_revision,
+                            error = %error,
+                            "Loading the pending-update target failed"
                         );
                         let action = Self::start_action(
                             &parent,
                             &role,
                             Some(pending_update_ref),
-                            start_outcome::RawStartError::TargetFetch(&error),
+                            start_outcome::RawStartError::TargetLoad(&error),
                         );
-                        Self::perform_start_action(&parent, action).await?;
+                        Self::perform_start_action(&parent, action)
+                            .await
+                            .map_err(|error| match error {
+                                WorkerExecutorError::Runtime { .. } => {
+                                    WorkerExecutorError::RecoveryRequired {
+                                        retry_from: None,
+                                        details: error.to_string(),
+                                    }
+                                }
+                                error => error,
+                            })?;
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
@@ -12055,8 +12135,22 @@ impl RunningWorker {
             }
         };
 
-        if component_metadata.metadata.has_shared_linear_memory() {
-            return Err(shared_linear_memory_error(&parent).into());
+        if let Some(reason) = component_support_error(&component_metadata.metadata) {
+            if let Some(head) = &pending_update_ref {
+                let action = Self::start_action(
+                    &parent,
+                    &role,
+                    Some(head),
+                    start_outcome::RawStartError::TargetUnsupported(reason),
+                );
+                Self::perform_start_action(&parent, action).await?;
+                return Err(CreateWorkerInstanceError::ReacquireMemory);
+            }
+            return Err(WorkerExecutorError::worker_creation_failed(
+                parent.owned_agent_id.agent_id(),
+                reason,
+            )
+            .into());
         }
 
         // Refresh the snapshot used by the read-only cache key. The component
@@ -12186,7 +12280,7 @@ impl RunningWorker {
             });
         let limits = filesystems
             .resolved_limits(parent.resource_entry.max_disk_space_limit())
-            .map_err(|error| CreateWorkerInstanceError {
+            .map_err(|error| CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::runtime(error.to_string()),
                 filesystem_cleanup_failure: error.cleanup_failed().then(|| {
                     UnloadCleanupFailure::Other(WorkerExecutorError::runtime(error.to_string()))
@@ -12206,7 +12300,7 @@ impl RunningWorker {
                 pressure_recovery,
             )
             .await
-            .map_err(|failure| CreateWorkerInstanceError {
+            .map_err(|failure| CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::runtime(failure.source.to_string()),
                 filesystem_cleanup_failure: failure.source.cleanup_failed().then(|| {
                     UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
@@ -12242,7 +12336,7 @@ impl RunningWorker {
                 let startup_error = WorkerExecutorError::runtime(failure.source.to_string());
                 return Err(match delete_created(failure.filesystem).await {
                     Ok(()) => startup_error.into(),
-                    Err(cleanup_error) => CreateWorkerInstanceError {
+                    Err(cleanup_error) => CreateWorkerInstanceError::Failed {
                         error: WorkerExecutorError::runtime(format!(
                             "{startup_error}; additionally failed to clean up the created agent filesystem: {}",
                             cleanup_error.source
@@ -12661,13 +12755,13 @@ async fn cleanup_typed_agent_filesystem<Adapter: SandboxFilesystemAdapter>(
     close_error: Option<WorkerExecutorError>,
 ) -> CreateWorkerInstanceError {
     match delete_agent_filesystem(filesystem).await {
-        Ok(()) => CreateWorkerInstanceError {
+        Ok(()) => CreateWorkerInstanceError::Failed {
             error: startup_error,
             filesystem_cleanup_failure: close_error.map(UnloadCleanupFailure::Other),
         },
         Err(cleanup_error) => {
             warn!(error = %cleanup_error.source, "Failed to clean up filesystem after worker startup failure");
-            CreateWorkerInstanceError {
+            CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::runtime(format!(
                     "{startup_error}; additionally failed to clean up the agent filesystem: {}",
                     cleanup_error.source
@@ -12874,7 +12968,7 @@ struct HydratedInvocationResultCache {
 }
 
 struct HydratedInvocationResultCacheEntry {
-    result: InvocationResult,
+    result: Arc<InvocationResult>,
     /// Oplog branch generation in which this result was produced.
     revert_generation: u64,
     oplog_idx: OplogIndex,
@@ -12893,7 +12987,7 @@ impl HydratedInvocationResultCache {
         &self,
         key: &IdempotencyKey,
         status: &AgentStatusRecord,
-    ) -> Option<(&InvocationResult, OplogIndex)> {
+    ) -> Option<(&Arc<InvocationResult>, OplogIndex)> {
         self.values.get(key).and_then(|entry| {
             (entry.revert_generation == status.invocation_results.revert_generation()
                 && !status.deleted_regions.is_in_deleted_region(entry.oplog_idx))
@@ -12909,7 +13003,7 @@ impl HydratedInvocationResultCache {
     fn insert(
         &mut self,
         key: IdempotencyKey,
-        value: InvocationResult,
+        value: impl Into<Arc<InvocationResult>>,
         revert_generation: u64,
         oplog_idx: OplogIndex,
     ) {
@@ -12919,7 +13013,7 @@ impl HydratedInvocationResultCache {
         self.values.insert(
             key,
             HydratedInvocationResultCacheEntry {
-                result: value,
+                result: value.into(),
                 revert_generation,
                 oplog_idx,
             },
@@ -13108,6 +13202,7 @@ mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
+    use golem_common::schema::SchemaValue;
     use test_r::test;
 
     #[test]
@@ -14063,6 +14158,63 @@ mod tests {
     }
 
     #[test]
+    fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
+        let key = IdempotencyKey::new("shared-result".to_string());
+        let index = OplogIndex::from_u64(4);
+        let status = AgentStatusRecord::default();
+        let generation = status.invocation_results.revert_generation();
+        let result = Arc::new(InvocationResult::Cached {
+            result: Ok(AgentInvocationOutput {
+                result: AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::List {
+                        elements: (0..10_000)
+                            .map(|i| SchemaValue::U8((i % 251) as u8))
+                            .collect(),
+                    },
+                },
+                consumed_fuel: Some(123),
+                invocation_status: None,
+                component_revision: Some(ComponentRevision::INITIAL),
+                agent_id: None,
+                idempotency_key: Some(key.clone()),
+                oplog_index: Some(index),
+                agent_fingerprint: None,
+            }),
+        });
+        let mut cache = HydratedInvocationResultCache::new(1);
+        cache.insert(key.clone(), result.clone(), generation, index);
+        let (first, found_index) = cache.get_valid(&key, &status).unwrap();
+        assert_eq!(found_index, index);
+        assert!(Arc::ptr_eq(first, &result));
+        let follower = first.clone();
+        cache.insert(key.clone(), follower.clone(), generation, index);
+        assert!(Arc::ptr_eq(
+            cache.get_valid(&key, &status).unwrap().0,
+            &follower
+        ));
+
+        cache.insert(key.clone(), result.clone(), generation + 1, index);
+        assert!(cache.get_valid(&key, &status).is_none());
+        cache.remove(&key);
+        assert!(cache.get_valid(&key, &status).is_none());
+        match lookup_result_from_cached_result(&status, &key, Arc::unwrap_or_clone(follower)) {
+            LookupResult::Complete(Ok(output)) => {
+                assert_eq!(output.consumed_fuel, Some(123));
+                assert_eq!(output.oplog_index, Some(index));
+                let AgentInvocationResult::AgentMethod { output } = output.result else {
+                    panic!("expected method result");
+                };
+                let SchemaValue::List { elements } = output else {
+                    panic!("expected list output");
+                };
+                assert_eq!(elements.len(), 10_000);
+                assert_eq!(elements[9_999], SchemaValue::U8(210));
+            }
+            other => panic!("expected completed result, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn ephemeral_invocation_requires_a_final_phantom_id_even_when_it_may_exist() {
         let result = validate_resolved_invocation_identity(
             AgentMode::Ephemeral,
@@ -14386,13 +14538,28 @@ mod tests {
                 module_bytes: 4096,
                 initial_linear_memory_bytes: 8192,
                 reserved_linear_memory_bytes: 16384,
+                supported: true,
             })),
             TargetChargeAction::ChargeTarget(ResolvedComponentCharge {
                 module_bytes: 4096,
                 initial_linear_memory_bytes: 8192,
                 reserved_linear_memory_bytes: 16384,
+                supported: true,
             }),
             "a resolved target is charged with its own module size"
+        );
+    }
+
+    #[test]
+    fn classify_target_charge_falls_back_for_unsupported_target_even_when_oversized() {
+        assert_eq!(
+            classify_target_charge(&Ok(ResolvedComponentCharge {
+                module_bytes: 4096,
+                initial_linear_memory_bytes: 4 * 1024 * 1024 * 1024,
+                reserved_linear_memory_bytes: 4 * 1024 * 1024 * 1024,
+                supported: false,
+            })),
+            TargetChargeAction::FallBackToCurrent,
         );
     }
 

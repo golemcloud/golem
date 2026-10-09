@@ -571,51 +571,70 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function restJson(value: unknown): string {
-  const encode = (
-    current: unknown,
-    arrayElement: boolean,
-    nativeValue: boolean,
-  ): string | undefined => {
-    if (current === null) return 'null';
+  const chunks: string[] = [];
+  const encode = (current: unknown, arrayElement: boolean, nativeValue: boolean): void => {
+    if (current === null) {
+      chunks.push('null');
+      return;
+    }
     switch (typeof current) {
       case 'boolean':
       case 'string':
-        return JSON.stringify(current);
+        chunks.push(JSON.stringify(current));
+        return;
       case 'bigint':
-        return current.toString();
+        chunks.push(current.toString());
+        return;
       case 'number':
-        return Number.isFinite(current) ? JSON.stringify(current) : 'null';
+        chunks.push(Number.isFinite(current) ? JSON.stringify(current) : 'null');
+        return;
       case 'object':
         if (Array.isArray(current)) {
-          return `[${current.map((item) => encode(item, true, nativeValue) ?? 'null').join(',')}]`;
+          chunks.push('[');
+          for (let i = 0; i < current.length; i++) {
+            if (i > 0) chunks.push(',');
+            if (i in current) encode(current[i], true, nativeValue);
+          }
+          chunks.push(']');
+          return;
         }
         const object = current as Record<string, unknown>;
-        return `{${Object.keys(current)
-          .flatMap((key) => {
-            const item = object[key];
-            const encoded =
-              nativeValue &&
-              key === 'value' &&
-              (object.kind === 'f32' || object.kind === 'f64') &&
-              typeof item === 'number' &&
-              Object.is(item, -0)
-                ? '-0'
-                : encode(
-                    item,
-                    false,
-                    nativeValue ||
-                      (current === value && (key === 'parameters' || key === 'methodParameters')),
-                  );
-            return encoded === undefined ? [] : [`${JSON.stringify(key)}:${encoded}`];
-          })
-          .join(',')}}`;
+        chunks.push('{');
+        let first = true;
+        for (const key of Object.keys(object)) {
+          const item = object[key];
+          if (item === undefined || typeof item === 'function' || typeof item === 'symbol')
+            continue;
+          if (!first) chunks.push(',');
+          first = false;
+          chunks.push(JSON.stringify(key), ':');
+          if (
+            nativeValue &&
+            key === 'value' &&
+            (object.kind === 'f32' || object.kind === 'f64') &&
+            typeof item === 'number' &&
+            Object.is(item, -0)
+          ) {
+            chunks.push('-0');
+          } else {
+            encode(
+              item,
+              false,
+              nativeValue ||
+                (current === value && (key === 'parameters' || key === 'methodParameters')),
+            );
+          }
+        }
+        chunks.push('}');
+        return;
       case 'undefined':
       case 'function':
       case 'symbol':
-        return arrayElement ? 'null' : undefined;
+        if (arrayElement) chunks.push('null');
     }
   };
-  return encode(value, false, false) ?? 'null';
+  encode(value, false, false);
+  return chunks.length === 0 ? 'null' : chunks.join('');
 }
 
 function parseInvocationResultJson(json: string): AgentInvocationResult {
@@ -1394,15 +1413,20 @@ export type PublicStreamReferencePolicy = 'none' | 'provisional' | 'stable';
 
 /** Validates a public protocol value against an exact projected schema graph. */
 export class PublicValueCodec {
-  constructor(private readonly graph: SchemaGraph) {}
+  private readonly resolved = new Map<SchemaType, SchemaTypeBody>();
+  private readonly fusedApplication: boolean;
+  constructor(private readonly graph: SchemaGraph) {
+    this.fusedApplication = canFuseApplication(graph.root);
+  }
 
   validate(value: unknown, streamPolicy: PublicStreamReferencePolicy): PublicValue {
-    new PublicValueValidator(this.graph, streamPolicy).validate(value);
+    new PublicValueValidator(this.graph, streamPolicy, this.resolved).validate(value);
     return value as PublicValue;
   }
 
   application(value: unknown): PublicValue {
-    const validator = new PublicValueValidator(this.graph, 'none');
+    const validator = new PublicValueValidator(this.graph, 'none', this.resolved);
+    if (this.fusedApplication) return validator.convert(value) as PublicValue;
     validator.validate(value);
     return validator.application(value) as PublicValue;
   }
@@ -1412,6 +1436,37 @@ export function publicValueCodec(graph: SchemaGraph): PublicValueCodec {
   return new PublicValueCodec(graph);
 }
 
+// These shapes cannot fail application conversion after value validation. Keep
+// two-pass ordering for floats and semantic types with representability errors.
+function canFuseApplication(type: SchemaType, depth = 0): boolean {
+  if (depth >= 64) return false;
+  const body = type.body;
+  switch (body.tag) {
+    case 'bool':
+    case 's8':
+    case 's16':
+    case 's32':
+    case 's64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 'u64':
+    case 'char':
+    case 'string':
+      return true;
+    case 'record':
+      return body.fields.every((field) => canFuseApplication(field.body, depth + 1));
+    case 'tuple':
+      return body.elements.every((element) => canFuseApplication(element, depth + 1));
+    case 'list':
+    case 'fixed-list':
+    case 'option':
+      return canFuseApplication(body.element, depth + 1);
+    default:
+      return false;
+  }
+}
+
 class PublicValueValidator {
   private charge = 0;
   private readonly streams = new Set<string>();
@@ -1419,6 +1474,7 @@ class PublicValueValidator {
   constructor(
     private readonly graph: SchemaGraph,
     private readonly streamPolicy: PublicStreamReferencePolicy,
+    private readonly resolved: Map<SchemaType, SchemaTypeBody> = new Map(),
   ) {}
 
   validate(value: unknown): void {
@@ -1427,6 +1483,10 @@ class PublicValueValidator {
 
   application(value: unknown): unknown {
     return this.applicationValue(this.graph.root, value);
+  }
+
+  convert(value: unknown): unknown {
+    return this.value(this.graph.root, value, 0, true);
   }
 
   private applicationValue(type: SchemaType, value: unknown): unknown {
@@ -1540,7 +1600,7 @@ class PublicValueValidator {
     }
   }
 
-  private value(type: SchemaType, value: unknown, depth: number): void {
+  private value(type: SchemaType, value: unknown, depth: number, application = false): unknown {
     if (depth >= 64) this.fail('resource-exhausted', 'schema value nesting exceeds 64 levels');
     this.add(1);
     const body = this.resolve(type);
@@ -1556,31 +1616,31 @@ class PublicValueValidator {
       case 'bool':
         if (typeof payload !== 'boolean') this.mismatch('boolean');
         this.add(1);
-        return;
+        return payload;
       case 's8':
         this.integer(body, payload, -128, 127, 1, 'signed');
-        return;
+        return payload;
       case 's16':
         this.integer(body, payload, -32768, 32767, 2, 'signed');
-        return;
+        return payload;
       case 's32':
         this.integer(body, payload, -2147483648, 2147483647, 4, 'signed');
-        return;
+        return payload;
       case 'u8':
         this.integer(body, payload, 0, 255, 1, 'unsigned');
-        return;
+        return payload;
       case 'u16':
         this.integer(body, payload, 0, 65535, 2, 'unsigned');
-        return;
+        return payload;
       case 'u32':
         this.integer(body, payload, 0, 4294967295, 4, 'unsigned');
-        return;
+        return payload;
       case 's64':
         this.decimalInteger(body, payload, true);
-        return;
+        return payload;
       case 'u64':
         this.decimalInteger(body, payload, false);
-        return;
+        return payload;
       case 'f32':
         this.float(body, payload, true);
         return;
@@ -1593,12 +1653,12 @@ class PublicValueValidator {
         const point = payload.codePointAt(0) as number;
         if (point >= 0xd800 && point <= 0xdfff) this.mismatch('Unicode scalar');
         this.string(payload);
-        return;
+        return payload;
       }
       case 'string':
         if (typeof payload !== 'string') this.mismatch('string');
         this.string(payload);
-        return;
+        return payload;
       case 'record': {
         const input = publicObject(payload, 'record payload');
         if (Object.keys(input).length !== 1 || input.fields === undefined)
@@ -1607,6 +1667,13 @@ class PublicValueValidator {
         if (fields.length !== body.fields.length)
           this.fail('validation-error', 'record arity does not match schema');
         this.collection(body.fields.length);
+        if (application)
+          return Object.fromEntries(
+            body.fields.map((field, index) => [
+              field.name,
+              this.value(field.body, fields[index], depth + 1, true),
+            ]),
+          );
         body.fields.forEach((field, index) => this.value(field.body, fields[index], depth + 1));
         return;
       }
@@ -1655,15 +1722,17 @@ class PublicValueValidator {
         if (values.length !== body.elements.length)
           this.fail('validation-error', 'tuple arity does not match schema');
         this.collection(values.length);
+        if (application)
+          return body.elements.map((element, index) =>
+            this.value(element, values[index], depth + 1, true),
+          );
         body.elements.forEach((element, index) => this.value(element, values[index], depth + 1));
         return;
       }
       case 'list':
-        this.repeated(body.element, payload, depth, undefined);
-        return;
+        return this.repeated(body.element, payload, depth, undefined, application);
       case 'fixed-list':
-        this.repeated(body.element, payload, depth, body.length);
-        return;
+        return this.repeated(body.element, payload, depth, body.length, application);
       case 'map': {
         const input = publicObject(payload, 'map payload');
         publicExactMembers(input, new Set(['entries']), 'map payload');
@@ -1682,8 +1751,9 @@ class PublicValueValidator {
         const input = publicObject(payload, 'option payload');
         if (Object.keys(input).length !== 1 || input.inner === undefined)
           this.fail('malformed-message', 'invalid members in option payload');
-        if (input.inner !== null) this.value(body.element, input.inner, depth + 1);
-        return;
+        return input.inner === null
+          ? null
+          : this.value(body.element, input.inner, depth + 1, application);
       }
       case 'result': {
         const input = publicObject(payload, 'result payload');
@@ -1822,6 +1892,9 @@ class PublicValueValidator {
   }
 
   private resolve(type: SchemaType): SchemaTypeBody {
+    if (type.body.tag !== 'ref') return type.body;
+    const resolved = this.resolved.get(type);
+    if (resolved) return resolved;
     let current = type;
     const seen = new Set<string>();
     while (current.body.tag === 'ref') {
@@ -1832,10 +1905,17 @@ class PublicValueValidator {
       if (!definition) this.fail('validation-error', `unresolved schema reference '${id}'`);
       current = definition.body;
     }
+    this.resolved.set(type, current.body);
     return current.body;
   }
 
-  private repeated(type: SchemaType, value: unknown, depth: number, length?: number): void {
+  private repeated(
+    type: SchemaType,
+    value: unknown,
+    depth: number,
+    length?: number,
+    application = false,
+  ): unknown {
     const input = publicObject(value, 'list payload');
     publicExactMembers(input, new Set(['elements']), 'list payload');
     const values = publicArray(
@@ -1845,6 +1925,7 @@ class PublicValueValidator {
     if (length !== undefined && values.length !== length)
       this.fail('validation-error', 'fixed-list length does not match schema');
     this.collection(values.length);
+    if (application) return values.map((item) => this.value(type, item, depth + 1, true));
     values.forEach((item) => this.value(type, item, depth + 1));
   }
 
@@ -2921,8 +3002,13 @@ function parseJson(
   enforceStreamingBudgets = false,
 ): unknown {
   let offset = 0;
+  const scalar = /(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/uy;
   const whitespace = () => {
-    while (/[ \t\r\n]/u.test(text[offset] ?? '')) offset += 1;
+    while (offset < text.length) {
+      const code = text.charCodeAt(offset);
+      if (code !== 32 && code !== 9 && code !== 13 && code !== 10) break;
+      offset += 1;
+    }
   };
   const string = (): string => {
     const start = offset;
@@ -2977,9 +3063,8 @@ function parseJson(
         if (text[offset - 1] !== ',') throw new Error();
       }
     }
-    const match = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/u.exec(
-      text.slice(offset),
-    );
+    scalar.lastIndex = offset;
+    const match = scalar.exec(text);
     if (!match) throw new Error();
     offset += match[0].length;
     return integersAsBigInt && /^-?\d/u.test(match[0])

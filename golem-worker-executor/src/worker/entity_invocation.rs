@@ -99,6 +99,7 @@ pub(crate) struct EntityInvocationResources {
     registration: Option<EntitySlotRegistration>,
     permit: Option<OwnerInvocationPermit>,
     lane_wait: Option<OwnerLaneWait>,
+    suspension: Option<Arc<super::suspension::OwnerSuspension>>,
     executor_tasks: crate::services::active_agents::InvocationLoops,
 }
 
@@ -333,6 +334,7 @@ impl EntityInvocationResources {
         hosted: Option<Box<dyn RetainedEntityStore>>,
         mut registration: EntitySlotRegistration,
         permit: Option<OwnerInvocationPermit>,
+        suspension: Arc<super::suspension::OwnerSuspension>,
         executor_tasks: crate::services::active_agents::InvocationLoops,
     ) -> Self {
         registration.body_finished();
@@ -341,6 +343,7 @@ impl EntityInvocationResources {
             registration: Some(registration),
             permit,
             lane_wait: None,
+            suspension: Some(suspension),
             executor_tasks,
         }
     }
@@ -349,9 +352,14 @@ impl EntityInvocationResources {
         let Some(mut hosted) = self.hosted.take() else {
             return Ok(());
         };
+        let activity = self
+            .suspension
+            .as_ref()
+            .map(|suspension| suspension.register_external());
         let (hosted, result) = self
             .executor_tasks
             .spawn_entity(async move {
+                let _activity = activity;
                 let result = hosted.prepare_parent_end().await;
                 (hosted, result)
             })
@@ -382,9 +390,15 @@ impl EntityInvocationResources {
             permit.complete();
         }
         let settlement = match self.hosted.take() {
-            Some(hosted) => self
-                .executor_tasks
-                .spawn_entity(hosted.settle())
+            Some(hosted) => {
+                let activity = self
+                    .suspension
+                    .as_ref()
+                    .map(|suspension| suspension.register_external());
+                self.executor_tasks.spawn_entity(async move {
+                    let _activity = activity;
+                    hosted.settle().await
+                })
                 .await
                 .map_err(|error| {
                     WorkerExecutorError::runtime(format!(
@@ -395,7 +409,8 @@ impl EntityInvocationResources {
                     WorkerExecutorError::runtime(
                         "Retained entity Store settlement was abandoned during executor shutdown",
                     )
-                })?,
+                })?
+            }
             None => Ok(()),
         };
         drop(self.registration.take());
@@ -502,6 +517,7 @@ pub(crate) fn start_entity_invocation<Ctx, R, F, Finalize, Finalized>(
     host: InstanceHost<Ctx>,
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     executor_tasks: crate::services::active_agents::InvocationLoops,
     parent: OwnerInvocationId,
     scope: EntityInvocationScope,
@@ -536,6 +552,7 @@ where
     start_entity_invocation_inner(
         slot,
         lane,
+        suspension,
         executor_tasks,
         scope,
         mode,
@@ -549,6 +566,7 @@ pub(crate) fn start_registered_entity_invocation<Ctx, R, F, Finalize, Finalized>
     host: InstanceHost<Ctx>,
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -575,6 +593,7 @@ where
     let mut handle = start_entity_invocation_inner(
         slot,
         lane,
+        suspension,
         executor_tasks,
         scope,
         mode,
@@ -593,6 +612,7 @@ pub(crate) fn start_pre_acquired_entity_invocation<Ctx, R, F, Finalize, Finalize
     host: InstanceHost<Ctx>,
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -607,12 +627,23 @@ where
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
     let run = ComponentEntityRunner { host, body: invoke };
-    start_entity_invocation_inner(slot, lane, executor_tasks, scope, mode, None, run, finalize)
+    start_entity_invocation_inner(
+        slot,
+        lane,
+        suspension,
+        executor_tasks,
+        scope,
+        mode,
+        None,
+        run,
+        finalize,
+    )
 }
 
 pub(crate) fn start_native_entity_invocation<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     executor_tasks: crate::services::active_agents::InvocationLoops,
     parent: Option<OwnerInvocationId>,
     scope: EntityInvocationScope,
@@ -655,6 +686,7 @@ where
     start_entity_invocation_inner(
         slot,
         lane,
+        suspension,
         executor_tasks,
         scope,
         mode,
@@ -667,6 +699,7 @@ where
 pub(crate) fn start_registered_native_entity_invocation<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -698,6 +731,7 @@ where
     let mut handle = start_entity_invocation_inner(
         slot,
         lane,
+        suspension,
         executor_tasks,
         scope,
         mode,
@@ -712,6 +746,7 @@ where
 fn start_entity_invocation_inner<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -727,6 +762,7 @@ where
 {
     let cancellation = tokio_util::sync::CancellationToken::new();
     let registration = slot.register(&scope, cancellation.clone())?;
+    let participant = suspension.register_entity(scope.invocation_id().clone());
     let invocation_id = scope.invocation_id().clone();
     let invocation = OwnerInvocationId::Entity(invocation_id.clone());
     let lane_await_required = ticket.is_some();
@@ -748,6 +784,7 @@ where
     let task_executor = executor_tasks.clone();
     let task = executor_tasks.spawn_entity(
         async move {
+            let _participant = participant;
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
             debug!("Entity invocation started");
             let mut permit = None;
@@ -771,6 +808,7 @@ where
                                     hosted,
                                     registration,
                                     permit,
+                                    suspension.clone(),
                                     task_executor,
                                 ),
                             };
@@ -791,6 +829,7 @@ where
                     hosted,
                     registration,
                     permit,
+                    suspension,
                     task_executor,
                 ),
             }
@@ -841,6 +880,7 @@ mod tests {
                     registration: None,
                     permit: None,
                     lane_wait: None,
+                    suspension: None,
                     executor_tasks: task_executor,
                 },
             }
@@ -919,6 +959,7 @@ mod tests {
             registration: None,
             permit: None,
             lane_wait: None,
+            suspension: None,
             executor_tasks,
         };
 
@@ -931,9 +972,16 @@ mod tests {
 
     #[test]
     async fn retained_store_callbacks_are_not_polled_after_executor_shutdown() {
+        use super::super::suspension::tests::{blocked_timer, eligible_now};
+        use std::time::{Duration, Instant};
+
         let events = Arc::new(Mutex::new(Vec::new()));
         let shutdown = tokio_util::sync::CancellationToken::new();
         let executor_tasks = crate::services::active_agents::InvocationLoops::new(shutdown.clone());
+        let suspension = super::super::suspension::OwnerSuspension::new();
+        let (_store, _, _timer) =
+            blocked_timer(&suspension, Instant::now() + Duration::from_secs(30));
+        assert!(eligible_now(&suspension));
         shutdown.cancel();
         executor_tasks.wait_for_exit().await.unwrap();
 
@@ -944,9 +992,11 @@ mod tests {
             registration: None,
             permit: None,
             lane_wait: None,
+            suspension: Some(suspension.clone()),
             executor_tasks: executor_tasks.clone(),
         };
         assert!(preparation.prepare_parent_end().await.is_err());
+        assert!(eligible_now(&suspension));
 
         let settlement = EntityInvocationResources {
             hosted: Some(Box::new(RecordingStore {
@@ -955,9 +1005,11 @@ mod tests {
             registration: None,
             permit: None,
             lane_wait: None,
+            suspension: Some(suspension.clone()),
             executor_tasks,
         };
         assert!(settlement.settle_after_parent_end().await.is_err());
+        assert!(eligible_now(&suspension));
         assert!(events.lock().unwrap().is_empty());
     }
 }

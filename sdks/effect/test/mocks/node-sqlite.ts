@@ -104,9 +104,19 @@ export class DatabaseSync {
   public _bytes: Uint8Array = new Uint8Array(0)
   public _autocommit = true
   public _attachments: Array<{ name: string }> = [{ name: "main" }, { name: "temp" }]
+  public _pragmas: Record<string, number> = { page_count: 1, page_size: 4096, cache_size: -2000 }
+  public _returnArrays = false
 
-  constructor(_path: unknown, _options?: unknown) {
+  constructor(
+    private readonly _path: unknown,
+    _options?: unknown,
+  ) {
     this.__id = ++DatabaseSync._counter
+  }
+
+  location(): string | null {
+    if (this._closed) throw new Error("database is closed")
+    return this._path === ":memory:" || this._path === "" ? null : String(this._path)
   }
 
   open(): void {
@@ -119,12 +129,24 @@ export class DatabaseSync {
     this._execLog.push(sql)
   }
   prepare(sql: string): StatementSync {
+    if (this._closed) throw new Error("database is closed")
     // Special-case the autocommit/list pragmas for snapshot tests.
     const stmt = new StatementSync(this, sql)
     const lower = sql.trim().toLowerCase()
     if (lower === "pragma database_list") {
       stmt.all = (..._args: ReadonlyArray<unknown>) =>
-        this._attachments.map((a) => ({ name: a.name })) as Array<Record<string, unknown>>
+        this._attachments.map((a, index) =>
+          this._returnArrays ? [index, a.name, ""] : { name: a.name },
+        ) as Array<Record<string, unknown>>
+    }
+    if (lower.startsWith("pragma ")) {
+      const name = lower.slice(7)
+      if (Object.hasOwn(this._pragmas, name))
+        stmt.get = () =>
+          (this._returnArrays ? [this._pragmas[name]] : { [name]: this._pragmas[name] }) as Record<
+            string,
+            unknown
+          >
     }
     return stmt
   }
@@ -149,7 +171,7 @@ export class DatabaseSync {
   backup(_path: unknown, _options?: unknown): Promise<void> {
     return Promise.resolve()
   }
-  isOpen(): boolean {
+  get isOpen(): boolean {
     return !this._closed
   }
   isTransaction(): boolean {
