@@ -40,6 +40,8 @@ env:
 
 jobs:
   build-and-store:
+    outputs:
+      native-binaries-disk-key: ${{ steps.native-binaries-key.outputs.key }}
     env:
       CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
@@ -62,21 +64,37 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
         timeout-minutes: 30
+      - name: Identify native binary disk
+        id: native-binaries-key
+        run: echo "key=${GITHUB_REPOSITORY}-native-binaries-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      # Preserve snapshots for partial consumer reruns; inactive disks expire after seven days.
+      - name: Mount native binary producer disk
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ steps.native-binaries-key.outputs.key }}
+          path: tmp/native-binaries
+          commit: 'true'
+      - name: Validate native binary producer mount
+        run: |
+          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
+          rm -f tmp/native-binaries/PUBLICATION
       - name: Packaging all binaries with cargo-nextest
         run: |
-          mkdir -pv tmp
-          cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
+          cargo nextest -v archive --archive-file tmp/native-binaries/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
         timeout-minutes: 5
 
-      - name: Upload packaged binaries
-        uses: actions/upload-artifact@v6
-        with:
-          name: golem-binaries
-          path: tmp/golem-binaries.tar.zst
-          compression-level: 0
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
+      - name: Publish packaged binaries
+        env:
+          DISK_KEY: ${{ steps.native-binaries-key.outputs.key }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
+          cd tmp/native-binaries
+          test -s golem-binaries.tar.zst
+          sha256sum golem-binaries.tar.zst > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
   check-clippy-and-format:
     env:
@@ -117,6 +135,7 @@ jobs:
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       # Bun is needed by check-openapi (which depends on check-docs-openapi)
@@ -168,6 +187,7 @@ jobs:
           install-protoc: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - name: Check configs are up to date
@@ -271,6 +291,7 @@ jobs:
           auto-start: false
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
         with:
@@ -304,6 +325,7 @@ jobs:
           install-cargo-binstall: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
         with:
@@ -441,6 +463,7 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-test-components
@@ -593,6 +616,7 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
@@ -779,6 +803,7 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-builtin-artifacts

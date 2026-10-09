@@ -1,8 +1,11 @@
 name: 'Restore Build Binaries'
-description: 'Install cargo-test-r, download binaries, and apply archive'
+description: 'Validate sticky disk publication and apply the binary archive'
 inputs:
   run-id:
-    description: 'GitHub run ID containing the binary artifact'
+    description: 'GitHub run ID that published the binaries'
+    required: true
+  disk-key:
+    description: 'Exact sticky disk key published by the producer attempt'
     required: true
   copy-to-target:
     description: 'Whether to copy binaries to target/debug'
@@ -10,19 +13,35 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Mount packaged binaries
+      uses: useblacksmith/stickydisk@v1
+      with:
+        key: ${{ inputs.disk-key }}
+        path: tmp/native-binaries
+        commit: 'false'
+    - name: Validate binary publication
+      shell: bash
+      env:
+        DISK_KEY: ${{ inputs.disk-key }}
+        PUBLICATION_RUN_ID: ${{ inputs.run-id }}
+        SOURCE_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
+        cd tmp/native-binaries
+        [[ -n "$DISK_KEY" && "$PUBLICATION_RUN_ID" == "$GITHUB_RUN_ID" ]] || { echo 'Invalid native binary producer inputs' >&2; exit 1; }
+        for file in PUBLICATION SHA256SUMS golem-binaries.tar.zst; do
+          [[ -s "$file" && ! -L "$file" ]] || { echo "Missing native binary publication: $file (snapshot may be absent or publication denied)" >&2; exit 1; }
+        done
+        printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$PUBLICATION_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" | cmp -s - PUBLICATION || { echo 'Native binary publication identity mismatch' >&2; exit 1; }
+        [[ $(wc -l < SHA256SUMS) -eq 1 ]] && grep -Eq '^[0-9a-f]{64}  golem-binaries\.tar\.zst$' SHA256SUMS || { echo 'Invalid native binary checksum manifest' >&2; exit 1; }
+        sha256sum --check --strict SHA256SUMS
     - name: Install cargo-test-r
       shell: bash
       run: cargo binstall --force --locked cargo-test-r@2.2.5
-    - name: Download packaged binaries
-      uses: actions/download-artifact@v8
-      with:
-        name: golem-binaries
-        path: tmp
-        run-id: ${{ inputs.run-id }}
-        github-token: ${{ github.token }}
     - name: Apply binary archive
       shell: bash
-      run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries.tar.zst
+      run: cargo-test-r reuse-nextest-archive --archive-file tmp/native-binaries/golem-binaries.tar.zst
     - name: Copy binaries to target/debug
       if: inputs.copy-to-target == 'true'
       shell: bash
