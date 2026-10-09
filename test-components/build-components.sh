@@ -147,36 +147,32 @@ else
 fi
 
 if [[ -z "${GOLEM_CLI:-}" ]]; then
-  if [[ "$clean_only" = true ]]; then
-    cli_candidates=(
-      "${TARGET_DIR}/debug/golem"
-      "${TARGET_DIR}/debug/golem.exe"
-      "${TARGET_DIR}/debug/golem-cli"
-      "${TARGET_DIR}/debug/golem-cli.exe"
-      "${TARGET_DIR}/release/golem"
-      "${TARGET_DIR}/release/golem.exe"
-      "${TARGET_DIR}/release/golem-cli"
-      "${TARGET_DIR}/release/golem-cli.exe"
-    )
-    for candidate in "${cli_candidates[@]}"; do
-      if [[ -x "$candidate" ]]; then
-        GOLEM_CLI="$candidate"
-        break
-      fi
-    done
-
-    if [[ -z "${GOLEM_CLI:-}" ]]; then
-      if command -v golem >/dev/null 2>&1; then
-        GOLEM_CLI="$(command -v golem)"
-      elif command -v golem-cli >/dev/null 2>&1; then
-        GOLEM_CLI="$(command -v golem-cli)"
-      else
-        echo "Cleaning test components requires a pre-built or globally installed golem or golem-cli" >&2
-        exit 1
-      fi
+  cli_candidates=(
+    "${TARGET_DIR}/debug/golem"
+    "${TARGET_DIR}/debug/golem.exe"
+    "${TARGET_DIR}/debug/golem-cli"
+    "${TARGET_DIR}/debug/golem-cli.exe"
+    "${TARGET_DIR}/release/golem"
+    "${TARGET_DIR}/release/golem.exe"
+    "${TARGET_DIR}/release/golem-cli"
+    "${TARGET_DIR}/release/golem-cli.exe"
+  )
+  for candidate in "${cli_candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      GOLEM_CLI="$candidate"
+      break
     fi
-  else
-    GOLEM_CLI="${TARGET_DIR}/debug/golem"
+  done
+
+  if [[ -z "${GOLEM_CLI:-}" ]]; then
+    if command -v golem >/dev/null 2>&1; then
+      GOLEM_CLI="$(command -v golem)"
+    elif command -v golem-cli >/dev/null 2>&1; then
+      GOLEM_CLI="$(command -v golem-cli)"
+    else
+      echo "Test components require a pre-built or globally installed golem or golem-cli" >&2
+      exit 1
+    fi
   fi
 fi
 

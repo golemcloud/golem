@@ -16,7 +16,7 @@ Test WASMs are normally generated, gitignored artifacts. Build only what the sel
    Do not classify by language from directory names alone.
 4. Check membership in the arrays at the top of `test-components/build-components.sh`. Use its group/chunk commands for listed applications or the component-specific instructions for an unlisted fixture.
 
-For listed applications, ensure `golem` exists (the script honors `GOLEM_CLI` and otherwise resolves the Cargo target directory). Build the package with `cargo build -p golem --bin golem` when needed. Do not hardcode `target/`; set `GOLEM_CLI` explicitly when using a redirected target directory.
+For listed applications, ensure either `golem` or `golem-cli` exists. The script honors `GOLEM_CLI`; otherwise it checks the resolved Cargo target directory's debug and release binaries, then PATH, preferring `golem` within each location. Build with `cargo build -p golem --bin golem` or `cargo build -p golem-cli --bin golem-cli` when needed. Do not hardcode `target/`.
 
 All mutating `golem build` commands require `--yes`. Normal release Rust builds are orchestrated by:
 
