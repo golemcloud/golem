@@ -13,6 +13,6 @@ export const EffectBenchmarkAgent = defineAgent({
 }).implement({
   init: () => Effect.void,
   methods: () => ({
-    largeInput: ({ input }) => Effect.sync(() => input.length),
+    largeInput: ({ input }: { input: ReadonlyArray<number> }) => Effect.sync(() => input.length),
   }),
 });
