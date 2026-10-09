@@ -1394,7 +1394,9 @@ fn external_streaming_generation_compiles_recursive_streams() {
             .next()
             .unwrap();
         assert_eq!(
-            method_source.matches(".application(").count(),
+            method_source
+                .matches(".application(configLimitsMaximum)")
+                .count(),
             1,
             "{method_name} must project each supplied config value exactly once"
         );

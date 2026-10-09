@@ -1005,12 +1005,12 @@ impl TypeScriptBridgeGenerator {
                 .map(|(i, (_, typ))| self.encode_guest_wire(&format!("__args[{i}]"), typ))
                 .collect::<anyhow::Result<Vec<_>>>()?;
             encode = format!(
-                "(__args: [{args}]): base.SchemaValueTree => {{ const __writer = new base.SchemaValueWriter(); const root = __writer.add({{ tag: 'record-value', val: [{}] }}); return {{ valueNodes: __writer.valueNodes, root }}; }}",
+                "(__args: [{args}]) => {{ const __writer = new base.SchemaValueWriter(); const root = __writer.add({{ tag: 'record-value', val: [{}] }}); return {{ valueNodes: __writer.valueNodes, root }}; }}",
                 fields.join(", ")
             );
             let direct_decode = self.decode_guest_wire("__tree.root", &output)?;
             decode = format!(
-                "(__tree: base.SchemaValueTree | undefined): {result} => {{ const __fallback = {decode}; if (!__tree) return __fallback(undefined); if (__tree.valueNodes.some(n => n.tag === 'secret-value' || n.tag === 'quota-token-handle' || n.tag === 'permission-card-handle' || n.tag === 'stream-value')) return __fallback(base.schemaValueFromWit(__tree)); return ({direct_decode}) as {result}; }}"
+                "(__tree: Parameters<typeof base.schemaValueFromWit>[0] | undefined): {result} => {{ const __fallback = {decode}; if (!__tree) return __fallback(undefined); if (__tree.valueNodes.some((n: Parameters<typeof base.schemaValueFromWit>[0]['valueNodes'][number]) => n.tag === 'secret-value' || n.tag === 'quota-token-handle' || n.tag === 'permission-card-handle' || n.tag === 'stream-value')) return __fallback(base.schemaValueFromWit(__tree)); return ({direct_decode}) as {result}; }}"
             );
             remote = "base.wireRemoteAgent(this.resolved)!";
         }
