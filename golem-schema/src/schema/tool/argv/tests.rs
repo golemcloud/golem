@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ParsedToolArguments, parse};
+use super::{ParsedToolArguments, parse, parse_with_variables};
 use crate::schema::tool::*;
 use crate::schema::{SchemaGraph, SchemaType, SchemaValue};
+use std::collections::HashMap;
 use test_r::test;
 
 fn body() -> CommandBody {
@@ -108,6 +109,43 @@ fn optional_string(value: Option<&str>) -> SchemaValue {
     SchemaValue::Option {
         inner: value.map(|value| Box::new(SchemaValue::String(value.into()))),
     }
+}
+
+fn parsed_with(
+    tool: &Tool,
+    argv: &[&str],
+    variables: &[(&str, &str)],
+) -> Result<ParsedToolArguments, String> {
+    let variables: HashMap<String, String> = variables
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    parse_with_variables(
+        tool,
+        &argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        &variables,
+    )
+}
+
+fn values_with(tool: &Tool, argv: &[&str], variables: &[(&str, &str)]) -> Vec<SchemaValue> {
+    let ParsedToolArguments::Invoke { input, .. } = parsed_with(tool, argv, variables).unwrap()
+    else {
+        panic!("unexpected help")
+    };
+    let (_, SchemaValue::Record { fields }) = input.into_parts() else {
+        panic!("not a record")
+    };
+    fields
+}
+
+fn env_option(name: &str, shape: OptionShape, variable: &str) -> OptionSpec {
+    let mut option = option(name, shape);
+    option.env_var = Some(variable.into());
+    option
+}
+
+fn string(value: &str) -> SchemaValue {
+    SchemaValue::String(value.into())
 }
 
 #[test]
@@ -731,6 +769,280 @@ fn constraints_see_an_omitted_optional_argument_with_a_plain_type_as_absent() {
         assert_eq!(parsed(&t, &args).err(), None, "{args:?}");
     }
     let both = parsed(&t, &["--author", "Ada", "HEAD"]).err();
+    assert!(
+        both.as_deref().is_some_and(|e| e.contains("constraint")),
+        "{both:?}"
+    );
+}
+
+#[test]
+fn an_option_left_out_takes_the_value_of_its_declared_variable() {
+    let mut b = body();
+    b.options.push(env_option(
+        "cwd",
+        OptionShape::Scalar(SchemaType::string()),
+        "PWD",
+    ));
+    b.options.push(env_option(
+        "color",
+        OptionShape::OptionalScalar(SchemaType::string()),
+        "COLOR",
+    ));
+    let t = tool(b);
+    for (variables, cwd, color) in [
+        (vec![], None, None),
+        (vec![("OTHER", "/elsewhere")], None, None),
+        (vec![("PWD", "/work/repo")], Some("/work/repo"), None),
+        (
+            vec![("PWD", "/work/repo"), ("COLOR", "always")],
+            Some("/work/repo"),
+            Some("always"),
+        ),
+    ] {
+        assert_eq!(
+            values_with(&t, &[], &variables),
+            vec![optional_string(cwd), optional_string(color)],
+            "{variables:?}"
+        );
+    }
+}
+
+#[test]
+fn the_command_line_wins_over_a_variable_and_a_variable_over_the_default() {
+    let mut b = body();
+    let mut cwd = env_option("cwd", OptionShape::Scalar(SchemaType::string()), "PWD");
+    cwd.default = Some(string("/"));
+    b.options.push(cwd);
+    let t = tool(b);
+    for (args, variables, expected) in [
+        (vec![], vec![], "/"),
+        (vec![], vec![("PWD", "/work")], "/work"),
+        (vec!["--cwd", "/x"], vec![("PWD", "/work")], "/x"),
+        (vec!["--cwd=/x"], vec![], "/x"),
+    ] {
+        assert_eq!(
+            values_with(&t, &args, &variables),
+            vec![string(expected)],
+            "{args:?} {variables:?}"
+        );
+    }
+}
+
+#[test]
+fn a_variable_satisfies_a_required_option() {
+    let mut b = body();
+    let mut region = env_option(
+        "region",
+        OptionShape::Scalar(SchemaType::string()),
+        "REGION",
+    );
+    region.required = true;
+    b.options.push(region);
+    let t = tool(b);
+    let missing = parsed_with(&t, &[], &[]).err();
+    assert!(
+        missing
+            .as_deref()
+            .is_some_and(|e| e.contains("missing required option --region")),
+        "{missing:?}"
+    );
+    assert_eq!(
+        values_with(&t, &[], &[("REGION", "eu")]),
+        vec![string("eu")]
+    );
+}
+
+#[test]
+fn a_repeatable_option_splits_the_value_of_a_variable_by_its_delimiter() {
+    let mut b = body();
+    b.options.push(env_option(
+        "tags",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Delimited(','),
+            item_type: SchemaType::string(),
+        }),
+        "TAGS",
+    ));
+    let t = tool(b);
+    let list = |items: &[&str]| SchemaValue::List {
+        elements: items.iter().map(|item| string(item)).collect(),
+    };
+    assert_eq!(values_with(&t, &[], &[]), vec![list(&[])]);
+    assert_eq!(
+        values_with(&t, &[], &[("TAGS", "a,b")]),
+        vec![list(&["a", "b"])]
+    );
+    assert_eq!(
+        values_with(&t, &["--tags", "x"], &[("TAGS", "a,b")]),
+        vec![list(&["x"])]
+    );
+}
+
+#[test]
+fn an_inherited_global_option_takes_a_variable_below_a_subcommand() {
+    let mut t = tool(body());
+    t.commands.nodes[0].body = None;
+    t.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+    let mut directories = option(
+        "working-directory",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Repeated,
+            item_type: SchemaType::string(),
+        }),
+    );
+    directories.short = Some('C');
+    let mut cwd = env_option("cwd", OptionShape::Scalar(SchemaType::string()), "PWD");
+    cwd.default = Some(string("/"));
+    t.commands.nodes[0].globals.options = vec![directories, cwd];
+    let mut child = tool(body()).commands.nodes.remove(0);
+    child.name = "status".into();
+    t.commands.nodes.push(child);
+    let list = |items: &[&str]| SchemaValue::List {
+        elements: items.iter().map(|item| string(item)).collect(),
+    };
+    for (args, variables, directories, cwd) in [
+        (vec!["status"], vec![], vec![], "/"),
+        (
+            vec!["status"],
+            vec![("PWD", "/work/repo")],
+            vec![],
+            "/work/repo",
+        ),
+        (
+            vec!["-C", "repo", "status"],
+            vec![("PWD", "/work")],
+            vec!["repo"],
+            "/work",
+        ),
+        (
+            vec!["status", "--cwd", "/x"],
+            vec![("PWD", "/work")],
+            vec![],
+            "/x",
+        ),
+    ] {
+        assert_eq!(
+            values_with(&t, &args, &variables),
+            vec![list(&directories), string(cwd)],
+            "{args:?} {variables:?}"
+        );
+    }
+}
+
+#[test]
+fn flags_take_true_false_and_counts_from_variables() {
+    let mut b = body();
+    let mut verbose = flag(
+        "verbose",
+        'v',
+        FlagShape::BoolFlag(BoolFlagShape {
+            default: false,
+            negatable: false,
+        }),
+    );
+    verbose.env_var = Some("VERBOSE".into());
+    let mut level = flag("level", 'l', FlagShape::CountFlag(Some(3)));
+    level.env_var = Some("LEVEL".into());
+    b.flags = vec![verbose, level];
+    let t = tool(b);
+    for (args, variables, verbose, level) in [
+        (vec![], vec![], false, 0),
+        (vec![], vec![("VERBOSE", "true"), ("LEVEL", "2")], true, 2),
+        (vec![], vec![("VERBOSE", "FALSE")], false, 0),
+        (vec!["--verbose"], vec![("VERBOSE", "false")], true, 0),
+        (vec!["-l"], vec![("LEVEL", "3")], false, 1),
+    ] {
+        assert_eq!(
+            values_with(&t, &args, &variables),
+            vec![SchemaValue::Bool(verbose), SchemaValue::U32(level)],
+            "{args:?} {variables:?}"
+        );
+    }
+    for (variable, value, flag) in [
+        ("VERBOSE", "yes", "--verbose"),
+        ("LEVEL", "4", "--level"),
+        ("LEVEL", "many", "--level"),
+    ] {
+        let error = parsed_with(&t, &[], &[(variable, value)]).err();
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|e| e.contains(flag) && e.contains(variable)),
+            "{variable}={value}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn a_value_from_a_variable_that_does_not_decode_names_the_option_and_the_variable() {
+    let mut b = body();
+    b.options.push(env_option(
+        "count",
+        OptionShape::Scalar(SchemaType::s32()),
+        "COUNT",
+    ));
+    let t = tool(b);
+    assert_eq!(
+        values_with(&t, &[], &[("COUNT", "7")]),
+        vec![SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::S32(7)))
+        }]
+    );
+    let error = parsed_with(&t, &[], &[("COUNT", "seven")]).err();
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("--count") && e.contains("COUNT")),
+        "{error:?}"
+    );
+    // The same bad value on the command line is not blamed on a variable.
+    let error = parsed_with(&t, &["--count", "seven"], &[("COUNT", "7")]).err();
+    assert!(
+        error.as_deref().is_some_and(|e| !e.contains("COUNT")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_variable_that_is_set_to_the_empty_text_is_used() {
+    let mut b = body();
+    let mut label = env_option("label", OptionShape::Scalar(SchemaType::string()), "LABEL");
+    label.default = Some(string("unnamed"));
+    b.options.push(label);
+    let t = tool(b);
+    assert_eq!(values_with(&t, &[], &[]), vec![string("unnamed")]);
+    assert_eq!(values_with(&t, &[], &[("LABEL", "")]), vec![string("")]);
+}
+
+#[test]
+fn a_value_from_a_variable_counts_as_given_for_constraints() {
+    let mut b = body();
+    b.options.push(env_option(
+        "token",
+        OptionShape::Scalar(SchemaType::string()),
+        "TOKEN",
+    ));
+    b.options.push(option(
+        "token-file",
+        OptionShape::Scalar(SchemaType::string()),
+    ));
+    b.constraints.push(Constraint::Forbids(ForbidsC {
+        lhs_quant: Quantifier::All,
+        lhs: vec![Ref::Present("token".into())],
+        rhs: vec![Ref::Present("token-file".into())],
+    }));
+    let t = tool(b);
+    assert_eq!(
+        parsed_with(&t, &["--token-file", "f"], &[]).err(),
+        None,
+        "no variable"
+    );
+    assert_eq!(
+        parsed_with(&t, &[], &[("TOKEN", "t")]).err(),
+        None,
+        "only the variable"
+    );
+    let both = parsed_with(&t, &["--token-file", "f"], &[("TOKEN", "t")]).err();
     assert!(
         both.as_deref().is_some_and(|e| e.contains("constraint")),
         "{both:?}"
