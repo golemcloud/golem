@@ -44,8 +44,11 @@ use golem_common::model::{
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
     NormalizedBlobPath, PutIfAbsent, agent_path_segment,
@@ -1213,8 +1216,8 @@ impl IndexedStorage for ReadCountingIndexedStorage {
 
 /// `BlobStorage` decorator counting read-type operations and optionally failing a raw write.
 #[derive(Debug)]
-pub(crate) struct ReadCountingBlobStorage {
-    inner: InMemoryBlobStorage,
+pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
+    inner: B,
     reads: AtomicUsize,
     puts: AtomicUsize,
     fail_put: Option<usize>,
@@ -1237,25 +1240,25 @@ pub(crate) struct ReadCountingBlobStorage {
 
 impl ReadCountingBlobStorage {
     pub(crate) fn new() -> Self {
-        Self {
-            inner: InMemoryBlobStorage::new(),
-            reads: AtomicUsize::new(0),
-            puts: AtomicUsize::new(0),
-            fail_put: None,
-            fail_delete_after: AtomicUsize::new(0),
-            fail_delete_after_commit: AtomicUsize::new(0),
-            fail_delete_dir_once: AtomicBool::new(false),
-            pause_put: std::sync::Mutex::new(None),
-            pause_read: std::sync::Mutex::new(None),
-        }
+        Self::wrapping(InMemoryBlobStorage::new())
     }
 
     fn failing_on_put(fail_put: usize) -> Self {
         Self {
-            inner: InMemoryBlobStorage::new(),
+            fail_put: Some(fail_put),
+            ..Self::new()
+        }
+    }
+}
+
+impl<B> ReadCountingBlobStorage<B> {
+    /// Counts the reads of `inner`, and fails nothing.
+    fn wrapping(inner: B) -> Self {
+        Self {
+            inner,
             reads: AtomicUsize::new(0),
             puts: AtomicUsize::new(0),
-            fail_put: Some(fail_put),
+            fail_put: None,
             fail_delete_after: AtomicUsize::new(0),
             fail_delete_after_commit: AtomicUsize::new(0),
             fail_delete_dir_once: AtomicBool::new(false),
@@ -1315,7 +1318,7 @@ impl ReadCountingBlobStorage {
 }
 
 #[async_trait]
-impl BlobStorageBackend for ReadCountingBlobStorage {
+impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
     async fn copy_between_at(
         &self,
         target_label: &'static str,
@@ -7648,9 +7651,13 @@ async fn multilayer_partial_delete_stays_retryable(_tracing: &Tracing) {
     );
 }
 
-#[test]
-async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
-    let storage = Arc::new(ReadCountingBlobStorage::new());
+/// The archive finds its chunks through the manifest in the indexed storage and never lists a
+/// directory, so an object in the segment of the agent that the manifest does not name is never
+/// read, on any backend.
+async fn check_that_an_unlisted_blob_object_is_never_read<B: BlobStorageBackend + 'static>(
+    inner: B,
+) {
+    let storage = Arc::new(ReadCountingBlobStorage::wrapping(inner));
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
         component_id: ComponentId::new(),
@@ -7675,7 +7682,7 @@ async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
         .await
         .unwrap();
 
-    let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage, 1);
+    let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     assert!(
         !service
             .try_exists(&owned_agent_id, AgentMode::Durable)
@@ -7693,6 +7700,7 @@ async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
             .unwrap()
             .is_empty()
     );
+    assert_eq!(storage.reads(), 0);
 
     let entries = transfer_test_entries();
     archive
@@ -7708,6 +7716,41 @@ async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
             .unwrap(),
         entries
     );
+    // The chunk that the manifest names is read through the same storage, so the count of zero
+    // above is a count of the reads of the archive.
+    assert!(storage.reads() > 0);
+}
+
+#[test]
+async fn an_unlisted_blob_object_is_never_read_on_the_in_memory_backend(_tracing: &Tracing) {
+    check_that_an_unlisted_blob_object_is_never_read(InMemoryBlobStorage::new()).await;
+}
+
+#[test]
+async fn an_unlisted_blob_object_is_never_read_on_the_filesystem_backend(_tracing: &Tracing) {
+    let root = tempfile::TempDir::new().unwrap();
+    check_that_an_unlisted_blob_object_is_never_read(
+        FileSystemBlobStorage::new(root.path()).await.unwrap(),
+    )
+    .await;
+}
+
+#[test]
+async fn an_unlisted_blob_object_is_never_read_on_the_sqlite_backend(_tracing: &Tracing) {
+    let root = tempfile::TempDir::new().unwrap();
+    let pool = SqlitePool::configured(&golem_common::config::DbSqliteConfig {
+        database: root
+            .path()
+            .join("blob_storage.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 4,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+    check_that_an_unlisted_blob_object_is_never_read(SqliteBlobStorage::new(pool).await.unwrap())
+        .await;
 }
 
 #[test]
