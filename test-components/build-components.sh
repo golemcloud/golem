@@ -72,7 +72,7 @@ print_groups_json() {
   printf '%s{"name":"effect","needs-node":true,"needs-effect":true}' "$sep"
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
-  printf ',{"name":"benchmarks","needs-node":true,"needs-moonbit":false}]\n'
+  printf ',{"name":"benchmarks","needs-node":true,"needs-effect":true,"needs-moonbit":false}]\n'
 }
 
 clean_only=false
