@@ -3422,6 +3422,180 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
 }
 
 #[test]
+async fn replay_delivery_barrier_does_not_block_claims_of_starts_below_its_marker() {
+    // Two concurrent guest tasks. Task A starts call A (Start 2). While A is in flight, the other
+    // task starts and completes call X (Start 3, End 4). Then A completes and its result reaches
+    // the guest (End 5, CompletionDelivered 6). The guest issued X before it observed A, so the
+    // replay must let the guest claim and resolve X before A's guest boundary acknowledges the
+    // delivery barrier. A's delivery runs concurrently with X's host call: when the delivery
+    // takes the cursor advance gate first, the claim of X or the wait for X's resolution parks on
+    // that gate, and the guest boundary that releases the gate is behind X's host call.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_resolution(),
+        end_for(3, 43),
+        end_for(2, 42),
+        delivered_for(2),
+        noop(),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match tokio::time::timeout(Duration::from_secs(1), rs.await_resolution(handle_a))
+        .await
+        .expect("step parked: await_resolution(A)")
+        .unwrap()
+    {
+        Resolution::Completed {
+            delivery_marker, ..
+        } => assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6))),
+        other => panic!("expected A to complete for host-side continuation, got {other:?}"),
+    }
+
+    let delivery = tokio::spawn({
+        let rs = rs.clone();
+        async move {
+            rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6))
+                .await
+        }
+    });
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+
+    let handle_x = tokio::time::timeout(
+        Duration::from_secs(1),
+        rs.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ),
+    )
+    .await
+    .expect("step parked: claim X")
+    .unwrap();
+    match tokio::time::timeout(Duration::from_secs(1), rs.await_resolution(handle_x))
+        .await
+        .expect("step parked: await_resolution(X)")
+        .unwrap()
+    {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected X to complete, got {other:?}"),
+    }
+
+    let barrier = tokio::time::timeout(Duration::from_secs(1), delivery)
+        .await
+        .expect("step parked: A's delivery")
+        .unwrap()
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    barrier.acknowledge();
+    let (idx, _) = tokio::time::timeout(Duration::from_secs(1), rs.get_oplog_entry(None))
+        .await
+        .expect("step parked: get_oplog_entry after acknowledge")
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(7));
+}
+
+#[test]
+async fn replay_delivery_barrier_does_not_block_claims_of_open_starts_below_its_marker() {
+    // As above, but the other task then starts call Y (Start 5) before A completes, and Y is
+    // still in flight at A's delivery (End 6, CompletionDelivered 7, Y's End 8). This is the
+    // shape of the GOL-689 oplog. A's delivery does not wait for the claim of Y, so the delivery
+    // barrier can hold the cursor advance gate while the guest is in Y's host call. Y's Start is
+    // below the marker, so its claim must not wait for A's guest boundary.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_resolution(),
+        end_for(3, 43),
+        start_named(HostFunctionName::WallClockNow),
+        end_for(2, 42),
+        delivered_for(2),
+        end_for(5, 44),
+        noop(),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match tokio::time::timeout(Duration::from_secs(1), rs.await_resolution(handle_a))
+        .await
+        .expect("step parked: await_resolution(A)")
+        .unwrap()
+    {
+        Resolution::Completed {
+            delivery_marker, ..
+        } => assert_eq!(delivery_marker, Some(OplogIndex::from_u64(7))),
+        other => panic!("expected A to complete for host-side continuation, got {other:?}"),
+    }
+
+    let delivery = tokio::spawn({
+        let rs = rs.clone();
+        async move {
+            rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(7))
+                .await
+        }
+    });
+
+    let handle_x = tokio::time::timeout(
+        Duration::from_secs(1),
+        rs.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ),
+    )
+    .await
+    .expect("step parked: claim X")
+    .unwrap();
+    match tokio::time::timeout(Duration::from_secs(1), rs.await_resolution(handle_x))
+        .await
+        .expect("step parked: await_resolution(X)")
+        .unwrap()
+    {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected X to complete, got {other:?}"),
+    }
+
+    let barrier = tokio::time::timeout(Duration::from_secs(1), delivery)
+        .await
+        .expect("step parked: A's delivery")
+        .unwrap()
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
+
+    let handle_y = tokio::time::timeout(
+        Duration::from_secs(1),
+        rs.claim_concurrent_start(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    )
+    .await
+    .expect("step parked: claim Y while A's delivery barrier is held")
+    .unwrap();
+
+    barrier.acknowledge();
+    match tokio::time::timeout(Duration::from_secs(1), rs.await_resolution(handle_y))
+        .await
+        .expect("step parked: await_resolution(Y)")
+        .unwrap()
+    {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(8)),
+        other => panic!("expected Y to complete, got {other:?}"),
+    }
+}
+
+#[test]
 async fn replay_delivery_marker_skips_following_hints_after_guest_boundary() {
     let rs = replay_state_over(vec![
         noop(),
