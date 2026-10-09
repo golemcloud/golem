@@ -121,9 +121,15 @@ impl SqliteBlobStorage {
                     last_modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Metadata: Last modified timestamp
                     size INTEGER NOT NULL,                                -- Metadata: Size of the blob
                     is_directory BOOLEAN DEFAULT FALSE NOT NULL,          -- Flag indicating if the row represents a directory
-                    PRIMARY KEY (namespace, parent, name)  -- Composite primary key
+                    PRIMARY KEY (namespace, parent, name, is_directory)   -- A blob and a directory can hold one path
                 );
                 "#)).await?;
+        self.pool
+            .with_rw("blob_storage", "init")
+            .execute(sqlx::query(
+                "CREATE INDEX IF NOT EXISTS blob_storage_directories ON blob_storage (namespace, parent, name) WHERE is_directory = TRUE;",
+            ))
+            .await?;
         Ok(())
     }
 
@@ -279,8 +285,9 @@ impl BlobStorageBackend for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, Error> {
+        // A blob row sorts before the row of a directory at the same path, so a blob wins.
         let query = sqlx::query_as(
-            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? ORDER BY is_directory LIMIT 1;",
         )
             .bind(Self::namespace(namespace))
             .bind(path.parent_text()?)
@@ -310,7 +317,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                         VALUES (?, ?, ?, ?, ?, FALSE)
-                        ON CONFLICT(namespace, parent, name) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+                        ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
                     "#,
                 )
                     .bind(Self::namespace(namespace))
@@ -343,7 +350,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
                 INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                 SELECT ?, ?, ?, value, size, FALSE FROM blob_storage
                 WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE
-                ON CONFLICT(namespace, parent, name) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+                ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
             "#,
         )
         .bind(Self::namespace(to_namespace))
@@ -371,13 +378,14 @@ impl BlobStorageBackend for SqliteBlobStorage {
         data: &[u8],
     ) -> Result<PutIfAbsent, Error> {
         let size = data.len() as i64;
-        // The primary key holds the path, so the insert and the check of the key are one
-        // statement. A row that is there makes the insert change no row.
+        // The primary key holds the path and the kind of the row, so the insert and the check of
+        // the key are one statement. A blob row that is there makes the insert change no row, and
+        // the row of a directory at the path is another key.
         let query = sqlx::query(
             r#"
                 INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                 VALUES (?, ?, ?, ?, ?, FALSE)
-                ON CONFLICT(namespace, parent, name) DO NOTHING;
+                ON CONFLICT(namespace, parent, name, is_directory) DO NOTHING;
             "#,
         )
         .bind(Self::namespace(namespace))
@@ -408,7 +416,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
         path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
         let query = sqlx::query(
-            "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+            "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;",
         )
         .bind(Self::namespace(namespace))
         .bind(path.parent_text()?)
@@ -432,7 +440,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                         VALUES (?, ?, ?, NULL, 0, TRUE)
-                        ON CONFLICT(namespace, parent, name) DO UPDATE SET is_directory = TRUE, value = NULL, size = 0;
+                        ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET last_modified_at = CURRENT_TIMESTAMP;
                     "#
                 )
                 .bind(Self::namespace(namespace))
@@ -455,19 +463,26 @@ impl BlobStorageBackend for SqliteBlobStorage {
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
         let directory = path.text()?;
-        let query =
-            sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
+        let (descendants_start, descendants_end) = descendant_bounds(&directory);
+
+        let query = if directory.is_empty() {
+            sqlx::query_as::<_, (String, String)>(LIST_ROOT_DIR).bind(Self::namespace(namespace))
+        } else {
+            sqlx::query_as::<_, (String, String)>(LIST_DIR)
                 .bind(Self::namespace(namespace))
-                .bind(directory.clone());
+                .bind(directory)
+                .bind(descendants_start)
+                .bind(descendants_end)
+        };
 
         let result = self
             .pool
             .with_ro(target_label, op_label)
-            .fetch_all_as::<(String,), _>(query)
+            .fetch_all_as::<(String, String), _>(query)
             .await
             .map(|rows| {
                 rows.into_iter()
-                    .map(|row| blob_child_path(&directory, &row.0).into())
+                    .map(|(parent, name)| blob_child_path(&parent, &name).into())
                     .collect()
             })?;
 
@@ -607,6 +622,21 @@ impl BlobStorageBackend for SqliteBlobStorage {
     }
 }
 
+/// The rows whose parent is the directory `?2`, and the rows of directories at any depth below it,
+/// whose parents are from `?3` to before `?4` (`descendant_bounds`). The first part searches the
+/// primary key and the second the index of the rows of directories, so the listing reads no row of
+/// a blob that is deeper below the directory. The union gives a path that a blob and a directory
+/// hold one time.
+const LIST_DIR: &str = r#"SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND parent = ?2
+UNION
+SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND is_directory = TRUE AND parent >= ?3 AND parent < ?4;"#;
+
+/// [`LIST_DIR`] at the root, where every row of a directory in the namespace is below the
+/// directory.
+const LIST_ROOT_DIR: &str = r#"SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND parent = ''
+UNION
+SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND is_directory = TRUE;"#;
+
 /// Gives the bounds of the `parent` of each row below the directory `dir`, at any depth. The
 /// first bound is in the range and the second is not.
 ///
@@ -633,5 +663,65 @@ impl DBMetadata {
             last_modified_at,
             size: self.size as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LIST_DIR, LIST_ROOT_DIR, SqliteBlobStorage};
+    use crate::db::PoolApi;
+    use crate::db::sqlite::SqlitePool;
+    use golem_common::config::DbSqliteConfig;
+    use test_r::test;
+
+    /// Gives the plan of `sql` with the arguments of a listing, one detail per step.
+    async fn plan(pool: &SqlitePool, sql: &str, arguments: &[&'static str]) -> Vec<String> {
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let query = arguments.iter().fold(
+            sqlx::query_as::<_, (i64, i64, i64, String)>(&explain),
+            |query, argument| query.bind(*argument),
+        );
+        pool.with_ro("test", "plan")
+            .fetch_all_as::<(i64, i64, i64, String), _>(query)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, _, detail)| detail)
+            .collect()
+    }
+
+    /// Each read of the table in a listing searches the key range of the parent, or the index of
+    /// the rows of directories, so a listing does not read every row of the namespace.
+    #[test]
+    async fn a_listing_reads_only_the_rows_below_its_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = SqlitePool::configured(&DbSqliteConfig {
+            database: root.path().join("blobs.db").to_string_lossy().into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap();
+        SqliteBlobStorage::new(pool.clone()).await.unwrap();
+
+        for (sql, arguments) in [
+            (LIST_DIR, &["namespace", "dir", "dir/", "dir0"][..]),
+            (LIST_ROOT_DIR, &["namespace"][..]),
+        ] {
+            let reads = plan(&pool, sql, arguments)
+                .await
+                .into_iter()
+                .filter(|detail| detail.contains("blob_storage"))
+                .collect::<Vec<_>>();
+            assert!(
+                !reads.is_empty()
+                    && reads.iter().all(|detail| {
+                        detail.starts_with("SEARCH")
+                            && (detail.contains("parent")
+                                || detail.contains("blob_storage_directories"))
+                    }),
+                "{sql}: {reads:?}"
+            );
+        }
     }
 }
