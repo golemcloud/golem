@@ -1395,7 +1395,7 @@ fn external_streaming_generation_compiles_recursive_streams() {
             .unwrap();
         assert_eq!(
             method_source
-                .matches(".application(configLimitsMaximum)")
+                .matches("const configValue = base.publicValueCodec(")
                 .count(),
             1,
             "{method_name} must project each supplied config value exactly once"
