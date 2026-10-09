@@ -221,6 +221,23 @@ async fn effect_duplex_websocket_crash_continuation(
                 })),
             })
             .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let response = responses.message().await?.expect("input acknowledgement");
+                match response.response {
+                    Some(invocation_response::Response::InputAck(ack)) => {
+                        if ack.highest_contiguous_sequence == 2 {
+                            break;
+                        }
+                    }
+                    other => {
+                        anyhow::bail!("unexpected response before terminal input ACK: {other:?}")
+                    }
+                }
+            }
+            anyhow::Ok(())
+        })
+        .await??;
         tokio::time::timeout(Duration::from_secs(10), async {
             let mut values = Vec::new();
             let mut closed = false;
