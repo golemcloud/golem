@@ -132,7 +132,7 @@ Prefer structure over parsing strings yourself:
 
 The command tree is metadata, not a spawned shell. A component cannot currently run an arbitrary native executable. Implement operations with code and libraries compiled into the component, or call an external service through supported network APIs.
 
-On a command line, an enum value is matched without regard to letter case when that names exactly one case, so `literal` selects a case named `Literal`. Generated `--help` lists the positional arguments of a command with their summaries, and marks each enum-typed argument or option with its possible values.
+On a command line, an enum value is matched without regard to letter case when that names exactly one case, so `literal` selects a case named `Literal`. Generated `--help` lists the positional arguments of a command with their summaries, and shows the possible values of an argument or option whose value is an enum.
 
 ### Give a tool the caller's directory
 

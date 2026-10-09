@@ -615,7 +615,7 @@ fn flag_from_variable(flag: &FlagSpec, value: &str) -> Result<(u32, Option<bool>
         FlagShape::BoolFlag(_) => match bool_word(value) {
             Some(state) => Ok((0, Some(state))),
             None => Err(format!(
-                "invalid value {value:?}: expected true or false (also 1/0, yes/no, on/off)"
+                "invalid value {value:?}: expected true, yes, on, y, t or 1, or false, no, off, n, f or 0"
             )),
         },
         FlagShape::CountFlag(max) => {

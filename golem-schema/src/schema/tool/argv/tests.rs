@@ -1155,10 +1155,13 @@ fn help_lists_the_arguments_and_the_values_of_an_enum() {
     let mut b = body();
     let mut path = positional("path", SchemaType::string());
     path.doc.summary = "Root file or directory".into();
+    path.value_name = Some("FILE".into());
+    let mut depth = positional("depth", SchemaType::u32());
+    depth.default = Some(SchemaValue::U32(3));
     let mut search_mode = positional("mode", SchemaType::ref_to(TypeId::from("search-mode")));
     search_mode.required = false;
     search_mode.doc.summary = "How the pattern is read".into();
-    b.positionals.fixed = vec![path, search_mode];
+    b.positionals.fixed = vec![path, search_mode, depth];
     b.positionals.tail = Some(TailPositional {
         name: "globs".into(),
         doc: Doc::default(),
@@ -1204,12 +1207,18 @@ fn help_lists_the_arguments_and_the_values_of_an_enum() {
     };
     let arguments = position("Arguments:");
     assert!(arguments < position("Options:"), "{help}");
-    assert_eq!(position("<path> Root file or directory"), arguments + 1);
+    // The names have the form of the usage line: a value name, an optional argument, a default.
+    assert!(
+        lines[0].ends_with("<FILE> [mode] [depth] [globs]..."),
+        "{help}"
+    );
+    assert_eq!(position("<FILE> Root file or directory"), arguments + 1);
     assert_eq!(
         position("[mode] How the pattern is read [possible values: Literal, Regex]"),
         arguments + 2
     );
-    assert_eq!(position("[globs]..."), arguments + 3);
+    assert_eq!(position("[depth]"), arguments + 3);
+    assert_eq!(position("[globs]..."), arguments + 4);
     position("--on-error <VALUE> Mode after a bad pattern [possible values: Literal, Regex]");
     position("--also <VALUE> [possible values: Literal, Regex]");
     position("--label <VALUE>");
