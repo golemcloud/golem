@@ -114,8 +114,10 @@ pub(crate) enum SnapshotRecoveryResult {
 pub(crate) enum ManualLoadResult {
     /// The load failed with the details.
     Failed(String),
-    /// The load was interrupted, or the guest exited.
-    Interrupted,
+    /// The load was interrupted with the interrupt kind.
+    Interrupted(InterruptKind),
+    /// The guest exited during the load.
+    Exited,
 }
 
 /// The raw failure of a start, as the place that found it has it.
@@ -171,8 +173,6 @@ pub(crate) enum StartAction {
     Error(WorkerExecutorError),
     /// Retry the start with this decision.
     Retry(RetryDecision),
-    /// The update is applied.
-    Succeed,
     /// Write nothing; the update stays pending for the new owner of the shard.
     ShardLost,
 }
@@ -232,7 +232,6 @@ pub(crate) fn decide(
             }
             _ => StartAction::Error(error.passed_through()),
         },
-        Cell::Succeed => StartAction::Succeed,
     }
 }
 
@@ -428,6 +427,7 @@ enum StartProblem {
     LoadFailed,
     ManualLoadFailed,
     ManualLoadInterrupted,
+    ManualLoadExited,
     RecoveryRequired,
     Interrupted,
     AgentFailed,
@@ -483,7 +483,10 @@ impl StartProblem {
                 }
             },
             RawStartError::ManualLoad(ManualLoadResult::Failed(_)) => Self::ManualLoadFailed,
-            RawStartError::ManualLoad(ManualLoadResult::Interrupted) => Self::ManualLoadInterrupted,
+            RawStartError::ManualLoad(ManualLoadResult::Interrupted(_)) => {
+                Self::ManualLoadInterrupted
+            }
+            RawStartError::ManualLoad(ManualLoadResult::Exited) => Self::ManualLoadExited,
             RawStartError::Replay { error, diverged } => match error {
                 WorkerExecutorError::UnexpectedOplogEntry { .. } => Self::Divergence,
                 _ if *diverged => Self::Divergence,
@@ -633,8 +636,6 @@ enum Cell {
     Pass,
     /// `D`: the retry decision of the load.
     Retry,
-    /// `OK`: the update is applied.
-    Succeed,
 }
 
 /// The outcome table. A cell that cannot occur passes the error.
@@ -657,14 +658,17 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             _ => Cell::Pass,
         },
         // A pending manual update loads its record through its own load, which reports a failed
-        // load as `ManualLoadFailed` and an interrupted load or an exited guest as
-        // `ManualLoadInterrupted`, so the other load rows of this column are not reached.
+        // load as `ManualLoadFailed`, an exited guest as `ManualLoadExited` and an interrupted
+        // load as `ManualLoadInterrupted`, so the other load rows of this column are not reached.
+        // An interrupted load passes its interrupt: the update stays pending, and the next start
+        // loads the snapshot again.
         Column::ManualPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
             Problem::TargetUnsupported => coded(Code::TargetUnsupported),
             Problem::ModeChange
             | Problem::RestoreConflict
             | Problem::ManualLoadFailed
+            | Problem::ManualLoadExited
             | Problem::LoadUnavailable
             | Problem::LoadFailed
             | Problem::RecoveryRequired
@@ -673,7 +677,6 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             Problem::Restore(RestoreClass::Lost) => coded(Code::ManualSnapshotUnavailable),
             Problem::Restore(RestoreClass::Fixed) => coded(Code::SnapshotRestoreFailed),
             Problem::Restore(RestoreClass::DiskFull) => coded(Code::SnapshotRestoreDiskFull),
-            Problem::ManualLoadInterrupted => Cell::Succeed,
             _ => Cell::Pass,
         },
         Column::ManualPromoted | Column::AssistedPromoted => match problem {
@@ -827,6 +830,9 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
             "Snapshot-assisted automatic update failed while instantiating the target: {error}"
         ),
         RawStartError::ManualLoad(ManualLoadResult::Failed(text)) => text.clone(),
+        RawStartError::ManualLoad(ManualLoadResult::Exited) => {
+            format!("Manual update failed to load snapshot: {}", raw_text(error))
+        }
         RawStartError::UpdateState(error) => format!("Applying worker update failed: {error}"),
         RawStartError::Load(_) | RawStartError::Replay { .. } => match column {
             Column::AssistedPending => format!(
@@ -842,7 +848,7 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
         | RawStartError::Disabled
         | RawStartError::Filesystem(_)
         | RawStartError::Finish(_)
-        | RawStartError::ManualLoad(ManualLoadResult::Interrupted) => raw_text(error),
+        | RawStartError::ManualLoad(ManualLoadResult::Interrupted(_)) => raw_text(error),
     }
 }
 
@@ -873,8 +879,11 @@ fn raw_text(error: &RawStartError<'_>) -> String {
             }
         },
         RawStartError::ManualLoad(ManualLoadResult::Failed(text)) => text.clone(),
-        RawStartError::ManualLoad(ManualLoadResult::Interrupted) => {
+        RawStartError::ManualLoad(ManualLoadResult::Interrupted(_)) => {
             "the snapshot load was interrupted".to_string()
+        }
+        RawStartError::ManualLoad(ManualLoadResult::Exited) => {
+            "the agent exited during the snapshot load".to_string()
         }
         RawStartError::UpdateState(error) => error.to_string(),
     }
@@ -899,12 +908,17 @@ impl RawStartError<'_> {
                 | SnapshotRecoveryResult::Lost(error),
             ) => error.clone(),
             RawStartError::UpdateState(error) => error.to_worker_executor_error(),
+            RawStartError::ManualLoad(ManualLoadResult::Interrupted(kind)) => {
+                WorkerExecutorError::Interrupted { kind: *kind }
+            }
             RawStartError::StaleSource(_)
             | RawStartError::TargetUnsupported(_)
             | RawStartError::ModeChange(_)
             | RawStartError::Disabled
             | RawStartError::Load(_)
-            | RawStartError::ManualLoad(_) => WorkerExecutorError::runtime(raw_text(self)),
+            | RawStartError::ManualLoad(ManualLoadResult::Failed(_) | ManualLoadResult::Exited) => {
+                WorkerExecutorError::runtime(raw_text(self))
+            }
         }
     }
 }
@@ -1303,7 +1317,6 @@ mod tests {
             Cell::VisibleInvocation => "V2",
             Cell::Pass => "P",
             Cell::Retry => "D",
-            Cell::Succeed => "OK",
         }
     }
 
@@ -1311,8 +1324,9 @@ mod tests {
     /// InitialFiles, AutomaticPending (on a promoted manual baseline), AssistedPending,
     /// AssistedPromoted.
     ///
-    /// Rows for causes that only some sites report: `Target(Other)` and `ManualLoadFailed` (both
-    /// fail the update), `Restore(DiskFull)` (the cells of `Restore(Fixed)` with their own text),
+    /// Rows for causes that only some sites report: `Target(Other)`, `ManualLoadFailed` and
+    /// `ManualLoadExited` (all fail the update), `ManualLoadInterrupted` (which passes its
+    /// interrupt), `Restore(DiskFull)` (the cells of `Restore(Fixed)` with their own text),
     /// `AfterReplay` (a filesystem failure after the replay, which passes in every column), and
     /// `LoadLost` (a lost payload of the selected record, which only a snapshot-assisted attempt
     /// reports).
@@ -1329,7 +1343,7 @@ mod tests {
             Column::AssistedPromoted,
         ];
         let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-        let table: [(Problem, [&str; 7]); 34] = [
+        let table: [(Problem, [&str; 7]); 35] = [
             (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
             (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
             (
@@ -1397,7 +1411,11 @@ mod tests {
             ),
             (
                 Problem::ManualLoadInterrupted,
-                ["P", "OK", "P", "P", "P", "P", "P"],
+                ["P", "P", "P", "P", "P", "P", "P"],
+            ),
+            (
+                Problem::ManualLoadExited,
+                ["P", "F", "P", "P", "P", "P", "P"],
             ),
             (
                 Problem::RecoveryRequired,
@@ -1685,7 +1703,10 @@ mod tests {
                 StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Failed(
                     "load".to_string()
                 ))),
-                StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Interrupted)),
+                StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Interrupted(
+                    InterruptKind::Restart
+                ))),
+                StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Exited)),
                 StartProblem::of(&RawStartError::Finish(&FilesystemError::AgentQuota(
                     storage()
                 ))),
@@ -1698,6 +1719,7 @@ mod tests {
                 Problem::Instantiation { interrupted: true },
                 Problem::ManualLoadFailed,
                 Problem::ManualLoadInterrupted,
+                Problem::ManualLoadExited,
                 Problem::AfterReplay,
             ]
         );
@@ -2674,13 +2696,68 @@ mod tests {
             ),
             StartAction::Error(WorkerExecutorError::Runtime { .. })
         ));
+    }
+
+    /// An interrupted load of a pending manual update ends the start with its interrupt, so the
+    /// update stays pending and the next start loads the snapshot again; on a lost shard the new
+    /// owner does. A guest exit during the load fails the update and names the exit.
+    #[test]
+    fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
+        let manual = manual_head();
+        let role = BaselineRole::ManualPending(Arc::new(manual.clone()));
+        [
+            InterruptKind::Interrupt(Timestamp::from(5)),
+            InterruptKind::Suspend(Timestamp::from(5)),
+            InterruptKind::Restart,
+            InterruptKind::Jump,
+            InterruptKind::ShardLost,
+        ]
+        .into_iter()
+        .for_each(|kind| {
+            [false, true].into_iter().for_each(|lost_shard| {
+                let action = decide(
+                    &role,
+                    Some(&manual),
+                    RawStartError::ManualLoad(&ManualLoadResult::Interrupted(kind)),
+                    &agent_id(),
+                    lost_shard,
+                );
+                assert!(
+                    matches!(
+                        &action,
+                        StartAction::Error(WorkerExecutorError::Interrupted { kind: actual })
+                            if *actual == kind
+                    ),
+                    "{kind:?} {lost_shard}: {action:?}"
+                );
+            });
+        });
+
+        let (target, details, assisted, attempt, fault) = entry_fields(
+            &failed_entry(decide_now(
+                &role,
+                Some(&manual),
+                RawStartError::ManualLoad(&ManualLoadResult::Exited),
+            ))
+            .0,
+        );
+        assert_eq!(
+            (target, assisted, attempt, fault),
+            (revision(3), None, Some(OplogIndex::from_u64(9)), None)
+        );
+        assert_eq!(
+            details,
+            "Manual update failed to load snapshot: the agent exited during the snapshot load"
+        );
         assert!(matches!(
-            decide_now(
-                &BaselineRole::ManualPending(Arc::new(manual_head())),
-                Some(&manual_head()),
-                RawStartError::ManualLoad(&ManualLoadResult::Interrupted)
+            decide(
+                &role,
+                Some(&manual),
+                RawStartError::ManualLoad(&ManualLoadResult::Exited),
+                &agent_id(),
+                true,
             ),
-            StartAction::Succeed
+            StartAction::ShardLost
         ));
     }
 

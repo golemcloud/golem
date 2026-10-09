@@ -11830,11 +11830,9 @@ impl RunningWorker {
             start_outcome::StartAction::ShardLost => Err(WorkerExecutorError::Interrupted {
                 kind: InterruptKind::ShardLost,
             }),
-            start_outcome::StartAction::Retry(_) | start_outcome::StartAction::Succeed => {
-                Err(WorkerExecutorError::runtime(
-                    "a failed start before the replay gave a replay outcome",
-                ))
-            }
+            start_outcome::StartAction::Retry(_) => Err(WorkerExecutorError::runtime(
+                "a failed start before the replay gave a replay outcome",
+            )),
         }
     }
 
@@ -11864,8 +11862,7 @@ impl RunningWorker {
             action @ (start_outcome::StartAction::FailUpdate { .. }
             | start_outcome::StartAction::SkipPeriodic(_)
             | start_outcome::StartAction::RejectPeriodic(_)
-            | start_outcome::StartAction::Retry(_)
-            | start_outcome::StartAction::Succeed) => {
+            | start_outcome::StartAction::Retry(_)) => {
                 let cleaned = cleanup(raw).await;
                 if matches!(
                     cleaned,
