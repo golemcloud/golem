@@ -687,12 +687,12 @@ fn decode(graph: &SchemaGraph, ty: &SchemaType, raw: &str) -> Result<SchemaValue
     let json = match resolved {
         SchemaType::String { .. }
         | SchemaType::Char { .. }
-        | SchemaType::Enum { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
         | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. } => serde_json::Value::String(raw.into()),
+        SchemaType::Enum { cases, .. } => serde_json::Value::String(enum_case(cases, raw).into()),
         SchemaType::Bool { .. } if raw.eq_ignore_ascii_case("true") => {
             serde_json::Value::Bool(true)
         }
@@ -708,6 +708,19 @@ fn decode(graph: &SchemaGraph, ty: &SchemaType, raw: &str) -> Result<SchemaValue
     };
     crate::schema::render::from_untrusted_json_value(graph, ty, &json)
         .map_err(|e| format!("invalid value {raw:?}: {e}"))
+}
+
+/// The case that `raw` names: the exact one, or the only one that is equal without regard to
+/// letter case. Other text goes on unchanged, and the reader refuses it.
+fn enum_case<'a>(cases: &'a [String], raw: &'a str) -> &'a str {
+    if cases.iter().any(|case| case == raw) {
+        return raw;
+    }
+    let mut equal = cases.iter().filter(|case| case.eq_ignore_ascii_case(raw));
+    match (equal.next(), equal.next()) {
+        (Some(case), None) => case,
+        _ => raw,
+    }
 }
 
 fn resolve<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> Result<&'a SchemaType, String> {

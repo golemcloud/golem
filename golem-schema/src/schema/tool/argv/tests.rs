@@ -1085,3 +1085,51 @@ fn sixty_four_bit_integers_are_written_as_plain_numbers() {
         assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
     }
 }
+
+#[test]
+fn an_enum_value_is_accepted_in_any_letter_case() {
+    let mode = || SchemaType::r#enum(vec!["Literal".into(), "Regex".into()]);
+    let mut b = body();
+    b.positionals.fixed = vec![positional("mode", mode())];
+    b.options
+        .push(option("fallback", OptionShape::Scalar(mode())));
+    b.options.push(option(
+        "also",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Delimited(','),
+            item_type: mode(),
+        }),
+    ));
+    let t = tool(b);
+    let exact = values(
+        &t,
+        &["Regex", "--fallback", "Literal", "--also", "Literal,Regex"],
+    );
+    for args in [
+        vec!["regex", "--fallback", "literal", "--also", "literal,regex"],
+        vec!["REGEX", "--fallback", "LITERAL", "--also", "LiTeRaL,rEgEx"],
+    ] {
+        assert_eq!(values(&t, &args), exact, "{args:?}");
+    }
+    for args in [
+        vec!["rege"],
+        vec!["regexp"],
+        vec!["Regex", "--fallback", "lit"],
+    ] {
+        assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
+    }
+
+    // The exact spelling wins, and text that is equal to two cases names neither.
+    let mut b = body();
+    b.positionals.fixed = vec![positional(
+        "unit",
+        SchemaType::r#enum(vec!["m".into(), "M".into(), "Kb".into(), "kB".into()]),
+    )];
+    let t = tool(b);
+    assert_eq!(values(&t, &["m"]), vec![SchemaValue::Enum { case: 0 }]);
+    assert_eq!(values(&t, &["M"]), vec![SchemaValue::Enum { case: 1 }]);
+    assert_eq!(values(&t, &["kB"]), vec![SchemaValue::Enum { case: 3 }]);
+    for args in [vec!["kb"], vec!["KB"]] {
+        assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
+    }
+}
