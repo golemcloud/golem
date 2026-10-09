@@ -8,7 +8,7 @@ import ContentPage from "../layouts/ContentPage.astro";
   lead="Terms of use, privacy practices, and the status of Golem Cloud's services. Read this carefully — especially the Developer Preview Notice."
   description="Legal terms, privacy practices, acceptable use, and security for Golem Cloud — including Developer Preview status, data handling, and contact for legal matters."
 >
-  <p class="meta">Effective date: 21 May 2026.</p>
+  <p class="meta">Effective date: 9 October 2026.</p>
 
   <div class="callout">
     <strong>Developer Preview Notice.</strong> Golem Cloud (the managed service at <code
@@ -101,38 +101,94 @@ import ContentPage from "../layouts/ContentPage.astro";
   </p>
 
   <h3>What we collect</h3>
-  <p>
-    The only personal information we collect is your <strong>email address</strong>, which you
-    voluntarily provide when you sign up for a Developer Preview account, subscribe to release
-    updates, or contact us.
-  </p>
-  <p>
-    We do not use third-party analytics that profile individual users. We do not sell or rent your
-    information.
-  </p>
+  <ul>
+    <li>
+      <strong>Account information.</strong> When you sign in with GitHub, we receive and store your GitHub
+      user ID, your name (or your GitHub username if you have not set a name), and your email address.
+      We request access to your email addresses only, and we never receive your GitHub password.
+    </li>
+    <li>
+      <strong>Credentials.</strong> The API tokens you create and the session tokens issued when you sign
+      in.
+    </li>
+    <li>
+      <strong>Usage and plan data.</strong> Metering records for your account — compute, memory, storage,
+      invocations, and the number of applications, environments, and components — together with your plan
+      and limits.
+    </li>
+    <li>
+      <strong>Your content.</strong> The code, components, agent state, files, secrets, and other data
+      you deploy to or store in Golem Cloud.
+    </li>
+    <li>
+      <strong>Technical data.</strong> IP addresses and request metadata recorded in our service logs
+      and telemetry.
+    </li>
+    <li>
+      <strong>Website analytics.</strong> When you visit <code>golem.cloud</code>, Google Ads and
+      Contentsquare set cookies and collect information about your visit: pages viewed, how you
+      interact with them (clicks, scrolling, and mouse movement), referring pages, device and
+      browser details, and approximate location derived from your IP address.
+    </li>
+    <li>
+      <strong>Correspondence.</strong> Your email address and the contents of any message you send us.
+    </li>
+  </ul>
+  <p>We do not sell or rent your personal information.</p>
 
   <h3>How we use your information</h3>
   <ul>
-    <li>To provide and operate the Developer Preview service.</li>
+    <li>To provide and operate Golem Cloud, including running your content on your behalf.</li>
+    <li>To enforce plan limits and quotas, and to bill for paid plans.</li>
+    <li>To secure the service, investigate abuse, and diagnose problems.</li>
     <li>
       To send service-related communications (e.g., security notices, planned downtime, account
       changes).
     </li>
     <li>To send release updates and announcements — only if you have explicitly opted in.</li>
+    <li>
+      To understand how visitors use our website and measure the effectiveness of our advertising.
+    </li>
     <li>To comply with legal obligations.</li>
+  </ul>
+  <p>
+    We process your content only to operate the service. We will not use your code, data, or prompts
+    to train machine learning models, absent your express written consent.
+  </p>
+
+  <h3>Who we share it with</h3>
+  <ul>
+    <li><strong>GitHub</strong>, to authenticate you when you sign in.</li>
+    <li>
+      <strong>Google</strong> and <strong>Contentsquare</strong>, which receive the website
+      analytics described above.
+    </li>
+    <li>
+      <strong>Infrastructure and service providers</strong> that host and operate Golem Cloud on our behalf,
+      under contractual obligations to protect your information.
+    </li>
+    <li><strong>Authorities</strong>, when required by law.</li>
   </ul>
 
   <h3>Cookies and tracking</h3>
   <p>
-    We use only essential first-party cookies required for authentication and session management. We
-    do not use advertising cookies or third-party tracking pixels. If we add analytics in the
-    future, this section will be updated and consent obtained where required.
+    The Golem Cloud console (<code>console.golem.cloud</code>) uses only essential first-party
+    cookies for sign-in and session management. It uses no analytics, advertising, or tracking
+    cookies.
+  </p>
+  <p>
+    Our website (<code>golem.cloud</code>) uses Google Ads and Contentsquare cookies for the website
+    analytics described above. You can block or delete these cookies in your browser settings
+    without affecting your use of Golem Cloud.
   </p>
 
   <h3>Data retention &amp; deletion</h3>
   <p>
-    Your email is retained while your account is active. You may request deletion of your account
-    and associated data at any time by emailing <a href="mailto:privacy@golem.cloud"
+    We retain account information, credentials, and usage records while your account is active, and
+    afterwards as long as needed for billing and legal obligations. Service logs and telemetry are
+    kept for a limited period for security and diagnostics. Google and Contentsquare retain website
+    analytics under their own retention settings. You may request deletion of your account and
+    associated data at any time by emailing <a href="mailto:privacy@golem.cloud"
       >privacy@golem.cloud</a
     >. Preview workload data is routinely wiped — see the <a href="#preview"
       >Developer Preview Notice</a
@@ -151,8 +207,8 @@ import ContentPage from "../layouts/ContentPage.astro";
     If you are in the EEA, UK, or California, you have the right to access, correct, delete, or port
     your personal information; to object to processing; and to withdraw consent at any time. To
     exercise these rights, contact <a href="mailto:privacy@golem.cloud">privacy@golem.cloud</a>. Our
-    legal basis for processing is your consent and our legitimate interest in operating the Preview
-    service.
+    legal bases for processing are the performance of our contract with you, your consent, and our
+    legitimate interests in operating, securing, and improving Golem Cloud and our website.
   </p>
 
   <h3>Children</h3>
