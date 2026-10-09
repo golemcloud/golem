@@ -133,7 +133,14 @@ type HandlerFor<M> =
 
 /** SDK helpers available on a handler's `this` (alongside state). */
 export interface AgentContext<Config extends ConfigSpec = {}> {
+  /**
+   * Read identity through the durable host environment on every call.
+   * Replay reproduces the historical observation; live reads after a fork
+   * identify the child, including within the same invocation. Identity values
+   * explicitly stored in application state are not rewritten.
+   */
   getId(): ParsedAgentId;
+  /** Read the phantom ID from the current durable identity observation. */
   getPhantomId(): Uuid | undefined;
   getPrincipal(): Principal;
   /**
