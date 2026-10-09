@@ -609,6 +609,13 @@ before reconstructing the deadline from recorded `now + duration`. A completed o
 a recorded completed child. Cancelling after the child's End settles the outer wait without an
 internal delivery marker. Only the outer wait has a real guest-delivery boundary.
 
+P3 timers always return `STARTED` before successful guest delivery, even for zero-duration or
+expired waits. Both live execution and replay yield before completing the outer timer. `wait-for`
+yields after deriving its deadline from the recorded clock read, so the yield does not restart
+the duration. Otherwise an inline live timer could record its delivery before a direct P2 call,
+while replay returns `STARTED` and enters that Store-holding call before it can deliver the timer.
+The direct call would wait behind a guest boundary that its own Store ownership prevents.
+
 Replay: claim the matching `Start` (`StartClaim`, identity + optional request payload match),
 resolve its terminal through `ConcurrentReplayResolver`, then classify with
 `classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:

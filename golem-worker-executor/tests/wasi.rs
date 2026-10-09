@@ -5680,6 +5680,84 @@ async fn p3_resuming_sleep(
 
 #[test]
 #[timeout("60s")]
+async fn p3_ready_timers_defer_delivery_before_direct_clock_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "ready-timers-before-direct-clock");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "pending_p3_timers_and_p2_clock",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(result.into_typed::<Vec<bool>>()?, vec![true, true]);
+    let before = executor.get_oplog(&worker, boundary.next()).await?;
+    let clocks: Vec<_> = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name.ends_with("wall_clock::now") => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    let delivered: Vec<_> = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CompletionDelivered(_) => Some(entry.oplog_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(clocks.len(), 2);
+    assert_eq!(delivered.len(), 2);
+    assert!(clocks[0] < delivered[0]);
+    assert!(clocks[1] < delivered[1]);
+    assert_internal_clock_calls_settled(&before);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let after = executor.get_oplog(&worker, boundary.next()).await?;
+    assert_eq!(
+        after
+            .iter()
+            .filter(
+                |entry| matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name.ends_with("wall_clock::now"))
+            )
+            .count(),
+        2,
+        "replay must reuse both direct clock reads"
+    );
+    assert_internal_clock_calls_settled(&after);
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
 async fn p3_wait_for_restart_preserves_recorded_deadline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
