@@ -63,6 +63,31 @@ export const CounterAgentImpl = CounterAgent.implement({
 
 A bare enabled policy without a `state` schema (e.g. `snapshotting: 'default'` or `snapshotting: { everyNInvocations: 5 }`) requires a custom `snapshot: { save, load }` implementation. Automatic loading is generated only when a `state` schema provides a JSON-deserializable state contract.
 
+### Evolving the State Schema
+
+During a manual update, the source revision saves a snapshot, and the target revision validates the saved JSON against its own `state` schema. The SDK uses the schema's decoded value as the restored state. It does not call `init`, so a default supplied only by `init` does not fill a missing snapshot field.
+
+With Zod, give new fields a `.default(...)` value or make them `.optional()`:
+
+```typescript
+snapshotting: {
+    state: z.object({
+        count: z.number(),
+        label: z.string().default(''),
+        lastUpdated: z.number().optional(),
+    }),
+    policy: { everyNInvocations: 1 },
+}
+```
+
+This schema can load an earlier snapshot containing only `count`. The restored `label` is `''`; `lastUpdated` may be absent, so methods must handle that case. A new required field without a decoding default makes loading fail when the saved JSON does not contain it.
+
+For a rename or type change, accept the earlier representation and convert it to the complete target state. Use custom `save` and `load` functions when the schema cannot do this. A version marker can help `load` select the conversion, but it does not convert the state by itself. Test loading a snapshot saved by the source revision, not just a save/load round-trip in the target revision.
+
+If schema validation fails during a manual update, the update fails and the agent stays on its source revision. Run `golem agent get <AGENT_ID>` and inspect the update history. It shows `Failed update to ...` with details containing `Manual update failed to load snapshot: ...` and the loader error. A typed schema mismatch includes `snapshot state does not match its declared schema`. Fix the schema or loader in a new revision, deploy it, and request the update again.
+
+The same decoding rule applies when an automatic update uses a snapshot from the source revision. A decoding failure during a snapshot-assisted automatic update has `UPDATE_SNAPSHOT_INCOMPATIBLE`.
+
 ### SQLite Databases
 
 Typed state snapshotting handles each top-level `DatabaseSync` field of the agent (from `node:sqlite`). Do not declare these fields in the `state` schema.

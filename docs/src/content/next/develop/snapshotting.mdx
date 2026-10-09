@@ -51,6 +51,57 @@ Each language SDK can generate JSON saving and loading when the complete agent s
     </Tabs.Tab>
 </Tabs>
 
+### Evolving the state schema
+
+During a manual update, the source revision saves a snapshot, and the target revision loads it. With the default implementation, the target revision decodes the saved JSON using its own state schema or deserializer. It does not run normal initialization first, so values supplied only by `init` or a constructor do not fill missing snapshot fields.
+
+The target revision must be able to decode the snapshots of the agents you update:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        With Zod, give a new field a `.default(...)` value or make it `.optional()`. A new required field without a decoding default makes loading fail when the saved JSON does not contain it:
+
+        ```typescript
+        snapshotting: {
+            state: z.object({
+                value: z.number(),
+                label: z.string().default(''),
+                lastUpdated: z.number().optional(),
+            }),
+            policy: { everyNInvocations: 1 },
+        }
+        ```
+
+        This schema can load an earlier snapshot containing only `value`. The restored `label` is `''`; `lastUpdated` may be absent, so agent methods must handle that case.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The schema passed to `Snapshot.define(...)` decodes the saved state before the restoration strategy runs. Make new fields optional in that schema, or give them a decoding default. A default supplied only by `init` does not apply.
+
+        To convert an existing JSON snapshot, keep `Snapshot.define(...)` and use a schema that accepts the earlier representation. The restoration strategy can then construct the target state from the decoded value. Switching to `Snapshot.custom(...)` does not bypass JSON decoding: that mode accepts only binary snapshot envelopes.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The default loader uses `serde_json::from_slice::<Self>`. Give a new field `#[serde(default)]`, use an `Option<T>` field, or provide a custom deserializer that accepts the earlier JSON. A constructor default alone does not affect Serde decoding.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The JSON codec derived from the target revision's `Schema[S]` decodes the saved state before calling `loadSnapshot(state, context)`. The codec must accept missing new fields or supply decoding defaults. A default in the implementation constructor does not repair a codec error; use custom byte-based snapshot loading when you need to convert an earlier state format.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The generated loader uses `@json.from_json` to decode the saved JSON into the target revision's agent type. Its `FromJson` implementation must accept missing new fields. When the derived implementation cannot decode the earlier JSON, use a custom `load_snapshot` factory to convert it.
+    </Tabs.Tab>
+</Tabs>
+
+For a rename or type change, the loader must accept the earlier representation and convert it to the complete target state. Use [custom snapshotting](#custom-snapshotting) when the default decoder cannot do this, subject to the SDK's format restrictions described above. A version marker can help a custom loader select the conversion, but the marker alone does not make an earlier snapshot loadable. Test loading a snapshot saved by the source revision, not just a save/load round-trip in the target revision.
+
+If decoding fails during a manual update, the update fails and the agent stays on its source revision. Inspect the update history:
+
+```shell copy
+golem agent get <AGENT_ID>
+```
+
+The history shows `Failed update to ...` with details such as `Manual update failed to load snapshot: ...` followed by the loader error. A typed TypeScript schema mismatch includes `snapshot state does not match its declared schema`. Fix the loader or schema in a new revision, deploy it, and request the update again. See [Updating agents](/next/develop/updating#manual-snapshot-based-update).
+
+The same decoding rule applies when an automatic update uses a snapshot from the source revision. A decoding failure during a snapshot-assisted automatic update has `UPDATE_SNAPSHOT_INCOMPATIBLE`; see [Failure codes](/next/develop/updating#failure-codes).
+
 ## Custom snapshotting
 
 You can implement custom saving and restoration to control exactly how agent state is serialized. Saving runs on the live instance. Loading is a separate factory that returns the complete state or instance; the SDK never runs the normal agent initialization path first and then hands that instance to the loader. The following example shows a counter agent that saves its count as raw bytes:
