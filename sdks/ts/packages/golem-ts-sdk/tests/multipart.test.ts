@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { encodeMultipart, decodeMultipart, MultipartPart } from '../src/internal/multipart';
 
 const textEncoder = new TextEncoder();
@@ -104,6 +104,41 @@ describe('multipart encode/decode', () => {
 
     expect(decoded).toHaveLength(1);
     expect(decoded[0].body).toEqual(combined);
+  });
+
+  it('round-trips multi-MB binary parts between JSON parts', () => {
+    const body = new Uint8Array(4 * 1024 * 1024);
+    for (let i = 0; i < body.length; i++) body[i] = i % 256;
+    const parts = [jsonPart('state', { count: 17 }), binaryPart('db', body), jsonPart('tail', 29)];
+    const { data, boundary } = encodeMultipart(parts);
+    const decoded = decodeMultipart(data, boundary);
+
+    expect(decoded.map((part) => part.name)).toEqual(['state', 'db', 'tail']);
+    expect(decoded.map((part) => part.contentType)).toEqual(parts.map((part) => part.contentType));
+    for (let i = 0; i < parts.length; i++) {
+      expect(Buffer.from(decoded[i].body).equals(Buffer.from(parts[i].body))).toBe(true);
+    }
+    data.fill(0);
+    expect(Buffer.from(decoded[1].body).equals(Buffer.from(body))).toBe(true);
+  });
+
+  it('regenerates a boundary that occurs at the last possible position in a body', () => {
+    const colliding = '11111111-1111-1111-1111-111111111111';
+    const safe = '22222222-2222-2222-2222-222222222222';
+    const randomUUID = vi
+      .spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce(colliding)
+      .mockReturnValue(safe);
+    try {
+      const marker = `\r\n--${colliding.replace(/-/g, '')}`;
+      const body = textEncoder.encode(`\r\r\n--almost\r\n--111x${marker}`);
+      const { data, boundary } = encodeMultipart([binaryPart('db', body)]);
+
+      expect(boundary).toBe(safe.replace(/-/g, ''));
+      expect(decodeMultipart(data, boundary)[0].body).toEqual(body);
+    } finally {
+      randomUUID.mockRestore();
+    }
   });
 
   it('empty body part', () => {
