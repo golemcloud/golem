@@ -124,6 +124,12 @@ flowchart TD
 - `golem-schema::tool::argv` is also used by the native CLI. Bash passes shell-expanded arguments
   to it; there is no second tool argument grammar. Local commands win name collisions, with a
   diagnostic identifying shadowed tools. Unsupported secret/capability arguments are refused.
+- A bound tool is not a child process, so it does not inherit the shell's environment. It gets
+  only what its options declare: an option or flag that the command line leaves out and that
+  declares an environment variable takes that variable's value, from the shell's exported
+  variables. `PWD` is always the directory the shell is in, whatever a script assigned to it, so
+  a tool that declares `PWD` on an option starts where the script is. A tool that declares no
+  variable gets none of them.
 - Every wait in the shell — `sleep`, `timeout`, `read -t`, `tail -s`, the grace period for
   leftover jobs, the call's own time limit and `curl --retry-delay` — goes through Golem's durable
   monotonic clock, and every "now" (`find -mtime`, `date`, `touch`) through its recorded wall

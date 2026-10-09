@@ -10,7 +10,7 @@ use golem_schema::tool::{
     Tool,
     argv::{self, ParsedToolArguments},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 #[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
 
@@ -32,12 +32,17 @@ impl Catalog {
 }
 
 impl Catalog {
-    fn prepare_invocation(&self, name: &str, args: &[String]) -> Result<Invocation, CommandOutput> {
+    fn prepare_invocation(
+        &self,
+        name: &str,
+        args: &[String],
+        variables: &HashMap<String, String>,
+    ) -> Result<Invocation, CommandOutput> {
         let tool = self
             .tools
             .get(name)
             .ok_or_else(|| failure(127, "tool is not bound"))?;
-        let parsed = argv::parse(tool, args).map_err(|message| {
+        let parsed = argv::parse_with_variables(tool, args, variables).map_err(|message| {
             // The shared parser forbids constructing opaque capabilities from text.
             let message = if message.contains("capabilit") || message.contains("secret") {
                 format!("secret and other capability arguments are unsupported: {message}")
@@ -86,8 +91,9 @@ impl CommandInvoker for Catalog {
         &self,
         name: &str,
         args: &[String],
+        variables: &HashMap<String, String>,
     ) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
-        self.prepare_invocation(name, args)
+        self.prepare_invocation(name, args, variables)
             .map(|invocation| Box::new(invocation) as Box<dyn PreparedCommand>)
     }
 }
