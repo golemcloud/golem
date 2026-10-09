@@ -72,9 +72,9 @@ use golem_worker_executor::services::environment_state::{
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
-    native_test_tool_metadata, start_with_overrides,
+    AgentInvocationSuccessGateHandle, LastUniqueId, PrecompiledComponent, ReplayAdmissionStage,
+    TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    native_streaming_tool_metadata, native_test_tool_metadata, start_with_overrides,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
@@ -8792,6 +8792,100 @@ enum CompletedReconstructionExclusiveCase {
     CrashReplaySupervisorWindow,
 }
 
+/// Crashes the agent while its original invocation is held at the success gate, and releases the
+/// gate as a restart, so the next start reconstructs the invocation from the oplog.
+async fn crash_at_held_invocation_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    original_success: AgentInvocationSuccessGateHandle,
+) -> anyhow::Result<()> {
+    let (crash, ()) = tokio::join!(executor.simulated_crash(worker_id), async {
+        original_success.abort_as_restart();
+    });
+    crash?;
+    drop(original_success);
+    Ok(())
+}
+
+/// Checks the recovered oplog of an invocation whose completed tool call was reconstructed: the
+/// invocation started once and finished once, the entity `Start` settled exactly once before the
+/// finish, every `Start` the invocation recorded has a terminal, and no positional `Start` or
+/// `End` follows the finish.
+fn assert_replayed_reconstruction_invocation_settled(
+    oplog: &[PublicOplogEntryWithIndex],
+    method_name: &str,
+    entity_start: OplogIndex,
+) {
+    let started = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name.replace('-', "_") == method_name
+                    )
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(started.len(), 1, "{method_name} must start exactly once");
+    let started = started[0];
+    let finished = oplog
+        .iter()
+        .filter(|entry| {
+            entry.oplog_index > started
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(finished.len(), 1, "{method_name} must finish exactly once");
+    let finished = finished[0];
+    let terminals_of = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    let entity_terminals = terminals_of(entity_start);
+    assert_eq!(
+        entity_terminals.len(),
+        1,
+        "the entity Start {entity_start} must settle exactly once"
+    );
+    assert!(entity_terminals[0] < finished);
+    for entry in oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > started && entry.oplog_index < finished)
+    {
+        if matches!(entry.entry, PublicOplogEntry::Start(_)) {
+            let terminals = terminals_of(entry.oplog_index);
+            assert_eq!(
+                terminals.len(),
+                1,
+                "Start {} of {method_name} must have exactly one terminal",
+                entry.oplog_index
+            );
+            assert!(terminals[0] < finished);
+        }
+    }
+    assert!(
+        oplog.iter().all(|entry| entry.oplog_index < finished
+            || !matches!(
+                entry.entry,
+                PublicOplogEntry::Start(_) | PublicOplogEntry::End(_)
+            )),
+        "no positional Start or End may follow the finish of {method_name}"
+    );
+}
+
 /// Waits until the replayed clock claim parks on the completed reconstruction whose supervisor the
 /// test holds: the clock `Start` was never recorded, and the body's entries are still at the
 /// cursor head.
@@ -8925,11 +9019,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
 
         if case == CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow {
             let mut supervisor = executor.gate_next_completed_reconstruction_supervisor(&worker_id);
-            let (crash, ()) = tokio::join!(executor.simulated_crash(&worker_id), async {
-                original_success.abort_as_restart();
-            });
-            crash?;
-            drop(original_success);
+            crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
             let start =
                 tokio::time::timeout(std::time::Duration::from_secs(30), supervisor.entered())
                     .await
@@ -8939,7 +9029,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
             assert_eq!(start, reconstruction_start);
             wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id).await?;
             supervisor.release();
-            return Ok::<_, anyhow::Error>(());
+            return Ok::<_, anyhow::Error>(reconstruction_start);
         }
         let mut reconstruction_body =
             executor.gate_next_completed_entity_reconstruction(&worker_id);
@@ -8947,11 +9037,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
             executor.diverge_next_completed_entity_reconstruction(&worker_id);
         }
         let mut replayed_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
-        let (crash, ()) = tokio::join!(executor.simulated_crash(&worker_id), async {
-            original_success.abort_as_restart();
-        });
-        crash?;
-        drop(original_success);
+        crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
         let claimed_start =
             tokio::time::timeout(std::time::Duration::from_secs(30), replayed_claim.entered())
                 .await
@@ -9073,24 +9159,35 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 executor.shutdown_and_wait_for_invocation_loops().await?;
             }
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, anyhow::Error>(reconstruction_start)
     };
 
     let (invocation_result, validation_result) = tokio::join!(
         tokio::time::timeout(std::time::Duration::from_secs(60), &mut invocation),
         validate_recovery
     );
-    validation_result?;
+    let reconstruction_start = validation_result?;
     let invocation_result = invocation_result
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
     match case {
         CompletedReconstructionExclusiveCase::Success
         | CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
             invocation_result?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_replayed_reconstruction_invocation_settled(
+                &oplog,
+                "hold_completed_reconstruction_before_exclusive_clock",
+                reconstruction_start,
+            );
         }
         CompletedReconstructionExclusiveCase::Divergence => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_replayed_reconstruction_invocation_settled(
+                &oplog,
+                "hold_completed_reconstruction_before_exclusive_clock",
+                reconstruction_start,
+            );
             let failed_updates = oplog
                 .iter()
                 .filter_map(|entry| match &entry.entry {
