@@ -1,0 +1,106 @@
+---
+import { triad } from "../data/homepage";
+
+const icons: Record<string, string> = {
+  agents: `<circle cx="12" cy="8" r="3.5" />
+    <path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7" stroke-linecap="round" />`,
+  tools: `<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4 2.6-2.6z" stroke-linejoin="round" />`,
+  artifacts: `<rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M3 9h18" />
+    <circle cx="6.5" cy="6.5" r="0.6" fill="currentColor" />
+    <circle cx="9" cy="6.5" r="0.6" fill="currentColor" />
+    <path d="M8 14h8M8 17h5" stroke-linecap="round" />`,
+};
+---
+
+<section class="triad">
+  <div class="container">
+    <header class="triad-header">
+      <span class="eyebrow">{triad.eyebrow}</span>
+      <h2 class="section-heading">{triad.heading}</h2>
+    </header>
+
+    <div class="triad-grid">
+      {
+        triad.pillars.map((p) => (
+          <article class="triad-card">
+            <div class="triad-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                set:html={icons[p.id]}
+              />
+            </div>
+            <h3>{p.title}</h3>
+            <p set:html={p.bodyHtml} />
+          </article>
+        ))
+      }
+    </div>
+
+    <p class="triad-closer" set:html={triad.closerHtml} />
+  </div>
+</section>
+
+<style>
+  .triad {
+    padding: 4.5rem 0 4rem;
+    border-top: 1px solid var(--border);
+  }
+  .triad-header {
+    margin-bottom: 2.25rem;
+  }
+  .triad-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+  @media (min-width: 900px) {
+    .triad-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  .triad-card {
+    position: relative;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.6rem 1.5rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .triad-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: var(--accent-dim);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .triad-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+  .triad-card h3 {
+    font-size: 1.18rem;
+    letter-spacing: -0.01em;
+  }
+  .triad-card p {
+    font-size: 0.95rem;
+    line-height: 1.55;
+  }
+  .triad-closer {
+    margin-top: 2rem;
+    font-size: 1.08rem;
+    color: var(--text-secondary);
+  }
+  .triad-closer :global(strong) {
+    color: var(--accent);
+    font-weight: 500;
+  }
+</style>

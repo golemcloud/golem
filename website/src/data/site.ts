@@ -2,9 +2,9 @@
 // Keep this file small — section-specific copy lives in `homepage.ts`.
 
 export const site = {
-  title: "Golem — The durable agent runtime",
+  title: "Golem — Agents, tools, and artifacts on one durable runtime",
   description:
-    "Golem is the durable agent runtime that persists state, executes tools transactionally, and enforces every policy. Trust by construction.",
+    "Golem is the durable runtime for agents, their tools, and their artifacts — state persists, every tool call executes exactly once, and the host enforces every policy. Open source.",
   brand: {
     name: "Golem",
   },
@@ -15,6 +15,5 @@ export const urls = {
   discord: "https://discord.com/invite/UjXeH8uG4x",
   quickstart: "https://learn.golem.cloud/quickstart",
   docs: "https://learn.golem.cloud",
-  subscribe: "/subscribe",
-  roadmap: "/roadmap",
+  releases: "https://github.com/golemcloud/golem/releases",
 } as const;
