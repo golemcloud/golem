@@ -13,9 +13,14 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::oplog_blob_archive::new_s3_test;
+use golem_common::config::DbSqliteConfig;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
+use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL, STORAGE_OBJECTS_WRITTEN_TOTAL,
@@ -565,19 +570,81 @@ async fn blobstore_gives_an_error_for_a_container_name_at_the_root_of_the_namesp
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    // The in-memory backend gives no metadata for a root path, as the S3 backend does, so a read
+    // that finds no container is not hidden.
+    check_the_root_container_names(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Arc::new(InMemoryBlobStorage::new()),
+    )
+    .await
+}
+
+/// The root container names give the same permanent error on the SQLite backend.
+#[test]
+#[tracing::instrument]
+async fn blobstore_gives_an_error_for_a_container_name_at_the_root_on_sqlite(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let root = tempfile::TempDir::new()?;
+    let pool = SqlitePool::configured(&DbSqliteConfig {
+        database: root
+            .path()
+            .join("blob_storage.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 4,
+        foreign_keys: false,
+    })
+    .await?;
+    check_the_root_container_names(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Arc::new(SqliteBlobStorage::new(pool).await?),
+    )
+    .await
+}
+
+/// The root container names give the same permanent error on the S3 backend, over RustFS.
+#[test]
+#[tracing::instrument]
+async fn blobstore_gives_an_error_for_a_container_name_at_the_root_on_s3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The test keeps the RustFS container of the storage until it ends.
+    let s3 = new_s3_test();
+    check_the_root_container_names(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Arc::new(s3.s3_storage().await),
+    )
+    .await
+}
+
+/// Drives each host function that takes a container name with each root name, through the blob
+/// store service of production over `storage`, and requires the permanent error of a name.
+async fn check_the_root_container_names(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    storage: Arc<dyn BlobStorage + Send + Sync>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // The executor runs the blob store service of production over the in-memory backend, which
-    // gives no metadata for a root path, as the S3 backend does. The filesystem backend that
-    // the test dependencies hold gives the metadata of the directory of the namespace there, so
-    // it hides the read that found no container.
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            wrap_blob_store_service: Some(Arc::new(|_| {
-                Arc::new(DefaultBlobStoreService::new(Arc::new(
-                    InMemoryBlobStorage::new(),
-                )))
+            wrap_blob_store_service: Some(Arc::new(move |_| {
+                Arc::new(DefaultBlobStoreService::new(storage.clone()))
             })),
             ..Default::default()
         },

@@ -76,7 +76,7 @@ fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
 /// Spins up a fresh RustFS container per `get_blob_storage` call and keeps it
 /// alive for the lifetime of this per-worker dependency, so the returned S3
 /// blob storage remains usable for the whole test.
-struct S3Test {
+pub(crate) struct S3Test {
     s3_servers: Mutex<Vec<DockerRustFs>>,
 }
 
@@ -94,8 +94,9 @@ impl GetBlobStorage for S3Test {
 }
 
 impl S3Test {
-    /// Gives an S3 blob storage on a new RustFS container, which this dependency keeps alive.
-    async fn s3_storage(&self) -> s3::S3BlobStorage {
+    /// Gives an S3 blob storage on a new RustFS container, which this dependency keeps alive. The
+    /// container has the buckets of the compressed oplog and of the custom data of a guest.
+    pub(crate) async fn s3_storage(&self) -> s3::S3BlobStorage {
         let s3_server = DockerRustFs::new().await;
 
         let config = S3BlobStorageConfig {
@@ -140,12 +141,16 @@ async fn create_buckets(s3_server: &dyn S3Server, config: &S3BlobStorageConfig) 
             .force_path_style(true)
             .build(),
     );
-    for bucket in &config.compressed_oplog_buckets {
+    for bucket in config
+        .compressed_oplog_buckets
+        .iter()
+        .chain([&config.custom_data_bucket])
+    {
         client.create_bucket().bucket(bucket).send().await.unwrap();
     }
 }
 
-fn new_s3_test() -> S3Test {
+pub(crate) fn new_s3_test() -> S3Test {
     S3Test {
         s3_servers: Mutex::new(Vec::new()),
     }
