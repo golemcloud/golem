@@ -70,11 +70,12 @@ const containsBoundary = (parts: ReadonlyArray<MultipartPart>, boundary: string)
   const newline = encoder.encode(CRLF)
   return parts.some((part) => {
     // Appended framing can complete a delimiter at the end of a payload.
-    const data = concat([part.body, newline])
-    for (let i = 0; i < data.length; i++) {
+    const data = part.body
+    for (let i = data.indexOf(marker[0]!); i >= 0; i = data.indexOf(marker[0]!, i + 1)) {
       if (
         (i === 0 || matches(data, newline, i - newline.length)) &&
-        delimiterAt(data, marker, newline, i)
+        (delimiterAt(data, marker, newline, i) ||
+          (i + marker.length === data.length && matches(data, marker, i)))
       )
         return true
     }
@@ -173,8 +174,8 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
     if (names.has(name)) throw new MultipartCodecError(`Duplicate multipart part name: ${name}`)
     names.add(name)
     let next: ReturnType<typeof delimiterAt> = undefined
-    let bodyEnd = pos
-    for (; bodyEnd < data.length; bodyEnd++) {
+    let bodyEnd = data.indexOf(newline[0]!, pos)
+    for (; bodyEnd >= 0; bodyEnd = data.indexOf(newline[0]!, bodyEnd + 1)) {
       if (matches(data, newline, bodyEnd)) {
         next = delimiterAt(data, marker, newline, bodyEnd + newline.length)
         if (next) break

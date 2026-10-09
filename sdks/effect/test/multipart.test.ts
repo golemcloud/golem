@@ -43,6 +43,59 @@ describe("multipart encode/decode", () => {
     expect(decodeMultipart(encoded.data, encoded.boundary)[0]!.body).toEqual(body)
   })
 
+  it("preserves a large binary sandwich independently of the input buffer", () => {
+    const body = Uint8Array.from({ length: 4 * 1024 * 1024 }, (_, i) => i % 256)
+    const parts = [
+      { name: "state", contentType: "application/json", body: enc('{"count":17}') },
+      { name: "db:primary", contentType: "application/octet-stream", body },
+      { name: "tail", contentType: "application/json", body: enc('{"last":true}') },
+    ]
+    const encoded = encodeMultipart(parts)
+    const decoded = decodeMultipart(encoded.data, encoded.boundary)
+    expect(decoded.map(({ name, contentType }) => ({ name, contentType }))).toEqual(
+      parts.map(({ name, contentType }) => ({ name, contentType })),
+    )
+    for (const clearInput of [false, true]) {
+      if (clearInput) encoded.data.fill(0)
+      for (let i = 0; i < parts.length; i++) {
+        expect(Buffer.from(decoded[i]!.body).equals(Buffer.from(parts[i]!.body))).toBe(true)
+      }
+    }
+  })
+
+  for (const newline of ["\r\n", "\n"]) {
+    it(`preserves false delimiters and payload endings with ${JSON.stringify(newline)} framing`, () => {
+      const body = `\n\n--almost\n--b\r\ninvalid\r\n--bextra\r\n--b--extra\r\n\r\nend\n`
+      // Bare LF before a complete marker is payload only in CRLF framing.
+      const payload = newline === "\r\n" ? body : body.replace("\n--b\r\n", "\n--bextra\r\n")
+      const data = enc(
+        `--b${newline}Content-Type: application/octet-stream${newline}Content-Disposition: attachment; name="part:index"${newline}${newline}${payload}${newline}--b--`,
+      )
+      expect(dec(decodeMultipart(data, "b")[0]!.body)).toBe(payload)
+    })
+  }
+
+  for (const suffix of ["", "\r", "x", "--", "--\r", "--x"]) {
+    it(`classifies final-position collisions after false candidates: ${JSON.stringify(suffix)}`, () => {
+      const first = "11111111111111111111111111111111"
+      const second = "22222222222222222222222222222222"
+      const random = vi
+        .spyOn(crypto, "randomUUID")
+        .mockReturnValueOnce("11111111-1111-1111-1111-111111111111")
+        .mockReturnValue("22222222-2222-2222-2222-222222222222")
+      try {
+        const body = enc(`\r\r\n--almost\r\n--${first}x\r\n--${first}${suffix}`)
+        const encoded = encodeMultipart([
+          { name: "part:index", contentType: "application/octet-stream", body },
+        ])
+        expect(encoded.boundary).toBe(suffix === "" || suffix === "--" ? second : first)
+        expect(decodeMultipart(encoded.data, encoded.boundary)[0]!.body).toEqual(body)
+      } finally {
+        random.mockRestore()
+      }
+    })
+  }
+
   for (const payload of [
     "--B\r\ninside",
     "inside\r\n--B\r\nend",
