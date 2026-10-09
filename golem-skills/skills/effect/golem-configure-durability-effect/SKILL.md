@@ -1,6 +1,6 @@
 ---
 name: golem-configure-durability-effect
-description: "Choosing durable or ephemeral agent modes and scoped persistence levels in an Effect-based Golem project. Use when changing agent persistence, making an agent ephemeral, or controlling custom durable sections."
+description: "Choosing durable or ephemeral agent modes and writing custom durable functions in an Effect-based Golem project. Use when changing agent persistence, making an agent ephemeral, or controlling custom durable sections."
 ---
 
 # Configuring Agent Durability (Effect)
@@ -8,11 +8,12 @@ description: "Choosing durable or ephemeral agent modes and scoped persistence l
 Effect Golem has two related but different controls:
 
 1. `defineAgent({ mode: ... })` declares the agent type as durable or ephemeral.
-2. The `Durability` namespace controls the persistence level of a section while an agent is
-   running.
+2. The `Durability` namespace lets specialized library code record its own durable function calls
+   while an agent is running.
 
 Use the declaration mode when the request is to make an agent durable, ephemeral, persistent, or
-stateless. Do not replace an agent-mode change with a runtime persistence-level wrapper.
+stateless. A durable agent cannot opt out of oplog writes for part of its execution; there are no
+persistence levels in Golem 1.6.
 
 ## Durable Agents (Default)
 
@@ -120,38 +121,42 @@ The values are lowercase TypeScript string literals. Preserve the agent's name, 
 parameters, methods, implementation registration, and snapshot definition when the task only asks
 for a mode change. Run `golem build` after editing; do not edit generated files under `golem-temp/`.
 
-## Runtime Persistence Levels
+## Custom Durable Functions
 
 Import `Durability` as a namespace from `@golemcloud/effect-golem`. It is not an Effect service tag
 and must not be yielded as `yield* Durability`.
 
-For specialized code implementing custom durability, temporarily select a persistence level with
-the scoped combinator:
+Library code that performs an effect Golem does not already record (for example, a call through a
+custom transport) can make it durable with `Durability.wrap`. On a live run, the body executes and
+its schema-encoded result is recorded in the oplog. On replay, the recorded result is returned and
+the body does not run again:
 
 ```typescript
+import { Schema } from "effect";
 import { Durability } from "@golemcloud/effect-golem";
 
-const result = Durability.withPersistenceLevel(
-  Durability.PersistenceLevel.persistNothing,
-  customDurabilityEffect,
-);
+const stockLevel = (sku: string) =>
+  Durability.wrap(
+    {
+      iface: "inventory",
+      function: "stock-level",
+      functionType: Durability.FunctionType.readRemote,
+      requestSchema: Schema.Struct({ sku: Schema.String }),
+      success: Schema.Number,
+    },
+    { sku },
+    fetchStockLevel(sku),
+  );
 ```
 
-The available levels are:
+Pass an `error` schema to also record typed failures; without it, only successes are recorded.
+Defects and interruption leave the invocation unfinished, so it runs again on recovery. Use
+`Durability.wrapInfallible` for bodies that cannot fail. Choose `functionType`
+(`readLocal`, `writeLocal`, `readRemote`, `writeRemote`, `writeRemoteBatched`,
+`writeRemoteTransaction`) by whether re-executing the call after a crash is safe.
 
-| Value                                                  | Meaning                                                  |
-| ------------------------------------------------------ | -------------------------------------------------------- |
-| `Durability.PersistenceLevel.smart`                    | Default, recommended host-managed durable behavior       |
-| `Durability.PersistenceLevel.persistRemoteSideEffects` | Persist remote side effects only                         |
-| `Durability.PersistenceLevel.persistNothing`           | Run the section without replay or restoration guarantees |
-
-`withPersistenceLevel` restores the previous level when its Effect exits. For low-level integration
-code, `Durability.getPersistenceLevel` is an Effect value and
-`Durability.setPersistenceLevel(level)` changes the host mode directly.
-
-`persistNothing` does **not** make the agent type ephemeral, and `smart` does **not** make an
-ephemeral agent durable. Only the `defineAgent` `mode` field changes the agent type metadata shown
-by `golem agent-type list`.
+Golem's built-in host APIs (HTTP, RPC, key-value, blob storage, databases) are already durable;
+do not wrap them again.
 
 ## Choosing a Mode
 
@@ -160,7 +165,7 @@ by `golem agent-type list`.
 | Counter, shopping cart, workflow, or recoverable external calls     | Durable (default)                    |
 | Stateless transformer or adapter with no recovery requirement       | Ephemeral                            |
 | Long-running durable agent with a growing oplog                     | Durable with snapshots               |
-| Custom library section that implements its own live/replay protocol | Scoped `Durability.PersistenceLevel` |
+| Custom library effect that Golem does not record on its own         | `Durability.wrap`                    |
 
-When in doubt, keep the agent durable. Treat ephemeral mode and `persistNothing` as explicit
-opt-outs from different durability guarantees, not as general performance switches.
+When in doubt, keep the agent durable. Treat ephemeral mode as an explicit opt-out from durability
+guarantees, not as a general performance switch.
