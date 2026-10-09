@@ -1,3 +1,4 @@
+use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
     AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
     spawn_local,
@@ -21,9 +22,96 @@ use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
     decode_schema_value, encode_schema_graph, tool_definition, tool_implementation,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
 const MARKER: &[u8] = b"marker:";
+
+async fn race_p3_sleeps(secs: Vec<u64>) -> u64 {
+    let waits: Vec<_> = secs
+        .into_iter()
+        .map(|secs| async move {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
+            secs
+        })
+        .collect();
+    waits.race().await
+}
+
+#[derive(Debug, Clone, ToolError)]
+pub enum ClockRaceError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed { message: String },
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait ClockRace {
+    async fn race_p3_sleeps(&self, secs: Vec<u64>) -> Result<u64, ClockRaceError>;
+    async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError>;
+    async fn polling_loop_vs_watchdog(&self) -> Result<String, ClockRaceError>;
+    async fn follow_up(&self) -> Result<String, ClockRaceError>;
+}
+
+struct ClockRaceImpl;
+
+#[tool_implementation]
+impl ClockRace for ClockRaceImpl {
+    async fn race_p3_sleeps(&self, secs: Vec<u64>) -> Result<u64, ClockRaceError> {
+        Ok(race_p3_sleeps(secs).await)
+    }
+
+    async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError> {
+        let promise_id = golem_rust::create_promise();
+        let promise = async {
+            golem_rust::await_promise(&promise_id).await;
+            "promise".to_string()
+        };
+        let timer = async {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
+            "timer".to_string()
+        };
+        Ok((promise, timer).race().await)
+    }
+
+    async fn polling_loop_vs_watchdog(&self) -> Result<String, ClockRaceError> {
+        let flag = Rc::new(Cell::new(false));
+        let set_flag = {
+            let flag = flag.clone();
+            async move {
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(3_000_000_000).await;
+                flag.set(true);
+            }
+        };
+        let poll = {
+            let flag = flag.clone();
+            async move {
+                loop {
+                    if flag.get() {
+                        break "flag".to_string();
+                    }
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(100_000_000).await;
+                }
+            }
+        };
+        let watchdog = async {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000).await;
+            "watchdog".to_string()
+        };
+        let (_, result) = (set_flag, (poll, watchdog).race()).join().await;
+        Ok(result)
+    }
+
+    async fn follow_up(&self) -> Result<String, ClockRaceError> {
+        Ok("settled".to_string())
+    }
+}
 
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 #[schema(rename_all = "camelCase")]

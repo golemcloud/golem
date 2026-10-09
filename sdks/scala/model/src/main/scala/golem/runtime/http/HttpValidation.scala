@@ -155,7 +155,11 @@ object HttpValidation {
     constructorParamNames: Set[String]
   ): Either[String, Unit] = {
     val missing = mount.pathPrefix.zipWithIndex.collect {
-      case (PathSegment.PathVariable(varName), idx) if !constructorParamNames.contains(varName) =>
+      case (PathSegment.PathVariable(varName), idx)
+          if !constructorParamNames.contains(varName) &&
+            !mount.phantomIdBinding.exists {
+              case PhantomIdBinding.Path(name, _) => name == varName; case _ => false
+            } =>
         (varName, idx)
     }
     missing.headOption match {
@@ -225,6 +229,14 @@ object HttpValidation {
     principalParamNames: Set[String]
   ): Either[String, Unit] =
     for {
+      _ <- mount.phantomIdBinding match {
+             case Some(binding) if binding.name.isEmpty => Left("Phantom selector name must not be empty")
+             case Some(PhantomIdBinding.Path(name, _))
+                 if (constructorParamNames ++ principalParamNames).contains(name) ||
+                   mount.pathPrefix.count { case PathSegment.PathVariable(n) => n == name; case _ => false } != 1 =>
+               Left("Phantom path selector must name exactly one mount capture, not a constructor parameter")
+             case _ => Right(())
+           }
       _ <- validateNoCatchAllInMount(agentName, mount)
       _ <- validateMountVarsAreNotPrincipal(agentName, mount, principalParamNames)
       _ <- validateMountVarsExistInConstructor(mount, constructorParamNames)

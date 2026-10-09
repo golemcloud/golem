@@ -2898,6 +2898,17 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 .prop_map(|required| golem_common::model::agent::AgentHttpAuthDetails { required }),
         ),
         any::<bool>(),
+        proptest::option::of((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
+            |(path, name, optional)| {
+                let details =
+                    golem_common::model::agent::PhantomIdBindingDetails { name, optional };
+                if path {
+                    golem_common::model::agent::PhantomIdBinding::Path(details)
+                } else {
+                    golem_common::model::agent::PhantomIdBinding::Query(details)
+                }
+            },
+        )),
         proptest::collection::vec(arb_small_string(), 0..2),
         proptest::collection::vec(arb_path_segment(), 0..2),
         proptest::collection::vec(arb_file_mapping(), 1..3),
@@ -2910,6 +2921,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 path_prefix,
                 auth_details,
                 phantom_agent,
+                phantom_id_binding,
                 allowed_patterns,
                 webhook_suffix,
                 static_bindings,
@@ -2921,6 +2933,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                     path_prefix,
                     auth_details,
                     phantom_agent,
+                    phantom_id_binding,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     webhook_suffix,
                     static_bindings,

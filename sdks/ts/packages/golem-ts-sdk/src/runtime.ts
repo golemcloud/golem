@@ -359,6 +359,45 @@ function validateHttpConsistency(
   const mountVars = httpMount ? pathVariableNames(httpMount.pathPrefix) : new Set<string>();
 
   if (httpMount) {
+    const selector = httpMount.phantomIdBinding;
+    if (selector) {
+      const { name: selectorName } = selector.val;
+      if (!selectorName) {
+        throw new Error('Phantom selector must have a nonempty name');
+      }
+      if (typeof selector.val.optional !== 'boolean') {
+        throw new Error('Phantom selector optionality must be a boolean');
+      }
+      if (selector.tag === 'path') {
+        if (
+          idNames.has(selectorName) ||
+          httpMount.pathPrefix.filter(
+            (s) => s.tag === 'path-variable' && s.val.variableName === selectorName,
+          ).length !== 1
+        ) {
+          throw new Error(
+            'Phantom path selector must name exactly one mount capture, not an id field',
+          );
+        }
+        mountVars.delete(selectorName);
+      }
+      for (const mc of methodCodecs.values()) {
+        for (const ep of mc.httpEndpoints) {
+          if (
+            (selector.tag === 'query' &&
+              ep.queryVars.some((q) => q.queryParamName === selectorName)) ||
+            (selector.tag === 'path' && pathVariableNames(ep.pathSuffix).has(selectorName)) ||
+            (ep.durableStreams &&
+              selector.tag === 'query' &&
+              ['offset', 'cursor', 'live'].includes(selectorName))
+          ) {
+            throw new Error(
+              'Phantom selector conflicts with an endpoint binding or durable-stream control',
+            );
+          }
+        }
+      }
+    }
     for (const v of mountVars) {
       if (!idNames.has(v)) {
         throw new Error(
@@ -450,6 +489,12 @@ function assembleAgentType(
   const router = metadata.router ? compileRouterMount(metadata.router) : undefined;
   const httpMount: HttpMountDetails | undefined =
     router?.mount ?? (metadata.http ? compileHttpMount(name, metadata.http) : undefined);
+  if (
+    httpMount?.phantomIdBinding &&
+    (metadata.mode === 'ephemeral' || router || httpMount.filesystemBindings.length)
+  ) {
+    throw new Error('Phantom selectors require a regular durable mount without file exposure');
+  }
   if (router) {
     if (
       idCodecs.length ||

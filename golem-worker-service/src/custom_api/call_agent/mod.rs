@@ -37,7 +37,7 @@ use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
+    CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection, RequestBodySchema,
 };
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
@@ -60,16 +60,12 @@ impl CallAgentHandler {
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        // Phantom routes address a fresh agent instance on every call. For
-        // durable agents this requires generating a random phantom id here;
-        // for ephemeral agents the final per-invocation phantom identity is
-        // derived downstream from the invocation's idempotency key, so the
-        // target is addressed by its logical agent id.
-        let phantom_id = if behaviour.phantom {
-            (behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4)
-        } else {
-            None
-        };
+        let phantom_id = resolve_phantom_id(
+            request,
+            resolved_route,
+            &behaviour.phantom_selection,
+            |phantom| (phantom && behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4),
+        )?;
 
         let agent_id = Self::build_agent_id(
             resolved_route,
@@ -558,6 +554,43 @@ fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
     }
 }
 
+pub(super) fn resolve_phantom_id(
+    request: &RichRequest,
+    resolved_route: &ResolvedRouteEntry,
+    selection: &PhantomSelection,
+    policy: impl FnOnce(bool) -> Option<Uuid>,
+) -> Result<Option<Uuid>, RequestHandlerError> {
+    let value = match selection {
+        PhantomSelection::Policy { phantom } => return Ok(policy(*phantom)),
+        PhantomSelection::Original => return Ok(None),
+        PhantomSelection::Path { index } => {
+            resolved_route.captured_path_parameters[usize::from(*index)].as_str()
+        }
+        PhantomSelection::Query { name, optional } => {
+            match request.query_params().get(name).map(Vec::as_slice) {
+                Some([value]) => value.as_str(),
+                None if *optional => return Ok(None),
+                None | Some([]) => {
+                    return Err(RequestHandlerError::MissingValue {
+                        expected: "phantom UUID query selector",
+                    });
+                }
+                _ => {
+                    return Err(RequestHandlerError::TooManyValues {
+                        expected: "phantom UUID query selector",
+                    });
+                }
+            }
+        }
+    };
+    Uuid::parse_str(value)
+        .map(Some)
+        .map_err(|_| RequestHandlerError::ValueParsingFailed {
+            value: value.into(),
+            expected: "UUID",
+        })
+}
+
 pub(super) fn principal_from_request(
     request: &RichRequest,
 ) -> Result<Principal, RequestHandlerError> {
@@ -576,5 +609,188 @@ pub(super) fn principal_from_request(
                 .map_err(|e| anyhow!("CoreIdTokenClaims serialization error: {e}"))?,
         })),
         None => Ok(Principal::anonymous()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
+    use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType};
+    use test_r::test;
+
+    #[test]
+    async fn explicit_phantom_selection_validates_decoded_queries_and_capture_ordinals() {
+        let p = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let q = "8badf00d-1234-4567-89ab-0123456789ab";
+        let resolver = test_resolver(vec![test_route(
+            1,
+            "/base/{decision}/{instance}/literal/{tenant}",
+            Some("GET"),
+            "typed",
+        )]);
+        let route_request = poem::Request::builder()
+            .uri(format!("/base/d7/{p}/literal/west").parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let mut resolved = resolver
+            .resolve_matching_route(&route_request)
+            .await
+            .unwrap();
+        let path = PhantomSelection::Path { index: 1.into() };
+        assert_eq!(
+            resolve_phantom_id(
+                &RichRequest::new(route_request),
+                &resolved,
+                &path,
+                |_| panic!("explicit selection must not use policy")
+            )
+            .unwrap(),
+            Some(p)
+        );
+        for optional in [false, true] {
+            let selection = PhantomSelection::Query {
+                name: "instance".into(),
+                optional,
+            };
+            for query in [
+                format!("instance={p}"),
+                format!("instance={}", p.to_string().to_uppercase()),
+                format!("%69nstance={}", p.to_string().replace('-', "%2D")),
+                format!("other=one&instance={p}&other=two"),
+            ] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/base?{query}").parse().unwrap())
+                        .finish(),
+                );
+                assert_eq!(
+                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                        "explicit selection must not use policy"
+                    ))
+                    .unwrap(),
+                    Some(p)
+                );
+            }
+            for query in [
+                "instance=".into(),
+                "instance=invalid".into(),
+                format!("instance={p}&instance={p}"),
+                format!("instance={p}&instance={q}"),
+                format!("instance={p}&%69nstance={p}"),
+            ] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/base?{query}").parse().unwrap())
+                        .finish(),
+                );
+                assert!(
+                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                        "invalid explicit selection must not use policy"
+                    ))
+                    .is_err()
+                );
+            }
+            let request = RichRequest::new(
+                poem::Request::builder()
+                    .uri("/base".parse().unwrap())
+                    .finish(),
+            );
+            let result = resolve_phantom_id(&request, &resolved, &selection, |_| {
+                panic!("optional omission must not use policy")
+            });
+            if optional {
+                assert_eq!(result.unwrap(), None);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        let request = RichRequest::new(poem::Request::builder().finish());
+        assert_eq!(
+            resolve_phantom_id(
+                &request,
+                &resolved,
+                &PhantomSelection::Original,
+                |_| panic!("original must not use policy")
+            )
+            .unwrap(),
+            None
+        );
+        for phantom in [false, true] {
+            assert_eq!(
+                resolve_phantom_id(
+                    &request,
+                    &resolved,
+                    &PhantomSelection::Policy { phantom },
+                    |flag| {
+                        assert_eq!(flag, phantom);
+                        Some(p)
+                    }
+                )
+                .unwrap(),
+                Some(p)
+            );
+        }
+        let constructor = CompiledInputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "decision".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+                golem_common::schema::NamedFieldType {
+                    name: "tenant".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+            ])),
+            input_schema: InputSchema::Parameters(vec![]),
+        };
+        let bindings = vec![
+            ConstructorParameter::Path {
+                path_segment_index: 0.into(),
+                parameter_type: PathSegmentType::Str,
+            },
+            ConstructorParameter::Path {
+                path_segment_index: 2.into(),
+                parameter_type: PathSegmentType::Str,
+            },
+        ];
+        let component_id = golem_common::model::component::ComponentId::new();
+        let agent_type = golem_common::model::agent::AgentTypeName("selected".into());
+        let id = CallAgentHandler::build_agent_id(
+            &resolved,
+            component_id,
+            &agent_type,
+            &constructor,
+            &bindings,
+            Some(p),
+        )
+        .unwrap();
+        assert_eq!(id.agent_id, format!("selected(\"d7\",\"west\")[{p}]"));
+        resolved.captured_path_parameters[0] = "d9".into();
+        let other = CallAgentHandler::build_agent_id(
+            &resolved,
+            component_id,
+            &agent_type,
+            &constructor,
+            &bindings,
+            Some(p),
+        )
+        .unwrap();
+        assert_eq!(other.agent_id, format!("selected(\"d9\",\"west\")[{p}]"));
+        assert_ne!(id, other);
+        let other_component = CallAgentHandler::build_agent_id(
+            &resolved,
+            golem_common::model::component::ComponentId::new(),
+            &agent_type,
+            &constructor,
+            &bindings,
+            Some(p),
+        )
+        .unwrap();
+        assert_eq!(other.agent_id, other_component.agent_id);
+        assert_ne!(other, other_component);
     }
 }

@@ -80,6 +80,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
@@ -2544,6 +2545,8 @@ async fn wait_for_promise_checkpoint_to_await(
 ) -> anyhow::Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
+            // A resident owner can park with a buffered Start; oplog reads only see commits.
+            executor.commit_oplog(worker_id).await?;
             let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
             let checkpoint_parent = oplog.iter().find_map(|entry| {
                 (entry.oplog_index == checkpoint.oplog_idx).then(|| match &entry.entry {
@@ -4990,6 +4993,169 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
     executor.delete_worker(&worker_id).await?;
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn native_entity_vetoes_owner_suspension_until_cancelled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let mut streaming = native_streaming_tool_metadata();
+    streaming.commands.nodes[0].name = "native-streaming".to_string();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut state = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    let native = native_deployment_state(
+        context.account_id,
+        "ToolStreamingCaller",
+        streaming,
+        native_test_tool_metadata(),
+    );
+    state.registered_tools.extend(native.registered_tools);
+    for (owner, bindings) in native.tool_bindings {
+        state
+            .tool_bindings
+            .entry(owner)
+            .or_default()
+            .extend(bindings);
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(state),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "native-veto-long-clock");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let gate = executor
+        .invoke_and_await_agent(&caller_component, &agent, "native_veto_gate", data_value!())
+        .await?
+        .into_return_value()
+        .expect("promise gate");
+    let SchemaValue::Record { fields } = &gate else {
+        panic!("promise record")
+    };
+    let SchemaValue::U64(index) = fields[1] else {
+        panic!("promise oplog index")
+    };
+    let loads = executor.instance_load_count(&worker);
+    let effects = executor.native_test_effect_count();
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "native_veto_with_long_clock",
+        crate::raw_params(vec![gate]),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => panic!("native gate finished early: {result:?}"),
+        started = tokio::time::timeout(Duration::from_secs(10), async {
+            while executor.native_test_effect_count() == effects {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }) => { started?; }
+    }
+    tokio::select! {
+        result = &mut invocation => panic!("native gate finished early: {result:?}"),
+        _ = async {
+            let until = tokio::time::Instant::now() + Duration::from_secs(3);
+            while tokio::time::Instant::now() < until {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert!(executor.worker_is_loaded(&owned).await, "executing native must veto unloading");
+                assert_eq!(executor.instance_load_count(&worker), loads);
+                assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await.unwrap()
+                    .iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))),
+                    "executing native must veto automatic suspension");
+            }
+        } => {}
+    }
+    assert_eq!(executor.native_test_effect_count(), effects + 1);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker.clone(),
+                oplog_idx: OplogIndex::from_u64(index),
+            },
+            vec![],
+        )
+        .await?;
+    tokio::select! {
+        result = &mut invocation => panic!("timer finished before unloading: {result:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(10), async {
+            executor.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(8)).await?;
+            while executor.worker_is_loaded(&owned).await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    let result = tokio::time::timeout(Duration::from_secs(45), invocation)
+        .await??
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(result, ["cancelled", "20", "settled"]);
+    assert!(executor.instance_load_count(&worker) > loads);
+    assert_eq!(
+        executor.native_test_effect_count(),
+        effects + 1,
+        "cancelled native must not repeat live effects during replay"
+    );
+    let follow_up = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "clock_races_through_tool_entity",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(follow_up, ["2", "2", "timer", "flag", "settled"]);
+    assert_eq!(executor.native_test_effect_count(), effects + 1);
+    executor.delete_worker(&worker).await?;
     Ok(())
 }
 
@@ -14457,6 +14623,292 @@ async fn filesystem_tools_work_through_guest_invocation(
         filesystem_tools,
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn clock_races_complete_through_tool_entity_without_suspending_owner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent = agent_id!("ToolStreamingCaller", "clock-race-tool-owner");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "clock_races_through_tool_entity",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(result, ["2", "2", "timer", "flag", "settled"]);
+
+    let interval = executor.get_oplog(&worker, boundary).await?;
+    assert!(
+        interval
+            .iter()
+            .filter(|entry| entry.oplog_index > boundary)
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
+        "tool/entity clock-race interval unexpectedly contained a Suspend entry"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn long_clock_through_tool_entity_suspends_and_reconstructs_owner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent = agent_id!("ToolStreamingCaller", "long-clock-tool-owner");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let loads = executor.instance_load_count(&worker);
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "long_clock_through_tool_entity",
+        data_value!(),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => panic!("tool timer finished before suspension: {result:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(15), async {
+            executor.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10)).await?;
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &worker)).await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    let result = tokio::time::timeout(Duration::from_secs(45), invocation)
+        .await??
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(result, ["20", "settled"]);
+    assert!(executor.instance_load_count(&worker) > loads);
+    let follow_up = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "clock_races_through_tool_entity",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(follow_up, ["2", "2", "timer", "flag", "settled"]);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn aggregate_clocks_through_tool_entities_suspend_after_short_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "aggregate-clock-tool-owner");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let loads = executor.instance_load_count(&worker);
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "aggregate_clocks_through_tool_entities",
+        data_value!(),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => panic!("aggregate finished before suspension: {result:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(15), async {
+            executor.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10)).await?;
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &worker)).await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    let parked = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let entity_starts: Vec<_> = parked
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(entity_starts.len(), 2);
+    assert_eq!(
+        parked
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::End(params) if entity_starts.contains(&params.start_index)
+            ))
+            .count(),
+        1,
+        "the short producer must finish before the remaining aggregate wait unloads"
+    );
+    let result = tokio::time::timeout(Duration::from_secs(45), invocation)
+        .await??
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(result, ["20", "2", "settled"]);
+    assert!(executor.instance_load_count(&worker) > loads);
+    let follow_up = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "clock_races_through_tool_entity",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(follow_up, ["2", "2", "timer", "flag", "settled"]);
     Ok(())
 }
 
