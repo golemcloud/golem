@@ -439,6 +439,7 @@ mod tests {
                 path_prefix: vec![],
                 auth_details: Some(AuthDetails { required: false }),
                 phantom_agent: false,
+                phantom_id_binding: None,
                 cors_options: CorsOptions {
                     allowed_patterns: vec![],
                 },

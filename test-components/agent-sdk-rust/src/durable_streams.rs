@@ -29,6 +29,9 @@ pub struct FramedRecord {
 pub trait DurableStreamAgent {
     fn new(id: String) -> Self;
 
+    #[endpoint(get = "/instance")]
+    fn instance(&self) -> String;
+
     #[endpoint(put = "/json/{count}?delay_ms={delay_ms}")]
     fn json(&self, count: u32, delay_ms: u64) -> AgentStream<String>;
 
@@ -144,6 +147,10 @@ struct DurableStreamAgentImpl;
 impl DurableStreamAgent for DurableStreamAgentImpl {
     fn new(_id: String) -> Self {
         Self
+    }
+
+    fn instance(&self) -> String {
+        golem_rust::agentic::get_agent_id().agent_id
     }
 
     fn json(&self, count: u32, delay_ms: u64) -> AgentStream<String> {
@@ -324,7 +331,10 @@ fn stream_with_delay<T: IntoWire + FromWire + 'static>(
     stream
 }
 
-fn copy_stream<T, U>(mut input: AgentStream<T>, map: impl Fn(T) -> U + 'static) -> AgentStream<U>
+pub(crate) fn copy_stream<T, U>(
+    mut input: AgentStream<T>,
+    map: impl Fn(T) -> U + 'static,
+) -> AgentStream<U>
 where
     T: 'static,
     U: IntoWire + FromWire + 'static,
@@ -368,6 +378,9 @@ impl InvalidDurableStreamAgent for InvalidDurableStreamAgentImpl {
 pub trait EphemeralStreamAgent {
     fn new() -> Self;
 
+    #[endpoint(get = "/instance")]
+    fn instance(&self) -> String;
+
     #[endpoint(put = "/identity/{label}")]
     fn identity(&self, label: String) -> AgentStream<String>;
 }
@@ -380,6 +393,10 @@ impl EphemeralStreamAgent for EphemeralStreamAgentImpl {
         Self
     }
 
+    fn instance(&self) -> String {
+        golem_rust::agentic::get_agent_id().agent_id
+    }
+
     fn identity(&self, label: String) -> AgentStream<String> {
         stream_with_delay([label, golem_rust::agentic::get_agent_id().agent_id], 0)
     }
@@ -388,6 +405,9 @@ impl EphemeralStreamAgent for EphemeralStreamAgentImpl {
 #[agent_definition(mount = "/phantom-stream-agents", phantom_agent = true)]
 pub trait PhantomStreamAgent {
     fn new() -> Self;
+
+    #[endpoint(get = "/instance")]
+    fn instance(&self) -> String;
 
     #[endpoint(put = "/identity/{label}")]
     fn identity(&self, label: String) -> AgentStream<String>;
@@ -399,6 +419,10 @@ struct PhantomStreamAgentImpl;
 impl PhantomStreamAgent for PhantomStreamAgentImpl {
     fn new() -> Self {
         Self
+    }
+
+    fn instance(&self) -> String {
+        golem_rust::agentic::get_agent_id().agent_id
     }
 
     fn identity(&self, label: String) -> AgentStream<String> {
