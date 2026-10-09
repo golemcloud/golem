@@ -23,7 +23,8 @@ use crate::schema::tool::canonical::{
 };
 use crate::schema::tool::constraints::validate_tool_constraints;
 use crate::schema::tool::{
-    DuplicateKeyPolicy, FlagShape, FlagSpec, OptionShape, OptionSpec, Repetition, Tool,
+    DuplicateKeyPolicy, FlagShape, FlagSpec, OptionShape, OptionSpec, Positional, Repetition,
+    TailPositional, Tool,
 };
 use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use std::collections::HashMap;
@@ -800,21 +801,14 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
     if let Some(body) = &command.body {
         for p in &body.positionals.fixed {
             out.push(' ');
-            let name = p.value_name.as_deref().unwrap_or(&p.name);
-            if p.required && p.default.is_none() {
-                out.push_str(&format!("<{name}>"));
-            } else {
-                out.push_str(&format!("[{name}]"));
-            }
+            out.push_str(&positional_label(p));
         }
         if let Some(tail) = &body.positionals.tail {
             if let Some(separator) = &tail.separator {
                 out.push_str(&format!(" {separator}"));
             }
-            out.push_str(&format!(
-                " [{}]...",
-                tail.value_name.as_deref().unwrap_or(&tail.name)
-            ));
+            out.push(' ');
+            out.push_str(&tail_label(tail));
         }
     }
     out.push('\n');
@@ -833,6 +827,26 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
             if let Some(c) = child.as_usize().and_then(|i| tool.commands.nodes.get(i)) {
                 out.push_str(&format!("  {:16} {}\n", c.name, c.doc.summary));
             }
+        }
+    }
+    if let Some(body) = &command.body {
+        let mut arguments: Vec<_> = body
+            .positionals
+            .fixed
+            .iter()
+            .map(|p| (positional_label(p), &p.doc, &p.type_))
+            .collect();
+        if let Some(tail) = &body.positionals.tail {
+            arguments.push((tail_label(tail), &tail.doc, &tail.item_type));
+        }
+        if !arguments.is_empty() {
+            out.push_str("\nArguments:\n");
+        }
+        for (label, doc, type_) in arguments {
+            let text = format!("{}{}", doc.summary, possible_values(&tool.schema, type_));
+            let line = format!("  {label:16} {}", text.trim_start());
+            out.push_str(line.trim_end());
+            out.push('\n');
         }
     }
     out.push_str("\nOptions:\n");
@@ -856,6 +870,15 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
                 if !o.aliases.is_empty() {
                     out.push_str(&format!(" [aliases: {}]", o.aliases.join(", ")));
                 }
+                match &o.shape {
+                    OptionShape::Scalar(type_) | OptionShape::OptionalScalar(type_) => {
+                        out.push_str(&possible_values(&tool.schema, type_));
+                    }
+                    OptionShape::RepeatableList(shape) => {
+                        out.push_str(&possible_values(&tool.schema, &shape.item_type));
+                    }
+                    OptionShape::RepeatableMap(_) => {}
+                }
                 out.push('\n');
             }
             Surface::Flag(f) => {
@@ -878,6 +901,43 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
         out.push_str("  -h, --help      Print help (reserved only when undeclared)\n");
     }
     out
+}
+
+/// A fixed positional as the usage line and the argument list show it.
+fn positional_label(positional: &Positional) -> String {
+    let name = positional.value_name.as_deref().unwrap_or(&positional.name);
+    if positional.required && positional.default.is_none() {
+        format!("<{name}>")
+    } else {
+        format!("[{name}]")
+    }
+}
+
+/// The tail positional as the usage line and the argument list show it.
+fn tail_label(tail: &TailPositional) -> String {
+    format!("[{}]...", tail.value_name.as_deref().unwrap_or(&tail.name))
+}
+
+/// The help marker that lists the cases of an enum value, or nothing for another type.
+fn possible_values(graph: &SchemaGraph, type_: &SchemaType) -> String {
+    match enum_cases(graph, type_) {
+        Some(cases) => format!(" [possible values: {}]", cases.join(", ")),
+        None => String::new(),
+    }
+}
+
+/// The cases of the enum that a value of `type_` is, through named references and options.
+fn enum_cases<'a>(graph: &'a SchemaGraph, type_: &'a SchemaType) -> Option<&'a [String]> {
+    let mut current = type_;
+    // Bounded, because a recursive type can contain itself through an option.
+    for _ in 0..8 {
+        current = match graph.resolve_ref(current).ok()? {
+            SchemaType::Enum { cases, .. } => return Some(cases),
+            SchemaType::Option { inner, .. } => inner,
+            _ => return None,
+        };
+    }
+    None
 }
 
 #[cfg(test)]

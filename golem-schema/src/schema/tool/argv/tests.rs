@@ -14,7 +14,7 @@
 
 use super::{ParsedToolArguments, parse, parse_with_variables};
 use crate::schema::tool::*;
-use crate::schema::{SchemaGraph, SchemaType, SchemaValue};
+use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
 use std::collections::HashMap;
 use test_r::test;
 
@@ -1132,4 +1132,97 @@ fn an_enum_value_is_accepted_in_any_letter_case() {
     for args in [vec!["kb"], vec!["KB"]] {
         assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
     }
+}
+
+#[test]
+fn help_lists_the_arguments_and_the_values_of_an_enum() {
+    let mode = || SchemaType::r#enum(vec!["Literal".into(), "Regex".into()]);
+    let mut b = body();
+    let mut path = positional("path", SchemaType::string());
+    path.doc.summary = "Root file or directory".into();
+    let mut search_mode = positional("mode", SchemaType::ref_to(TypeId::from("search-mode")));
+    search_mode.required = false;
+    search_mode.doc.summary = "How the pattern is read".into();
+    b.positionals.fixed = vec![path, search_mode];
+    b.positionals.tail = Some(TailPositional {
+        name: "globs".into(),
+        doc: Doc::default(),
+        value_name: None,
+        item_type: SchemaType::string(),
+        min: 0,
+        max: None,
+        separator: None,
+        verbatim: false,
+        accepts_stdio: false,
+    });
+    let mut on_error = option("on-error", OptionShape::Scalar(SchemaType::option(mode())));
+    on_error.doc.summary = "Mode after a bad pattern".into();
+    b.options.push(on_error);
+    b.options.push(option(
+        "also",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Delimited(','),
+            item_type: mode(),
+        }),
+    ));
+    b.options
+        .push(option("label", OptionShape::Scalar(SchemaType::string())));
+    let mut t = tool(b);
+    t.schema.defs.push(SchemaTypeDef {
+        id: TypeId::from("search-mode"),
+        name: None,
+        body: mode(),
+    });
+    let ParsedToolArguments::Help(help) = parsed(&t, &["--help"]).unwrap() else {
+        panic!()
+    };
+    // One space between words, so that the column widths are not a part of the test.
+    let lines: Vec<String> = help
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    let position = |line: &str| {
+        lines
+            .iter()
+            .position(|l| l == line)
+            .unwrap_or_else(|| panic!("no line {line:?} in:\n{help}"))
+    };
+    let arguments = position("Arguments:");
+    assert!(arguments < position("Options:"), "{help}");
+    assert_eq!(position("<path> Root file or directory"), arguments + 1);
+    assert_eq!(
+        position("[mode] How the pattern is read [possible values: Literal, Regex]"),
+        arguments + 2
+    );
+    assert_eq!(position("[globs]..."), arguments + 3);
+    position("--on-error <VALUE> Mode after a bad pattern [possible values: Literal, Regex]");
+    position("--also <VALUE> [possible values: Literal, Regex]");
+    position("--label <VALUE>");
+    // An argument with no text has no spaces after its name.
+    assert!(help.lines().any(|line| line == "  [globs]..."), "{help}");
+
+    let mut b = body();
+    b.options
+        .push(option("label", OptionShape::Scalar(SchemaType::string())));
+    let ParsedToolArguments::Help(help) = parsed(&tool(b), &["--help"]).unwrap() else {
+        panic!()
+    };
+    assert!(!help.contains("Arguments:"), "{help}");
+
+    // A type that contains itself through an option has no values to list.
+    let mut b = body();
+    b.positionals.fixed = vec![positional(
+        "chain",
+        SchemaType::ref_to(TypeId::from("chain")),
+    )];
+    let mut t = tool(b);
+    t.schema.defs.push(SchemaTypeDef {
+        id: TypeId::from("chain"),
+        name: None,
+        body: SchemaType::option(SchemaType::ref_to(TypeId::from("chain"))),
+    });
+    let ParsedToolArguments::Help(help) = parsed(&t, &["--help"]).unwrap() else {
+        panic!()
+    };
+    assert!(help.lines().any(|line| line == "  <chain>"), "{help}");
 }
