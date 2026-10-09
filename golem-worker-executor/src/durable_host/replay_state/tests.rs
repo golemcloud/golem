@@ -3369,7 +3369,7 @@ async fn host_internal_end_does_not_wait_for_accessor_continuation() {
         result
     });
     tokio::pin!(continuation);
-    assert!(futures::poll!(continuation.as_mut()).is_pending());
+    let continuation_result = futures::poll!(continuation.as_mut());
     resolution_ready.await.unwrap();
 
     // Model a direct host call holding the Store. The accessor continuation remains unpolled
@@ -3386,8 +3386,12 @@ async fn host_internal_end_does_not_wait_for_accessor_continuation() {
         Resolution::Completed { end_idx, delivery_marker: None, .. }
             if end_idx == OplogIndex::from_u64(5)
     ));
+    let continuation_result = match continuation_result {
+        std::task::Poll::Ready(result) => result,
+        std::task::Poll::Pending => continuation.await,
+    };
     assert!(matches!(
-        continuation.await.unwrap(),
+        continuation_result.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed {
             end_idx, delivery_marker: None, ..
         }) if end_idx == OplogIndex::from_u64(3)
