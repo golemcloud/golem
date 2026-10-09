@@ -51,8 +51,8 @@ fn completed(end_idx: u64) -> Resolution {
 fn resolver_out_of_order_completion() {
     // [S1, S2, E2, E1]: claim both, then resolve E2 before E1.
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1));
-    let mut rx2 = resolver.register(idx(2));
+    let mut rx1 = resolver.register(idx(1), None);
+    let mut rx2 = resolver.register(idx(2), None);
     assert!(rx1.try_recv().is_err());
     assert!(rx2.try_recv().is_err());
 
@@ -78,7 +78,7 @@ fn resolver_out_of_order_completion() {
 fn resolver_cancelled() {
     // [S1, Cancelled1]
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     assert!(resolver.resolve_if_pending(
         idx(1),
         idx(2),
@@ -100,7 +100,7 @@ fn resolver_resolve_before_register_buffers() {
     let mut resolver = ConcurrentReplayResolver::default();
     resolver.resolve(idx(1), completed(2));
     assert!(!resolver.is_pending(idx(1)));
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     match rx.try_recv() {
         Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
             assert_eq!(end_idx, idx(2))
@@ -115,7 +115,7 @@ fn resolver_missing_pending_is_dropped_not_buffered() {
     // No registration: resolve_if_pending must not buffer (this is the unregistered-End case,
     // e.g. the guest-facing manual durability pair).
     assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     assert!(rx.try_recv().is_err());
 }
 
@@ -124,8 +124,8 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
     // End-of-replay must wake every still-suspended awaiter as Incomplete, not leave them
     // hanging. A resolved awaiter is already gone and is unaffected.
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1));
-    let mut rx2 = resolver.register(idx(2));
+    let mut rx1 = resolver.register(idx(1), None);
+    let mut rx2 = resolver.register(idx(2), None);
     assert!(resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
 
     resolver.fail_all_pending_incomplete();
@@ -146,7 +146,7 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
 #[test]
 fn resolver_duplicate_resolution_is_ignored() {
     let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1));
+    let mut rx = resolver.register(idx(1), None);
     assert!(resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     // Second resolution: no longer pending.
     assert!(!resolver.resolve_if_pending(idx(1), idx(3), completed(3)));

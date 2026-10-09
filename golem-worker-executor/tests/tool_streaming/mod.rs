@@ -72,9 +72,9 @@ use golem_worker_executor::services::environment_state::{
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
-    native_test_tool_metadata, start_with_overrides,
+    AgentInvocationSuccessGateHandle, LastUniqueId, PrecompiledComponent, ReplayAdmissionStage,
+    TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    native_streaming_tool_metadata, native_test_tool_metadata, start_with_overrides,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
@@ -8789,6 +8789,119 @@ enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
     ExecutorShutdownDuringBodyValidation,
+    CrashReplaySupervisorWindow,
+    EntityCustomRootCrashReplay,
+}
+
+/// Crashes the agent while its original invocation is held at the success gate, and releases the
+/// gate as a restart, so the next start reconstructs the invocation from the oplog.
+async fn crash_at_held_invocation_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    original_success: AgentInvocationSuccessGateHandle,
+) -> anyhow::Result<()> {
+    let (crash, ()) = tokio::join!(executor.simulated_crash(worker_id), async {
+        original_success.abort_as_restart();
+    });
+    crash?;
+    drop(original_success);
+    Ok(())
+}
+
+/// Checks the recovered oplog of an invocation whose completed tool call was reconstructed: the
+/// invocation started once and finished once, the entity `Start` settled exactly once before the
+/// finish, every `Start` the invocation recorded has a terminal, and no positional `Start` or
+/// `End` follows the finish.
+fn assert_replayed_reconstruction_invocation_settled(
+    oplog: &[PublicOplogEntryWithIndex],
+    method_name: &str,
+    entity_start: OplogIndex,
+) {
+    let started = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name.replace('-', "_") == method_name
+                    )
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(started.len(), 1, "{method_name} must start exactly once");
+    let started = started[0];
+    let finished = oplog
+        .iter()
+        .filter(|entry| {
+            entry.oplog_index > started
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(finished.len(), 1, "{method_name} must finish exactly once");
+    let finished = finished[0];
+    let terminals_of = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    let entity_terminals = terminals_of(entity_start);
+    assert_eq!(
+        entity_terminals.len(),
+        1,
+        "the entity Start {entity_start} must settle exactly once"
+    );
+    assert!(entity_terminals[0] < finished);
+    for entry in oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > started && entry.oplog_index < finished)
+    {
+        if matches!(entry.entry, PublicOplogEntry::Start(_)) {
+            let terminals = terminals_of(entry.oplog_index);
+            assert_eq!(
+                terminals.len(),
+                1,
+                "Start {} of {method_name} must have exactly one terminal",
+                entry.oplog_index
+            );
+            assert!(terminals[0] < finished);
+        }
+    }
+    assert!(
+        oplog.iter().all(|entry| entry.oplog_index < finished
+            || !matches!(
+                entry.entry,
+                PublicOplogEntry::Start(_) | PublicOplogEntry::End(_)
+            )),
+        "no positional Start or End may follow the finish of {method_name}"
+    );
+}
+
+/// Waits until the replayed clock claim parks on the completed reconstruction whose supervisor the
+/// test holds: the clock `Start` was never recorded, and the body's entries are still at the
+/// cursor head.
+async fn wait_for_clock_claim_blocked_on_held_reconstruction(
+    executor: &TestWorkerExecutor,
+    owned_agent_id: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.wait_for_replay_claim_blocked_on_active_body(owned_agent_id),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("the replayed clock claim did not wait for the held reconstruction")
+    })?
 }
 
 async fn run_completed_reconstruction_exclusive_p2_case(
@@ -8845,6 +8958,18 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
             "exclusive-p2-body-validation-shutdown"
         }
+        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
+            "exclusive-p2-crash-replay-window"
+        }
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
+            "exclusive-p2-entity-custom-root"
+        }
+    };
+    let method = match case {
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
+            "hold_entity_custom_root_reconstruction_before_exclusive_clock"
+        }
+        _ => "hold_completed_reconstruction_before_exclusive_clock",
     };
     let agent_id = agent_id!("ToolStreamingCaller", case_name);
     let worker_id = executor
@@ -8869,12 +8994,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     executor
         .skip_next_wall_clock_now_durability(&owned_agent_id)
         .await?;
-    let invocation = executor.invoke_and_await_agent(
-        &caller_component,
-        &agent_id,
-        "hold_completed_reconstruction_before_exclusive_clock",
-        data_value!(),
-    );
+    let invocation =
+        executor.invoke_and_await_agent(&caller_component, &agent_id, method, data_value!());
     tokio::pin!(invocation);
 
     let validate_recovery = async {
@@ -8902,17 +9023,31 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .await?;
         }
 
+        if matches!(
+            case,
+            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+                | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay
+        ) {
+            let mut supervisor = executor.gate_next_completed_reconstruction_supervisor(&worker_id);
+            crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
+            let start =
+                tokio::time::timeout(std::time::Duration::from_secs(30), supervisor.entered())
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("crash-replay reconstruction supervisor was not reached")
+                    })?;
+            assert_eq!(start, reconstruction_start);
+            wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id).await?;
+            supervisor.release();
+            return Ok::<_, anyhow::Error>(reconstruction_start);
+        }
         let mut reconstruction_body =
             executor.gate_next_completed_entity_reconstruction(&worker_id);
         if case == CompletedReconstructionExclusiveCase::Divergence {
             executor.diverge_next_completed_entity_reconstruction(&worker_id);
         }
         let mut replayed_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
-        let (crash, ()) = tokio::join!(executor.simulated_crash(&worker_id), async {
-            original_success.abort_as_restart();
-        });
-        crash?;
-        drop(original_success);
+        crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
         let claimed_start =
             tokio::time::timeout(std::time::Duration::from_secs(30), replayed_claim.entered())
                 .await
@@ -8983,6 +9118,11 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     futures::poll!(owner_failure.as_mut()),
                     std::task::Poll::Pending
                 ));
+                // The replay on the source revision that follows the failed update: hold the
+                // supervisor of its completed reconstruction after the claim and before it drains
+                // the recorded terminal, so the exclusive clock call claims in that window.
+                let mut source_claim =
+                    executor.gate_next_completed_reconstruction_supervisor(&worker_id);
                 reconstruction_body.release();
                 let owner_failure =
                     tokio::time::timeout(std::time::Duration::from_secs(30), owner_failure)
@@ -9002,7 +9142,21 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                         .all(|entry| !matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_))),
                     "divergent reconstruction permitted ReplayFinished update finalization"
                 );
+                let source_start = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    source_claim.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("source-revision reconstruction supervisor was not reached")
+                })?;
+                assert_eq!(source_start, reconstruction_start);
+                wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id)
+                    .await?;
+                source_claim.release();
             }
+            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+            | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => unreachable!(),
             CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
@@ -9016,23 +9170,48 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 executor.shutdown_and_wait_for_invocation_loops().await?;
             }
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, anyhow::Error>(reconstruction_start)
     };
 
     let (invocation_result, validation_result) = tokio::join!(
         tokio::time::timeout(std::time::Duration::from_secs(60), &mut invocation),
         validate_recovery
     );
-    validation_result?;
+    let reconstruction_start = validation_result?;
     let invocation_result = invocation_result
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
     match case {
-        CompletedReconstructionExclusiveCase::Success => {
+        CompletedReconstructionExclusiveCase::Success
+        | CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
             invocation_result?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
+        }
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
+            invocation_result?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
+            let custom_roots = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "golem-it::entity-custom-root" =>
+                    {
+                        Some(params.parent_start_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                custom_roots,
+                vec![Some(reconstruction_start)],
+                "the body's root custom invocation must record the entity Start as its parent"
+            );
         }
         CompletedReconstructionExclusiveCase::Divergence => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
             let failed_updates = oplog
                 .iter()
                 .filter_map(|entry| match &entry.entry {
@@ -9085,6 +9264,46 @@ async fn completed_reconstruction_settles_while_exclusive_p2_waits(
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Success,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn crash_replay_clock_claim_waits_for_entity_custom_root_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn crash_replay_clock_claim_waits_for_completed_reconstruction_supervisor(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow,
     )
     .await
 }
