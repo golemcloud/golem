@@ -1,5 +1,28 @@
 # Progress
 
+## 2026-10-09: Typed Persistent Agent Stream
+
+- Split Agent websocket decoding from presentation through a typed consumer
+  boundary. The existing CLI formatter remains a consumer with its structured
+  output contract unchanged, while plugin, recovery, invocation, lag, output,
+  and connection events remain distinct for the TUI.
+- Added retained exact-Agent Stream routing and an explicit `ctrl+k` connect /
+  disconnect action. Retargeting and context changes cancel the old session;
+  ordinary destination switches keep it alive.
+- Added a cancellation-safe persistent session with capped exponential
+  reconnect, Connected/Reconnecting/Failed presentation, and a bounded output
+  channel so sustained events do not outrank terminal and control input.
+- Added a 10,000-event / 16-MiB dual-bounded buffer, background unread and
+  follow state, separate server-missed and locally-evicted counts, typed event
+  styling, keyboard/mouse scrolling, and responsive compact rendering.
+- Added focused coverage for reconnect delay, count/byte eviction, distinct
+  loss counters, explicit disconnect retention, typed rendering, retained
+  routes, and compact terminal sizes.
+
+Still open in this slice: aggregate metric bucket-to-Oplog time-range handoff,
+custom absolute metric ranges, Deployment and Configuration depth, Overview
+cards, and final terminal visual acceptance.
+
 ## 2026-10-09: Bounded Structured Oplog Search And Explorer
 
 - Split exact raw Oplog paging from filtered search: raw reads remain GET while
@@ -29,9 +52,8 @@
   Dashboard aggregates remain explicit about requiring Explore when they do
   not identify one Agent source.
 
-Still open in this slice: aggregate metric bucket-to-Oplog time-range handoff,
-custom absolute metric ranges, typed Stream transport/session behavior, and
-final terminal visual acceptance.
+Still open after this checkpoint: aggregate metric bucket-to-Oplog time-range
+handoff, custom absolute metric ranges, and final terminal visual acceptance.
 
 ## 2026-10-08: Stable Ops Navigation And Typed Metrics Foundation
 

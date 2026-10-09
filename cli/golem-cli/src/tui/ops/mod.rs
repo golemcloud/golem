@@ -15,6 +15,7 @@
 pub(super) mod activity;
 pub(super) mod metrics;
 pub(super) mod resources;
+pub(super) mod stream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum OpsDestination {
@@ -91,6 +92,7 @@ pub(super) enum OpsRoute {
     Root,
     Agent(AgentIdentity),
     Oplog(OplogRoute),
+    Stream(AgentIdentity),
     MetricsPanel(String),
 }
 
@@ -161,6 +163,13 @@ impl OpsApp {
         }
     }
 
+    pub(super) fn current_stream(&self) -> Option<&AgentIdentity> {
+        match self.current_route() {
+            OpsRoute::Stream(agent) => Some(agent),
+            _ => None,
+        }
+    }
+
     pub(super) fn clear_oplog_focus(&mut self) {
         if let Some(OpsRoute::Oplog(route)) = self.routes[OpsDestination::Oplog.index()].last_mut()
         {
@@ -181,6 +190,16 @@ impl OpsApp {
     pub(super) fn open_oplog(&mut self, route: OplogRoute) {
         self.active = OpsDestination::Oplog;
         self.routes[OpsDestination::Oplog.index()].push(OpsRoute::Oplog(route));
+    }
+
+    pub(super) fn open_stream(&mut self, agent: AgentIdentity) {
+        self.active = OpsDestination::Stream;
+        let routes = &mut self.routes[OpsDestination::Stream.index()];
+        if let Some(OpsRoute::Stream(current)) = routes.last_mut() {
+            *current = agent;
+        } else {
+            routes.push(OpsRoute::Stream(agent));
+        }
     }
 
     pub(super) fn pop_route(&mut self) -> bool {
@@ -225,6 +244,14 @@ mod tests {
         app.select(super::OpsDestination::Metrics);
         assert_eq!(app.current_route(), &super::OpsRoute::Root);
 
+        app.select(super::OpsDestination::Agents);
+        assert!(matches!(app.current_route(), super::OpsRoute::Agent(_)));
+
+        app.open_stream(super::AgentIdentity {
+            component: "component".to_string(),
+            agent_id: "agent".to_string(),
+        });
+        assert!(matches!(app.current_route(), super::OpsRoute::Stream(_)));
         app.select(super::OpsDestination::Agents);
         assert!(matches!(app.current_route(), super::OpsRoute::Agent(_)));
 

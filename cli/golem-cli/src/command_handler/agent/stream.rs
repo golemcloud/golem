@@ -18,9 +18,8 @@ use crate::model::agent::AgentLogStreamOptions;
 use crate::model::format::Format;
 use anyhow::{Context, anyhow};
 use bytes::Bytes;
-use futures_util::future::Either;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt, TryStreamExt, future, pin_mut};
+use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
 use golem_common::model::{AgentEvent, AgentId, IdempotencyKey, LogLevel, Timestamp};
@@ -33,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::{task, time};
+use tokio::time;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
@@ -43,6 +42,86 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info, trace};
 use url::Url;
 use uuid::Uuid;
+
+#[derive(Clone, Debug)]
+pub(crate) enum AgentStreamItem {
+    Stdout {
+        timestamp: Timestamp,
+        message: String,
+    },
+    Stderr {
+        timestamp: Timestamp,
+        message: String,
+    },
+    Log {
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
+    },
+    InvocationStarted {
+        timestamp: Timestamp,
+        function: String,
+        idempotency_key: IdempotencyKey,
+    },
+    InvocationFinished {
+        timestamp: Timestamp,
+        function: String,
+        idempotency_key: IdempotencyKey,
+    },
+    PluginError {
+        timestamp: Timestamp,
+        plugin_name: String,
+        message: String,
+    },
+    SnapshotRecoverySucceeded {
+        timestamp: Timestamp,
+        snapshot_index: u64,
+    },
+    SnapshotRecoveryFailed {
+        timestamp: Timestamp,
+        snapshot_index: u64,
+        error: String,
+    },
+    ServerLagged {
+        timestamp: Timestamp,
+        missed: u64,
+    },
+    StreamClosed {
+        timestamp: Timestamp,
+    },
+    StreamError {
+        timestamp: Timestamp,
+        error: String,
+    },
+}
+
+impl AgentStreamItem {
+    pub(crate) fn timestamp(&self) -> Timestamp {
+        match self {
+            Self::Stdout { timestamp, .. }
+            | Self::Stderr { timestamp, .. }
+            | Self::Log { timestamp, .. }
+            | Self::InvocationStarted { timestamp, .. }
+            | Self::InvocationFinished { timestamp, .. }
+            | Self::PluginError { timestamp, .. }
+            | Self::SnapshotRecoverySucceeded { timestamp, .. }
+            | Self::SnapshotRecoveryFailed { timestamp, .. }
+            | Self::ServerLagged { timestamp, .. }
+            | Self::StreamClosed { timestamp }
+            | Self::StreamError { timestamp, .. } => *timestamp,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+pub(crate) trait AgentStreamConsumer: Send + Sync {
+    async fn connected(&self) {}
+
+    async fn consume(&self, item: AgentStreamItem);
+
+    async fn flush(&self) {}
+}
 
 #[derive(Debug)]
 struct InsecureServerCertVerifier {
@@ -100,7 +179,7 @@ pub(super) fn insecure_connector() -> anyhow::Result<Connector> {
 pub struct AgentConnection {
     request: Request,
     connector: Option<Connector>,
-    output: AgentStreamOutput,
+    output: Arc<dyn AgentStreamConsumer>,
     idempotency_key: Option<IdempotencyKey>,
     last_seen_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
     goal_reached: Arc<AtomicBool>,
@@ -127,7 +206,7 @@ impl AgentConnection {
             agent_id,
             allow_insecure,
         )?;
-        let output = AgentStreamOutput::new(connect_options, format);
+        let output = Arc::new(AgentStreamOutput::new(connect_options, format));
 
         let last_seen_idempotency_key = Arc::new(Mutex::new(None));
         let goal_reached = Arc::new(AtomicBool::new(false));
@@ -143,12 +222,39 @@ impl AgentConnection {
         })
     }
 
+    pub(crate) fn with_consumer(
+        worker_service_url: Url,
+        auth_token: TokenSecret,
+        component_id: &ComponentId,
+        agent_id: String,
+        allow_insecure: bool,
+        ping_interval: Duration,
+        output: Arc<dyn AgentStreamConsumer>,
+    ) -> anyhow::Result<Self> {
+        let (request, connector) = Self::create_request(
+            worker_service_url,
+            auth_token.secret().to_string(),
+            component_id.0,
+            agent_id,
+            allow_insecure,
+        )?;
+        Ok(Self {
+            request,
+            connector,
+            output,
+            idempotency_key: None,
+            last_seen_idempotency_key: Arc::new(Mutex::new(None)),
+            goal_reached: Arc::new(AtomicBool::new(false)),
+            ping_interval,
+        })
+    }
+
     /// Creates a new worker connection and every time the connection is dropped tries to
     /// reconnect. If there was an idempotency_key goal, and it has been reached, the loop
     /// exits.
     pub async fn run_forever(self) -> anyhow::Result<()> {
         while !self.goal_reached.load(Ordering::Acquire) {
-            if let Err(error) = self.run().await
+            if let Err(error) = self.run_once().await
                 && error
                     .downcast_ref::<crate::error::service::ServiceError>()
                     .is_some_and(|error| error.is_previous_invocation_failed())
@@ -163,7 +269,7 @@ impl AgentConnection {
     }
 
     /// Connects to the worker event stream and outputs incoming messages until the connection is dropped
-    async fn run(&self) -> anyhow::Result<()> {
+    pub(crate) async fn run_once(&self) -> anyhow::Result<()> {
         let (ws_stream, _) = connect_async_tls_with_config(
             self.request.clone(),
             None,
@@ -183,31 +289,21 @@ impl AgentConnection {
         })?;
 
         let (write, read) = ws_stream.split();
-
-        let ping_interval = self.ping_interval;
-        let pings = task::spawn(async move { Self::ping_loop(write, ping_interval).await });
+        self.output.connected().await;
 
         let output = self.output.clone();
         let last_seen_idempotency_key = self.last_seen_idempotency_key.clone();
         let idempotency_key = self.idempotency_key.clone();
         let goal_reached = self.goal_reached.clone();
-        let read_messages = task::spawn(async move {
-            Self::read_loop(
+        tokio::select! {
+            error = Self::ping_loop(write, self.ping_interval) => Err(error),
+            () = Self::read_loop(
                 read,
                 output,
                 last_seen_idempotency_key,
                 idempotency_key,
                 goal_reached,
-            )
-            .await;
-        });
-
-        pin_mut!(pings, read_messages);
-        match future::select(pings, read_messages).await {
-            Either::Left((Ok(result), _)) => Err(result),
-            Either::Left((Err(err), _)) => Err(anyhow!(err)),
-            Either::Right((Ok(_), _)) => Ok(()),
-            Either::Right((Err(err), _)) => Err(anyhow!(err)),
+            ) => Ok(()),
         }
     }
 
@@ -281,7 +377,7 @@ impl AgentConnection {
 
     async fn read_loop(
         read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-        output: AgentStreamOutput,
+        output: Arc<dyn AgentStreamConsumer>,
         last_seen_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
         idempotency_key_to_look_for: Option<IdempotencyKey>,
         goal_reached: Arc<AtomicBool>,
@@ -312,20 +408,20 @@ impl AgentConnection {
                             AgentEvent::StdOut { timestamp, bytes } => {
                                 if matching {
                                     output
-                                        .emit_stdout(
+                                        .consume(AgentStreamItem::Stdout {
                                             timestamp,
-                                            String::from_utf8_lossy(&bytes).to_string(),
-                                        )
+                                            message: String::from_utf8_lossy(&bytes).to_string(),
+                                        })
                                         .await;
                                 }
                             }
                             AgentEvent::StdErr { timestamp, bytes } => {
                                 if matching {
                                     output
-                                        .emit_stderr(
+                                        .consume(AgentStreamItem::Stderr {
                                             timestamp,
-                                            String::from_utf8_lossy(&bytes).to_string(),
-                                        )
+                                            message: String::from_utf8_lossy(&bytes).to_string(),
+                                        })
                                         .await;
                                 }
                             }
@@ -336,7 +432,14 @@ impl AgentConnection {
                                 message,
                             } => {
                                 if matching {
-                                    output.emit_log(timestamp, level, context, message).await;
+                                    output
+                                        .consume(AgentStreamItem::Log {
+                                            timestamp,
+                                            level,
+                                            context,
+                                            message,
+                                        })
+                                        .await;
                                 }
                             }
                             AgentEvent::InvocationStart {
@@ -350,7 +453,11 @@ impl AgentConnection {
                                 {
                                     *last_seen_idempotency_key = Some(idempotency_key.clone());
                                     output
-                                        .emit_invocation_start(timestamp, function, idempotency_key)
+                                        .consume(AgentStreamItem::InvocationStarted {
+                                            timestamp,
+                                            function,
+                                            idempotency_key,
+                                        })
                                         .await;
                                 }
                             }
@@ -361,11 +468,11 @@ impl AgentConnection {
                             } => {
                                 if matching {
                                     output
-                                        .emit_invocation_finished(
+                                        .consume(AgentStreamItem::InvocationFinished {
                                             timestamp,
                                             function,
-                                            idempotency_key.clone(),
-                                        )
+                                            idempotency_key: idempotency_key.clone(),
+                                        })
                                         .await;
 
                                     last_seen_idempotency_key.take();
@@ -381,12 +488,11 @@ impl AgentConnection {
                             } => {
                                 if matching {
                                     output
-                                        .emit_log(
+                                        .consume(AgentStreamItem::PluginError {
                                             timestamp,
-                                            LogLevel::Error,
-                                            format!("plugin:{plugin_name}"),
+                                            plugin_name,
                                             message,
-                                        )
+                                        })
                                         .await;
                                 }
                             }
@@ -396,12 +502,10 @@ impl AgentConnection {
                             } => {
                                 if matching {
                                     output
-                                        .emit_log(
+                                        .consume(AgentStreamItem::SnapshotRecoverySucceeded {
                                             timestamp,
-                                            LogLevel::Info,
-                                            "snapshot-recovery".to_string(),
-                                            format!("loaded snapshot from oplog index {snapshot_index}"),
-                                        )
+                                            snapshot_index: snapshot_index.as_u64(),
+                                        })
                                         .await;
                                 }
                             }
@@ -412,14 +516,11 @@ impl AgentConnection {
                             } => {
                                 if matching {
                                     output
-                                        .emit_log(
+                                        .consume(AgentStreamItem::SnapshotRecoveryFailed {
                                             timestamp,
-                                            LogLevel::Error,
-                                            "snapshot-recovery".to_string(),
-                                            format!(
-                                                "failed to load snapshot from oplog index {snapshot_index}: {error}"
-                                            ),
-                                        )
+                                            snapshot_index: snapshot_index.as_u64(),
+                                            error,
+                                        })
                                         .await;
                                 }
                             }
@@ -427,10 +528,10 @@ impl AgentConnection {
                                 number_of_missed_messages,
                             } => {
                                 output
-                                    .emit_missed_messages(
-                                        Timestamp::now_utc(),
-                                        number_of_missed_messages,
-                                    )
+                                    .consume(AgentStreamItem::ServerLagged {
+                                        timestamp: Timestamp::now_utc(),
+                                        missed: number_of_missed_messages,
+                                    })
                                     .await;
                             }
                         },
@@ -449,10 +550,19 @@ impl AgentConnection {
         match result {
             Ok(()) | Err(tungstenite::error::Error::ConnectionClosed) => {
                 // successful exit
-                output.emit_stream_closed(Timestamp::now_utc()).await;
+                output
+                    .consume(AgentStreamItem::StreamClosed {
+                        timestamp: Timestamp::now_utc(),
+                    })
+                    .await;
             }
             Err(error) => {
-                output.emit_stream_error(Timestamp::now_utc(), error).await;
+                output
+                    .consume(AgentStreamItem::StreamError {
+                        timestamp: Timestamp::now_utc(),
+                        error: error.to_string(),
+                    })
+                    .await;
             }
         }
     }

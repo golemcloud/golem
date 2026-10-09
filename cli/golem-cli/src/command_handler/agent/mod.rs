@@ -13,7 +13,7 @@
 // limitations under the License.
 
 mod invocation_session;
-mod stream;
+pub(crate) mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
@@ -2645,6 +2645,35 @@ impl AgentCommandHandler {
         }
 
         Ok(result)
+    }
+
+    pub(crate) async fn stream_connection(
+        &self,
+        component_name: &ComponentName,
+        agent_id: &RawAgentId,
+        consumer: Arc<dyn stream::AgentStreamConsumer>,
+    ) -> anyhow::Result<AgentConnection> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+        let component = self
+            .ctx
+            .component_handler()
+            .resolve_component(&environment, component_name, Some(agent_id.into()))
+            .await?
+            .with_context(|| format!("Component {component_name} not found"))?;
+
+        AgentConnection::with_consumer(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &component.id,
+            agent_id.0.clone(),
+            self.ctx.allow_insecure(),
+            self.ctx.agent_stream_ping_interval(),
+            consumer,
+        )
     }
 
     /// Deletes all agents of a component. Best-effort: a failure on one agent does not stop the

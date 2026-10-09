@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command_handler::agent::stream::{AgentStreamConsumer, AgentStreamItem};
 use crate::command_handler::log::print_command_output_document;
 use crate::log::log_error;
 use crate::model::agent::AgentLogStreamOptions;
@@ -25,7 +26,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite;
 
 #[derive(Clone)]
 pub struct AgentStreamOutput {
@@ -162,7 +162,7 @@ impl AgentStreamOutput {
         }
     }
 
-    pub async fn emit_stream_error(&self, timestamp: Timestamp, error: tungstenite::error::Error) {
+    pub async fn emit_stream_error(&self, timestamp: Timestamp, error: impl ToString) {
         let mut state = self.state.lock().await;
 
         if !self
@@ -329,5 +329,90 @@ impl AgentStreamOutput {
         } else {
             println!("{s}");
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentStreamConsumer for AgentStreamOutput {
+    async fn consume(&self, item: AgentStreamItem) {
+        match item {
+            AgentStreamItem::Stdout { timestamp, message } => {
+                self.emit_stdout(timestamp, message).await
+            }
+            AgentStreamItem::Stderr { timestamp, message } => {
+                self.emit_stderr(timestamp, message).await
+            }
+            AgentStreamItem::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => self.emit_log(timestamp, level, context, message).await,
+            AgentStreamItem::InvocationStarted {
+                timestamp,
+                function,
+                idempotency_key,
+            } => {
+                self.emit_invocation_start(timestamp, function, idempotency_key)
+                    .await
+            }
+            AgentStreamItem::InvocationFinished {
+                timestamp,
+                function,
+                idempotency_key,
+            } => {
+                self.emit_invocation_finished(timestamp, function, idempotency_key)
+                    .await
+            }
+            AgentStreamItem::PluginError {
+                timestamp,
+                plugin_name,
+                message,
+            } => {
+                self.emit_log(
+                    timestamp,
+                    LogLevel::Error,
+                    format!("plugin:{plugin_name}"),
+                    message,
+                )
+                .await
+            }
+            AgentStreamItem::SnapshotRecoverySucceeded {
+                timestamp,
+                snapshot_index,
+            } => {
+                self.emit_log(
+                    timestamp,
+                    LogLevel::Info,
+                    "snapshot-recovery".to_string(),
+                    format!("loaded snapshot from oplog index {snapshot_index}"),
+                )
+                .await
+            }
+            AgentStreamItem::SnapshotRecoveryFailed {
+                timestamp,
+                snapshot_index,
+                error,
+            } => {
+                self.emit_log(
+                    timestamp,
+                    LogLevel::Error,
+                    "snapshot-recovery".to_string(),
+                    format!("failed to load snapshot from oplog index {snapshot_index}: {error}"),
+                )
+                .await
+            }
+            AgentStreamItem::ServerLagged { timestamp, missed } => {
+                self.emit_missed_messages(timestamp, missed).await
+            }
+            AgentStreamItem::StreamClosed { timestamp } => self.emit_stream_closed(timestamp).await,
+            AgentStreamItem::StreamError { timestamp, error } => {
+                self.emit_stream_error(timestamp, error).await
+            }
+        }
+    }
+
+    async fn flush(&self) {
+        AgentStreamOutput::flush(self).await;
     }
 }

@@ -88,6 +88,7 @@ fn preview_app() -> TuiApp {
         metrics: MetricsState::default(),
         activity: ActivityState::default(),
         resources: ResourcesState::default(),
+        stream: StreamState::default(),
         next_command_id: 1,
         selected_target: SelectedTarget {
             context: TuiContextInfo {

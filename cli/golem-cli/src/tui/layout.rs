@@ -65,6 +65,7 @@ pub(super) enum ScrollbarTarget {
     OpsList,
     OpsDetails,
     OpsDocument,
+    OpsStream,
     Help,
 }
 
@@ -130,6 +131,7 @@ pub(super) enum RegionKind {
     OpsList,
     OpsDetails,
     OpsDetailsSplit,
+    OpsStream,
     MetricsPanel(usize),
     MetricsChart,
     Scrollbar(ScrollbarTarget),

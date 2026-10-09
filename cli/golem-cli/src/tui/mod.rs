@@ -35,6 +35,7 @@ use nested_cli::{NestedCliEvent, NestedCliTarget};
 use ops::activity::ActivityRefreshPayload;
 use ops::metrics::MetricsRefreshPayload;
 use ops::resources::ResourcesRefreshPayload;
+use ops::stream::StreamMessage;
 use tokio::sync::oneshot;
 
 pub use app::run;
@@ -76,6 +77,14 @@ enum TuiEvent {
     ResourcesRefreshFinished {
         generation: u64,
         result: TuiContextTaskResult<ResourcesRefreshPayload>,
+    },
+    StreamMessage {
+        generation: u64,
+        message: StreamMessage,
+    },
+    StreamSessionFinished {
+        generation: u64,
+        result: TuiContextTaskResult<()>,
     },
     ContextSwitchFinished {
         generation: u64,

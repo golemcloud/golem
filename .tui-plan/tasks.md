@@ -46,8 +46,8 @@
 - [x] Add CLI time-range search flags and preserve structured entry output.
 - [x] Extract typed Oplog presentation and implement safe grouping.
 - [x] Implement exact/mixed scope, order, Stop/Resume, and Load More.
-- [ ] Extract typed Stream transport from CLI output.
-- [ ] Add persistent background Stream buffer, unread, reconnect, and drop state.
+- [x] Extract typed Stream transport from CLI output.
+- [x] Add persistent background Stream buffer, unread, reconnect, and drop state.
 
 ## Deployments and Configuration
 

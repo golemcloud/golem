@@ -26,7 +26,7 @@ use crate::agent_id_display::{
 use crate::app::context::ApplicationContext;
 use crate::auth::AuthPresenter;
 use crate::command::GolemCliGlobalFlags;
-use crate::command_handler::Handlers;
+use crate::command_handler::{AgentStreamItem, Handlers};
 use crate::config::Config;
 use crate::context::Context;
 use crate::log::Output;
@@ -60,6 +60,7 @@ use crate::tui::ops::metrics::{
     MetricsRefreshPayload, MetricsState,
 };
 use crate::tui::ops::resources::{self, ResourceScope, ResourcesRefreshPayload, ResourcesState};
+use crate::tui::ops::stream::{self, StreamState, StreamStatus};
 use crate::tui::ops::{
     AgentIdentity, OplogEntryIdentity, OplogRoute, OpsApp, OpsDestination, OpsRoute,
 };
@@ -86,9 +87,9 @@ use futures_util::StreamExt;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use golem_client::model::{EnvironmentWithDetails, OAuth2WebflowData, ScanCursor};
-use golem_common::model::AgentStatus;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::oplog::OplogErrorKind;
+use golem_common::model::{AgentStatus, LogLevel};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -442,6 +443,7 @@ struct TuiApp {
     metrics: MetricsState,
     activity: ActivityState,
     resources: ResourcesState,
+    stream: StreamState,
     next_command_id: u64,
     selected_target: SelectedTarget,
     context_switcher: ContextSwitcherState,
@@ -508,6 +510,7 @@ impl TuiApp {
             metrics: MetricsState::default(),
             activity: ActivityState::default(),
             resources: ResourcesState::default(),
+            stream: StreamState::default(),
             next_command_id: 1,
             selected_target,
             context_switcher: ContextSwitcherState::new(targets),
@@ -567,6 +570,22 @@ impl TuiApp {
             }
             TuiEvent::ResourcesRefreshFinished { generation, result } => {
                 self.finish_resources_refresh(generation, result)
+            }
+            TuiEvent::StreamMessage {
+                generation,
+                message,
+            } => {
+                let visible = self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream;
+                self.stream.apply_message(generation, message, visible);
+            }
+            TuiEvent::StreamSessionFinished { generation, result } => {
+                let (context_id, result, logs) = result.into_parts();
+                self.stream.finish(
+                    generation,
+                    context_id,
+                    result.map_err(|error| agent_refresh_error(error, logs)),
+                );
             }
             TuiEvent::ContextSwitchFinished { generation, result } => {
                 self.finish_context_switch(generation, result, event_tx)
@@ -665,6 +684,42 @@ impl TuiApp {
             return;
         }
         match key.code {
+            KeyCode::Up
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream =>
+            {
+                self.stream.scroll_up(1)
+            }
+            KeyCode::Down
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream =>
+            {
+                self.stream.scroll_down(1)
+            }
+            KeyCode::PageUp
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream =>
+            {
+                self.stream.scroll_up(10)
+            }
+            KeyCode::PageDown
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream =>
+            {
+                self.stream.scroll_down(10)
+            }
+            KeyCode::Home
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream =>
+            {
+                self.stream.scroll_to_start()
+            }
+            KeyCode::End
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream =>
+            {
+                self.stream.follow_latest()
+            }
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Oplog =>
@@ -894,6 +949,12 @@ impl TuiApp {
                     OpsDestination::Configuration => self.refresh_resources(event_tx),
                     OpsDestination::Stream => {}
                 }
+            }
+            KeyCode::Char('k')
+                if self.active_workspace == Workspace::Ops
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.toggle_stream_session(event_tx)
             }
             KeyCode::Char('n')
                 if self.active_workspace == Workspace::Ops
@@ -1501,6 +1562,16 @@ impl TuiApp {
                     .saturating_sub(self.agents.details_viewport_height.get());
                 self.agents.details_scroll = scrollbar_value_from_pointer(area, y, max);
             }
+            ScrollbarTarget::OpsStream => {
+                let max = self
+                    .stream
+                    .events
+                    .len()
+                    .saturating_sub(area.height as usize);
+                let start = scrollbar_value_from_pointer(area, y, max);
+                self.stream.scroll_from_end = max.saturating_sub(start);
+                self.stream.follow = self.stream.scroll_from_end == 0;
+            }
             ScrollbarTarget::Help => {
                 let max = self
                     .help_content_height
@@ -1561,6 +1632,16 @@ impl TuiApp {
                     self.scroll_agent_details_down(amount);
                 }
             }
+            Some(RegionKind::OpsStream)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Stream =>
+            {
+                if up {
+                    self.stream.scroll_up(amount);
+                } else {
+                    self.stream.scroll_down(amount);
+                }
+            }
             Some(RegionKind::MetricsChart)
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Metrics =>
@@ -1601,6 +1682,14 @@ impl TuiApp {
                 self.scroll_agent_details_up(amount);
             } else {
                 self.scroll_agent_details_down(amount);
+            }
+        } else if self.active_workspace == Workspace::Ops
+            && self.ops.active() == OpsDestination::Stream
+        {
+            if up {
+                self.stream.scroll_up(amount);
+            } else {
+                self.stream.scroll_down(amount);
             }
         }
     }
@@ -1933,6 +2022,10 @@ impl TuiApp {
                 self.toggle_agent_details();
                 self.close_palette();
             }
+            ActionId::ToggleAgentStream => {
+                self.close_palette();
+                self.toggle_stream_session(event_tx);
+            }
             ActionId::CycleAgentMode => {
                 self.cycle_agent_mode(event_tx);
                 self.close_palette();
@@ -2051,6 +2144,9 @@ impl TuiApp {
                 if self.filtered_agents().is_empty() =>
             {
                 ActionAvailability::Unavailable("no loaded agents match")
+            }
+            ActionId::ToggleAgentStream if self.stream_target_candidate().is_none() => {
+                ActionAvailability::Unavailable("select one exact Agent")
             }
             ActionId::OpenContextPicker if self.context_switch_busy() => {
                 ActionAvailability::Unavailable("context switch already running")
@@ -2498,6 +2594,9 @@ impl TuiApp {
     ) {
         self.active_workspace = Workspace::Ops;
         self.ops.select(destination);
+        if destination == OpsDestination::Stream {
+            self.stream.mark_visible();
+        }
         self.refresh_active_ops_destination(event_tx);
     }
 
@@ -2516,8 +2615,87 @@ impl TuiApp {
             OpsDestination::Oplog => self.refresh_activity(event_tx),
             OpsDestination::Metrics => self.refresh_metrics(event_tx),
             OpsDestination::Configuration => self.refresh_resources(event_tx),
-            OpsDestination::Stream => {}
+            OpsDestination::Stream => self.stream.mark_visible(),
         }
+    }
+
+    fn stream_target_candidate(&self) -> Option<AgentIdentity> {
+        if self.ops.active() == OpsDestination::Stream {
+            return self
+                .ops
+                .current_stream()
+                .cloned()
+                .or_else(|| self.stream.target.clone());
+        }
+        if self.ops.active() == OpsDestination::Agents {
+            return self.ops.current_agent().cloned().or_else(|| {
+                self.filtered_agents()
+                    .get(self.agents.selected)
+                    .map(|agent| agent.identity())
+            });
+        }
+        if self.ops.active() == OpsDestination::Oplog {
+            return self
+                .ops
+                .current_oplog()
+                .and_then(|route| (route.agents.len() == 1).then(|| route.agents[0].clone()));
+        }
+        self.stream.target.clone()
+    }
+
+    fn stream_session_active(&self) -> bool {
+        !matches!(
+            self.stream.status,
+            StreamStatus::Disconnected | StreamStatus::Failed(_)
+        )
+    }
+
+    fn toggle_stream_session(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.ops.active() == OpsDestination::Stream && self.stream_session_active() {
+            self.stream.disconnect();
+            return;
+        }
+        let Some(target) = self.stream_target_candidate() else {
+            self.stream.status = StreamStatus::Failed(
+                "Select one exact Agent before connecting the Stream".to_string(),
+            );
+            return;
+        };
+        self.ops.open_stream(target.clone());
+        self.active_workspace = Workspace::Ops;
+        self.start_stream(target, event_tx);
+    }
+
+    fn start_stream(&mut self, target: AgentIdentity, event_tx: Option<&TuiEventSender>) {
+        let Some(event_tx) = event_tx.cloned() else {
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.stream.status =
+                StreamStatus::Failed("TUI context executor is not available".to_string());
+            return;
+        };
+        let context_id = context_executor.current_context_id();
+        let generation = self.stream.prepare_connect(target.clone(), context_id);
+        let control_tx = event_tx.control();
+        let output_tx = event_tx.output();
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        let task = context_executor.spawn(
+            event_tx.control(),
+            auth_presenter,
+            move |launch_context| async move {
+                stream::run_session(
+                    launch_context.into_context(),
+                    target,
+                    generation,
+                    control_tx,
+                    output_tx,
+                )
+                .await
+            },
+            move |result| TuiEvent::StreamSessionFinished { generation, result },
+        );
+        self.stream.attach_task(task);
     }
 
     fn activity_scope(&self) -> Option<Vec<ActivityAgent>> {
@@ -3941,6 +4119,7 @@ impl TuiApp {
                 self.invalidate_metrics();
                 self.invalidate_activity();
                 self.invalidate_resources();
+                self.stream.reset();
                 self.ops.reset_routes();
                 self.context_switcher.last_error = None;
                 self.restore_default_mode();
@@ -4888,6 +5067,7 @@ impl TuiApp {
         if let Some(stop) = self.agents.auto_refresh_stop.take() {
             stop.store(true, Ordering::Relaxed);
         }
+        self.stream.disconnect();
     }
 
     fn save_preferences(&mut self) {
@@ -8431,7 +8611,15 @@ fn render_ops_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                     format!("{} samples loaded", app.metrics.samples.len())
                 },
             ),
-            ("Stream", "disconnected · no Agent selected".to_string()),
+            (
+                "Stream",
+                format!(
+                    "{} · {} buffered · {} unread",
+                    app.stream.status.label(),
+                    app.stream.events.len(),
+                    app.stream.unread
+                ),
+            ),
             (
                 "Local server",
                 format!(
@@ -8458,27 +8646,245 @@ fn render_ops_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 }
 
 fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let lines = vec![
-        Notice {
-            kind: NoticeKind::Empty,
-            message: "No Agent stream is connected",
+    let target = app
+        .stream
+        .target
+        .as_ref()
+        .or_else(|| app.ops.current_stream());
+    let title = target.map_or_else(
+        || "Stream".to_string(),
+        |target| format!("Stream / {}", target.agent_id),
+    );
+    let mut status_lines = vec![stream_status_line(app, area.width as usize)];
+    if let StreamStatus::Reconnecting {
+        attempt,
+        delay,
+        error,
+    } = &app.stream.status
+    {
+        let detail = match error {
+            Some(error) => format!(
+                "attempt {attempt} · retry in {:.2}s · {}",
+                delay.as_secs_f64(),
+                plain_tui_text(error)
+            ),
+            None => format!(
+                "attempt {attempt} · retry in {:.2}s · connection closed",
+                delay.as_secs_f64()
+            ),
+        };
+        status_lines.push(Line::from(Span::styled(
+            fit(&detail, area.width as usize),
+            Style::default().fg(theme().text_muted),
+        )));
+    } else if let StreamStatus::Failed(error) = &app.stream.status {
+        status_lines.push(Line::from(Span::styled(
+            fit(&plain_tui_text(error), area.width as usize),
+            Style::default().fg(theme().error),
+        )));
+    }
+    let status_height = status_lines
+        .len()
+        .min(area.height.saturating_sub(1) as usize) as u16;
+    let [header, status, body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(status_height),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+    PaneHeader {
+        title: &title,
+        focus: PaneFocus::Active,
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, header, &theme());
+    frame.render_widget(Paragraph::new(status_lines).style(surface_style()), status);
+
+    let pane_layout = PaneLayout::horizontal(body, &[1]);
+    let content_length = app.stream.events.len().max(1);
+    let Some(region) = pane_layout.regions(&[content_length]).into_iter().next() else {
+        return;
+    };
+    app.geometry.add_region(RegionKind::OpsStream, body);
+    let viewport_height = region.content_area.height as usize;
+    let range = app.stream.visible_range(viewport_height);
+    let lines = if app.stream.events.is_empty() {
+        let (kind, message) = if target.is_none() {
+            (
+                NoticeKind::Empty,
+                "Select one exact Agent in Agents, then use ctrl+k to connect",
+            )
+        } else if matches!(app.stream.status, StreamStatus::Connecting) {
+            (NoticeKind::Info, "Connecting to the selected Agent")
+        } else {
+            (
+                NoticeKind::Empty,
+                "No buffered events · use ctrl+k to connect",
+            )
+        };
+        vec![Notice { kind, message }.line(&theme())]
+    } else {
+        app.stream
+            .events
+            .range(range.clone())
+            .map(|item| stream_item_line(item, region.content_area.width as usize))
+            .collect()
+    };
+    frame.render_widget(
+        Paragraph::new(lines).style(surface_style()),
+        region.content_area,
+    );
+    if let Some(slot) = region.scrollbar {
+        let mut state = ScrollbarState::new(app.stream.events.len())
+            .position(range.start)
+            .viewport_content_length(viewport_height);
+        render_scrollbar(frame, slot, &mut state, &theme());
+        app.geometry
+            .add_region(RegionKind::Scrollbar(ScrollbarTarget::OpsStream), slot.area);
+    }
+    pane_layout.render_body_boundaries(frame, &[region], &theme());
+}
+
+fn stream_status_line(app: &TuiApp, width: usize) -> Line<'static> {
+    let visual = theme();
+    let status_color = match app.stream.status {
+        StreamStatus::Connected => visual.success,
+        StreamStatus::Connecting | StreamStatus::Reconnecting { .. } => visual.accent_hover,
+        StreamStatus::Failed(_) => visual.error,
+        StreamStatus::Disconnected => visual.text_muted,
+    };
+    let target = app
+        .stream
+        .target
+        .as_ref()
+        .map(|target| format!("{}/{}", target.component, target.agent_id))
+        .unwrap_or_else(|| "one exact Agent required".to_string());
+    let summary = format!(
+        "{} · {}/{} events · {} unread · {} server missed · {} local dropped · {} / {}",
+        if app.stream.follow {
+            "Follow"
+        } else {
+            "Paused"
+        },
+        app.stream.events.len(),
+        stream::MAX_EVENTS,
+        app.stream.unread,
+        app.stream.server_missed,
+        app.stream.locally_dropped,
+        format_bytes(app.stream.buffered_bytes),
+        format_bytes(stream::MAX_BYTES),
+    );
+    let prefix = format!("[{}] ", app.stream.status.label());
+    let suffix = format!("{target} · {summary}");
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(status_color)),
+        Span::styled(
+            fit(
+                &suffix,
+                width.saturating_sub(app.stream.status.label().len() + 3),
+            ),
+            Style::default().fg(visual.text_secondary),
+        ),
+    ])
+}
+
+fn stream_item_line(item: &AgentStreamItem, width: usize) -> Line<'static> {
+    let visual = theme();
+    let timestamp = item.timestamp().to_string();
+    let timestamp = timestamp
+        .split_once('T')
+        .map(|(_, time)| time.trim_end_matches('Z'))
+        .unwrap_or(timestamp.as_str());
+    let (kind, message, color) = match item {
+        AgentStreamItem::Stdout { message, .. } => ("OUT", message.clone(), visual.text),
+        AgentStreamItem::Stderr { message, .. } => ("ERR", message.clone(), visual.error),
+        AgentStreamItem::Log {
+            level,
+            context,
+            message,
+            ..
+        } => {
+            let color = match level {
+                LogLevel::Trace | LogLevel::Debug => visual.text_muted,
+                LogLevel::Info => visual.info,
+                LogLevel::Warn => visual.accent_hover,
+                LogLevel::Error | LogLevel::Critical => visual.error,
+            };
+            ("LOG", format!("{} [{}] {message}", level, context), color)
         }
-        .line(&theme()),
-        Line::default(),
-        FieldRow {
-            label: "Scope",
-            value: "one exact Agent",
-            label_width: 12,
+        AgentStreamItem::InvocationStarted {
+            function,
+            idempotency_key,
+            ..
+        } => (
+            "CALL",
+            format!("started {function} · {idempotency_key}"),
+            visual.accent_hover,
+        ),
+        AgentStreamItem::InvocationFinished {
+            function,
+            idempotency_key,
+            ..
+        } => (
+            "CALL",
+            format!("finished {function} · {idempotency_key}"),
+            visual.success,
+        ),
+        AgentStreamItem::PluginError {
+            plugin_name,
+            message,
+            ..
+        } => ("PLUGIN", format!("{plugin_name} · {message}"), visual.error),
+        AgentStreamItem::SnapshotRecoverySucceeded { snapshot_index, .. } => (
+            "RECOVER",
+            format!("loaded snapshot from oplog index {snapshot_index}"),
+            visual.success,
+        ),
+        AgentStreamItem::SnapshotRecoveryFailed {
+            snapshot_index,
+            error,
+            ..
+        } => (
+            "RECOVER",
+            format!("snapshot {snapshot_index} failed · {error}"),
+            visual.error,
+        ),
+        AgentStreamItem::ServerLagged { missed, .. } => (
+            "LAG",
+            format!("server reports {missed} missed events"),
+            visual.accent_hover,
+        ),
+        AgentStreamItem::StreamClosed { .. } => {
+            ("STREAM", "connection closed".to_string(), visual.text_muted)
         }
-        .line(&theme()),
-        FieldRow {
-            label: "Buffer",
-            value: "10,000 events / 16 MiB",
-            label_width: 12,
-        }
-        .line(&theme()),
-    ];
-    render_ops_document(frame, area, app, "Stream", lines);
+        AgentStreamItem::StreamError { error, .. } => (
+            "STREAM",
+            format!("connection error · {error}"),
+            visual.error,
+        ),
+    };
+    let message = message.replace(['\r', '\n'], " ↵ ");
+    let prefix = format!("{timestamp:<12} {kind:<7} ");
+    Line::from(vec![
+        Span::styled(prefix.clone(), Style::default().fg(visual.text_muted)),
+        Span::styled(
+            fit(&message, width.saturating_sub(prefix.chars().count())),
+            Style::default().fg(color),
+        ),
+    ])
+}
+
+fn format_bytes(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024 * 1024) as f64)
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -11313,6 +11719,19 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         push_raw_help(&mut lines, width, "ctrl+o", "Toggle newest / oldest order");
         push_raw_help(&mut lines, width, "ctrl+r", "Restart the bounded query");
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
+    } else if app.ops.active() == OpsDestination::Stream {
+        push_action_section_for_app(
+            &mut lines,
+            app,
+            width,
+            "Agent Stream",
+            &[ActionId::ToggleAgentStream],
+        );
+        push_raw_help(&mut lines, width, "up / down", "Scroll buffered events");
+        push_raw_help(&mut lines, width, "pageup / pagedown", "Scroll by page");
+        push_raw_help(&mut lines, width, "home", "Show oldest buffered events");
+        push_raw_help(&mut lines, width, "end", "Follow latest events");
+        push_raw_help(&mut lines, width, "ctrl+x v a", "Select an exact Agent");
     } else if app.ops.active() == OpsDestination::Metrics {
         push_section_break(&mut lines, width, "Metrics");
         if matches!(app.ops.current_route(), OpsRoute::MetricsPanel(_)) {
@@ -11394,6 +11813,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
                 ActionId::ToggleAgentAutoRefresh,
                 ActionId::ToggleAgentDetails,
                 ActionId::CycleAgentMode,
+                ActionId::ToggleAgentStream,
             ],
         );
         push_raw_help(&mut lines, width, "type", "Find within loaded agents");
@@ -13171,6 +13591,7 @@ enum ActionId {
     ToggleAgentAutoRefresh,
     CycleAgentMode,
     ToggleAgentDetails,
+    ToggleAgentStream,
     NextOpsDestination,
     PreviousOpsDestination,
     CycleAgentFindScope,
@@ -13579,6 +14000,16 @@ const ACTIONS: &[ActionDefinition] = &[
         category: ActionCategory::View,
         palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::ToggleAgentStream,
+        label: "Connect / Disconnect Agent Stream",
+        description: "Use the exact Agent scope and retain events in the background",
+        shortcut: Some("ctrl+k"),
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
+        execution_kind: ActionExecution::Direct,
         palette_visible: true,
     },
     ActionDefinition {
@@ -14959,7 +15390,7 @@ mod tests {
         assert_eq!(visible_count(ActionCategory::GoTo), 15);
         assert_eq!(visible_count(ActionCategory::Run), 12);
         assert_eq!(visible_count(ActionCategory::View), 7);
-        assert_eq!(visible_count(ActionCategory::Explore), 8);
+        assert_eq!(visible_count(ActionCategory::Explore), 9);
         assert_eq!(visible_count(ActionCategory::Tui), 2);
     }
 
@@ -16960,6 +17391,85 @@ mod tests {
         for (width, height) in [(60, 18), (24, 8), (1, 1)] {
             render_app_text_at(&app, width, height);
         }
+    }
+
+    #[test]
+    fn stream_renders_typed_events_and_background_unread_state_responsively() {
+        let mut app = test_app();
+        let target = AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "CartAgent(\"one\")".to_string(),
+        };
+        app.ops.open_stream(target.clone());
+        app.stream.target = Some(target);
+        app.stream.status = StreamStatus::Connected;
+        app.stream.apply_message(
+            0,
+            stream::StreamMessage::Item(AgentStreamItem::PluginError {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                plugin_name: "demo-plugin".to_string(),
+                message: "plugin failed".to_string(),
+            }),
+            true,
+        );
+        app.stream.apply_message(
+            0,
+            stream::StreamMessage::Item(AgentStreamItem::SnapshotRecoverySucceeded {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                snapshot_index: 42,
+            }),
+            false,
+        );
+
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("[Connected]"), "{frame}");
+        assert!(frame.contains("1 unread"), "{frame}");
+        assert!(frame.contains("PLUGIN"), "{frame}");
+        assert!(frame.contains("demo-plugin · plugin failed"), "{frame}");
+        assert!(frame.contains("RECOVER"), "{frame}");
+        assert!(frame.contains("oplog index 42"), "{frame}");
+
+        for (width, height) in [(60, 18), (24, 8), (1, 1)] {
+            render_app_text_at(&app, width, height);
+        }
+    }
+
+    #[test]
+    fn stream_scrollbar_and_destination_switch_preserve_the_session() {
+        let mut app = test_app();
+        let target = AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "CartAgent(\"one\")".to_string(),
+        };
+        app.ops.open_stream(target.clone());
+        app.stream.target = Some(target.clone());
+        app.stream.status = StreamStatus::Connected;
+        for index in 0..40 {
+            app.stream.apply_message(
+                0,
+                stream::StreamMessage::Item(AgentStreamItem::Stdout {
+                    timestamp: golem_common::model::Timestamp::from(index),
+                    message: format!("event {index}"),
+                }),
+                true,
+            );
+        }
+        render_app_text_at(&app, 80, 14);
+        let scrollbar = snapshot_region(&app, RegionKind::Scrollbar(ScrollbarTarget::OpsStream));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.y,
+            ),
+            None,
+        );
+        assert!(!app.stream.follow);
+        assert!(app.stream.scroll_from_end > 0);
+
+        app.select_ops_destination(OpsDestination::Agents, None);
+        assert_eq!(app.stream.status, StreamStatus::Connected);
+        assert_eq!(app.stream.target, Some(target));
     }
 
     #[test]
@@ -19091,6 +19601,7 @@ mod tests {
             metrics: MetricsState::default(),
             activity: ActivityState::default(),
             resources: ResourcesState::default(),
+            stream: StreamState::default(),
             next_command_id: 1,
             selected_target: SelectedTarget {
                 context: TuiContextInfo {

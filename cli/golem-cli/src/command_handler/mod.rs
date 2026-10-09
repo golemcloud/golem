@@ -25,6 +25,7 @@ use crate::command::{
 };
 use crate::command_handler::account::AccountCommandHandler;
 use crate::command_handler::agent::AgentCommandHandler;
+pub(crate) use crate::command_handler::agent::stream::{AgentStreamConsumer, AgentStreamItem};
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
