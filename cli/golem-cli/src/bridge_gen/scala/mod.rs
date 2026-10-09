@@ -944,6 +944,7 @@ impl ScalaBridgeGenerator {
         };
 
         if let OutputSchema::Single(ty) = &method.output_schema
+            && output_multimodal_cases(self.type_naming.graph(), &method.output_schema)?.is_none()
             && self.guest_direct_type(ty, &mut Vec::new())
         {
             let ty = self.type_reference(ty)?;

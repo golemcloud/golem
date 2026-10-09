@@ -2055,7 +2055,7 @@ fn multimodal_input_and_output_compiles() {
             variant_case("image-url", Some(SchemaType::string())),
         ]
     };
-    let pkg = GeneratedPackage::new(agent(
+    let agent_type = agent(
         "MediaAgent",
         // Non-same-language so modality case names normalize to UpperCamelCase.
         "",
@@ -2076,7 +2076,8 @@ fn multimodal_input_and_output_compiles() {
         ],
         vec![],
         AgentMode::Durable,
-    ));
+    );
+    let pkg = GeneratedPackage::new(agent_type.clone());
     let client = std::fs::read_to_string(
         pkg.package_dir()
             .join("src/main/scala/golem/bridge/client/media_agent/MediaAgentClient.scala"),
@@ -2134,6 +2135,21 @@ fn multimodal_input_and_output_compiles() {
     );
 
     compile(pkg.package_dir().as_path());
+
+    let guest = GeneratedPackage::new_with_mode(agent_type, ScalaBridgeMode::GuestWasmRpc);
+    let client = std::fs::read_to_string(
+        guest
+            .package_dir()
+            .join("src/main/scala/golem/bridge/client/media_agent/MediaAgentClient.scala"),
+    )
+    .unwrap();
+    assert!(client.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue(__tree)"));
+    assert!(
+        client.contains(
+            "_root_.golem.bridge.client.media_agent.Codecs.decodeMultimodal0List(__value)"
+        )
+    );
+    compile_guest_if_enabled(guest.package_dir().as_path());
 }
 
 /// A durable agent that declares local config overrides gets the
