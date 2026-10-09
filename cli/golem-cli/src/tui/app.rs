@@ -30,6 +30,7 @@ use crate::command_handler::Handlers;
 use crate::config::Config;
 use crate::context::Context;
 use crate::log::Output;
+use crate::model::agent::oplog::OplogEntryGroupKey;
 use crate::model::agent::{
     AgentListMode, AgentListPageCursor, AgentListRequest, AgentMetadataView,
     AgentsMetadataResponseView,
@@ -51,14 +52,17 @@ use crate::tui::nested_cli::{
     CommandExit, NestedCliEvent, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
 use crate::tui::ops::activity::{
-    self, ActivityAgent, ActivityRefreshPayload, ActivityRepresentation, ActivityState,
+    self, ActivityAgent, ActivityAgentRequest, ActivityLoadPosition, ActivityOrder,
+    ActivityRefreshPayload, ActivityRepresentation, ActivityState,
 };
 use crate::tui::ops::metrics::{
     self, MAX_EXPLORE_SERIES, MetricsFocus, MetricsLoad, MetricsMode, MetricsQuery,
     MetricsRefreshPayload, MetricsState,
 };
 use crate::tui::ops::resources::{self, ResourceScope, ResourcesRefreshPayload, ResourcesState};
-use crate::tui::ops::{AgentIdentity, OpsApp, OpsDestination, OpsRoute};
+use crate::tui::ops::{
+    AgentIdentity, OplogEntryIdentity, OplogRoute, OpsApp, OpsDestination, OpsRoute,
+};
 use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
 use crate::tui::visual::active_style;
@@ -748,8 +752,31 @@ impl TuiApp {
             KeyCode::Esc if self.agent_details_focused() => {
                 self.agents.focus = AgentOverviewFocus::List
             }
+            KeyCode::Esc
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && self.activity.query != self.activity.applied_query.text =>
+            {
+                self.activity.query = self.activity.applied_query.text.clone();
+            }
             KeyCode::Esc if self.active_workspace == Workspace::Ops => {
-                self.ops.pop_route();
+                if self.ops.pop_route() && self.ops.active() == OpsDestination::Oplog {
+                    self.invalidate_activity();
+                    self.refresh_activity(event_tx);
+                }
+            }
+            KeyCode::Enter
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && self.metrics_chart_inspection_active() =>
+            {
+                self.open_metric_sample_in_oplog(event_tx)
+            }
+            KeyCode::Enter
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog =>
+            {
+                self.apply_activity_query(event_tx)
             }
             KeyCode::Enter
                 if self.active_workspace == Workspace::Ops
@@ -816,6 +843,21 @@ impl TuiApp {
                 self.agents.query.push(character);
                 self.agents.reset_selection();
             }
+            KeyCode::Backspace
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && !self.activity.query.is_empty() =>
+            {
+                self.activity.query.pop();
+            }
+            KeyCode::Char(character)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+                    && (!character.is_whitespace() || !self.activity.query.is_empty()) =>
+            {
+                self.activity.query.push(character);
+            }
             _ => {}
         }
     }
@@ -852,6 +894,30 @@ impl TuiApp {
                     OpsDestination::Configuration => self.refresh_resources(event_tx),
                     OpsDestination::Stream => {}
                 }
+            }
+            KeyCode::Char('n')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.load_more_activity(event_tx)
+            }
+            KeyCode::Char('g')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.stop_activity()
+            }
+            KeyCode::Char('o')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                let selected = self.activity_selection_key();
+                self.activity.order = self.activity.order.toggle();
+                self.sort_activity_entries();
+                self.restore_activity_selection(selected);
             }
             KeyCode::Char('s')
                 if self.active_workspace == Workspace::Ops
@@ -2455,6 +2521,18 @@ impl TuiApp {
     }
 
     fn activity_scope(&self) -> Option<Vec<ActivityAgent>> {
+        if let Some(route) = self.ops.current_oplog() {
+            return Some(
+                route
+                    .agents
+                    .iter()
+                    .map(|agent| ActivityAgent {
+                        component: agent.component.clone(),
+                        agent_id: agent.agent_id.clone(),
+                    })
+                    .collect(),
+            );
+        }
         if let Some(agent) = self.ops.current_agent() {
             return Some(vec![ActivityAgent {
                 component: agent.component.clone(),
@@ -2506,6 +2584,58 @@ impl TuiApp {
             ));
             return;
         }
+        let route = self.ops.current_oplog().cloned();
+        self.activity.applied_query.from = route
+            .as_ref()
+            .and_then(|route| route.from_unix_nanos)
+            .and_then(datetime_from_unix_nanos);
+        self.activity.applied_query.to = route
+            .as_ref()
+            .and_then(|route| route.to_unix_nanos)
+            .and_then(datetime_from_unix_nanos);
+        let focus = route.and_then(|route| route.focus);
+        let requests = agents
+            .into_iter()
+            .map(|agent| {
+                let position = focus
+                    .as_ref()
+                    .filter(|focus| {
+                        focus.agent.component == agent.component
+                            && focus.agent.agent_id == agent.agent_id
+                    })
+                    .map(|focus| ActivityLoadPosition::Around(focus.index))
+                    .unwrap_or_else(|| {
+                        if self.activity.applied_query.active() {
+                            ActivityLoadPosition::Search(None)
+                        } else {
+                            ActivityLoadPosition::Latest
+                        }
+                    });
+                ActivityAgentRequest { agent, position }
+            })
+            .collect();
+        self.activity.pending_focus = focus.map(|focus| {
+            (
+                ActivityAgent {
+                    component: focus.agent.component,
+                    agent_id: focus.agent.agent_id,
+                },
+                focus.index,
+            )
+        });
+        self.start_activity_load(requests, false, event_tx);
+    }
+
+    fn start_activity_load(
+        &mut self,
+        requests: Vec<ActivityAgentRequest>,
+        append: bool,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        if requests.is_empty() {
+            self.activity.paused = false;
+            return;
+        }
         let Some(event_tx) = event_tx.cloned() else {
             return;
         };
@@ -2516,17 +2646,21 @@ impl TuiApp {
         self.activity.generation = self.activity.generation.saturating_add(1);
         let generation = self.activity.generation;
         self.activity.loading = true;
+        self.activity.paused = false;
+        self.activity.stopped = false;
         self.activity.error = None;
         self.activity.context_id = Some(context_executor.current_context_id());
+        let query = self.activity.applied_query.clone();
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
-        context_executor.spawn(
+        let task = context_executor.spawn(
             event_tx.control(),
             auth_presenter,
             move |launch_context| async move {
-                activity::load(launch_context.into_context(), agents).await
+                activity::load(launch_context.into_context(), requests, query, append).await
             },
             move |result| TuiEvent::ActivityRefreshFinished { generation, result },
         );
+        self.activity.task = Some(task);
     }
 
     fn finish_activity_refresh(
@@ -2541,33 +2675,146 @@ impl TuiApp {
         if Some(context_id) != self.activity.context_id {
             return;
         }
+        self.activity.task = None;
         self.activity.loading = false;
+        self.activity.stopped = false;
         match result {
             Ok(payload) => {
-                self.activity.agents = payload.agents;
-                self.activity.entries = payload.entries;
-                self.activity.failures = payload.failures;
+                let selected = self.activity_selection_key();
+                if payload.append {
+                    for agent in payload.agents {
+                        if !self.activity.agents.contains(&agent) {
+                            self.activity.agents.push(agent);
+                        }
+                    }
+                    self.activity.entries.extend(payload.entries);
+                    let mut seen = HashSet::new();
+                    self.activity.entries.retain(|entry| {
+                        seen.insert((
+                            entry.component.clone(),
+                            entry.agent_id.clone(),
+                            entry.presentation.index,
+                        ))
+                    });
+                    for progress in payload.progress {
+                        if let Some(existing) = self
+                            .activity
+                            .progress
+                            .iter_mut()
+                            .find(|existing| existing.agent == progress.agent)
+                        {
+                            *existing = progress;
+                        } else {
+                            self.activity.progress.push(progress);
+                        }
+                    }
+                    self.activity.failures.extend(payload.failures);
+                } else {
+                    self.activity.agents = payload.agents;
+                    self.activity.entries = payload.entries;
+                    self.activity.progress = payload.progress;
+                    self.activity.failures = payload.failures;
+                }
+                self.sort_activity_entries();
+                self.activity.paused = self
+                    .activity
+                    .progress
+                    .iter()
+                    .any(|progress| progress.has_more);
                 self.activity.selected = self
                     .activity
                     .selected
-                    .min(self.activity.entries.len().saturating_sub(1));
+                    .min(self.activity_visible_len().saturating_sub(1));
+                if let Some((agent, index)) = self.activity.pending_focus.take()
+                    && let Some(position) = self.activity.entries.iter().position(|entry| {
+                        entry.component == agent.component
+                            && entry.agent_id == agent.agent_id
+                            && entry.presentation.index == index
+                    })
+                {
+                    self.activity.representation = ActivityRepresentation::Entries;
+                    self.activity.selected = position;
+                } else {
+                    self.restore_activity_selection(selected);
+                }
                 self.activity.error = None;
             }
             Err(error) => self.activity.error = Some(agent_refresh_error(error, logs)),
         }
     }
 
+    fn apply_activity_query(&mut self, event_tx: Option<&TuiEventSender>) {
+        let query = self.activity.query.trim().to_string();
+        if query == self.activity.applied_query.text && !self.activity.entries.is_empty() {
+            return;
+        }
+        self.activity.query = query.clone();
+        self.activity.applied_query.text = query;
+        self.activity.selected = 0;
+        self.ops.clear_oplog_focus();
+        self.refresh_activity(event_tx);
+    }
+
+    fn load_more_activity(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.activity.loading {
+            return;
+        }
+        if self.activity.stopped && self.activity.progress.is_empty() {
+            self.refresh_activity(event_tx);
+            return;
+        }
+        let search = self.activity.applied_query.active();
+        let requests = self
+            .activity
+            .progress
+            .iter()
+            .filter(|progress| progress.has_more)
+            .filter_map(|progress| {
+                let position = if search {
+                    Some(ActivityLoadPosition::Search(progress.next.clone()))
+                } else {
+                    progress
+                        .oldest_loaded_index
+                        .map(ActivityLoadPosition::Before)
+                }?;
+                Some(ActivityAgentRequest {
+                    agent: progress.agent.clone(),
+                    position,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.start_activity_load(requests, true, event_tx);
+    }
+
+    fn stop_activity(&mut self) {
+        if !self.activity.loading {
+            return;
+        }
+        self.activity.generation = self.activity.generation.saturating_add(1);
+        if let Some(task) = self.activity.task.take() {
+            task.abort();
+        }
+        self.activity.loading = false;
+        self.activity.paused = true;
+        self.activity.stopped = true;
+    }
+
     fn invalidate_activity(&mut self) {
+        if let Some(task) = self.activity.task.take() {
+            task.abort();
+        }
         let representation = self.activity.representation;
-        self.activity = ActivityState {
-            generation: self.activity.generation.saturating_add(1),
-            representation,
-            ..ActivityState::default()
-        };
+        let order = self.activity.order;
+        let generation = self.activity.generation.saturating_add(1);
+        let mut activity = ActivityState::default();
+        activity.generation = generation;
+        activity.representation = representation;
+        activity.order = order;
+        self.activity = activity;
     }
 
     fn move_activity_selection(&mut self, down: bool) {
-        let last = self.activity.entries.len().saturating_sub(1);
+        let last = self.activity_visible_len().saturating_sub(1);
         self.activity.selected = if down {
             self.activity.selected.saturating_add(1).min(last)
         } else {
@@ -2578,11 +2825,108 @@ impl TuiApp {
     fn set_activity_representation(
         &mut self,
         representation: ActivityRepresentation,
-        event_tx: Option<&TuiEventSender>,
+        _event_tx: Option<&TuiEventSender>,
     ) {
+        let selected = self.activity_selection_key();
         self.activity.representation = representation;
+        self.restore_activity_selection(selected);
         self.activity.error = None;
-        self.refresh_activity(event_tx);
+    }
+
+    fn activity_visible_len(&self) -> usize {
+        match self.activity.representation {
+            ActivityRepresentation::Grouped => {
+                activity::grouped_entries(&self.activity.entries).len()
+            }
+            ActivityRepresentation::Entries => self.activity.entries.len(),
+        }
+    }
+
+    fn sort_activity_entries(&mut self) {
+        let order = self.activity.order;
+        self.activity.entries.sort_by(|left, right| match order {
+            ActivityOrder::Newest => right
+                .presentation
+                .timestamp
+                .cmp(&left.presentation.timestamp)
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+                .then_with(|| right.presentation.index.cmp(&left.presentation.index)),
+            ActivityOrder::Oldest => left
+                .presentation
+                .timestamp
+                .cmp(&right.presentation.timestamp)
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+                .then_with(|| left.presentation.index.cmp(&right.presentation.index)),
+        });
+    }
+
+    fn activity_selection_key(
+        &self,
+    ) -> Option<(String, String, Option<OplogEntryGroupKey>, u64, bool)> {
+        match self.activity.representation {
+            ActivityRepresentation::Entries => self
+                .activity
+                .entries
+                .get(self.activity.selected)
+                .map(|entry| {
+                    (
+                        entry.component.clone(),
+                        entry.agent_id.clone(),
+                        entry.presentation.group.clone(),
+                        entry.presentation.index,
+                        true,
+                    )
+                }),
+            ActivityRepresentation::Grouped => activity::grouped_entries(&self.activity.entries)
+                .get(self.activity.selected)
+                .map(|group| {
+                    (
+                        group.component.clone(),
+                        group.agent_id.clone(),
+                        group.group.clone(),
+                        group.first_index,
+                        false,
+                    )
+                }),
+        }
+    }
+
+    fn restore_activity_selection(
+        &mut self,
+        key: Option<(String, String, Option<OplogEntryGroupKey>, u64, bool)>,
+    ) {
+        let Some((component, agent_id, group, index, exact)) = key else {
+            self.activity.selected = self
+                .activity
+                .selected
+                .min(self.activity_visible_len().saturating_sub(1));
+            return;
+        };
+        let position = match self.activity.representation {
+            ActivityRepresentation::Entries => self.activity.entries.iter().position(|entry| {
+                entry.component == component
+                    && entry.agent_id == agent_id
+                    && if exact {
+                        entry.presentation.index == index
+                    } else if group.is_some() {
+                        entry.presentation.group == group
+                    } else {
+                        entry.presentation.index == index
+                    }
+            }),
+            ActivityRepresentation::Grouped => activity::grouped_entries(&self.activity.entries)
+                .iter()
+                .position(|entry| {
+                    entry.component == component
+                        && entry.agent_id == agent_id
+                        && if group.is_some() {
+                            entry.group == group
+                        } else {
+                            entry.first_index == index
+                        }
+                }),
+        };
+        self.activity.selected = position.unwrap_or(0);
     }
 
     fn resource_scope(&self) -> Option<ResourceScope> {
@@ -3061,6 +3405,80 @@ impl TuiApp {
         } else {
             current.saturating_sub(1)
         });
+    }
+
+    fn open_metric_sample_in_oplog(&mut self, event_tx: Option<&TuiEventSender>) {
+        let anchor = self.metric_sample_oplog_anchor();
+        let (agent, index) = match anchor {
+            Ok(anchor) => anchor,
+            Err(message) => {
+                self.metrics.notice = Some(message);
+                return;
+            }
+        };
+        self.metrics.notice = None;
+        self.ops.open_oplog(OplogRoute {
+            agents: vec![agent.clone()],
+            focus: Some(OplogEntryIdentity { agent, index }),
+            from_unix_nanos: None,
+            to_unix_nanos: None,
+        });
+        self.invalidate_activity();
+        self.activity.representation = ActivityRepresentation::Entries;
+        self.refresh_activity(event_tx);
+    }
+
+    fn metric_sample_oplog_anchor(&self) -> Result<(AgentIdentity, u64), String> {
+        if self.metrics.source != crate::model::local_observability::LocalMetricSource::Agents {
+            return Err("Server metrics do not have Agent Oplog entries".to_string());
+        }
+        if matches!(self.ops.current_route(), OpsRoute::MetricsPanel(_)) {
+            return Err(
+                "Dashboard points combine a scope; use Explore to open an exact Agent sample"
+                    .to_string(),
+            );
+        }
+        let timestamp = metrics_cursor_timestamp(self, &self.metrics_chart_timestamps())
+            .ok_or_else(|| "Select a metric sample before opening Oplog".to_string())?;
+        let series = self
+            .metrics
+            .series
+            .get(self.metrics.selected_series)
+            .ok_or_else(|| "Select an Agent metric series before opening Oplog".to_string())?;
+        let agent_id = series
+            .agent_id
+            .as_deref()
+            .ok_or_else(|| "The selected series is not scoped to one Agent".to_string())?;
+        let index = self
+            .metrics
+            .series_samples
+            .iter()
+            .find(|samples| samples.series_key == series.series_key)
+            .and_then(|samples| {
+                samples
+                    .response
+                    .samples
+                    .iter()
+                    .find(|sample| sample.timestamp_unix_nanos == timestamp)
+            })
+            .and_then(|sample| sample.source_oplog_index)
+            .ok_or_else(|| "The selected sample has no exact Oplog source".to_string())?;
+        let mut matches = self
+            .agents
+            .agents
+            .iter()
+            .filter(|agent| agent.agent_id == agent_id)
+            .map(AgentListItem::identity);
+        let agent = matches
+            .next()
+            .ok_or_else(|| "Load the sample's Agent before opening its Oplog".to_string())?;
+        if matches.next().is_some() {
+            return Err(
+                "The AgentID matches multiple loaded components; narrow the Agent scope first"
+                    .to_string(),
+            );
+        }
+        Ok((agent, index))
     }
 
     fn select_metrics_chart_at(&mut self, x: u16) {
@@ -8064,9 +8482,13 @@ fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 }
 
 fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
+    let [header, query_bar, body] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
         .areas(area);
     let representation = app.activity.representation;
     let choices = [
@@ -8083,21 +8505,75 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     })
     .collect::<Vec<_>>()
     .join("  ");
-    let loading = if app.activity.loading {
-        " · refreshing…"
+    let load_state = if app.activity.loading {
+        " · [Loading…]"
+    } else if app.activity.stopped {
+        " · [Stopped]"
+    } else if app.activity.paused {
+        " · (More available)"
+    } else {
+        ""
+    };
+    let scan_progress = app
+        .activity
+        .progress
+        .iter()
+        .filter_map(|progress| {
+            progress
+                .scanned_through_index
+                .map(|scanned| (scanned, progress.last_index))
+        })
+        .max_by_key(|(scanned, _)| *scanned)
+        .map(|(scanned, last)| format!(" · scan #{scanned}/#{last}"))
+        .unwrap_or_default();
+    let scan_bound = if app
+        .activity
+        .progress
+        .iter()
+        .any(|progress| progress.scan_limit_reached && progress.has_more)
+    {
+        " · bounded"
     } else {
         ""
     };
     PaneHeader {
         title: &format!(
-            "Oplog · {choices} · {} Agent(s){loading}",
-            app.activity.agents.len()
+            "Oplog · {choices} · [{}] · {} Agent(s){scan_progress}{scan_bound}{load_state}",
+            app.activity.order.label(),
+            app.activity.agents.len(),
         ),
         focus: PaneFocus::Active,
         left_connector: Some("├"),
         ending: PaneEnding::Top,
     }
     .render(frame, header, &theme());
+    let query_state = if app.activity.query == app.activity.applied_query.text {
+        "applied"
+    } else {
+        "Enter to apply"
+    };
+    let query = if app.activity.query.is_empty() {
+        "type an Oplog text expression".to_string()
+    } else {
+        app.activity.query.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Search  ", Style::default().fg(theme().text_secondary)),
+            Span::styled(
+                fit(&query, query_bar.width.saturating_sub(24) as usize),
+                Style::default()
+                    .fg(theme().input_text)
+                    .bg(theme().input_background),
+            ),
+            Span::styled(
+                format!("  · {query_state}"),
+                Style::default().fg(theme().text_muted),
+            ),
+        ]))
+        .style(surface_style()),
+        query_bar,
+    );
 
     if let Some(error) = &app.activity.error {
         render_metrics_notice(frame, body, NoticeKind::Warning, error);
@@ -8136,7 +8612,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         notice_lines.push(
             Notice {
                 kind: NoticeKind::Warning,
-                message: "Large Oplog scope: up to 200 entries are read per Agent",
+                message: "Large Oplog scope: 100 entries are read per Agent and batch",
             }
             .line(&theme()),
         );
@@ -8182,6 +8658,49 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 
 fn render_activity_entries(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, journal: bool) {
     let visible = area.height.max(1) as usize;
+    if !journal {
+        let groups = activity::grouped_entries(&app.activity.entries);
+        let start = app
+            .activity
+            .selected
+            .saturating_sub(visible.saturating_sub(1) / 2)
+            .min(groups.len().saturating_sub(visible));
+        let lines = groups
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible)
+            .map(|(index, group)| {
+                let identity = if app.activity.agents.len() > 1 {
+                    format!("{}/{}", group.component, group.agent_id)
+                } else {
+                    group.agent_id.clone()
+                };
+                let anchor = group
+                    .group
+                    .as_ref()
+                    .and_then(|group| group.start_index())
+                    .map(|index| format!("group #{index}"))
+                    .unwrap_or_else(|| format!("entry #{}", group.first_index));
+                let kinds = group.kinds.join(" → ");
+                let count = if group.entry_count > 1 {
+                    format!(" · {} entries", group.entry_count)
+                } else {
+                    String::new()
+                };
+                metric_selection_line(
+                    format!(
+                        "{}  {}  {} · {}{}",
+                        group.timestamp, identity, anchor, kinds, count
+                    ),
+                    index == app.activity.selected,
+                    area.width,
+                )
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(Paragraph::new(lines).style(surface_style()), area);
+        return;
+    }
     let start = app
         .activity
         .selected
@@ -8195,20 +8714,16 @@ fn render_activity_entries(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, jour
         .skip(start)
         .take(visible)
         .map(|(index, entry)| {
-            let timestamp = entry.timestamp.as_deref().unwrap_or("—");
+            let timestamp = entry.presentation.timestamp;
             let identity = if app.activity.agents.len() > 1 {
                 format!("{}/{}", entry.component, entry.agent_id)
             } else {
                 entry.agent_id.clone()
             };
-            let label = if journal {
-                format!("#{:05}  {}  {}", entry.index, identity, entry.kind)
-            } else {
-                format!(
-                    "{}  {}  #{}  {}",
-                    timestamp, identity, entry.index, entry.kind
-                )
-            };
+            let label = format!(
+                "#{:05}  {}  {}  {}",
+                entry.presentation.index, identity, timestamp, entry.presentation.kind
+            );
             metric_selection_line(label, index == app.activity.selected, area.width)
         })
         .collect::<Vec<_>>();
@@ -8224,13 +8739,17 @@ fn render_activity_detail(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
     PaneHeader {
-        title: &format!("{} · #{} · {}", entry.agent_id, entry.index, entry.kind),
+        title: &format!(
+            "{} · #{} · {}",
+            entry.agent_id, entry.presentation.index, entry.presentation.kind
+        ),
         focus: PaneFocus::Idle,
         left_connector: Some("├"),
         ending: PaneEnding::Top,
     }
     .render(frame, header, &theme());
-    let detail = serde_json::to_string_pretty(&entry.detail).unwrap_or_else(|_| "null".to_string());
+    let detail = serde_json::to_string_pretty(&entry.presentation.detail)
+        .unwrap_or_else(|_| "null".to_string());
     frame.render_widget(
         Paragraph::new(detail)
             .style(surface_style())
@@ -9111,6 +9630,12 @@ fn metric_timestamp_label(timestamp_unix_nanos: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
         .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S%.3fZ").to_string())
         .unwrap_or_else(|| format!("{timestamp_unix_nanos} ns"))
+}
+
+fn datetime_from_unix_nanos(timestamp_unix_nanos: i64) -> Option<chrono::DateTime<chrono::Utc>> {
+    let seconds = timestamp_unix_nanos.div_euclid(1_000_000_000);
+    let nanos = timestamp_unix_nanos.rem_euclid(1_000_000_000) as u32;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
 }
 
 fn metric_cursor_value_line(
@@ -10776,7 +11301,17 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             "Grouped or exact Entries",
         );
         push_raw_help(&mut lines, width, "up / down", "Select an oplog entry");
-        push_raw_help(&mut lines, width, "ctrl+r", "Refresh the bounded snapshot");
+        push_raw_help(
+            &mut lines,
+            width,
+            "type / backspace",
+            "Edit server-side search",
+        );
+        push_raw_help(&mut lines, width, "enter", "Apply search");
+        push_raw_help(&mut lines, width, "ctrl+n", "Load the next bounded batch");
+        push_raw_help(&mut lines, width, "ctrl+g", "Stop the active search");
+        push_raw_help(&mut lines, width, "ctrl+o", "Toggle newest / oldest order");
+        push_raw_help(&mut lines, width, "ctrl+r", "Restart the bounded query");
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
     } else if app.ops.active() == OpsDestination::Metrics {
         push_section_break(&mut lines, width, "Metrics");
@@ -10788,6 +11323,12 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
                 "Inspect chart samples",
             );
             push_raw_help(&mut lines, width, "click / wheel", "Inspect chart sample");
+            push_raw_help(
+                &mut lines,
+                width,
+                "enter",
+                "Open exact Agent sample in Oplog",
+            );
             push_raw_help(&mut lines, width, "esc", "Return to dashboard");
         } else {
             push_raw_help(&mut lines, width, "left / right", "Dashboard or Explore");
@@ -10818,6 +11359,12 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
                     width,
                     "shift+left / shift+right",
                     "Inspect focused chart",
+                );
+                push_raw_help(
+                    &mut lines,
+                    width,
+                    "enter",
+                    "Open exact Agent sample in Oplog",
                 );
             }
         }
@@ -16173,6 +16720,75 @@ mod tests {
     }
 
     #[test]
+    fn exact_explore_sample_opens_a_retained_oplog_route() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.mode = MetricsMode::Explore;
+        app.metrics.focus = MetricsFocus::Chart;
+        app.metrics.series = vec![LocalMetricSeries {
+            series_key: "cart-invocations".to_string(),
+            statistic: "value".to_string(),
+            temporality: LocalMetricTemporality::Delta,
+            attributes: BTreeMap::new(),
+            environment_id: None,
+            component_id: None,
+            agent_id: Some("cart-1".to_string()),
+            agent_type: Some("CartAgent".to_string()),
+            latest_value: Some(1.0),
+            latest_unix_nanos: Some(20),
+        }];
+        app.metrics.series_samples = vec![metrics::MetricsSeriesSamples {
+            series_key: "cart-invocations".to_string(),
+            response: LocalMetricSamplesResponse {
+                samples: vec![LocalMetricSample {
+                    timestamp_unix_nanos: 20,
+                    value: 1.0,
+                    statistic: "value".to_string(),
+                    source_oplog_index: Some(73),
+                }],
+                observed_from_unix_nanos: Some(20),
+                observed_to_unix_nanos: Some(20),
+                original_point_count: 1,
+                approximate: false,
+            },
+        }];
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.ops.active(), OpsDestination::Oplog);
+        assert_eq!(
+            app.ops.current_route(),
+            &OpsRoute::Oplog(OplogRoute {
+                agents: vec![AgentIdentity {
+                    component: "cart".to_string(),
+                    agent_id: "cart-1".to_string(),
+                }],
+                focus: Some(OplogEntryIdentity {
+                    agent: AgentIdentity {
+                        component: "cart".to_string(),
+                        agent_id: "cart-1".to_string(),
+                    },
+                    index: 73,
+                }),
+                from_unix_nanos: None,
+                to_unix_nanos: None,
+            })
+        );
+        assert_eq!(app.activity.representation, ActivityRepresentation::Entries);
+        assert_eq!(
+            app.activity.pending_focus,
+            Some((
+                ActivityAgent {
+                    component: "cart".to_string(),
+                    agent_id: "cart-1".to_string(),
+                },
+                73,
+            ))
+        );
+    }
+
+    #[test]
     fn metrics_append_pages_preserve_selection_and_deduplicate_rows() {
         let family = |name: &str| LocalMetricFamily {
             name: name.to_string(),
@@ -16356,6 +16972,135 @@ mod tests {
 
         assert_eq!(app.activity.representation, ActivityRepresentation::Entries);
         assert!(!app.activity.loading);
+    }
+
+    #[test]
+    fn oplog_typed_groups_progress_and_details_render_responsively() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.agents = vec![ActivityAgent {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+        }];
+        let entry = |index, kind: &str| activity::ActivityEntry {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+            presentation: crate::model::agent::oplog::OplogEntryPresentation {
+                index,
+                timestamp: golem_common::model::Timestamp::from(index),
+                kind: kind.to_string(),
+                group: Some(crate::model::agent::oplog::OplogEntryGroupKey::OplogIndex(
+                    7,
+                )),
+                detail: serde_json::json!({"type": kind, "index": index}),
+            },
+        };
+        app.activity.entries = vec![entry(9, "End"), entry(7, "Start")];
+        app.activity.progress = vec![activity::ActivityAgentProgress {
+            agent: app.activity.agents[0].clone(),
+            next: Some(golem_common::model::oplog::OplogCursor {
+                next_oplog_index: 10,
+                current_component_revision: 1,
+            }),
+            scanned_through_index: Some(9),
+            last_index: 20,
+            oldest_loaded_index: Some(7),
+            has_more: true,
+            scan_limit_reached: true,
+        }];
+        app.activity.paused = true;
+
+        let grouped = render_app_text_at(&app, 120, 28);
+        assert!(grouped.contains("scan #9/#20 · bounded"), "{grouped}");
+        assert!(
+            grouped.contains("group #7 · End → Start · 2 entries"),
+            "{grouped}"
+        );
+
+        app.activity.representation = ActivityRepresentation::Entries;
+        let entries = render_app_text_at(&app, 120, 28);
+        assert!(entries.contains("#00009"), "{entries}");
+        assert!(entries.contains("\"type\": \"End\""), "{entries}");
+
+        app.handle_key(modified_key(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert_eq!(app.activity.order, ActivityOrder::Oldest);
+        assert_eq!(app.activity.entries[0].presentation.index, 7);
+        assert_eq!(
+            app.activity.entries[app.activity.selected]
+                .presentation
+                .index,
+            9
+        );
+
+        for (width, height) in [(60, 18), (24, 8), (1, 1)] {
+            render_app_text_at(&app, width, height);
+        }
+    }
+
+    #[test]
+    fn oplog_plain_text_edits_a_draft_and_enter_applies_it() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        let agent = AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+        };
+        app.ops.open_oplog(OplogRoute {
+            agents: vec![agent.clone()],
+            focus: Some(OplogEntryIdentity { agent, index: 73 }),
+            from_unix_nanos: None,
+            to_unix_nanos: None,
+        });
+
+        for character in "failed invocation".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.activity.query, "failed invocation");
+        assert!(app.activity.applied_query.text.is_empty());
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.activity.applied_query.text, "failed invocation");
+        assert!(
+            app.ops
+                .current_oplog()
+                .is_some_and(|route| route.focus.is_none())
+        );
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("failed invocation"), "{frame}");
+        assert!(frame.contains("applied"), "{frame}");
+    }
+
+    #[test]
+    async fn stopping_oplog_aborts_the_active_query_task() {
+        struct DropFlag(Arc<AtomicBool>);
+
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let mut app = test_app();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = DropFlag(dropped.clone());
+        app.activity.task = Some(tokio::spawn(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        }));
+        app.activity.loading = true;
+
+        app.stop_activity();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("aborted query task should be dropped");
+
+        assert!(!app.activity.loading);
+        assert!(app.activity.stopped);
     }
 
     #[test]

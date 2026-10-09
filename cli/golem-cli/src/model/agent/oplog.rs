@@ -19,13 +19,14 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
-    MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
+    MultipartPartData, OplogCursor, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttributeValue, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationOperation, PublicOplogEntry,
     PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[cfg(test)]
 use crate::agent_id_display::SourceLanguage;
@@ -48,6 +49,101 @@ pub struct AgentOplogEntryView {
     pub index: u64,
     pub attribution: PublicOplogEntryAttribution,
     pub entry: PublicOplogEntry,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentOplogSearchPage {
+    pub entries: Vec<AgentOplogEntryView>,
+    pub next: Option<OplogCursor>,
+    pub scanned_through_index: Option<u64>,
+    pub last_index: u64,
+    pub scan_limit_reached: bool,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum OplogEntryGroupKey {
+    OplogIndex(u64),
+    Span(String),
+}
+
+impl OplogEntryGroupKey {
+    pub fn start_index(&self) -> Option<u64> {
+        match self {
+            Self::OplogIndex(index) => Some(*index),
+            Self::Span(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct OplogEntryPresentation {
+    pub index: u64,
+    pub timestamp: Timestamp,
+    pub kind: String,
+    pub group: Option<OplogEntryGroupKey>,
+    pub detail: Value,
+}
+
+impl From<AgentOplogEntryView> for OplogEntryPresentation {
+    fn from(value: AgentOplogEntryView) -> Self {
+        let group = match &value.entry {
+            PublicOplogEntry::Start(_)
+            | PublicOplogEntry::BeginAtomicRegion(_)
+            | PublicOplogEntry::BeginRemoteTransaction(_) => {
+                Some(OplogEntryGroupKey::OplogIndex(value.index))
+            }
+            PublicOplogEntry::End(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.start_index.as_u64()))
+            }
+            PublicOplogEntry::Cancelled(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.start_index.as_u64()))
+            }
+            PublicOplogEntry::CompletionDiscarded(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.start_index.as_u64()))
+            }
+            PublicOplogEntry::CompletionDelivered(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.start_index.as_u64()))
+            }
+            PublicOplogEntry::HostStreamFrame(params) => Some(OplogEntryGroupKey::OplogIndex(
+                params.parent_start_index.as_u64(),
+            )),
+            PublicOplogEntry::EndAtomicRegion(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.begin_index.as_u64()))
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.begin_index.as_u64()))
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.begin_index.as_u64()))
+            }
+            PublicOplogEntry::CommittedRemoteTransaction(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.begin_index.as_u64()))
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(params) => {
+                Some(OplogEntryGroupKey::OplogIndex(params.begin_index.as_u64()))
+            }
+            PublicOplogEntry::StartSpan(params) => {
+                Some(OplogEntryGroupKey::Span(params.span_id.to_string()))
+            }
+            PublicOplogEntry::FinishSpan(params) => {
+                Some(OplogEntryGroupKey::Span(params.span_id.to_string()))
+            }
+            PublicOplogEntry::SetSpanAttribute(params) => {
+                Some(OplogEntryGroupKey::Span(params.span_id.to_string()))
+            }
+            _ => None,
+        };
+        let timestamp = value.entry.timestamp();
+        let kind = value.entry.kind().to_string();
+        let detail = serde_json::to_value(&value.entry).unwrap_or(Value::Null);
+        Self {
+            index: value.index,
+            timestamp,
+            kind,
+            group,
+            detail,
+        }
+    }
 }
 
 impl StructuredOutput for AgentOplogEntryView {
@@ -1213,11 +1309,15 @@ mod tests {
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
+    use golem_common::model::oplog::public_oplog_entry::{
+        BeginAtomicRegionParams, EndAtomicRegionParams, EndParams, StartParams,
+    };
     use golem_common::model::oplog::{
         AgentInitializationParameters, AgentMethodInvocationParameters, HostRequestSecretReveal,
         HostResponseSecretRevealed, LoadSnapshotParameters, ManualUpdateParameters,
         ProcessOplogEntriesParameters, PublicAgentEntity, PublicAgentEntityKind,
-        PublicEntityInvocationContext, PublicToolInvocationOperation, RawSnapshotData,
+        PublicDurableFunctionType, PublicEntityInvocationContext, PublicToolInvocationOperation,
+        RawSnapshotData,
     };
     use golem_common::model::{Empty, IdempotencyKey};
     use golem_common::schema::{
@@ -1255,6 +1355,57 @@ mod tests {
             source_language: SourceLanguage::Rust,
             secret_config_paths: std::collections::BTreeSet::new(),
         }
+    }
+
+    #[test]
+    fn oplog_presentation_uses_typed_kind_timestamp_and_relationships() {
+        let start = OplogEntryPresentation::from(AgentOplogEntryView {
+            index: 17,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: PublicOplogEntry::Start(StartParams {
+                timestamp: Timestamp::from(1000),
+                parent_start_index: None,
+                function_name: "golem:test/run".to_string(),
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
+            }),
+        });
+        let end = OplogEntryPresentation::from(AgentOplogEntryView {
+            index: 19,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: PublicOplogEntry::End(EndParams {
+                timestamp: Timestamp::from(2000),
+                start_index: golem_common::model::OplogIndex::from_u64(17),
+                response: None,
+                forced_commit: false,
+            }),
+        });
+        let atomic_start = OplogEntryPresentation::from(AgentOplogEntryView {
+            index: 23,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
+                timestamp: Timestamp::from(3000),
+            }),
+        });
+        let atomic_end = OplogEntryPresentation::from(AgentOplogEntryView {
+            index: 29,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
+                timestamp: Timestamp::from(4000),
+                begin_index: golem_common::model::OplogIndex::from_u64(23),
+            }),
+        });
+
+        assert_eq!(start.kind, "Start");
+        assert_eq!(start.timestamp, Timestamp::from(1000));
+        assert_eq!(start.group, Some(OplogEntryGroupKey::OplogIndex(17)));
+        assert_eq!(end.kind, "End");
+        assert_eq!(end.timestamp, Timestamp::from(2000));
+        assert_eq!(end.group, Some(OplogEntryGroupKey::OplogIndex(17)));
+        assert_eq!(atomic_start.group, Some(OplogEntryGroupKey::OplogIndex(23)));
+        assert_eq!(atomic_end.group, Some(OplogEntryGroupKey::OplogIndex(23)));
     }
 
     /// Long agent ids are pre-formatted, so they have to break at their own

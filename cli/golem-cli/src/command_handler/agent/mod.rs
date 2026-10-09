@@ -36,7 +36,7 @@ use crate::model::agent::action_result::{
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
-use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogSearchPage};
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
@@ -976,6 +976,134 @@ impl AgentCommandHandler {
         }
         entries.truncate(max_entries as usize);
         Ok(entries)
+    }
+
+    pub async fn oplog_page(
+        &self,
+        component_name: &ComponentName,
+        agent_id: &RawAgentId,
+        from: u64,
+        count: u64,
+    ) -> anyhow::Result<Vec<AgentOplogEntryView>> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+        let component = self
+            .ctx
+            .component_handler()
+            .resolve_component(&environment, component_name, Some(agent_id.into()))
+            .await?
+            .with_context(|| format!("Component {component_name} not found"))?;
+        let clients = self.ctx.golem_clients().await?;
+        let mut cursor = None;
+        let mut entries = Vec::new();
+        while entries.len() < count as usize {
+            let remaining = count.saturating_sub(entries.len() as u64);
+            let result = clients
+                .worker
+                .get_oplog(
+                    &component.id.0,
+                    &agent_id.0,
+                    Some(from),
+                    remaining.min(self.ctx.http_batch_size()),
+                    cursor.as_ref(),
+                )
+                .await
+                .map_service_error()?;
+            entries.extend(result.entries.into_iter().map(|entry| AgentOplogEntryView {
+                index: entry.oplog_index.as_u64(),
+                attribution: entry.attribution,
+                entry: entry.entry,
+            }));
+            cursor = result.next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        entries.truncate(count as usize);
+        Ok(entries)
+    }
+
+    pub async fn oplog_search_batch(
+        &self,
+        component_name: &ComponentName,
+        agent_id: &RawAgentId,
+        text: Option<&str>,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+        count: u64,
+        mut cursor: Option<OplogCursor>,
+    ) -> anyhow::Result<AgentOplogSearchPage> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+        let component = self
+            .ctx
+            .component_handler()
+            .resolve_component(&environment, component_name, Some(agent_id.into()))
+            .await?
+            .with_context(|| format!("Component {component_name} not found"))?;
+        let clients = self.ctx.golem_clients().await?;
+        let mut result = clients
+            .worker
+            .search_oplog(
+                &component.id.0,
+                &agent_id.0,
+                &golem_client::model::SearchOplogRequest {
+                    text: text
+                        .filter(|text| !text.trim().is_empty())
+                        .map(ToOwned::to_owned),
+                    from,
+                    to,
+                    count,
+                    cursor,
+                },
+            )
+            .await
+            .map_service_error()?;
+        let mut entries = result.entries;
+        cursor = result.next.take();
+        while entries.len() < count as usize && cursor.is_some() {
+            let remaining = count.saturating_sub(entries.len() as u64);
+            result = clients
+                .worker
+                .search_oplog(
+                    &component.id.0,
+                    &agent_id.0,
+                    &golem_client::model::SearchOplogRequest {
+                        text: text
+                            .filter(|text| !text.trim().is_empty())
+                            .map(ToOwned::to_owned),
+                        from,
+                        to,
+                        count: remaining,
+                        cursor,
+                    },
+                )
+                .await
+                .map_service_error()?;
+            entries.append(&mut result.entries);
+            cursor = result.next.take();
+        }
+        entries.truncate(count as usize);
+        Ok(AgentOplogSearchPage {
+            entries: entries
+                .into_iter()
+                .map(|entry| AgentOplogEntryView {
+                    index: entry.oplog_index.as_u64(),
+                    attribution: entry.attribution,
+                    entry: entry.entry,
+                })
+                .collect(),
+            next: cursor,
+            scanned_through_index: result.scanned_through_index,
+            last_index: result.last_index,
+            scan_limit_reached: result.scan_limit_reached,
+        })
     }
 
     async fn cmd_revert(

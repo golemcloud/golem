@@ -1,6 +1,6 @@
 # Progress
 
-## 2026-10-09: Bounded Structured Oplog Search
+## 2026-10-09: Bounded Structured Oplog Search And Explorer
 
 - Split exact raw Oplog paging from filtered search: raw reads remain GET while
   text/time search is a structured POST request.
@@ -13,10 +13,25 @@
   now accepts `--from-time` and `--to-time`, preserves one structured document
   per entry, and reports scan-budget progress while following continuations.
 - Added typed `kind()` and `timestamp()` accessors to public Oplog entries so
-  the upcoming TUI presentation layer does not infer core fields from JSON.
+  the TUI presentation layer does not infer core fields from JSON.
+- Rebuilt the Oplog destination around exact retained Agent scope and explicit
+  mixed scope capped at 20 Agents. The view now has draft/applied server-side
+  search, grouped and exact-entry representations, newest/oldest order, and a
+  retained exact-index route for cross-destination navigation.
+- Auto-chain bounded search requests until one result batch is full, then show
+  per-Agent scan progress and pause at the continuation. `ctrl+n` resumes or
+  loads the next batch; `ctrl+g` aborts the active task without losing the last
+  completed continuation.
+- Group only typed host-call, completion, host-stream, atomic-region,
+  remote-transaction, and span relationships. Unlinked entries remain separate
+  and multi-Agent timestamp order remains presentation rather than durability.
+- Added an exact Explore-sample handoff into the source Agent and oplog index.
+  Dashboard aggregates remain explicit about requiring Explore when they do
+  not identify one Agent source.
 
-Still open in this slice: typed grouping and the Oplog destination's retained
-scope/query, Stop/Resume, Load More, and metric handoff behavior.
+Still open in this slice: aggregate metric bucket-to-Oplog time-range handoff,
+custom absolute metric ranges, typed Stream transport/session behavior, and
+final terminal visual acceptance.
 
 ## 2026-10-08: Stable Ops Navigation And Typed Metrics Foundation
 

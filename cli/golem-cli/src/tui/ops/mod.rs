@@ -73,9 +73,24 @@ pub(super) struct AgentIdentity {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct OplogRoute {
+    pub(super) agents: Vec<AgentIdentity>,
+    pub(super) focus: Option<OplogEntryIdentity>,
+    pub(super) from_unix_nanos: Option<i64>,
+    pub(super) to_unix_nanos: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct OplogEntryIdentity {
+    pub(super) agent: AgentIdentity,
+    pub(super) index: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum OpsRoute {
     Root,
     Agent(AgentIdentity),
+    Oplog(OplogRoute),
     MetricsPanel(String),
 }
 
@@ -139,6 +154,20 @@ impl OpsApp {
         }
     }
 
+    pub(super) fn current_oplog(&self) -> Option<&OplogRoute> {
+        match self.current_route() {
+            OpsRoute::Oplog(route) => Some(route),
+            _ => None,
+        }
+    }
+
+    pub(super) fn clear_oplog_focus(&mut self) {
+        if let Some(OpsRoute::Oplog(route)) = self.routes[OpsDestination::Oplog.index()].last_mut()
+        {
+            route.focus = None;
+        }
+    }
+
     pub(super) fn open_agent(&mut self, agent: AgentIdentity) {
         self.active = OpsDestination::Agents;
         self.routes[OpsDestination::Agents.index()].push(OpsRoute::Agent(agent));
@@ -147,6 +176,11 @@ impl OpsApp {
     pub(super) fn open_metrics_panel(&mut self, panel_id: String) {
         self.active = OpsDestination::Metrics;
         self.routes[OpsDestination::Metrics.index()].push(OpsRoute::MetricsPanel(panel_id));
+    }
+
+    pub(super) fn open_oplog(&mut self, route: OplogRoute) {
+        self.active = OpsDestination::Oplog;
+        self.routes[OpsDestination::Oplog.index()].push(OpsRoute::Oplog(route));
     }
 
     pub(super) fn pop_route(&mut self) -> bool {
@@ -167,6 +201,8 @@ impl OpsApp {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     #[test]
     fn destination_cycle_is_stable_and_wraps() {
         assert_eq!(
@@ -199,6 +235,23 @@ mod tests {
         );
         app.select(super::OpsDestination::Agents);
         assert!(matches!(app.current_route(), super::OpsRoute::Agent(_)));
+
+        let agent = super::AgentIdentity {
+            component: "component".to_string(),
+            agent_id: "agent".to_string(),
+        };
+        app.open_oplog(super::OplogRoute {
+            agents: vec![agent.clone()],
+            focus: Some(super::OplogEntryIdentity { agent, index: 42 }),
+            from_unix_nanos: None,
+            to_unix_nanos: None,
+        });
+        assert!(matches!(app.current_route(), super::OpsRoute::Oplog(_)));
+        app.select(super::OpsDestination::Metrics);
+        assert_eq!(
+            app.current_route(),
+            &super::OpsRoute::MetricsPanel("invocation-rate".to_string())
+        );
         app.reset_routes();
         assert_eq!(app.current_route(), &super::OpsRoute::Root);
     }

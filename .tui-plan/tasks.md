@@ -44,8 +44,8 @@
 - [x] Separate raw GET paging from structured POST search.
 - [x] Carry scanned progress and continuations across gRPC/service/REST/client.
 - [x] Add CLI time-range search flags and preserve structured entry output.
-- [ ] Extract typed Oplog presentation and implement safe grouping.
-- [ ] Implement exact/mixed scope, order, Stop/Resume, and Load More.
+- [x] Extract typed Oplog presentation and implement safe grouping.
+- [x] Implement exact/mixed scope, order, Stop/Resume, and Load More.
 - [ ] Extract typed Stream transport from CLI output.
 - [ ] Add persistent background Stream buffer, unread, reconnect, and drop state.
 
