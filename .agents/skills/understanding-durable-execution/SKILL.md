@@ -617,7 +617,11 @@ entries are consumed as a replay-inert subtree). Incomplete: the block goes live
 original root `Start` and the **whole body re-runs**, re-recording nested calls as new physical
 `Start`s. This is the one ordinary durable path where a completed nested effect legitimately
 repeats; the block author owns its idempotency (`reference/timelines.md` §15,
-`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`).
+`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`). A root
+custom invocation of an entity body records the entity invocation `Start` as its
+`parent_start_index` (and claims with it), like every other durable call of that body, so replay
+can tell it from a top-level call of the primary; the custom tree itself (invocation ids, child
+initiation) keeps using the custom parent.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended — if `can_reexecute_on_incomplete_replay`
