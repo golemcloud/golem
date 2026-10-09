@@ -34,7 +34,7 @@ export type MutationResult = { summary: string; paths: string[] };
 // and the first one from `start`.
 export function effectiveCwd(
   directories: readonly string[],
-  start = "/",
+  start: string,
 ): string {
   return directories.reduce(
     (cwd, value) => path.resolve(cwd, value),
@@ -44,7 +44,7 @@ export function effectiveCwd(
 
 export async function validatedCwd(
   directories: readonly string[],
-  start = "/",
+  start: string,
 ): Promise<string> {
   // As in Git, the caller's directory is only entered when nothing replaces it: an absolute
   // `-C` works even if that directory is gone.
@@ -67,7 +67,7 @@ export async function validatedCwd(
 
 export async function repository(
   directories: readonly string[],
-  start = "/",
+  start: string,
 ): Promise<Repository> {
   const cwd = await validatedCwd(directories, start);
   const dir = await git.findRoot({ fs, filepath: cwd });
