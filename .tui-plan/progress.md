@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-10-09: Metric Bucket To Oplog Handoff
+
+- Extended the local sample response with the exact aggregation bucket width;
+  exact raw points continue to carry their source Oplog index and do not claim
+  a bucket.
+- Kept exact Explore handoffs on the source Agent and entry index. Aggregate
+  Explore points now transfer the same exact Agent plus the selected bucket's
+  clamped absolute from/to range into bounded Oplog search.
+- Made the resulting Oplog time predicate visible in the pane header and open
+  aggregate searches in Grouped mode while exact anchors retain Entries mode.
+- Added store-level bucket-width assertions and TUI tests for exact and
+  aggregate routing, including a final partial bucket.
+
+Still open in this slice: custom absolute metric ranges, explicit Agent-set
+actions, the remaining destination/state previews, and final terminal visual
+acceptance.
+
 ## 2026-10-09: Independently Loading Ops Overview
 
 - Replaced the generic status document with five selectable cards for the

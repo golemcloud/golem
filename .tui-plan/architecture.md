@@ -99,7 +99,8 @@ and a continuation cursor.
 
 The OTLP exporter attaches the exact source index to every metric point emitted
 from an oplog entry. Exact one-Agent samples jump directly; aggregate points
-transfer their time bucket and explicit scope to bounded search.
+carry the server-computed bucket width and transfer that clamped absolute time
+range plus their exact one-Agent series scope to bounded search.
 
 ## Stream Transport
 

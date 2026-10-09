@@ -418,6 +418,18 @@ fn tui_auth_presenter(event_tx: &TuiEventSender) -> Arc<dyn AuthPresenter> {
     })
 }
 
+enum MetricOplogTarget {
+    Exact {
+        agent: AgentIdentity,
+        index: u64,
+    },
+    Range {
+        agent: AgentIdentity,
+        from_unix_nanos: i64,
+        to_unix_nanos: i64,
+    },
+}
+
 struct TuiApp {
     should_quit: bool,
     active_workspace: Workspace,
@@ -4193,27 +4205,45 @@ impl TuiApp {
     }
 
     fn open_metric_sample_in_oplog(&mut self, event_tx: Option<&TuiEventSender>) {
-        let anchor = self.metric_sample_oplog_anchor();
-        let (agent, index) = match anchor {
-            Ok(anchor) => anchor,
+        let target = match self.metric_sample_oplog_target() {
+            Ok(target) => target,
             Err(message) => {
                 self.metrics.notice = Some(message);
                 return;
             }
         };
         self.metrics.notice = None;
-        self.ops.open_oplog(OplogRoute {
-            agents: vec![agent.clone()],
-            focus: Some(OplogEntryIdentity { agent, index }),
-            from_unix_nanos: None,
-            to_unix_nanos: None,
-        });
+        let (route, representation) = match target {
+            MetricOplogTarget::Exact { agent, index } => (
+                OplogRoute {
+                    agents: vec![agent.clone()],
+                    focus: Some(OplogEntryIdentity { agent, index }),
+                    from_unix_nanos: None,
+                    to_unix_nanos: None,
+                },
+                ActivityRepresentation::Entries,
+            ),
+            MetricOplogTarget::Range {
+                agent,
+                from_unix_nanos,
+                to_unix_nanos,
+            } => (
+                OplogRoute {
+                    agents: vec![agent],
+                    focus: None,
+                    from_unix_nanos: Some(from_unix_nanos),
+                    to_unix_nanos: Some(to_unix_nanos),
+                },
+                ActivityRepresentation::Grouped,
+            ),
+        };
+        self.ops.open_oplog(route);
         self.invalidate_activity();
-        self.activity.representation = ActivityRepresentation::Entries;
+        self.activity.representation = representation;
         self.refresh_activity(event_tx);
     }
 
-    fn metric_sample_oplog_anchor(&self) -> Result<(AgentIdentity, u64), String> {
+    fn metric_sample_oplog_target(&self) -> Result<MetricOplogTarget, String> {
         if self.metrics.source != crate::model::local_observability::LocalMetricSource::Agents {
             return Err("Server metrics do not have Agent Oplog entries".to_string());
         }
@@ -4234,20 +4264,18 @@ impl TuiApp {
             .agent_id
             .as_deref()
             .ok_or_else(|| "The selected series is not scoped to one Agent".to_string())?;
-        let index = self
+        let response = self
             .metrics
             .series_samples
             .iter()
             .find(|samples| samples.series_key == series.series_key)
-            .and_then(|samples| {
-                samples
-                    .response
-                    .samples
-                    .iter()
-                    .find(|sample| sample.timestamp_unix_nanos == timestamp)
-            })
-            .and_then(|sample| sample.source_oplog_index)
-            .ok_or_else(|| "The selected sample has no exact Oplog source".to_string())?;
+            .map(|samples| &samples.response)
+            .ok_or_else(|| "The selected series has no loaded samples".to_string())?;
+        let sample = response
+            .samples
+            .iter()
+            .find(|sample| sample.timestamp_unix_nanos == timestamp)
+            .ok_or_else(|| "The selected series has no value at this chart position".to_string())?;
         let mut matches = self
             .agents
             .agents
@@ -4263,7 +4291,24 @@ impl TuiApp {
                     .to_string(),
             );
         }
-        Ok((agent, index))
+        if let Some(index) = sample.source_oplog_index {
+            return Ok(MetricOplogTarget::Exact { agent, index });
+        }
+        let bucket_width = response.bucket_width_unix_nanos.ok_or_else(|| {
+            "The selected sample has no exact Oplog source or aggregate time bucket".to_string()
+        })?;
+        let query_range = self.metrics.time_range.ok_or_else(|| {
+            "The loaded metric range is unavailable; refresh before opening Oplog".to_string()
+        })?;
+        let bucket =
+            metric_bucket_range(query_range, bucket_width, timestamp).ok_or_else(|| {
+                "The selected aggregate point is outside the loaded metric range".to_string()
+            })?;
+        Ok(MetricOplogTarget::Range {
+            agent,
+            from_unix_nanos: bucket.from_unix_nanos,
+            to_unix_nanos: bucket.to_unix_nanos,
+        })
     }
 
     fn select_metrics_chart_at(&mut self, x: u16) {
@@ -10363,9 +10408,22 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     } else {
         ""
     };
+    let time_filter = match (
+        app.activity.applied_query.from,
+        app.activity.applied_query.to,
+    ) {
+        (Some(from), Some(to)) => format!(
+            " · time {}→{}",
+            from.format("%H:%M:%S%.3fZ"),
+            to.format("%H:%M:%S%.3fZ")
+        ),
+        (Some(from), None) => format!(" · from {}", from.format("%H:%M:%S%.3fZ")),
+        (None, Some(to)) => format!(" · to {}", to.format("%H:%M:%S%.3fZ")),
+        (None, None) => String::new(),
+    };
     PaneHeader {
         title: &format!(
-            "Oplog · {choices} · [{}] · {} Agent(s){scan_progress}{scan_bound}{load_state}",
+            "Oplog · {choices} · [{}] · {} Agent(s){time_filter}{scan_progress}{scan_bound}{load_state}",
             app.activity.order.label(),
             app.activity.agents.len(),
         ),
@@ -11448,6 +11506,33 @@ fn metrics_cursor_timestamp(app: &TuiApp, timestamps: &[i64]) -> Option<i64> {
             .chart_cursor
             .unwrap_or(timestamps.len() - 1)
             .min(timestamps.len() - 1)],
+    )
+}
+
+fn metric_bucket_range(
+    query_range: crate::model::local_observability::LocalMetricTimeRange,
+    bucket_width_unix_nanos: i64,
+    sample_timestamp_unix_nanos: i64,
+) -> Option<crate::model::local_observability::LocalMetricTimeRange> {
+    if bucket_width_unix_nanos <= 0
+        || sample_timestamp_unix_nanos < query_range.from_unix_nanos
+        || sample_timestamp_unix_nanos >= query_range.to_unix_nanos
+    {
+        return None;
+    }
+    let offset = sample_timestamp_unix_nanos.saturating_sub(query_range.from_unix_nanos);
+    let bucket_offset = offset
+        .div_euclid(bucket_width_unix_nanos)
+        .saturating_mul(bucket_width_unix_nanos);
+    let from_unix_nanos = query_range.from_unix_nanos.saturating_add(bucket_offset);
+    let to_unix_nanos = from_unix_nanos
+        .saturating_add(bucket_width_unix_nanos)
+        .min(query_range.to_unix_nanos);
+    (from_unix_nanos < to_unix_nanos).then_some(
+        crate::model::local_observability::LocalMetricTimeRange {
+            from_unix_nanos,
+            to_unix_nanos,
+        },
     )
 }
 
@@ -13677,7 +13762,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
                 &mut lines,
                 width,
                 "enter",
-                "Open exact Agent sample in Oplog",
+                "Open exact sample or aggregate bucket in Oplog",
             );
             push_raw_help(&mut lines, width, "esc", "Return to dashboard");
         } else {
@@ -13714,7 +13799,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
                     &mut lines,
                     width,
                     "enter",
-                    "Open exact Agent sample in Oplog",
+                    "Open exact sample or aggregate bucket in Oplog",
                 );
             }
         }
@@ -19157,6 +19242,7 @@ mod tests {
                 observed_to_unix_nanos: Some(10),
                 original_point_count: 1,
                 approximate: false,
+                bucket_width_unix_nanos: None,
             },
         }];
 
@@ -19215,6 +19301,7 @@ mod tests {
                 observed_to_unix_nanos: Some(20),
                 original_point_count: 1,
                 approximate: false,
+                bucket_width_unix_nanos: None,
             },
         }];
 
@@ -19249,6 +19336,98 @@ mod tests {
                 },
                 73,
             ))
+        );
+    }
+
+    #[test]
+    fn aggregate_explore_sample_opens_its_scoped_oplog_bucket() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.mode = MetricsMode::Explore;
+        app.metrics.focus = MetricsFocus::Chart;
+        app.metrics.time_range = Some(LocalMetricTimeRange {
+            from_unix_nanos: 0,
+            to_unix_nanos: 100,
+        });
+        app.metrics.series = vec![LocalMetricSeries {
+            series_key: "cart-invocations".to_string(),
+            statistic: "value".to_string(),
+            temporality: LocalMetricTemporality::Delta,
+            attributes: BTreeMap::new(),
+            environment_id: None,
+            component_id: None,
+            agent_id: Some("cart-1".to_string()),
+            agent_type: Some("CartAgent".to_string()),
+            latest_value: Some(4.0),
+            latest_unix_nanos: Some(40),
+        }];
+        app.metrics.series_samples = vec![metrics::MetricsSeriesSamples {
+            series_key: "cart-invocations".to_string(),
+            response: LocalMetricSamplesResponse {
+                samples: vec![LocalMetricSample {
+                    timestamp_unix_nanos: 40,
+                    value: 4.0,
+                    statistic: "value".to_string(),
+                    source_oplog_index: None,
+                }],
+                observed_from_unix_nanos: Some(30),
+                observed_to_unix_nanos: Some(45),
+                original_point_count: 12,
+                approximate: true,
+                bucket_width_unix_nanos: Some(25),
+            },
+        }];
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.ops.active(), OpsDestination::Oplog);
+        assert_eq!(
+            app.ops.current_route(),
+            &OpsRoute::Oplog(OplogRoute {
+                agents: vec![AgentIdentity {
+                    component: "cart".to_string(),
+                    agent_id: "cart-1".to_string(),
+                }],
+                focus: None,
+                from_unix_nanos: Some(25),
+                to_unix_nanos: Some(50),
+            })
+        );
+        assert_eq!(app.activity.representation, ActivityRepresentation::Grouped);
+        assert_eq!(
+            app.activity.applied_query.from,
+            datetime_from_unix_nanos(25)
+        );
+        assert_eq!(app.activity.applied_query.to, datetime_from_unix_nanos(50));
+    }
+
+    #[test]
+    fn aggregate_metric_bucket_is_clamped_to_the_loaded_range() {
+        assert_eq!(
+            metric_bucket_range(
+                LocalMetricTimeRange {
+                    from_unix_nanos: 10,
+                    to_unix_nanos: 50,
+                },
+                16,
+                49,
+            ),
+            Some(LocalMetricTimeRange {
+                from_unix_nanos: 42,
+                to_unix_nanos: 50,
+            })
+        );
+        assert_eq!(
+            metric_bucket_range(
+                LocalMetricTimeRange {
+                    from_unix_nanos: 10,
+                    to_unix_nanos: 50,
+                },
+                0,
+                20,
+            ),
+            None
         );
     }
 

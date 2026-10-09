@@ -503,6 +503,7 @@ impl LocalObservability {
                 observed_to_unix_nanos: None,
                 original_point_count: 0,
                 approximate: false,
+                bucket_width_unix_nanos: None,
             });
         };
         let include_seed = profile.kind == LocalMetricKind::Gauge;
@@ -528,12 +529,22 @@ impl LocalObservability {
             .saturating_sub(usize::from(include_seed && seed.is_some()))
             .max(1);
         let aggregate = summary.point_count as usize > in_range_limit;
-        let mut samples = if aggregate {
+        let bucket_width_unix_nanos = aggregate.then(|| {
+            let span = request
+                .range
+                .to_unix_nanos
+                .saturating_sub(request.range.from_unix_nanos)
+                .max(1);
+            let divisor = in_range_limit.max(1) as i64;
+            span.saturating_add(divisor - 1) / divisor
+        });
+        let mut samples = if let Some(bucket_width_unix_nanos) = bucket_width_unix_nanos {
             aggregate_samples(
                 pool,
                 request,
                 profile,
                 in_range_limit,
+                bucket_width_unix_nanos,
                 seed.as_ref().map(|sample| sample.value),
             )
             .await?
@@ -563,6 +574,7 @@ impl LocalObservability {
             observed_to_unix_nanos: summary.observed_to,
             original_point_count: summary.point_count,
             approximate: aggregate,
+            bucket_width_unix_nanos,
         })
     }
 
@@ -1982,15 +1994,9 @@ async fn aggregate_samples(
     request: &LocalMetricSamplesRequest,
     profile: SampleProfile,
     max_points: usize,
+    bucket_width: i64,
     seed: Option<f64>,
 ) -> anyhow::Result<Vec<LocalMetricSample>> {
-    let span = request
-        .range
-        .to_unix_nanos
-        .saturating_sub(request.range.from_unix_nanos)
-        .max(1);
-    let divisor = max_points.max(1) as i64;
-    let bucket_width = span.saturating_add(divisor - 1) / divisor;
     match (profile.kind, profile.temporality) {
         (LocalMetricKind::Gauge, _) => {
             aggregate_last_samples(pool, request, max_points, bucket_width).await
@@ -3027,6 +3033,7 @@ mod tests {
         );
         assert!(delta.approximate);
         assert_eq!(delta.original_point_count, 4);
+        assert_eq!(delta.bucket_width_unix_nanos, Some(25));
 
         let cumulative = service
             .samples(&request("cumulative", &cumulative_series_key, 10, 50, 2))
@@ -3041,6 +3048,7 @@ mod tests {
             vec![(10, 6.0), (30, 7.0)]
         );
         assert!(cumulative.approximate);
+        assert_eq!(cumulative.bucket_width_unix_nanos, Some(20));
 
         let exact_cumulative = service
             .samples(&request("cumulative", &cumulative_series_key, 10, 50, 10))
@@ -3055,6 +3063,7 @@ mod tests {
             vec![(10, 3.0), (20, 3.0), (30, 2.0), (40, 5.0)]
         );
         assert!(!exact_cumulative.approximate);
+        assert_eq!(exact_cumulative.bucket_width_unix_nanos, None);
 
         let gauge = service
             .samples(&request("gauge", &gauge_series_key, 10, 50, 3))

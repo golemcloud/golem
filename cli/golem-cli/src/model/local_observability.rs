@@ -182,6 +182,7 @@ pub struct LocalMetricSamplesResponse {
     pub observed_to_unix_nanos: Option<i64>,
     pub original_point_count: u64,
     pub approximate: bool,
+    pub bucket_width_unix_nanos: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
