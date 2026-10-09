@@ -95,12 +95,105 @@ pub(crate) struct EntityInvocationCompletion<R> {
 }
 
 pub(crate) struct EntityInvocationResources {
-    hosted: Option<Box<dyn RetainedEntityStore>>,
-    registration: Option<EntitySlotRegistration>,
+    retained: Option<RetainedEntityControl>,
     permit: Option<OwnerInvocationPermit>,
     lane_wait: Option<OwnerLaneWait>,
-    suspension: Option<Arc<super::suspension::OwnerSuspension>>,
-    executor_tasks: crate::services::active_agents::InvocationLoops,
+}
+
+enum RetainedEntityCommand {
+    Prepare(tokio::sync::oneshot::Sender<Result<(), WorkerExecutorError>>),
+    Settle(tokio::sync::oneshot::Sender<Result<(), WorkerExecutorError>>),
+}
+
+struct RetainedEntityControl {
+    commands: tokio::sync::mpsc::UnboundedSender<(
+        super::suspension::ExternalActivity,
+        RetainedEntityCommand,
+    )>,
+    disposal: tokio_util::sync::CancellationToken,
+    task: Option<JoinHandle<Option<()>>>,
+    suspension: Arc<super::suspension::OwnerSuspension>,
+}
+
+impl Drop for RetainedEntityControl {
+    fn drop(&mut self) {
+        self.disposal.cancel();
+    }
+}
+
+// Field order keeps the registration alive throughout Store/context destruction, including
+// abandonment of an unpolled task during executor shutdown.
+struct RetainedEntityOwner {
+    hosted: Option<Box<dyn RetainedEntityStore>>,
+    _registration: EntitySlotRegistration,
+}
+
+impl RetainedEntityControl {
+    fn spawn(
+        hosted: Box<dyn RetainedEntityStore>,
+        registration: EntitySlotRegistration,
+        suspension: Arc<super::suspension::OwnerSuspension>,
+        executor_tasks: &crate::services::active_agents::InvocationLoops,
+    ) -> Self {
+        let cancellation = registration.cancellation();
+        let owner = RetainedEntityOwner {
+            hosted: Some(hosted),
+            _registration: registration,
+        };
+        let disposal = tokio_util::sync::CancellationToken::new();
+        let dispose = disposal.clone();
+        let (commands, mut receive) = tokio::sync::mpsc::unbounded_channel();
+        let task = executor_tasks.spawn_entity(async move {
+            let mut owner = owner;
+            // The callback future is nested inside the owner's lifetime. Cancelling this work
+            // drops a consuming settlement future before releasing the registration.
+            let work = async {
+                while let Some((_activity, command)) = receive.recv().await {
+                    match command {
+                        RetainedEntityCommand::Prepare(reply) => {
+                            let result = match owner.hosted.as_mut() {
+                                Some(hosted) => hosted.prepare_parent_end().await,
+                                None => Ok(()),
+                            };
+                            if reply.send(result).is_err() {
+                                break;
+                            }
+                        }
+                        RetainedEntityCommand::Settle(reply) => {
+                            let result = match owner.hosted.take() {
+                                Some(hosted) => hosted.settle().await,
+                                None => Ok(()),
+                            };
+                            let _ = reply.send(result);
+                            break;
+                        }
+                    }
+                }
+            };
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {}
+                _ = dispose.cancelled() => {}
+                _ = work => {}
+            }
+            drop(owner);
+        });
+        Self {
+            commands,
+            disposal,
+            task: Some(task),
+            suspension,
+        }
+    }
+
+    async fn join(&mut self) -> Result<(), WorkerExecutorError> {
+        if let Some(task) = self.task.take() {
+            task.await.map_err(|error| {
+                WorkerExecutorError::runtime(format!("Retained entity Store task failed: {error}"))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) trait RetainedEntityStore: Send {
@@ -332,88 +425,80 @@ impl<R> EntityInvocationCompletion<R> {
 impl EntityInvocationResources {
     fn from_finished_body(
         hosted: Option<Box<dyn RetainedEntityStore>>,
-        mut registration: EntitySlotRegistration,
+        registration: EntitySlotRegistration,
         permit: Option<OwnerInvocationPermit>,
         suspension: Arc<super::suspension::OwnerSuspension>,
         executor_tasks: crate::services::active_agents::InvocationLoops,
     ) -> Self {
-        registration.body_finished();
         Self {
-            hosted,
-            registration: Some(registration),
+            retained: hosted.map(|hosted| {
+                RetainedEntityControl::spawn(hosted, registration, suspension, &executor_tasks)
+            }),
             permit,
             lane_wait: None,
-            suspension: Some(suspension),
-            executor_tasks,
         }
     }
 
     pub(crate) async fn prepare_parent_end(&mut self) -> Result<(), WorkerExecutorError> {
-        let Some(mut hosted) = self.hosted.take() else {
+        let Some(retained) = self.retained.as_mut() else {
             return Ok(());
         };
-        let activity = self
-            .suspension
-            .as_ref()
-            .map(|suspension| suspension.register_external());
-        let (hosted, result) = self
-            .executor_tasks
-            .spawn_entity(async move {
-                let _activity = activity;
-                let result = hosted.prepare_parent_end().await;
-                (hosted, result)
-            })
-            .await
-            .map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "Retained entity Store parent-end preparation task failed: {error}"
-                ))
-            })?
-            .ok_or_else(|| {
-                WorkerExecutorError::runtime(
-                    "Retained entity Store preparation was abandoned during executor shutdown",
-                )
+        let (reply, result) = tokio::sync::oneshot::channel();
+        retained
+            .commands
+            .send((
+                retained.suspension.register_external(),
+                RetainedEntityCommand::Prepare(reply),
+            ))
+            .map_err(|_| {
+                WorkerExecutorError::runtime("Retained entity Store preparation was abandoned")
             })?;
-        self.hosted = Some(hosted);
-        result
+        result.await.map_err(|_| {
+            WorkerExecutorError::runtime("Retained entity Store preparation was abandoned")
+        })?
     }
 
-    pub(crate) fn release_for_owner_failure(&mut self) {
+    pub(crate) async fn release_for_owner_failure(&mut self) -> Result<(), WorkerExecutorError> {
         if let Some(permit) = self.permit.take() {
             permit.complete();
         }
-        drop(self.registration.take());
+        if let Some(mut retained) = self.retained.take() {
+            retained.disposal.cancel();
+            retained.join().await?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn settle_after_parent_end(mut self) -> Result<(), WorkerExecutorError> {
         if let Some(permit) = self.permit.take() {
             permit.complete();
         }
-        let settlement = match self.hosted.take() {
-            Some(hosted) => {
-                let activity = self
-                    .suspension
-                    .as_ref()
-                    .map(|suspension| suspension.register_external());
-                self.executor_tasks.spawn_entity(async move {
-                    let _activity = activity;
-                    hosted.settle().await
-                })
-                .await
-                .map_err(|error| {
-                    WorkerExecutorError::runtime(format!(
-                        "Retained entity Store settlement task failed: {error}"
+        let settlement = match self.retained.as_mut() {
+            Some(retained) => {
+                let (reply, result) = tokio::sync::oneshot::channel();
+                let settlement = if retained
+                    .commands
+                    .send((
+                        retained.suspension.register_external(),
+                        RetainedEntityCommand::Settle(reply),
                     ))
-                })?
-                .ok_or_else(|| {
-                    WorkerExecutorError::runtime(
-                        "Retained entity Store settlement was abandoned during executor shutdown",
-                    )
-                })?
+                    .is_ok()
+                {
+                    result.await.map_err(|_| {
+                        WorkerExecutorError::runtime(
+                            "Retained entity Store settlement was abandoned",
+                        )
+                    })?
+                } else {
+                    Err(WorkerExecutorError::runtime(
+                        "Retained entity Store settlement was abandoned",
+                    ))
+                };
+                retained.join().await?;
+                settlement
             }
             None => Ok(()),
         };
-        drop(self.registration.take());
         if let Some(lane_wait) = self.lane_wait.take() {
             lane_wait.wait().await;
         }
@@ -871,17 +956,13 @@ mod tests {
         let executor_tasks = crate::services::active_agents::InvocationLoops::new(
             tokio_util::sync::CancellationToken::new(),
         );
-        let task_executor = executor_tasks.clone();
         let task = executor_tasks.spawn_entity(async move {
             EntityInvocationCompletion {
                 result: Ok("completed"),
                 resources: EntityInvocationResources {
-                    hosted: None,
-                    registration: None,
+                    retained: None,
                     permit: None,
                     lane_wait: None,
-                    suspension: None,
-                    executor_tasks: task_executor,
                 },
             }
         });
@@ -946,22 +1027,82 @@ mod tests {
         }
     }
 
+    fn recording_resources(
+        events: Option<Arc<Mutex<Vec<&'static str>>>>,
+        suspension: Arc<super::super::suspension::OwnerSuspension>,
+        executor: crate::services::active_agents::InvocationLoops,
+    ) -> EntityInvocationResources {
+        use golem_common::model::entity::{
+            EntityActivation, EntityActivationPolicy, EntityInvocationId, ExecutableTarget,
+            FilesystemCapability, OwnedAgentEntityId,
+        };
+        use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
+        let owner = golem_common::model::OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "owner".into(),
+            },
+        );
+        let activation = Arc::new(
+            EntityActivation::new(
+                ExecutableTarget::new(ComponentId::new(), 1_u64.try_into().unwrap()),
+                1_u64.try_into().unwrap(),
+                EntityActivationPolicy::ToolMiddleware {
+                    middleware_name: "retained".try_into().unwrap(),
+                    provision: Default::default(),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: SecretKeyScope::All,
+                    secret_keys_revealable: SecretKeyScope::All,
+                    filesystem_access: ToolFilesystemAccess::Unset,
+                },
+                FilesystemCapability::Incapable,
+            )
+            .unwrap(),
+        );
+        let entity = OwnedAgentEntityId {
+            owner: owner.clone(),
+            entity: activation.entity(),
+        };
+        let slot = Arc::new(EntitySlot::new(entity.clone()));
+        let scope = EntityInvocationScope::new(
+            EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
+            OplogIndex::from_u64(1),
+            activation,
+            golem_common::model::agent::Principal::Agent(
+                golem_common::model::agent::AgentPrincipal {
+                    agent_id: owner.agent_id,
+                },
+            ),
+            InvocationExecutionMode::Live,
+            golem_common::model::IdempotencyKey::fresh(),
+            false,
+            false,
+            golem_common::model::IdempotencyKey::fresh(),
+        )
+        .unwrap();
+        let registration = slot.register(&scope, Default::default()).unwrap();
+        EntityInvocationResources::from_finished_body(
+            events
+                .map(|events| Box::new(RecordingStore { events }) as Box<dyn RetainedEntityStore>),
+            registration,
+            None,
+            suspension,
+            executor,
+        )
+    }
+
     #[test]
     async fn retained_store_prepares_before_terminal_commit_and_settlement() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let executor_tasks = crate::services::active_agents::InvocationLoops::new(
             tokio_util::sync::CancellationToken::new(),
         );
-        let mut resources = EntityInvocationResources {
-            hosted: Some(Box::new(RecordingStore {
-                events: events.clone(),
-            })),
-            registration: None,
-            permit: None,
-            lane_wait: None,
-            suspension: None,
+        let mut resources = recording_resources(
+            Some(events.clone()),
+            super::super::suspension::OwnerSuspension::new(),
             executor_tasks,
-        };
+        );
 
         resources.prepare_parent_end().await.unwrap();
         events.lock().unwrap().push("terminal");
@@ -985,31 +1126,30 @@ mod tests {
         shutdown.cancel();
         executor_tasks.wait_for_exit().await.unwrap();
 
-        let mut preparation = EntityInvocationResources {
-            hosted: Some(Box::new(RecordingStore {
-                events: events.clone(),
-            })),
-            registration: None,
-            permit: None,
-            lane_wait: None,
-            suspension: Some(suspension.clone()),
-            executor_tasks: executor_tasks.clone(),
-        };
+        let mut preparation = recording_resources(
+            Some(events.clone()),
+            suspension.clone(),
+            executor_tasks.clone(),
+        );
         assert!(preparation.prepare_parent_end().await.is_err());
         assert!(eligible_now(&suspension));
 
-        let settlement = EntityInvocationResources {
-            hosted: Some(Box::new(RecordingStore {
-                events: events.clone(),
-            })),
-            registration: None,
-            permit: None,
-            lane_wait: None,
-            suspension: Some(suspension.clone()),
-            executor_tasks,
-        };
+        let settlement =
+            recording_resources(Some(events.clone()), suspension.clone(), executor_tasks);
         assert!(settlement.settle_after_parent_end().await.is_err());
         assert!(eligible_now(&suspension));
         assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    async fn absent_retained_store_release_remains_a_noop_during_shutdown() {
+        let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+        executor.wait_for_exit().await.unwrap();
+        let resources = recording_resources(
+            None,
+            super::super::suspension::OwnerSuspension::new(),
+            executor,
+        );
+        resources.release().await.unwrap();
     }
 }
