@@ -156,7 +156,7 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 			if !f.IsExported() {
 				continue
 			}
-			path := append(clonePath(prefix), engine.LowerFirst(f.Name))
+			path := append(clonePath(prefix), engine.SchemaName(f.Name))
 			index := append(append([]int(nil), idx...), i)
 			switch {
 			case isSecretType(f.Type):

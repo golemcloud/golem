@@ -145,11 +145,14 @@ client, err := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"})
 if err != nil {
 	return err.Error() // the weather component is not deployed
 }
-forecast := golem.Must(client.Forecast(3))
+forecast, err := client.Forecast(3)                   // (Out, error)
+forecast = client.MustForecast(3)                     // panics on a failed call
+receipt := client.MustTriggerForecast(3)              // enqueue, don't wait
+pending := client.ForecastAsync(3)                    // *golem.Future[Out]
 ```
 
-- `Get<Agent>` and `NewPhantom<Agent>` return an error when the host cannot resolve the target, as the callee lives in another component that may not be deployed.
-- Each method on the client calls `MethodDef.Call` underneath and returns its `(Out, error)` (only `error` for a method without output), so a failed call returns the SDK's own `*golem.RemoteCallError`, exactly as a same-component call does. Wrap it in `golem.Must` / `golem.Must0` to panic instead.
+- `Get<Agent>` and `NewPhantom<Agent>` return an error when the host cannot resolve the target, as the callee lives in another component that may not be deployed. `MustGet<Agent>` and `MustNewPhantom<Agent>` panic instead.
+- Each method has the forms of a same-component `MethodDef`: `<M>` (`MethodDef.Call`: `(Out, error)`, only `error` without output), `Trigger<M>`, `Schedule<M>(at, …)`, each with a `Must` form, and `<M>Async` (`CallAsync`). A failed call returns the SDK's own `*golem.RemoteCallError`, exactly as a same-component call does. Methods that take or return a stream have no trigger or schedule form.
 - The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
 - The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
 - Methods that take or return streams are included, with each stream spelled `golem.AgentStream[T]` (see `golem-streaming-agent-go`).

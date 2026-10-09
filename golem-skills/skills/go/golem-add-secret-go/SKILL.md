@@ -92,7 +92,7 @@ A `golem.Secret[T]` can be a field of a method's input or its result. It travels
 var Share = Agent.Method[golem.Unit, golem.Secret[string]]("share")
 
 agent.Handle(Share, func(ctx *golem.Context[state], _ golem.Unit) golem.Secret[string] {
-	return ctx.Config(Agent).ApiKey
+	return ctx.Config(Agent).APIKey
 })
 
 // in another agent

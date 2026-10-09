@@ -107,9 +107,9 @@ Guest clients that `golem build` generates for `dependencies.agents` (see `golem
 ```go
 import provider "golem.local/bridge/stream-provider-guest-client"
 
-remote := provider.GetStreamProvider(provider.StreamProviderId{Name: "main"})
-total := remote.Sum(golem.StreamOf[int32](1, 2, 3))
-doubled := remote.Doubled(golem.ProduceStream(func(w *golem.AgentStreamWriter[int32]) error {
+remote := provider.MustGetStreamProvider(provider.StreamProviderId{Name: "main"})
+total := remote.MustSum(golem.StreamOf[int32](1, 2, 3))
+doubled := remote.MustDoubled(golem.ProduceStream(func(w *golem.AgentStreamWriter[int32]) error {
 	return w.WriteAll(1, 2, 3)
 }))
 ```

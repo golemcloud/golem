@@ -149,10 +149,22 @@ func (a *FullAgentClient[Id, Cfg]) Get(id Id, opts ...ClientOpt) (Client[Id], er
 	return getClient[Id](defs, a.name, id, opts)
 }
 
+// MustGet is [FullAgentClient.Get] that panics when the host cannot resolve
+// the target.
+func (a *FullAgentClient[Id, Cfg]) MustGet(id Id, opts ...ClientOpt) Client[Id] {
+	return Must(a.Get(id, opts...))
+}
+
 // NewPhantom allocates a fresh phantom instance and returns a client for it,
 // with the error contract of [FullAgentClient.Get].
 func (a *FullAgentClient[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) (Client[Id], error) {
 	return newPhantomClient[Id](defs, a.name, id, opts)
+}
+
+// MustNewPhantom is [FullAgentClient.NewPhantom] that panics when the host
+// cannot resolve the target.
+func (a *FullAgentClient[Id, Cfg]) MustNewPhantom(id Id, opts ...ClientOpt) Client[Id] {
+	return Must(a.NewPhantom(id, opts...))
 }
 
 // Bind addresses an existing agent by its id, which must name this client's

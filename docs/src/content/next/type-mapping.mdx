@@ -165,7 +165,7 @@ When calling the raw invoke endpoints, each argument and result is wrapped as a 
         | `(T1, T2, T3)` | `["hello", 1234, true]` | Fixed-order JSON array |
     </Tabs.Tab>
     <Tabs.Tab>
-        The following Go types are supported. Method parameters are the exported fields of the method's input struct, and struct field names map to schema names by lower-casing the first letter (`OrderId` becomes `orderId`).
+        The following Go types are supported. Method parameters are the exported fields of the method's input struct, and struct field names map to schema names by spelling them unexported: the leading word is lower-cased whole (`OrderID` becomes `orderID`, `APIKey` becomes `apiKey`).
 
         | Go type | JSON representation | Remarks
         | ------- | ------------------- | -------

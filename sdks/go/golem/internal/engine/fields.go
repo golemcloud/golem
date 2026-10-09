@@ -46,11 +46,11 @@ func (d *Engine) StructFields(t reflect.Type) []Field {
 			continue
 		}
 		if f.Type == d.PrincipalType {
-			out = append(out, Field{Name: LowerFirst(f.Name), Index: i, Typ: f.Type, AutoInjected: true})
+			out = append(out, Field{Name: SchemaName(f.Name), Index: i, Typ: f.Type, AutoInjected: true})
 			continue
 		}
 		fi := Field{
-			Name:  LowerFirst(f.Name),
+			Name:  SchemaName(f.Name),
 			Index: i,
 			Typ:   f.Type,
 			Codec: d.Compile(f.Type),
@@ -71,13 +71,21 @@ func (d *Engine) StructFields(t reflect.Type) []Field {
 	return out
 }
 
-func LowerFirst(s string) string {
-	if s == "" {
-		return s
-	}
+// SchemaName is the schema name of an exported Go identifier: the identifier
+// as Go would spell it unexported. The leading word is lower-cased whole, so an
+// initialism stays one word: ID is id, APIKey is apiKey and UserID is userID.
+func SchemaName(s string) string {
 	b := []byte(s)
-	if b[0] >= 'A' && b[0] <= 'Z' {
-		b[0] += 'a' - 'A'
+	n := 0
+	for n < len(b) && b[n] >= 'A' && b[n] <= 'Z' {
+		n++
+	}
+	// In URLPath the P starts the next word, so it stays upper-case.
+	if n > 1 && n < len(b) && b[n] >= 'a' && b[n] <= 'z' {
+		n--
+	}
+	for i := range n {
+		b[i] += 'a' - 'A'
 	}
 	return string(b)
 }

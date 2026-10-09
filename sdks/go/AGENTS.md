@@ -50,6 +50,15 @@ trap, the function has a `Must` variant next to the error-returning form
 (`MethodDef.MustCall`, `blobstore.MustGetContainer`); everywhere else `golem.Must`,
 `Must0` and `Must2` turn an error into a panic at the call site.
 
+Generated clients follow where they run. A guest client runs in a component, so it has
+the forms of a same-component `MethodDef` — call, trigger, schedule, async — each with
+its `Must` variant, and `MustGet<Agent>` beside `Get<Agent>`. An external client runs in
+an ordinary Go program, where a panic is not a trap, so it returns errors only.
+
+A Go identifier becomes a schema name spelled as Go would spell it unexported: the
+leading word is lower-cased whole (`engine.SchemaName`: `ID` is `id`, `APIKey` is
+`apiKey`, `UserID` is `userID`).
+
 ## Prerequisites
 
 - Stock Go matching `golem/go.mod` for `go build` and `go test`.

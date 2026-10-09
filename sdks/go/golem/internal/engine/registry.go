@@ -152,7 +152,7 @@ func (d *Engine) DefineFlags(t reflect.Type) *FlagsDef {
 				t, f.Name, f.Type)
 			return fd
 		}
-		fd.Names = append(fd.Names, LowerFirst(f.Name))
+		fd.Names = append(fd.Names, SchemaName(f.Name))
 		fd.Fields = append(fd.Fields, i)
 	}
 	if len(fd.Names) == 0 {

@@ -122,7 +122,7 @@ func methodStreamSlots(in []engine.Field, out reflect.Type) streamSlots {
 				continue
 			}
 			if elem, ok := streamElemOf(f.Type); ok {
-				slots.outputs[engine.LowerFirst(f.Name)] = elem.Kind() == reflect.Uint8
+				slots.outputs[engine.SchemaName(f.Name)] = elem.Kind() == reflect.Uint8
 			}
 		}
 	}

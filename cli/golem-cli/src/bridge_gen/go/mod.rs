@@ -119,6 +119,9 @@ struct AgentNames {
     client: String,
     get: String,
     new_phantom: String,
+    /// The guest client's panicking forms of `get` and `new_phantom`.
+    must_get: String,
+    must_new_phantom: String,
     /// The typed configuration struct and its option, when the agent declares
     /// local configuration.
     config: Option<(String, String)>,
@@ -147,6 +150,8 @@ impl AgentNames {
             client: format!("{agent}Client"),
             get: format!("Get{agent}"),
             new_phantom: format!("NewPhantom{agent}"),
+            must_get: format!("MustGet{agent}"),
+            must_new_phantom: format!("MustNewPhantom{agent}"),
             config: agent_type
                 .config
                 .iter()
@@ -164,6 +169,8 @@ impl AgentNames {
             self.client.clone(),
             self.get.clone(),
             self.new_phantom.clone(),
+            self.must_get.clone(),
+            self.must_new_phantom.clone(),
         ];
         if let Some((config, option)) = &self.config {
             out.push(config.clone());
@@ -736,9 +743,10 @@ impl GoBridgeGenerator {
 
         // The client.
         writer.doc(&format!(
-            "{} calls a {agent_name} agent. A failed call returns the SDK's own\n\
-             error, the same as golem.MethodDef.Call, so its classification survives;\n\
-             wrap a call in golem.Must or golem.Must0 to panic on it instead.",
+            "{} calls a {agent_name} agent. Each method has the forms of a\n\
+             golem.MethodDef: it calls, triggers, schedules or starts the call\n\
+             asynchronously, and a failed call returns the SDK's own error, so its\n\
+             classification survives. The Must forms panic on it instead.",
             n.client
         ));
         writer.line(format!(
@@ -769,6 +777,7 @@ impl GoBridgeGenerator {
             writer.dedent();
             writer.line("}");
             writer.blank();
+            write_must_constructor(&n.must_get, &n.get, &n.id, &n.client, &mut writer);
         }
         writer.doc(&format!(
             "{} allocates a fresh phantom {agent_name} instance. Options override\n\
@@ -787,9 +796,17 @@ impl GoBridgeGenerator {
         writer.dedent();
         writer.line("}");
         writer.blank();
+        write_must_constructor(
+            &n.must_new_phantom,
+            &n.new_phantom,
+            &n.id,
+            &n.client,
+            &mut writer,
+        );
 
+        let names = GuestMethodNames::new(&n.methods);
         for (idx, method) in self.agent_type.methods.iter().enumerate() {
-            self.write_guest_method(idx, method, &outputs[idx], &mut writer)?;
+            self.write_guest_method(idx, method, &outputs[idx], &names, &mut writer)?;
         }
 
         Ok(writer.finish(&self.package_name()))
@@ -838,6 +855,7 @@ impl GoBridgeGenerator {
         idx: usize,
         method: &golem_common::schema::AgentMethodSchema,
         output: &str,
+        names: &GuestMethodNames,
         writer: &mut GoWriter,
     ) -> anyhow::Result<()> {
         let n = &self.names;
@@ -846,22 +864,12 @@ impl GoBridgeGenerator {
         for field in &fields {
             params.push(self.render(&field.schema, writer)?);
         }
-        // Parameter names avoid the receiver and the locals the body uses.
+        // Parameter names avoid the receiver and the locals the bodies use.
         let param_idents = unique_idents_with_reserved(
             fields.iter().map(|f| to_param_ident(&f.name)).collect(),
-            &["c", "err", "golem"],
+            &["c", "err", "at", "golem", "time"],
         );
         let field_idents = unique_idents(fields.iter().map(|f| to_field_ident(&f.name)).collect());
-
-        if !method.description.trim().is_empty() {
-            writer.doc(&format!(
-                "{} {}",
-                n.methods[idx],
-                lower_first(method.description.trim())
-            ));
-        } else {
-            writer.doc(&format!("{} calls {}.", n.methods[idx], method.name));
-        }
 
         let signature = param_idents
             .iter()
@@ -883,34 +891,187 @@ impl GoBridgeGenerator {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        let call = format!(
-            "{}.Call(c.client, {input})",
-            descriptor_var(&n.agent, &n.methods[idx])
+        let descriptor = descriptor_var(&n.agent, &n.methods[idx]);
+        let unit = matches!(method.output_schema, OutputSchema::Unit);
+        let client = &n.client;
+        let streams = method_uses_streams(&self.agent_type.schema, method);
+        if !streams {
+            writer.import("time");
+        }
+        let mut func = |doc: String, name: &str, sig: &str, ret: &str, body: Vec<String>| {
+            writer.doc(&doc);
+            let ret = if ret.is_empty() {
+                String::new()
+            } else {
+                format!(" {ret}")
+            };
+            writer.line(format!("func (c {client}) {name}({sig}){ret} {{"));
+            writer.indent();
+            for line in body {
+                writer.line(line);
+            }
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        };
+
+        let call = &names.call[idx];
+        let must_call = &names.must_call[idx];
+        let doc = if method.description.trim().is_empty() {
+            format!("{call} calls {}.", method.name)
+        } else {
+            format!("{call} {}", lower_first(method.description.trim()))
+        };
+        let (ret, body) = if unit {
+            (
+                "error".to_string(),
+                vec![
+                    format!("_, err := {descriptor}.Call(c.client, {input})"),
+                    "return err".to_string(),
+                ],
+            )
+        } else {
+            (
+                format!("({output}, error)"),
+                vec![format!("return {descriptor}.Call(c.client, {input})")],
+            )
+        };
+        func(doc, call, &signature, &ret, body);
+        func(
+            format!("{must_call} is {call} that panics on a failed call."),
+            must_call,
+            &signature,
+            if unit { "" } else { output },
+            vec![if unit {
+                format!("{descriptor}.MustCall(c.client, {input})")
+            } else {
+                format!("return {descriptor}.MustCall(c.client, {input})")
+            }],
+        );
+        let call_async = &names.call_async[idx];
+        func(
+            format!(
+                "{call_async} starts {} and returns at once with a future, so several\n\
+                 calls can be in flight.",
+                method.name
+            ),
+            call_async,
+            &signature,
+            &format!("*golem.Future[{output}]"),
+            vec![format!("return {descriptor}.CallAsync(c.client, {input})")],
         );
 
-        match &method.output_schema {
-            OutputSchema::Unit => {
-                writer.line(format!(
-                    "func (c {}) {}({signature}) error {{",
-                    n.client, n.methods[idx]
-                ));
-                writer.indent();
-                writer.line(format!("_, err := {call}"));
-                writer.line("return err");
-            }
-            OutputSchema::Single(_) => {
-                writer.line(format!(
-                    "func (c {}) {}({signature}) ({output}, error) {{",
-                    n.client, n.methods[idx]
-                ));
-                writer.indent();
-                writer.line(format!("return {call}"));
-            }
+        // A trigger or a schedule cannot hand a stream back, so a method that
+        // takes or returns one only has the forms that wait for it.
+        if streams {
+            return Ok(());
         }
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+        let trigger = &names.trigger[idx];
+        let must_trigger = &names.must_trigger[idx];
+        func(
+            format!(
+                "{trigger} enqueues {} without waiting for it to run.",
+                method.name
+            ),
+            trigger,
+            &signature,
+            "(golem.InvocationID, error)",
+            vec![format!("return {descriptor}.Trigger(c.client, {input})")],
+        );
+        func(
+            format!("{must_trigger} is {trigger} that panics on a failed call."),
+            must_trigger,
+            &signature,
+            "golem.InvocationID",
+            vec![format!(
+                "return {descriptor}.MustTrigger(c.client, {input})"
+            )],
+        );
+        let schedule_signature = if signature.is_empty() {
+            "at time.Time".to_string()
+        } else {
+            format!("at time.Time, {signature}")
+        };
+        let schedule = &names.schedule[idx];
+        let must_schedule = &names.must_schedule[idx];
+        func(
+            format!("{schedule} enqueues {} to run at at.", method.name),
+            schedule,
+            &schedule_signature,
+            "(*golem.ScheduledInvocation, error)",
+            vec![format!(
+                "return {descriptor}.Schedule(c.client, at, {input})"
+            )],
+        );
+        func(
+            format!("{must_schedule} is {schedule} that panics on a failed call."),
+            must_schedule,
+            &schedule_signature,
+            "*golem.ScheduledInvocation",
+            vec![format!(
+                "return {descriptor}.MustSchedule(c.client, at, {input})"
+            )],
+        );
         Ok(())
+    }
+}
+
+/// A Must constructor: the error-returning one that panics instead.
+fn write_must_constructor(must: &str, fallible: &str, id: &str, client: &str, w: &mut GoWriter) {
+    w.doc(&format!(
+        "{must} is {fallible} that panics when the host cannot resolve the target."
+    ));
+    w.line(format!(
+        "func {must}(id {id}, opts ...golem.ClientOpt) {client} {{"
+    ));
+    w.indent();
+    w.line(format!("return golem.Must({fallible}(id, opts...))"));
+    w.dedent();
+    w.line("}");
+    w.blank();
+}
+
+/// The guest client methods each agent method produces: the forms of a
+/// `golem.MethodDef`. They share the client's method set, so a schema method
+/// called `trigger-x` must not take the name of `x`'s trigger.
+struct GuestMethodNames {
+    call: Vec<String>,
+    must_call: Vec<String>,
+    call_async: Vec<String>,
+    trigger: Vec<String>,
+    must_trigger: Vec<String>,
+    schedule: Vec<String>,
+    must_schedule: Vec<String>,
+}
+
+impl GuestMethodNames {
+    fn new(methods: &[String]) -> Self {
+        let count = methods.len();
+        let forms: [fn(&str) -> String; 7] = [
+            |m| m.to_string(),
+            |m| format!("Must{m}"),
+            |m| format!("{m}Async"),
+            |m| format!("Trigger{m}"),
+            |m| format!("MustTrigger{m}"),
+            |m| format!("Schedule{m}"),
+            |m| format!("MustSchedule{m}"),
+        ];
+        let all = forms
+            .iter()
+            .flat_map(|form| methods.iter().map(|m| form(m)))
+            .collect();
+        let unique = unique_idents(all);
+        let mut chunks = unique.chunks(count.max(1)).map(<[String]>::to_vec);
+        let mut next = || chunks.next().unwrap_or_default();
+        Self {
+            call: next(),
+            must_call: next(),
+            call_async: next(),
+            trigger: next(),
+            must_trigger: next(),
+            schedule: next(),
+            must_schedule: next(),
+        }
     }
 }
 
@@ -965,5 +1126,20 @@ fn discriminator(rule: &DiscriminatorRule) -> String {
         DiscriminatorRule::FieldAbsent { field_name } => {
             format!("golem.ByFieldAbsent({})", go_string(field_name))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn a_method_named_like_another_form_keeps_its_name() {
+        let names = GuestMethodNames::new(&["Poll".to_string(), "MustPoll".to_string()]);
+        assert_eq!(names.call, ["Poll", "MustPoll"]);
+        assert_eq!(names.must_call, ["MustPoll2", "MustMustPoll"]);
+        assert_eq!(names.call_async, ["PollAsync", "MustPollAsync"]);
+        assert_eq!(names.must_trigger, ["MustTriggerPoll", "MustTriggerMustPoll"]);
     }
 }

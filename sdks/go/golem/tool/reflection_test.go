@@ -30,14 +30,6 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// need unwraps a (value, error) pair, failing the test through a panic.
-func need[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
 func recordFieldNames(ref core.Ref) []string {
 	record, _ := ref.Type().Body.(core.RecordType)
 	out := make([]string, 0, len(record.Fields))

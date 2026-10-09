@@ -42,7 +42,7 @@ func TestBindAdapters(t *testing.T) {
 	}
 }
 
-func TestStructFieldsAndLowerFirst(t *testing.T) {
+func TestStructFieldsAndSchemaName(t *testing.T) {
 	if fs := defs.StructFields(reflect.TypeFor[int]()); len(fs) != 0 {
 		t.Fatalf("non-struct should yield no fields, got %d", len(fs))
 	}
@@ -55,8 +55,13 @@ func TestStructFieldsAndLowerFirst(t *testing.T) {
 	if len(fs) != 1 || fs[0].Name != "exported" {
 		t.Fatalf("fields = %+v", fs)
 	}
-	if engine.LowerFirst("") != "" {
-		t.Fatal("lowerFirst(\"\") should be empty")
+	for in, want := range map[string]string{
+		"": "", "X": "x", "Name": "name", "ID": "id", "APIKey": "apiKey",
+		"UserID": "userID", "URLPath": "urlPath", "HTTP2Server": "http2Server", "AmountCents": "amountCents",
+	} {
+		if got := engine.SchemaName(in); got != want {
+			t.Errorf("SchemaName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

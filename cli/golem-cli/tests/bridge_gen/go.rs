@@ -400,6 +400,25 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         client.contains("func (c CounterAgentClient) Add(by uint32) error {"),
         "{client}"
     );
+    // Each method has the forms of a golem.MethodDef, each with a Must form,
+    // and the constructors have Must forms too.
+    for expected in [
+        "func (c CounterAgentClient) MustIncrement() float64 {",
+        "func (c CounterAgentClient) MustAdd(by uint32) {",
+        "func (c CounterAgentClient) IncrementAsync() *golem.Future[float64] {",
+        "func (c CounterAgentClient) AddAsync(by uint32) *golem.Future[golem.Unit] {",
+        "func (c CounterAgentClient) TriggerAdd(by uint32) (golem.InvocationID, error) {",
+        "func (c CounterAgentClient) MustTriggerAdd(by uint32) golem.InvocationID {",
+        "func (c CounterAgentClient) ScheduleAdd(at time.Time, by uint32) (*golem.ScheduledInvocation, error) {",
+        "func (c CounterAgentClient) MustScheduleAdd(at time.Time, by uint32) *golem.ScheduledInvocation {",
+        "func MustGetCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) CounterAgentClient {",
+        "func MustNewPhantomCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) CounterAgentClient {",
+    ] {
+        assert!(
+            client.contains(expected),
+            "missing {expected} in:\n{client}"
+        );
+    }
     let go_mod = generated.read("go.mod");
     assert!(
         go_mod.contains("module golem.local/bridge/counter-agent-guest-client"),
@@ -795,6 +814,11 @@ fn go_guest_client_generates_stream_bearing_methods(env: &GoEnv) {
     assert!(client.contains(") Upload("), "{client}");
     assert!(client.contains(") Feed("), "{client}");
     assert!(client.contains("golem.AgentStream[[]uint8]"), "{client}");
+    // A trigger or a schedule cannot hand a stream back.
+    assert!(client.contains(") MustUpload("), "{client}");
+    assert!(client.contains(") TriggerCount("), "{client}");
+    assert!(!client.contains("TriggerUpload"), "{client}");
+    assert!(!client.contains("ScheduleFeed"), "{client}");
     let types = generated.read("types.go");
     assert!(types.contains("golem.AgentStream[string]"), "{types}");
     generated.assert_gofmt_clean(env);
@@ -1248,6 +1272,7 @@ fn go_guest_ephemeral_client_has_no_get(env: &GoEnv) {
     );
     assert!(client.contains("func NewPhantomRequestAgent("), "{client}");
     assert!(!client.contains("func GetRequestAgent("), "{client}");
+    assert!(!client.contains("func MustGetRequestAgent("), "{client}");
     generated.assert_gofmt_clean(env);
     generated.assert_vets_for_wasip1(env);
 }

@@ -89,7 +89,7 @@ Declare a config type with `DefineConfiguredHTTPRouter` and read it from the req
 ```go
 type SiteConfig struct {
     Greeting string
-    ApiKey   golem.Secret[string]
+    APIKey   golem.Secret[string]
 }
 
 var Site = golem.DefineConfiguredHTTPRouter[SiteConfig](golem.RouterSpec{Name: "Website", Mount: "/web"})
