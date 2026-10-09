@@ -127,6 +127,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         when: monotonic_clock::Mark,
     ) -> wasmtime::Result<()> {
+        // A timer must return STARTED even when its deadline has passed. An inline live
+        // delivery followed by a direct host call can deadlock replay when that call holds
+        // the Store before the replayed timer reaches its guest-delivery boundary.
+        tokio::task::yield_now().await;
         run_read_access::<_, _, Ctx, P3MonotonicClockWaitUntil, _>(
             store,
             HostRequestMonotonicClockTimestamp { nanos: when },
@@ -199,6 +203,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         };
         let when = now.nanos.saturating_add(how_long);
 
+        // Yield after reconstructing the deadline, not before reading the clock: the timer
+        // keeps its original deadline while live and replay both use deferred guest delivery.
+        tokio::task::yield_now().await;
         if let Some((_, delivery)) = replayed {
             if delivery.is_replay_discarded() {
                 std::future::pending::<()>().await;

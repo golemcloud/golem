@@ -36,6 +36,7 @@ pub trait Clock {
     fn new(name: String) -> Self;
     fn sleep(&self, secs: u64) -> Result<(), String>;
     async fn sleep_p3(&self, secs: u64) -> bool;
+    async fn pending_p3_timers_and_p2_clock(&self) -> Vec<bool>;
     async fn race_p3_sleeps(&self, secs: Vec<u64>) -> u64;
     async fn race_promise_and_p3_sleep(&self, secs: u64) -> String;
     async fn polling_loop_vs_watchdog(&self) -> String;
@@ -69,6 +70,28 @@ impl Clock for ClockImpl {
         golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000))
             .await;
         true
+    }
+
+    async fn pending_p3_timers_and_p2_clock(&self) -> Vec<bool> {
+        use std::future::{Future, poll_fn};
+        use std::pin::Pin;
+        use std::task::Poll;
+
+        let timers: [Pin<Box<dyn Future<Output = ()>>>; 2] = [
+            Box::pin(golem_rust::wasip3::clocks::monotonic_clock::wait_for(0)),
+            Box::pin(golem_rust::wasip3::clocks::monotonic_clock::wait_until(0)),
+        ];
+        let mut pending = Vec::new();
+        for mut timer in timers {
+            let started = poll_fn(|cx| Poll::Ready(timer.as_mut().poll(cx).is_pending())).await;
+            pending.push(started);
+            // Enter a synchronous import before consuming the asynchronous timer completion.
+            wasi::clocks::wall_clock::now();
+            if started {
+                timer.await;
+            }
+        }
+        pending
     }
 
     async fn race_p3_sleeps(&self, secs: Vec<u64>) -> u64 {
