@@ -5,14 +5,15 @@ import { site } from "../data/site";
 interface Props {
   title?: string;
   description?: string;
+  image?: string;
   frontmatter?: { title?: string };
 }
 
-const { title, description, frontmatter } = Astro.props;
+const { title, description, image, frontmatter } = Astro.props;
 const pageTitle = title ?? frontmatter?.title ?? site.title;
 const pageDescription = description ?? site.description;
 const canonicalURL = new URL(Astro.url.pathname, Astro.site).href;
-const ogImage = new URL("/og-image.jpg", Astro.site).href;
+const ogImage = new URL(image ?? "/og-image.jpg", Astro.site).href;
 ---
 
 <html lang="en">
