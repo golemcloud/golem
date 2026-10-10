@@ -33,8 +33,8 @@ use http_body_util::Empty;
 use http_body_util::combinators::UnsyncBoxBody;
 use std::future::poll_fn;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use tokio::sync::{Notify, oneshot};
 use tracing::warn;
@@ -140,12 +140,11 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
 }
 
 /// Spawns a [`ReplayedRequestLeakGuard`] for the replayed send's request
-/// resource. Called by the durable `send` replay path *before* it awaits the
-/// recorded resolution; see the guard's documentation for why.
+/// resource before Start admission, including when liveness is not yet known.
 pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
     request_rep: u32,
-    scope: Option<(DurableFunctionType, OplogIndex)>,
+    scope: Arc<Mutex<Option<(DurableFunctionType, OplogIndex)>>>,
     disarm_rx: oneshot::Receiver<()>,
 ) {
     let activity = store.with(|mut access| {
@@ -166,18 +165,19 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
 ///
 /// The guest may drop the replayed send future at any await point (e.g. it
 /// cancels the response future after losing a `race` against another branch,
-/// which aborts the host task mid-`replay_access`). At those points the send
-/// future still owns the replayed `Resource<Request>`, and a plain drop would
+/// which aborts the host task during Start admission or `replay_access`). The
+/// send future still owns the replayed `Resource<Request>`, and a plain drop would
 /// leak it in the resource table: the host-side ends of the guest's body
 /// streams stay alive but are never consumed, so the guest's pending body /
 /// trailers writes never resolve and the guest task can never exit — blocking
 /// invocation settlement.
 ///
-/// The guard holds the request's table rep and waits on a disarm channel. The
-/// replay path disarms it on every path where request ownership is handed
-/// over: normal replay completion (which consumes the request inline) and
-/// live re-execution of an incomplete call (where the real `send` takes the
-/// request). Only when the send future is dropped without disarming does the
+/// The guard holds the request's table rep and waits on a disarm channel. It is
+/// armed before liveness is known; the send disarms it when request ownership
+/// transfers to inline replay consumption or live execution. The shared scope
+/// slot is filled once Start admission returns a handle. Before that, no scope
+/// has been installed in the durable context for the guard to close.
+/// Only when the send future is dropped without disarming does the
 /// guard consume the request itself — deleting it from the table and draining
 /// its outgoing body, which resolves the guest's writes just like a completed
 /// transmission would. Rep reuse is not a hazard: the leaked entry is deleted
@@ -185,7 +185,7 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
 /// it.
 struct ReplayedRequestLeakGuard<Ctx> {
     request_rep: u32,
-    scope: Option<(DurableFunctionType, OplogIndex)>,
+    scope: Arc<Mutex<Option<(DurableFunctionType, OplogIndex)>>>,
     disarm_rx: oneshot::Receiver<()>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
@@ -230,6 +230,7 @@ where
             // This cancellation path may be the invocation's final host call.
             // Close this send's scope directly rather than draining unrelated
             // drop events, so the scope can advance before the guard exits.
+            let scope = scope.lock().unwrap().clone();
             if let Some((function_type, begin_index)) = scope {
                 end_durable_function_access_if_open(
                     accessor,

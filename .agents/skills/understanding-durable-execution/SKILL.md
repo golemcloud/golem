@@ -592,20 +592,38 @@ Every nondeterministic host function goes through `begin_durable_function` /
 `persist_durable_function_invocation` / `read_persisted_durable_function_invocation` with the same
 `Start`/`End` shape.
 
-Live (accessor path): append `Start` eagerly → run the live action → append `End` (or
+Live (guest-facing accessor path): append `Start` eagerly → run the live action → append `End` (or
 `Cancelled`) → hand the result to the guest → append `CompletionDelivered` (or
 `CompletionDiscarded` if the guest dropped the completion unread). The serialized direct path
 has no markers: its result is delivered when the host function returns. A trap while a call is
 in flight leaves `Start` incomplete (`abandon_for_trap`); a trap never writes `Cancelled`.
 
+**Host-internal results** use `DurableCallSession::invoke_host_internal_access`: Start/End
+remain durable and identity-validated, but End returns the recorded result directly to the host.
+There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless
+replay-tail gate. A Store-holding reader must never wait for progress whose only producer needs
+that Store's event loop. P3 `monotonic-clock::wait-for` records its outer Start first and owns the
+internal `now` read as a child. It resolves the outer replay before the child: a cancelled outer
+wait parks without issuing the child, while an incomplete outer wait owns cancellation cleanup
+before reconstructing the deadline from recorded `now + duration`. A completed outer requires
+a recorded completed child. Cancelling after the child's End settles the outer wait without an
+internal delivery marker. Only the outer wait has a real guest-delivery boundary.
+
+P3 timers always return `STARTED` before successful guest delivery, even for zero-duration or
+expired waits. Both live execution and replay yield before completing the outer timer. `wait-for`
+yields after deriving its deadline from the recorded clock read, so the yield does not restart
+the duration. Otherwise an inline live timer could record its delivery before a direct P2 call,
+while replay returns `STARTED` and enters that Store-holding call before it can deliver the timer.
+The direct call would wait behind a guest boundary that its own Store ownership prevents.
+
 Replay: claim the matching `Start` (`StartClaim`, identity + optional request payload match),
 resolve its terminal through `ConcurrentReplayResolver`, then classify with
-`classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by every path:
+`classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:
 
 | Recorded | `ReplayedResolution` | Guest handoff |
 |---|---|---|
 | `End` + `CompletionDelivered` | `Delivered`, `AtMarker` | released exactly at the recorded marker boundary (`ReplayDeliveryBarrier` holds the cursor gate) |
-| `End`, no marker (accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
+| `End`, no marker (guest-facing accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
 | `Cancelled { partial: Some }` | `Delivered`, `Immediate` | guest-initiated, deterministic drop point; no gating |
 | `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | the guest never saw a value; the future is parked for the guest's deterministic drop |
 | `Start` without terminal | `Incomplete` | see below |
@@ -831,6 +849,14 @@ This execution-needing path acquires no capacity during preparation; cancellatio
 durably enqueued acceptance prefix. Read-only hits/followers persist no invocation/result/alias.
 Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart` — after an
 executor restart, an old key returns the recorded result without re-running the guest.
+
+P3 HTTP send arms a Store-owned request leak guard before Start admission, not just before
+replay resolution. Guest cancellation can drop the send while its claim waits at the cursor gate.
+The guard fences owned cursor operations, deletes and drains the request, and closes its installed
+durable scope if one exists. This releases the guest's body/trailer writes without re-issuing the
+request. A shared slot receives the scope index when admission returns the handle; before that,
+no scope is installed in the durable context. Both replay consumption and live execution disarm
+the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
 
 ## Durable RPC exactly-once
 

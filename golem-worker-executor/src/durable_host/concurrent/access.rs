@@ -36,7 +36,7 @@ enum AccessTerminalGuardState {
 
 pub(super) struct AccessTerminalGuard<P: DropPolicy> {
     state: AccessTerminalGuardState,
-    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    teardown: TeardownProbe,
     /// Policy-controlled sink for unfinished drops (`BeforeTerminal`): `None` for policies (e.g.
     /// `NotCancellable`) that treat an unfinished drop as a programming error instead of queueing
     /// a cancellation.
@@ -53,11 +53,11 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         call: DroppedCall,
         sink: Option<UnboundedSender<DropEvent>>,
         cleanup_sink: Option<UnboundedSender<DropEvent>>,
-        runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+        teardown: TeardownProbe,
     ) -> Self {
         Self {
             state: AccessTerminalGuardState::BeforeTerminal { call },
-            runtime_teardown,
+            teardown,
             sink,
             cleanup_sink,
             _phantom: PhantomData,
@@ -165,6 +165,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
                     // converted; chained defensively so a still-pending terminal append can never
                     // be overtaken by a marker append.
                     pending_append: terminal.map(OrderedAppend::Task),
+                    teardown: self.teardown.clone(),
                 })),
             },
             _ => CompletionDelivery::unarmed(),
@@ -176,13 +177,13 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { mut call } => {
-                if call.is_executor_shutting_down() {
+                if self.teardown.is_executor_shutting_down() {
                     call.release_atomic_lease();
                     tracing::debug!(
                         start_idx = %call.start_idx(),
                         "durable call terminal abandoned during executor shutdown"
                     );
-                } else if (self.runtime_teardown)() {
+                } else if self.teardown.is_runtime_tearing_down() {
                     // Runtime abandonment is structural: release resident ownership without
                     // applying the guest-drop policy or recording a semantic terminal.
                     call.release_atomic_lease();
@@ -205,12 +206,23 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
             } => {
                 // A torn drop with the marker still armed: queue a discarded marker after the
                 // terminal task, then let a receipt-waiting task take the terminal's place in the
-                // cleanup event so invocation completion awaits the marker too.
+                // cleanup event so invocation completion awaits the marker too. A tear caused by
+                // runtime teardown is not a guest discard: the `End` stays markerless so replay
+                // delivers it (see [`TeardownProbe`]).
                 let terminal = match discard_marker {
-                    Some(marker) => Some(task_for_marker_receipt(marker.record(
-                        CompletionMarkerKind::Discarded,
-                        terminal.map(OrderedAppend::Task),
-                    ))),
+                    Some(marker) if !self.teardown.is_tearing_down() => {
+                        Some(task_for_marker_receipt(marker.record(
+                            CompletionMarkerKind::Discarded,
+                            terminal.map(OrderedAppend::Task),
+                        )))
+                    }
+                    Some(marker) => {
+                        tracing::debug!(
+                            start_idx = %marker.start_idx,
+                            "terminal guard abandoned during runtime teardown; leaving the end markerless"
+                        );
+                        terminal
+                    }
                     None => terminal,
                 };
                 if let Some(sink) = &self.cleanup_sink {

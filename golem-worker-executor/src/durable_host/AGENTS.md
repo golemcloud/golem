@@ -29,12 +29,20 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
 - **Observe**: the guest's consumption of a completion is recorded by `CompletionDelivered` /
   `CompletionDiscarded` as the tail operation of the host function
   (`supersede_prior_completion_delivery` hard-errors otherwise). This applies to accessor
-  (concurrent) calls: replay releases each completion at its recorded boundary
-  (`CompletionDelivery::AtMarker`); an accessor `End` without a marker is a
+  (concurrent) calls whose results reach the guest: replay releases each completion at its recorded boundary
+  (`CompletionDelivery::AtMarker`); a guest-facing accessor `End` without a marker is a
   crash-after-completion and is withheld until the natural replay tail (`AtReplayTail`), never
-  re-executed and never delivered early. The serialized direct path records no markers
+  re-executed and never delivered early. `CompletionDiscarded` means the *guest* dropped the
+  completion unread; an armed token or terminal guard torn by Store unload or executor shutdown
+  (`TeardownProbe`) must leave the `End` markerless, otherwise replay withholds a completion the
+  guest never saw. The serialized direct path records no markers
   (`DurableCallSession::replay` rejects `CompletionDelivered` for a non-accessor call) and
   delivers at the host return.
+- **Host-internal results** retain durable Start/End and cancellation tracking, but create no
+  guest-terminal observer, delivery token, delivery/discard marker, or replay-tail gate. Use
+  `invoke_host_internal_access` with an outer call that owns cancellation until the host
+  continuation finishes. A completed internal End returns its recorded result to the host.
+  Never make a Store-holding operation wait for progress that requires that Store's event loop.
 
 ## Identity on the replay path
 

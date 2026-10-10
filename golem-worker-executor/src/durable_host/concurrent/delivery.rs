@@ -125,6 +125,52 @@ pub(super) struct CompletionMarkerRecord {
     pub(super) recorder: CompletionMarkerRecorder,
 }
 
+/// Tells a torn armed delivery apart from a guest discard. A `Store` being unloaded (worker
+/// interrupt, simulated crash, retry, eviction) or an executor shutting down drops every host
+/// future it still owns, including tokens and terminal guards armed between a persisted `End`
+/// and its guest delivery. That tear abandons the whole execution rather than discarding one
+/// completion, so it must leave the `End` markerless — replay tail-gates it and delivers it to
+/// the re-executed guest — instead of recording `CompletionDiscarded`, which would withhold the
+/// completion from a guest that never saw it.
+#[derive(Clone)]
+pub(super) struct TeardownProbe {
+    executor_shutdown: tokio_util::sync::CancellationToken,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl TeardownProbe {
+    pub(super) fn new(
+        executor_shutdown: tokio_util::sync::CancellationToken,
+        runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        Self {
+            executor_shutdown,
+            runtime_teardown,
+        }
+    }
+
+    /// A probe that never reports teardown, for tokens whose tear can only be guest-initiated.
+    #[cfg(test)]
+    pub(super) fn never() -> Self {
+        Self::new(
+            tokio_util::sync::CancellationToken::new(),
+            Arc::new(|| false),
+        )
+    }
+
+    pub(super) fn is_executor_shutting_down(&self) -> bool {
+        self.executor_shutdown.is_cancelled()
+    }
+
+    pub(super) fn is_runtime_tearing_down(&self) -> bool {
+        (self.runtime_teardown)()
+    }
+
+    pub(super) fn is_tearing_down(&self) -> bool {
+        self.is_executor_shutting_down() || self.is_runtime_tearing_down()
+    }
+}
+
 impl CompletionMarkerRecord {
     pub(super) fn record(
         self,
@@ -217,7 +263,8 @@ pub(super) fn task_for_marker_receipt(
 /// - `Drop` while armed — the delivering future itself was torn; spawns exactly one owned marker
 ///   append (ordered after the pending terminal) and hands its join plus
 ///   the in-flight [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitCompletionMarker`],
-///   so invocation settlement cannot overtake the append.
+///   so invocation settlement cannot overtake the append. A tear caused by runtime teardown
+///   ([`TeardownProbe`]) settles like [`Self::suppress`] instead: the `End` stays markerless.
 ///
 /// On replay the token mirrors the recorded delivery status. A discarded completion parks at its
 /// delivery boundary. A delivered completion first lets the host-side post-`End` continuation run,
@@ -318,6 +365,8 @@ pub(super) struct LiveDelivery {
     pub(super) cleanup_sink: Option<UnboundedSender<DropEvent>>,
     /// The terminal append reserved before any completion marker.
     pub(super) pending_append: Option<OrderedAppend>,
+    /// Consulted when the armed token is torn: a teardown tear records no marker.
+    pub(super) teardown: TeardownProbe,
 }
 
 impl CompletionDelivery {
@@ -328,16 +377,18 @@ impl CompletionDelivery {
     }
 
     /// Builds the replay token for a guest-observed terminal according to its recorded
-    /// [`ReplayDeliveryDisposition`]. `recorder`, `trap_context` and `cleanup_sink` are needed
-    /// only for [`ReplayDeliveryDisposition::AtReplayTail`], whose token converts to live-armed
-    /// once the replay tail exhausts (see [`Self::prepare_delivery`]); `live_call_permit` stays
-    /// `None` — a marker lost after a suspension just tail-gates the `End` again.
+    /// [`ReplayDeliveryDisposition`]. `recorder`, `trap_context`, `cleanup_sink` and `teardown`
+    /// are needed only for [`ReplayDeliveryDisposition::AtReplayTail`], whose token converts to
+    /// live-armed once the replay tail exhausts (see [`Self::prepare_delivery`]);
+    /// `live_call_permit` stays `None` — a marker lost after a suspension just tail-gates the
+    /// `End` again.
     pub(super) fn replay_delivered(
         disposition: ReplayDeliveryDisposition,
         start_index: OplogIndex,
         recorder: CompletionMarkerRecorder,
         trap_context: DurableCallTrapContext,
         cleanup_sink: Option<UnboundedSender<DropEvent>>,
+        teardown: TeardownProbe,
     ) -> Self {
         Self {
             state: CompletionDeliveryState::ReplayDelivered(match disposition {
@@ -357,6 +408,7 @@ impl CompletionDelivery {
                         live_call_permit: None,
                         cleanup_sink,
                         pending_append: None,
+                        teardown,
                     }))
                 }
             }),
@@ -581,24 +633,27 @@ impl CompletionDelivery {
 
     fn settle(&mut self) {
         match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
-            CompletionDeliveryState::Live(live) => {
-                if let Some(pending) = live.pending_append {
-                    // The ordered append is still in flight: keep it settlement-accounted via
-                    // the drain queue, without a marker.
-                    Self::emit_await_event(
-                        live.cleanup_sink,
-                        receipt_for_pending_append(pending),
-                        live.trap_context,
-                        live.live_call_permit,
-                    );
-                }
-            }
+            CompletionDeliveryState::Live(live) => Self::settle_live_without_marker(*live),
             CompletionDeliveryState::ReplayDelivered(replay) => {
                 let _ = replay.fail("delivery was suppressed before reaching the guest");
             }
             CompletionDeliveryState::ReplayDiscarded
             | CompletionDeliveryState::Unarmed
             | CompletionDeliveryState::Done => {}
+        }
+    }
+
+    /// Settles a live-armed token without recording a marker. A still-pending terminal append
+    /// stays settlement-accounted through the drain queue; otherwise the in-flight permit is
+    /// simply released.
+    fn settle_live_without_marker(live: LiveDelivery) {
+        if let Some(pending) = live.pending_append {
+            Self::emit_await_event(
+                live.cleanup_sink,
+                receipt_for_pending_append(pending),
+                live.trap_context,
+                live.live_call_permit,
+            );
         }
     }
 
@@ -618,6 +673,7 @@ impl CompletionDelivery {
                     live_call_permit,
                     cleanup_sink,
                     pending_append,
+                    teardown: _,
                 } = *live;
                 let guard = MarkerAwaitGuard {
                     receipt: Some(marker.record(CompletionMarkerKind::Discarded, pending_append)),
@@ -695,6 +751,7 @@ impl CompletionDelivery {
                 live_call_permit: None,
                 cleanup_sink: None,
                 pending_append: None,
+                teardown: TeardownProbe::never(),
             })),
         })
     }
@@ -735,6 +792,7 @@ impl CompletionDelivery {
                 in_atomic_region: false,
             },
             cleanup_sink,
+            TeardownProbe::never(),
         )
     }
 }
@@ -743,6 +801,17 @@ impl Drop for CompletionDelivery {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
             CompletionDeliveryState::Live(live) => {
+                if live.teardown.is_tearing_down() {
+                    // The Store (or the executor) is going away with the token still armed:
+                    // the guest never had the chance to observe or discard the completion, so
+                    // the `End` must stay markerless for replay to tail-gate and deliver it.
+                    tracing::debug!(
+                        start_idx = %live.marker.start_idx,
+                        "completion-delivery token abandoned during runtime teardown"
+                    );
+                    Self::settle_live_without_marker(*live);
+                    return;
+                }
                 // The delivering future was torn while the token was still armed: the guest
                 // silently discarded a persisted successful completion. Chain the owned marker
                 // append after the pending terminal and hand the join plus the
