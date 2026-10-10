@@ -121,6 +121,14 @@ fn is_json(mime: &mime::Mime) -> bool {
     mime.essence_str() == "application/json"
 }
 
+pub(super) fn is_localhost_name(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .rsplit_once('.')
+            .is_some_and(|(_, label)| label.eq_ignore_ascii_case("localhost"))
+}
+
 fn validate_url(value: &str, timeout_ms: u64, max_bytes: usize) -> Result<Url, DurableStreamError> {
     if !(1..=300_000).contains(&timeout_ms) || max_bytes == 0 {
         return Err(invalid("Invalid timeout or batch limit"));
@@ -142,7 +150,7 @@ fn validate_url(value: &str, timeout_ms: u64, max_bytes: usize) -> Result<Url, D
     let host = url
         .host_str()
         .ok_or_else(|| invalid("Stream URL requires a host"))?;
-    let loopback = host == "localhost"
+    let loopback = is_localhost_name(host)
         || host
             .trim_matches(['[', ']'])
             .parse::<IpAddr>()

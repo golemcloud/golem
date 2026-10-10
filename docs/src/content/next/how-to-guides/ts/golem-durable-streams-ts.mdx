@@ -109,9 +109,10 @@ custom durable/atomic wrapper.
 
 `auth` must be a borrowed raw host `Secret` capability, such as an `s.secret(z.string())` method
 argument. Pass it directly; do not call `.get()`. The `this.config` `Secret<T>` wrapper is not the
-raw capability accepted by this API. HTTPS is required except when the host is exactly `localhost`
-or a loopback IP; a name such as `app.localhost` is not exempt. Redirects and URL credentials are
-rejected.
+raw capability accepted by this API. HTTPS is required except when the host is `localhost`, a
+dot-delimited subdomain such as `app.localhost`, or a loopback IP. Localhost names are
+case-insensitive and may have one terminal DNS dot. The URL authority stays unchanged. Redirects
+and URL credentials are rejected.
 
 ```shell
 golem build

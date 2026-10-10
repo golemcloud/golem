@@ -445,9 +445,12 @@ Constructors retain the borrowed secret's pinned identity/metadata independently
 handle's lifetime. The live path requires
 network permission, secret Reveal permission and any entity `secret_keys_revealable` restriction;
 it fetches one pinned string secret and sends it as Bearer without exposing it to the SDK. HTTP
-is restricted to loopback/localhost; otherwise HTTPS is required. Redirects and automatic HTTP
-retries are disabled. Remote errors are typed durable results. SDK retry budgets/backoff use
-durable clocks and waits, outside custom durability wrappers.
+is restricted to literal loopback IPs and case-insensitive `localhost` names or dot-delimited
+subdomains, with at most one terminal DNS dot. A reusable local HTTP client bypasses proxies and
+resolves localhost names to IPv4/IPv6 loopback candidates without rewriting the URL authority.
+Literal loopback destinations remain unchanged. HTTPS uses the normal client's DNS and proxy
+behavior. Redirects and automatic HTTP retries are disabled. Remote errors are typed durable
+results. SDK retry budgets/backoff use durable clocks and waits, outside custom durability wrappers.
 
 `durable_stream.external_batch_max_size` bounds payloads and accepts human-readable SI/IEC sizes
 (default `8 MiB`). Codec buffer reservation uses existing memory admission and is held through

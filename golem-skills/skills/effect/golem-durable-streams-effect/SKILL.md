@@ -114,7 +114,9 @@ add another durability or atomic wrapper.
 For authentication, declare `Schema.Redacted(Schema.String)` with `defineConfig`, yield the config
 service, then yield the field's `borrow` Effect. Pass that opaque host capability as `auth`; never
 evaluate `get`, unwrap a `Redacted`, log it, or put credentials in the URL. HTTPS is required except
-when the host is exactly `localhost` or a loopback IP. Redirects and URL credentials are rejected.
+when the host is `localhost`, a dot-delimited subdomain such as `app.localhost`, or a loopback IP.
+Localhost names are case-insensitive and may have one terminal DNS dot. The URL authority stays
+unchanged. Redirects and URL credentials are rejected.
 
 ```shell
 golem build

@@ -187,5 +187,8 @@ If you see `This action requires confirmation, but the current shell is non-inte
 - App manifest reference: https://learn.golem.cloud/app-manifest
 - Full docs: https://learn.golem.cloud
 - golem-rust SDK: https://docs.rs/golem-rust
-<!-- golem-managed:guide:rust:end -->
+
+
+
+
 
