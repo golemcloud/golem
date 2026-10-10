@@ -124,6 +124,8 @@ use golem_worker_executor::services::direct_invocation_auth::{
 };
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use golem_worker_executor::services::golem_config::FilesystemStorageMode;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
@@ -134,7 +136,7 @@ use golem_worker_executor::services::golem_config::{
 };
 #[cfg(target_os = "linux")]
 use golem_worker_executor::services::golem_config::{
-    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageMode,
+    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
@@ -4535,7 +4537,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
 }
 
 /// The per-agent disk limit of the default plan, 1 GiB.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const DEFAULT_PLAN_DISK_SPACE: u64 = 1024 * 1024 * 1024;
 
 /// Starts an executor on XFS storage with reflink and without project quotas, at
@@ -4572,6 +4574,38 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
         },
         None,
         "Timeout waiting for reflink XFS filesystem snapshot server to start",
+    )
+    .await
+}
+
+/// Starts an executor on APFS development storage that takes a snapshot after each invocation.
+/// The plan has a finite disk limit, but the storage has no per-agent accounting or metering.
+#[cfg(target_os = "macos")]
+pub async fn start_with_filesystem_snapshots_on_apfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    root: PathBuf,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let root = root.into_boxed_path();
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.mode = FilesystemStorageMode::Apfs { root: root.clone() };
+                config.resource_usage_metering.filesystem = false;
+                config.filesystem_snapshots = filesystem_snapshots.clone();
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for APFS filesystem snapshot server to start",
     )
     .await
 }

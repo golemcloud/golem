@@ -3110,8 +3110,11 @@ pub mod server {
         #[clap(long)]
         pub clean: bool,
 
-        /// Use deterministic agent filesystem directories rooted at the given
-        /// path instead of random temp directories. The directory layout is:
+        /// Set the root of the agent filesystem directories. On macOS, the
+        /// local server uses APFS and defaults to <data_dir>/agents. On other
+        /// platforms, this selects Directory storage instead of Temporary.
+        /// Filesystem TOML and environment settings can override this root.
+        /// The directory layout is:
         ///   <root>/<environment_id>/<component_id>/<agent_segment>/
         /// The agent segment is the agent name, with each character that is not
         /// an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32

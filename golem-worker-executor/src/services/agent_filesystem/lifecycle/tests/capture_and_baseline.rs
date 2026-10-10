@@ -2018,6 +2018,137 @@ fn list_entries(
         })
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[timeout("60s")]
+async fn apfs_alias_renamed_initial_file_is_captured_and_restores_with_native_spelling() {
+    assert_apfs_alias_capture_restores(
+        "caf\u{e9}.txt",
+        "caf\u{e9}.txt",
+        "cafe\u{301}.txt",
+        "cafe\u{301}.txt",
+    )
+    .await;
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[timeout("60s")]
+async fn apfs_alias_renamed_initial_file_parent_keeps_the_stored_ancestor_spelling() {
+    assert_apfs_alias_capture_restores(
+        "outer/caf\u{e9}/file.txt",
+        "outer/caf\u{e9}",
+        "outer/cafe\u{301}",
+        "outer/cafe\u{301}/file.txt",
+    )
+    .await;
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[timeout("60s")]
+async fn apfs_case_alias_renamed_initial_file_restores_on_a_case_insensitive_volume() {
+    let observation = tempfile::tempdir().unwrap();
+    std::fs::write(observation.path().join("case-probe"), b"case mode").unwrap();
+    let insensitive = observation.path().join("CASE-PROBE").exists();
+    println!("native APFS case-insensitive lookup observed: {insensitive}");
+    if insensitive {
+        assert_apfs_alias_capture_restores("ro.txt", "ro.txt", "RO.txt", "RO.txt").await;
+    } else {
+        assert_eq!(
+            std::fs::read(observation.path().join("CASE-PROBE"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound,
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn assert_apfs_alias_capture_restores(
+    declared: &str,
+    move_from: &str,
+    move_to: &str,
+    stored_file: &str,
+) {
+    let parent = tempfile::tempdir().unwrap();
+    let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+        &FilesystemStorageMode::Apfs {
+            root: parent.path().into(),
+        },
+        golem_common::model::RetryConfig::default(),
+    )
+    .await
+    .unwrap();
+    let agents = UnmanagedAgents {
+        parent,
+        provisioning,
+        scratch: Arc::new(directories.scratch),
+        store: InitialFileStore::new().await,
+        component_id: ComponentId::new(),
+    };
+    let files = [agents
+        .store
+        .declare(
+            &format!("/{declared}"),
+            AgentFilePermissions::ReadOnly,
+            b"initial",
+        )
+        .await];
+    let source_agent = agents.agent("alias-source");
+    let source = agents
+        .start(&source_agent, &files, NO_RESTORE)
+        .await
+        .unwrap();
+    let generation = resident_generation_handle(&source);
+    futures::stream::iter([(move_from, "temporary"), ("temporary", move_to)])
+        .for_each(|(from, to)| {
+            let generation = &generation;
+            async move {
+                edit_namespace(
+                    generation,
+                    NamespaceEdit::Move {
+                        source: PathTarget::at_root(generation, from).unwrap(),
+                        destination: PathTarget::at_root(generation, to).unwrap(),
+                    },
+                )
+                .unwrap()
+                .await
+                .unwrap();
+            }
+        })
+        .await;
+    let source_root = agents.root(&source_agent).into_boxed_path();
+    let expected = read_tree(&source_root);
+    assert!(expected.nodes.contains_key(stored_file));
+    assert!(!expected.nodes.contains_key(declared));
+    assert_eq!(
+        std::fs::read(source_root.join(declared)).unwrap(),
+        b"initial"
+    );
+    let captured = copied(capture(&source, Duration::from_secs(5), None))
+        .await
+        .unwrap();
+    let restored_agent = agents.agent("alias-restored");
+    let restored = agents
+        .start(&restored_agent, &files, Some(copying_restore(&captured)))
+        .await
+        .unwrap_or_else(|error| panic!("an alias-renamed capture must restore: {error}"));
+    assert_eq!(read_tree(&agents.root(&restored_agent)), expected);
+    assert!(
+        left_out_of(&captured).is_empty(),
+        "an alias-renamed initial file must keep its bytes in the capture"
+    );
+    assert!(
+        read_tree(&captured.directory().join("tree"))
+            .nodes
+            .contains_key(stored_file)
+    );
+    captured.discard().await.unwrap();
+    delete(seal(source)).await.unwrap();
+    delete(seal(restored)).await.unwrap();
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_the_path_is_the_initial_file()
@@ -3638,7 +3769,7 @@ impl ReferenceModel {
     }
 
     /// Gives a file or a symlink one more name. A read-only file permits it. A directory refuses it
-    /// when the source exists and the destination does not.
+    /// even when the destination already exists.
     fn hard_link(&mut self, source: &str, destination: &str) -> ResultClass {
         let checked = self
             .check_ancestors(source)
@@ -3650,10 +3781,10 @@ impl ReferenceModel {
         ) {
             (Err(class), _, _) => class,
             (Ok(()), None, _) => ResultClass::NotFound,
-            (Ok(()), Some(_), true) => ResultClass::AlreadyExists,
-            (Ok(()), Some(linked), false) if self.objects[linked] == ModelObject::Directory => {
+            (Ok(()), Some(linked), _) if self.objects[linked] == ModelObject::Directory => {
                 ResultClass::NotPermitted
             }
+            (Ok(()), Some(_), true) => ResultClass::AlreadyExists,
             (Ok(()), Some(linked), false) => {
                 self.paths.insert(destination.to_string(), linked);
                 ResultClass::Ok
@@ -4206,6 +4337,84 @@ async fn check_restore_against_replay(
     }
     proptest::prop_assert!(problems.is_empty(), "{}", problems.join("\n"));
     Ok(coverage)
+}
+
+#[test]
+fn the_reference_model_refuses_directory_link_collisions_without_following_symlinks() {
+    let mut model = ReferenceModel::default();
+    assert_eq!(
+        model.install(&[
+            DeclaredFile {
+                path: "d/f",
+                read_only: false,
+                content: 0
+            },
+            DeclaredFile {
+                path: "f",
+                read_only: false,
+                content: 0
+            },
+        ]),
+        ResultClass::Ok
+    );
+    assert_eq!(model.hard_link("d", "f"), ResultClass::NotPermitted);
+    assert_eq!(model.hard_link("d", "missing/alias"), ResultClass::NotFound);
+    assert_eq!(model.hard_link("d", "f/alias"), ResultClass::InvalidTarget);
+    assert_eq!(model.hard_link("absent", "f"), ResultClass::NotFound);
+    assert_eq!(model.hard_link("f", "f"), ResultClass::AlreadyExists);
+    model.make("link", ModelObject::Symlink { target: "d".into() });
+    assert_eq!(model.hard_link("link", "f"), ResultClass::AlreadyExists);
+    assert_eq!(model.hard_link("link", "alias"), ResultClass::Ok);
+    assert!(
+        matches!(model.object_at("alias"), Some(ModelObject::Symlink { target }) if target == "d")
+    );
+}
+
+#[test]
+async fn a_directory_hard_link_collision_restores_like_a_full_replay() {
+    let history = History {
+        initial: Box::new([]),
+        steps: Box::new([
+            HistoryStep::Update {
+                files: Box::new([
+                    DeclaredFile {
+                        path: "d/f",
+                        read_only: false,
+                        content: 0,
+                    },
+                    DeclaredFile {
+                        path: "f",
+                        read_only: false,
+                        content: 0,
+                    },
+                ]),
+            },
+            HistoryStep::HardLink {
+                source: 9,
+                destination: 0,
+            },
+        ]),
+        capture: 2,
+    };
+    check_restore_against_replay(&history).await.unwrap();
+    let history = History {
+        capture: 1,
+        ..history
+    };
+    check_restore_against_replay(&history).await.unwrap();
+    let history = History {
+        steps: history
+            .steps
+            .iter()
+            .cloned()
+            .chain(std::iter::once(HistoryStep::Write {
+                file: 1,
+                content: 1,
+            }))
+            .collect(),
+        ..history
+    };
+    check_restore_against_replay(&history).await.unwrap();
 }
 
 #[test]

@@ -21,7 +21,7 @@ use crate::filesystem_snapshot::{
 };
 use crate::services::agent_filesystem::{RestoreClass, RestoreTree};
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::services::golem_config::FilesystemStorageMode;
 use async_trait::async_trait;
 use futures::FutureExt as _;
@@ -3430,9 +3430,23 @@ async fn reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
     .await;
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[test_r::timeout("60s")]
+async fn apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
+    let root = tempfile::tempdir().unwrap();
+    a_volume_below_the_pressure_target_admits_no_periodic_upload(
+        FilesystemStorageMode::Apfs {
+            root: root.path().into(),
+        },
+        "apfs-pressure",
+    )
+    .await;
+}
+
 /// Binds `storage` on a real volume, sets pressure targets that no volume reaches, and checks
 /// that the volume has no room for the periodic upload of the agent `name`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn a_volume_below_the_pressure_target_admits_no_periodic_upload(
     storage: FilesystemStorageMode,
     name: &str,

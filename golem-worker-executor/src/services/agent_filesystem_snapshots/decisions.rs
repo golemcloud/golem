@@ -189,7 +189,7 @@ pub(super) fn binding(
     match config {
         FilesystemSnapshotsConfig::Disabled(_) => Ok(Binding::Disabled),
         FilesystemSnapshotsConfig::Managed(_) if !copy_on_write => Err(
-            "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+            "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
                 .to_string(),
         ),
         FilesystemSnapshotsConfig::Managed(config) => Ok(Binding::Managed(config)),
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(
             binding(&managed, false).err(),
             Some(
-                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
                     .to_string()
             )
         );

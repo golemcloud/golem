@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 pub mod command_handler;
 pub mod compat;
+mod filesystem_config;
 pub mod launch;
 mod router;
 

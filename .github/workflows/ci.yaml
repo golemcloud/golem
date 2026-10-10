@@ -364,6 +364,70 @@ jobs:
           cp "$(command -v cargo-test-r)" "${GOLEM_MANAGED_XFS_CARGO_TEST_R}"
           integration-tests/scripts/managed-filesystem/run-lima.sh
 
+  apfs-tests:
+    name: apfs-tests
+    runs-on: blacksmith-6vcpu-macos-latest
+    needs:
+      - builtin-artifacts
+      - merge-test-components
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 4
+      RUST_MIN_STACK: 33554432
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: 'apfs-dev-ci'
+          cache-save-if: 'true'
+          install-cargo-make: 'false'
+          install-protoc: 'true'
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.49.0
+        with:
+          redis-version: latest
+          auto-start: false
+      - uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+      # The WASMs are portable. Build the test binaries on macOS, not from the Linux cache.
+      - name: Run APFS storage and snapshot admission tests
+        run: >-
+          cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor
+          --features test-utils --lib -- apfs_ hard_link_ capture_spelling_
+          scripted_namespace_resolution_exposes_only_opaque_semantic_facts
+          seed_files_preserve_attributes_and_cleanup_after_placement_failure
+          seed_symlinks_preserve_times_and_cleanup_after_placement_failure
+          seed_merges_an_empty_directory_without_opening_it_for_sync
+          the_reference_model_refuses_directory_link_collisions_without_following_symlinks
+          terminal_raw_namespace_error_invalidates_despite_no_effect_postcondition
+          a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives
+          --test-threads 1 --report-time
+      - name: Run APFS snapshot restart and development storage refusal tests
+        run: >-
+          cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor
+          --features test-utils --test integration --
+          filesystem_snapshots::apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+          filesystem_snapshots::managed_snapshots_on_storage_without_copy_on_write_fail_at_startup
+          --exact --test-threads 1 --report-time
+      - name: Build local server binaries
+        run: cargo build --locked -j 4 --profile dev-ci -p golem -p golem-cli
+      - name: Run local filesystem configuration tests
+        run: >-
+          cargo test --locked -j 4 --profile dev-ci -p golem --lib --
+          local_server_ --test-threads 1 --report-time
+      - name: Run local server APFS default and configured key restart tests
+        env:
+          GOLEM_CLI_TEST_BIN_PROFILE: dev-ci
+        run: >-
+          cargo test --locked -j 4 --profile dev-ci -p golem-cli --test integration --
+          local_server_apfs_defaults_keep_the_key_across_starts
+          local_server_apfs_configuration_keeps_the_key_across_starts
+          --test-threads 1 --report-time
+
   build-cli-test-bins:
     env:
       CARGO_BUILD_JOBS: 20
@@ -1583,6 +1647,7 @@ jobs:
       - golem-schema-guest
       - worker-tests
       - managed-xfs-tests
+      - apfs-tests
       - it
       - it-cli
       - it-cli-streaming

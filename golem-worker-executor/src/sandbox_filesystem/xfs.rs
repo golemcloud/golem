@@ -1329,33 +1329,6 @@ unsafe fn quotactl_raw(
     }
 }
 
-fn space_from_values(
-    blocks: u64,
-    available_blocks: u64,
-    fragment_size: u64,
-    filesystem_objects: u64,
-    available_filesystem_objects: u64,
-) -> std::io::Result<FilesystemSpace> {
-    let total_bytes = blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "filesystem total capacity exceeds u64",
-        )
-    })?;
-    let available_bytes = available_blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "filesystem available capacity exceeds u64",
-        )
-    })?;
-    Ok(FilesystemSpace::Observed {
-        total_bytes,
-        available_bytes,
-        total_filesystem_objects: filesystem_objects,
-        available_filesystem_objects,
-    })
-}
-
 impl ManagedProvisioning {
     pub(super) async fn create_fresh(
         &self,

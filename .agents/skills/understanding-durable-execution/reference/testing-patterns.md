@@ -222,6 +222,71 @@ the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`
 entity shutdown cases in `src/services/active_agents/tests.rs` and
 `src/worker/entity_invocation.rs`.
 
+## Filesystem snapshots on APFS
+
+The `apfs-tests` CI job builds the executor test binaries on a macOS runner and runs them on the
+runner's existing volume. It restores portable test-component and built-in artifact WASMs, not
+Linux binaries. It needs no Lima VM, disk image or special volume. The tests use normal registration, not
+`#[ignore]`. The framework supplies the Redis process for the restart test.
+
+The focused commands are:
+
+```shell
+cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- apfs_ hard_link_ capture_spelling_ scripted_namespace_resolution_exposes_only_opaque_semantic_facts seed_files_preserve_attributes_and_cleanup_after_placement_failure seed_symlinks_preserve_times_and_cleanup_after_placement_failure seed_merges_an_empty_directory_without_opening_it_for_sync the_reference_model_refuses_directory_link_collisions_without_following_symlinks terminal_raw_namespace_error_invalidates_despite_no_effect_postcondition a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives --test-threads 1 --report-time
+RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- filesystem_snapshots::apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay filesystem_snapshots::managed_snapshots_on_storage_without_copy_on_write_fail_at_startup --exact --test-threads 1 --report-time
+```
+
+The library filter covers the clone test in `sandbox_filesystem::apfs::tests`, the startup probe,
+conservative filename coordination, the configuration round trip and the capture pressure check.
+The portable seed tests also run their APFS branches. They check file attributes and temporary-file
+cleanup, symlink times and cleanup, and merging an unreadable empty directory without a sync-only
+child open. `apfs_seed_syncs_directory_attributes_through_restrictive_permissions` checks directory
+permissions and modification time through a descriptor opened before restrictive permissions.
+`apfs_conservative_coordination_covers_both_edit_observation_orders` polls contenders under held
+leases. It checks that observations run together, edits wait for observations, observations wait
+for an active edit, and a different parent remains independent. It uses lease release, not sleeps.
+`apfs_native_coordination_preserves_filename_spelling_and_lookup` creates a Unicode name through
+the adapter. It checks the stored and requested spellings, native normalization aliases and distinct
+files. It runs on the existing volume, so it observes only that volume's case mode.
+The `apfs_alias_renamed_initial_file` cases rename a read-only initial file or an ancestor through
+an intermediate path to a Unicode alias. They check that capture keeps the stored spelling and bytes,
+leaves the declaration out of `left_out`, and restores the same tree. The case-only test runs that
+history when the existing volume has case-insensitive lookup; it reports the observed case mode.
+The portable `capture_spelling_` cases check raw name comparisons, per-parent reuse, root-to-leaf
+targets, error propagation and closing after a failed listing. The scripted opaque-facts test separates
+a positive lookup proof from a canonical coordination label, even when the label matches the raw name.
+`apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes` checks copy-on-write
+copies, unflushed writes, exclusions and hard-link groups through the sandbox operations.
+`apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload` checks capture admission.
+The integration filters also check that `Managed` refuses storage without copy-on-write at startup.
+
+The same library run includes `hard_link_` and the fixed-seed restore property. A directory hard link
+must give `not-permitted` even when the destination exists. The scripted collision test programs
+`AlreadyExists` followed by a fresh directory observation. The preservation tests cover files,
+symlinks, stale directory hints and nonterminal proof failures. A terminal proof failure invalidates
+the generation and revokes later calls. The coordination test blocks the post-error source probe
+and explicitly polls a source replacement before it releases the probe. It does not infer exclusion
+from a sleep. The native minimized history runs the collision before and after capture, compares
+the tree with full replay, and checks a successful later write. The independent model tests keep
+ancestor and missing-source precedence and do not follow source symlinks.
+
+The restart test needs the `test-components/it_initial_file_system_release.wasm` fixture.
+It takes a periodic snapshot, drops the executor, starts a new one over the same storage and
+compares the files with a full replay. It includes hard links. Build the fixture before a local run with the
+`modifying-test-components` skill. The CI job restores it from `merge-test-components` and compiles
+it to native code on macOS. A Linux precompiled component cannot replace that step.
+
+The same job builds `golem` and `golem-cli` and runs the `local_server_` library tests for
+configuration defaults, optional TOML, overrides and retained keys. It then runs
+`local_server_apfs_defaults_keep_the_key_across_starts` and
+`local_server_apfs_configuration_keeps_the_key_across_starts` in the CLI integration suite with
+`GOLEM_CLI_TEST_BIN_PROFILE=dev-ci`. The first test starts without filesystem TOML or environment
+settings and checks the default APFS root, local blob storage and key retention across starts.
+The second loads normal TOML and applies an environment root override. Both start the server twice.
+Their contexts need the checksum-pinned built-in artifacts, including `git_tool`, in the server cache.
+Managed enables the snapshot service, but an agent still needs a snapshotting policy to save and
+restore snapshots. The executor restart test supplies that policy.
+
 ## Anti-patterns
 
 - A "restart" that only calls `resume` on a still-resident worker, or resets a cursor.

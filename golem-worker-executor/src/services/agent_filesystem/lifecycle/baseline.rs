@@ -760,8 +760,86 @@ async fn holds_only_initial_files<Adapter: SandboxFilesystemAdapter>(
     holds_nothing_else(sandbox, &state.declarations()).await
 }
 
-/// Finds the read-only declared paths that hold the declared initial file with a single name. A
-/// capture leaves out the bytes of these files. The result is in path order.
+/// Stored names of one parent, or a fact that its lookup requires exact spelling.
+enum DirectorySpellings {
+    Exact,
+    Listed(Box<[Box<OsStr>]>),
+}
+
+fn matches_stored_spelling(observed: &DirectorySpellings, name: &OsStr) -> bool {
+    match observed {
+        DirectorySpellings::Exact => true,
+        DirectorySpellings::Listed(names) => names
+            .binary_search_by(|stored| stored.as_ref().cmp(name))
+            .is_ok(),
+    }
+}
+
+/// Retains one spelling observation per parent in one stopped-call operation.
+/// PathReader first checks existence and kinds without following symlink ancestors.
+/// This reader keeps only names and lookup facts, never directory capabilities.
+#[derive(Default)]
+struct PathSpellingReader {
+    directories: HashMap<Box<Path>, DirectorySpellings>,
+}
+
+impl PathSpellingReader {
+    async fn agrees<Adapter: SandboxFilesystemAdapter>(
+        self,
+        sandbox: &Adapter,
+        path: &Path,
+    ) -> Result<(Self, bool), FilesystemStorageError> {
+        let components = path
+            .ancestors()
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect::<Box<[&Path]>>();
+        futures::stream::iter(components.iter().rev().copied())
+            .map(Ok)
+            .try_fold((self, true), |(mut reader, agrees), component| async move {
+                if !agrees {
+                    return Ok((reader, false));
+                }
+                let parent = component
+                    .parent()
+                    .expect("a declared file component has a parent");
+                let name = component
+                    .file_name()
+                    .expect("a declared file component has a name");
+                if !reader.directories.contains_key(parent) {
+                    // The target's fact belongs to its parent, not to the target directory.
+                    let resolved = sandbox
+                        .resolve_namespace_target(sandbox_path(component))
+                        .await?;
+                    let exact = resolved.has_byte_exact_lookup_proof();
+                    drop(resolved);
+                    let observed = if exact {
+                        DirectorySpellings::Exact
+                    } else {
+                        let mut names = directory_entries(sandbox, parent)
+                            .await?
+                            .into_iter()
+                            .map(|entry| entry.name.into_boxed_os_str())
+                            .collect::<Vec<_>>();
+                        names.sort_unstable();
+                        DirectorySpellings::Listed(names.into_boxed_slice())
+                    };
+                    reader.directories.insert(Box::from(parent), observed);
+                }
+                let agrees = matches_stored_spelling(
+                    reader
+                        .directories
+                        .get(parent)
+                        .expect("the parent spelling is observed"),
+                    name,
+                );
+                Ok((reader, agrees))
+            })
+            .await
+    }
+}
+
+/// Finds read-only declared paths whose exact stored spelling holds the declared initial file
+/// with a single name. A capture leaves out their bytes. The result is in path order.
 async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     state: &InitialFileState,
@@ -774,10 +852,14 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
     futures::stream::iter(read_only)
         .map(Ok)
         .try_fold(
-            (PathReader::default(), Vec::new()),
-            |(reader, mut paths), (path, declared)| async move {
+            (
+                PathReader::default(),
+                PathSpellingReader::default(),
+                Vec::new(),
+            ),
+            |(reader, spellings, mut paths), (path, declared)| async move {
                 let (reader, lookup) = reader.read(sandbox, path).await?;
-                if let PathLookup::Found(attributes) = lookup
+                let (spellings, agrees) = if let PathLookup::Found(attributes) = lookup
                     && attributes.link_count == 1
                     && holds_initial_file(
                         sandbox,
@@ -788,13 +870,18 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
                     )
                     .await?
                 {
+                    spellings.agrees(sandbox, path).await?
+                } else {
+                    (spellings, false)
+                };
+                if agrees {
                     paths.push(Box::from(path));
                 }
-                Ok((reader, paths))
+                Ok((reader, spellings, paths))
             },
         )
         .await
-        .map(|(_, paths)| paths.into_boxed_slice())
+        .map(|(_, _, paths)| paths.into_boxed_slice())
 }
 
 /// Tells whether the tree holds nothing but the paths of `declarations` and the directories on the
@@ -1236,7 +1323,206 @@ async fn link_other_names<Adapter: SandboxFilesystemAdapter>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox_filesystem::{SandboxDirectoryEntry, ScriptedSandboxFilesystemProvisioning};
     use test_r::test;
+
+    #[test]
+    fn capture_spelling_matches_raw_names_without_case_or_unicode_folding() {
+        let observed = DirectorySpellings::Listed(Box::new([
+            Box::<OsStr>::from(OsStr::new("A.txt")),
+            Box::<OsStr>::from(OsStr::new("caf\u{e9}.txt")),
+        ]));
+        assert!(matches_stored_spelling(&observed, OsStr::new("A.txt")));
+        assert!(matches_stored_spelling(
+            &observed,
+            OsStr::new("caf\u{e9}.txt")
+        ));
+        assert!(!matches_stored_spelling(&observed, OsStr::new("a.txt")));
+        assert!(!matches_stored_spelling(
+            &observed,
+            OsStr::new("cafe\u{301}.txt")
+        ));
+        assert!(!matches_stored_spelling(
+            &observed,
+            OsStr::new("another.txt")
+        ));
+    }
+
+    #[test]
+    async fn capture_spelling_reuses_listed_parents_and_keeps_siblings_distinct() {
+        let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+        control.push_namespace_resolution(11, "a", Some(12));
+        control.push_namespace_resolution(12, "f", None);
+        [
+            (
+                1,
+                vec![SandboxDirectoryEntry {
+                    name: "a".into(),
+                    kind: SandboxObjectKind::Directory,
+                }],
+            ),
+            (
+                2,
+                vec![
+                    SandboxDirectoryEntry {
+                        name: "g".into(),
+                        kind: SandboxObjectKind::File,
+                    },
+                    SandboxDirectoryEntry {
+                        name: "f".into(),
+                        kind: SandboxObjectKind::File,
+                    },
+                ],
+            ),
+        ]
+        .into_iter()
+        .for_each(|(id, entries)| {
+            control.push_open(Ok(SandboxOpened::scripted_directory(id)));
+            control.push_read_directory(Ok(entries));
+            control.push_close(Ok(()));
+        });
+        let sandbox = ScriptedSandboxFilesystem::create_fresh(
+            provisioning,
+            SandboxFilesystemName::new(
+                "environment".into(),
+                "component".into(),
+                "filesystem".into(),
+            )
+            .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let (reader, first) = PathSpellingReader::default()
+            .agrees(&sandbox, Path::new("a/f"))
+            .await
+            .unwrap();
+        assert!(first);
+        let (reader, second) = reader.agrees(&sandbox, Path::new("a/g")).await.unwrap();
+        assert!(second);
+        let (reader, missing) = reader
+            .agrees(&sandbox, Path::new("a/absent"))
+            .await
+            .unwrap();
+        assert!(!missing);
+        assert_eq!(reader.directories.len(), 2);
+        let calls = control.calls().into_boxed_slice();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("resolve_namespace_target("))
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("read_directory("))
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("close("))
+                .count(),
+            2
+        );
+        let resolved = calls
+            .iter()
+            .filter(|call| call.starts_with("resolve_namespace_target("))
+            .map(String::as_str)
+            .collect::<Box<[_]>>();
+        let expected = ["a", "a/f"].map(|path| {
+            format!(
+                "resolve_namespace_target(target={:?})",
+                SandboxPath::at_root(path)
+            )
+            .into_boxed_str()
+        });
+        assert_eq!(&*resolved, &expected.each_ref().map(|call| call.as_ref()));
+    }
+
+    #[test]
+    async fn capture_spelling_propagates_resolution_errors_before_directory_reads() {
+        let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+        control.push_namespace_resolution_error(FilesystemStorageError::io(
+            "resolve stored spelling",
+            Path::new("a"),
+            std::io::ErrorKind::PermissionDenied.into(),
+        ));
+        let sandbox = ScriptedSandboxFilesystem::create_fresh(
+            provisioning,
+            SandboxFilesystemName::new(
+                "environment".into(),
+                "component".into(),
+                "filesystem".into(),
+            )
+            .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let Err(error) = PathSpellingReader::default()
+            .agrees(&sandbox, Path::new("a/f"))
+            .await
+        else {
+            panic!("a resolution failure must not become a spelling match");
+        };
+        assert_eq!(
+            error.io_error().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        assert!(error.to_string().contains("resolve stored spelling"));
+        assert!(!control.calls().iter().any(|call| call.starts_with("open(")));
+    }
+
+    #[test]
+    async fn capture_spelling_closes_after_listing_failure_and_keeps_the_first_error() {
+        let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+        control.push_namespace_resolution(11, "a", Some(12));
+        control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+        control.push_read_directory(Err(FilesystemStorageError::io(
+            "read stored names",
+            Path::new(""),
+            std::io::ErrorKind::PermissionDenied.into(),
+        )));
+        control.push_close(Err(FilesystemStorageError::verification(
+            "close stored names",
+            Path::new(""),
+        )));
+        let sandbox = ScriptedSandboxFilesystem::create_fresh(
+            provisioning,
+            SandboxFilesystemName::new(
+                "environment".into(),
+                "component".into(),
+                "filesystem".into(),
+            )
+            .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let Err(error) = PathSpellingReader::default()
+            .agrees(&sandbox, Path::new("a/f"))
+            .await
+        else {
+            panic!("a listing failure must not become a spelling match");
+        };
+        assert_eq!(
+            error.io_error().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        assert!(error.to_string().contains("read stored names"));
+        assert_eq!(
+            control
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("close("))
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn the_changed_directories_are_the_root_and_the_parents_of_the_links_and_the_left_out_files() {

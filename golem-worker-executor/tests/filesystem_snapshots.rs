@@ -1754,7 +1754,7 @@ async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
             let message = format!("{error:#}");
             assert!(
                 message.contains(
-                    "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                    "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
                 ),
                 "{message}"
             );
@@ -2317,8 +2317,8 @@ fn managed_xfs_test_root() -> PathBuf {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
 }
 
-/// The store settings of the managed XFS tests: the store over the blob storage of the executor.
-#[cfg(target_os = "linux")]
+/// The settings of the store over the blob storage of the executor.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn managed_snapshots() -> FilesystemSnapshotsConfig {
     FilesystemSnapshotsConfig::Managed(Box::new(
         FilesystemSnapshotStoreConfig::new(&"5a".repeat(64), Duration::from_secs(60), 2, 2)
@@ -2389,6 +2389,35 @@ async fn reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
     .await
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[timeout("4m")]
+async fn apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_apfs;
+
+    let root = tempfile::tempdir()?;
+    let context = TestContext::new(last_unique_id);
+    restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
+        &context,
+        initial_file_system,
+        "apfs-replay",
+        |snapshots| {
+            start_with_filesystem_snapshots_on_apfs(
+                deps,
+                &context,
+                root.path().to_path_buf(),
+                snapshots,
+            )
+        },
+    )
+    .await
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the unprivileged reflink XFS test runner"]
@@ -2421,7 +2450,7 @@ async fn reflink_xfs_with_filesystem_metering_fails_at_startup(
 /// Starts the agent `name` with read-only and read-write initial files on executors that `start`
 /// makes, changes its files with a write, renames, a hard link and a symlink, and checks that a
 /// restart from a snapshot and a restart with a full replay both give the tree of the live agent.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn restart_from_a_snapshot_gives_the_tree_of_a_full_replay<F>(
     context: &TestContext,
     initial_file_system: &PrecompiledComponent,
@@ -2488,7 +2517,9 @@ where
     executor.release().await?;
 
     let restarted = start(managed_snapshots()).await?;
+    let mut events = restarted.capture_output(&agent.worker_id).await?;
     let restored = agent.describe(&restarted).await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
     let restored_shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
     restarted.release().await?;
     let replaying = start(FilesystemSnapshotsConfig::default()).await?;
