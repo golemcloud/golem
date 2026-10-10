@@ -15,7 +15,7 @@ describe("websocket reconstruction", () => {
     if (Websocket.isSessionLost(structural)) {
       expect(structural.reason.cause._tag).toBe("SessionLost")
       // @ts-expect-error Structural recognition does not promise an Error instance.
-      structural.message
+      expect(structural.message).toBeUndefined()
     }
     for (const value of [
       null,
