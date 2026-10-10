@@ -12,240 +12,209 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/** Byte-preserving multipart/mixed framing shared by snapshot modes. */
+const encoder = new TextEncoder();
+const decoder = new TextDecoder('utf-8', { fatal: true });
 const CRLF = '\r\n';
 
-const textEncoder = /* @__PURE__ */ new TextEncoder();
-const textDecoder = /* @__PURE__ */ new TextDecoder();
-
-export interface MultipartPart {
-  name: string;
-  contentType: string;
-  body: Uint8Array;
+export class MultipartCodecError extends Error {
+  readonly _tag = 'MultipartCodecError';
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = 'MultipartCodecError';
+  }
 }
 
-function generateBoundary(): string {
+export interface MultipartPart {
+  readonly name: string;
+  readonly contentType: string;
+  readonly body: Uint8Array;
+}
+
+const validBoundary = (boundary: string): boolean =>
+  /^[A-Za-z0-9'()+_,./:=?-]{1,70}$/.test(boundary);
+
+const matches = (data: Uint8Array, text: Uint8Array, offset: number): boolean => {
+  if (offset < 0 || offset + text.length > data.length) return false;
+  for (let i = 0; i < text.length; i++) {
+    if (data[offset + i] !== text[i]) return false;
+  }
+  return true;
+};
+
+const concat = (chunks: ReadonlyArray<Uint8Array>): Uint8Array => {
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+};
+
+// Returns the suffix position only for complete delimiter lines.
+const delimiterAt = (
+  data: Uint8Array,
+  marker: Uint8Array,
+  newline: Uint8Array,
+  offset: number,
+): { readonly end: number; readonly closing: boolean } | undefined => {
+  if (!matches(data, marker, offset)) return undefined;
+  let end = offset + marker.length;
+  const closing = data[end] === 45 && data[end + 1] === 45;
+  if (closing) end += 2;
+  if (matches(data, newline, end)) return { end: end + newline.length, closing };
+  if (closing && end === data.length) return { end, closing };
+  return undefined;
+};
+
+const generateBoundary = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID().replace(/-/g, '');
   }
   let hex = '';
-  for (let i = 0; i < 32; i++) {
-    hex += Math.floor(Math.random() * 16).toString(16);
-  }
+  for (let i = 0; i < 32; i++) hex += Math.floor(Math.random() * 16).toString(16);
   return hex;
-}
+};
 
-function containsBoundary(parts: MultipartPart[], boundary: string): boolean {
-  const marker = textEncoder.encode(`${CRLF}--${boundary}`);
-  for (const part of parts) {
-    if (indexOf(part.body, marker) !== -1) {
-      return true;
+const containsBoundary = (parts: ReadonlyArray<MultipartPart>, boundary: string): boolean => {
+  const marker = encoder.encode(`--${boundary}`);
+  const newline = encoder.encode(CRLF);
+  return parts.some((part) => {
+    // Appended framing can complete a delimiter at the end of a payload.
+    const data = part.body;
+    for (let i = data.indexOf(marker[0]!); i >= 0; i = data.indexOf(marker[0]!, i + 1)) {
+      if (
+        (i === 0 || matches(data, newline, i - newline.length)) &&
+        (delimiterAt(data, marker, newline, i) ||
+          (i + marker.length === data.length && matches(data, marker, i)))
+      )
+        return true;
     }
-  }
-  return false;
-}
+    return false;
+  });
+};
 
-function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
-  if (needle.length === 0) return 0;
-  if (needle.length > haystack.length) return -1;
-  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) {
-      if (haystack[i + j] !== needle[j]) continue outer;
-    }
-    return i;
+const validateHeaderValues = (part: MultipartPart): void => {
+  if (
+    part.name.length === 0 ||
+    /[\x00-\x1f\x7f"]/.test(part.name) ||
+    decoder.decode(encoder.encode(part.name)) !== part.name
+  ) {
+    throw new MultipartCodecError('invalid part name');
   }
-  return -1;
-}
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  let total = 0;
-  for (const c of chunks) total += c.length;
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    result.set(c, offset);
-    offset += c.length;
+  if (!/^[\x20-\x7e]+$/.test(part.contentType) || part.contentType.trim() !== part.contentType) {
+    throw new MultipartCodecError('invalid Content-Type');
   }
-  return result;
-}
+};
 
-export function encodeMultipart(parts: MultipartPart[]): {
-  data: Uint8Array;
-  boundary: string;
-} {
+export const encodeMultipart = (
+  parts: ReadonlyArray<MultipartPart>,
+): {
+  readonly data: Uint8Array;
+  readonly boundary: string;
+} => {
+  for (const part of parts) validateHeaderValues(part);
   let boundary = generateBoundary();
-  while (containsBoundary(parts, boundary)) {
-    boundary = generateBoundary();
-  }
-
-  const chunks: Uint8Array[] = [];
-
+  while (containsBoundary(parts, boundary)) boundary = generateBoundary();
+  const chunks: Array<Uint8Array> = [];
   for (const part of parts) {
-    const header =
-      `--${boundary}${CRLF}` +
-      `Content-Type: ${part.contentType}${CRLF}` +
-      `Content-Disposition: attachment; name="${part.name}"${CRLF}` +
-      CRLF;
-    chunks.push(textEncoder.encode(header));
-    chunks.push(part.body);
-    chunks.push(textEncoder.encode(CRLF));
+    chunks.push(
+      encoder.encode(
+        `--${boundary}${CRLF}Content-Type: ${part.contentType}${CRLF}Content-Disposition: attachment; name="${part.name}"${CRLF}${CRLF}`,
+      ),
+    );
+    chunks.push(part.body, encoder.encode(CRLF));
   }
-
-  chunks.push(textEncoder.encode(`--${boundary}--${CRLF}`));
-
+  chunks.push(encoder.encode(`--${boundary}--${CRLF}`));
   return { data: concat(chunks), boundary };
-}
+};
 
-export function decodeMultipart(data: Uint8Array, boundary: string): MultipartPart[] {
-  const delimiter = textEncoder.encode(`${CRLF}--${boundary}`);
-  const crlfBytes = textEncoder.encode(CRLF);
-  const lfByte = 0x0a; // \n
-
-  // Normalise: strip leading CRLF or LF if present
+export const decodeMultipart = (data: Uint8Array, boundary: string): Array<MultipartPart> => {
+  if (!validBoundary(boundary)) throw new MultipartCodecError('invalid boundary');
+  const marker = encoder.encode(`--${boundary}`);
   let start = 0;
-  if (data.length >= 2 && data[0] === 0x0d && data[1] === 0x0a) {
-    start = 2;
-  } else if (data.length >= 1 && data[0] === 0x0a) {
-    start = 1;
-  }
-
-  // The first boundary appears without a leading CRLF
-  const firstDelimiter = textEncoder.encode(`--${boundary}`);
-
-  // Verify the body starts with the opening boundary
-  if (!startsWith(data, firstDelimiter, start)) {
-    throw new Error('Multipart body does not start with boundary');
-  }
-
-  // Split the body on the delimiter
-  const rawSections = splitOnDelimiter(data, delimiter, start + firstDelimiter.length);
-
-  const parts: MultipartPart[] = [];
-  const seenNames = new Set<string>();
-
-  for (const section of rawSections) {
-    // Skip the closing delimiter section
-    if (startsWith(section, textEncoder.encode('--'), 0)) {
-      continue;
-    }
-
-    // Section starts after delimiter; skip the CRLF or LF that follows it
-    let sectionStart = 0;
-    if (section.length >= 2 && section[0] === 0x0d && section[1] === 0x0a) {
-      sectionStart = 2;
-    } else if (section.length >= 1 && section[0] === 0x0a) {
-      sectionStart = 1;
-    }
-
-    // Find the blank line separating headers from body (CRLF CRLF or LF LF)
-    const headerEndCrlf = findDoubleNewline(section, sectionStart, crlfBytes);
-    const headerEndLf = findDoubleNewlineLf(section, sectionStart);
-
-    let headerEnd: number;
-    let bodyStart: number;
-
-    if (headerEndCrlf !== -1 && (headerEndLf === -1 || headerEndCrlf <= headerEndLf)) {
-      headerEnd = headerEndCrlf;
-      bodyStart = headerEndCrlf + 4; // skip \r\n\r\n
-    } else if (headerEndLf !== -1) {
-      headerEnd = headerEndLf;
-      bodyStart = headerEndLf + 2; // skip \n\n
-    } else {
-      throw new Error('Could not find end of headers in multipart part');
-    }
-
-    const headerText = textDecoder.decode(section.slice(sectionStart, headerEnd));
-    const headerLines = headerText.split(/\r?\n/);
-
-    let contentType = '';
-    let name = '';
-
-    for (const line of headerLines) {
-      const colonIdx = line.indexOf(':');
-      if (colonIdx === -1) continue;
-      const key = line.slice(0, colonIdx).trim().toLowerCase();
-      const value = line.slice(colonIdx + 1).trim();
-
+  if (matches(data, encoder.encode(CRLF), 0)) start = 2;
+  else if (data[0] === 10) start = 1;
+  if (!matches(data, marker, start))
+    throw new MultipartCodecError('Multipart body does not start with boundary');
+  const firstSuffix = start + marker.length;
+  const suffix =
+    data[firstSuffix] === 45 && data[firstSuffix + 1] === 45 ? firstSuffix + 2 : firstSuffix;
+  const newline =
+    matches(data, encoder.encode(CRLF), suffix) || (suffix === data.length && start === 2)
+      ? encoder.encode(CRLF)
+      : encoder.encode('\n');
+  if (start !== 0 && start !== newline.length)
+    throw new MultipartCodecError('inconsistent leading newline');
+  let delimiter = delimiterAt(data, marker, newline, start);
+  if (!delimiter) throw new MultipartCodecError('invalid opening boundary');
+  const parts: Array<MultipartPart> = [];
+  const names = new Set<string>();
+  while (!delimiter.closing) {
+    let pos = delimiter.end;
+    let name: string | undefined;
+    let contentType: string | undefined;
+    // Header newline rules are independent of the delimiter framing newline.
+    while (true) {
+      const end = data.indexOf(10, pos);
+      if (end < 0) throw new MultipartCodecError('could not find end of headers in part');
+      const lineEnd = data[end - 1] === 13 ? end - 1 : end;
+      const bytes = data.subarray(pos, lineEnd);
+      if (bytes.some((b) => b < 32 || b === 127)) throw new MultipartCodecError('invalid header');
+      let line: string;
+      try {
+        line = decoder.decode(bytes);
+      } catch {
+        throw new MultipartCodecError('invalid UTF-8 header');
+      }
+      pos = end + 1;
+      if (line === '') break;
+      if (/^\s/.test(line)) throw new MultipartCodecError('invalid header');
+      const colon = line.indexOf(':');
+      if (colon < 0) throw new MultipartCodecError('invalid header');
+      const key = line.slice(0, colon).toLowerCase();
+      const value = line.slice(colon + 1).trim();
       if (key === 'content-type') {
+        if (contentType !== undefined) throw new MultipartCodecError('duplicate Content-Type');
         contentType = value;
       } else if (key === 'content-disposition') {
-        const nameMatch = value.match(/name="([^"]+)"/);
-        if (nameMatch) {
-          name = nameMatch[1];
-        }
+        if (name !== undefined) throw new MultipartCodecError('duplicate Content-Disposition');
+        const match = /^attachment;\s*name="([^"]+)"$/i.exec(value);
+        if (!match)
+          throw new MultipartCodecError('part missing or invalid name in Content-Disposition');
+        name = match[1]!;
+      } else throw new MultipartCodecError('unsupported header');
+    }
+    if (name === undefined || contentType === undefined)
+      throw new MultipartCodecError('part missing name or Content-Type');
+    if (names.has(name)) throw new MultipartCodecError(`Duplicate multipart part name: ${name}`);
+    names.add(name);
+    let next: ReturnType<typeof delimiterAt> = undefined;
+    let bodyEnd = data.indexOf(newline[0]!, pos);
+    for (; bodyEnd >= 0; bodyEnd = data.indexOf(newline[0]!, bodyEnd + 1)) {
+      if (matches(data, newline, bodyEnd)) {
+        next = delimiterAt(data, marker, newline, bodyEnd + newline.length);
+        if (next) break;
       }
     }
-
-    if (!name) {
-      throw new Error('Multipart part missing name in Content-Disposition');
-    }
-    if (seenNames.has(name)) {
-      throw new Error(`Duplicate multipart part name: ${name}`);
-    }
-    seenNames.add(name);
-
-    // Body: everything after headers until end of section.
-    // Strip trailing CRLF or LF that precedes the next delimiter.
-    let bodyEnd = section.length;
-    if (bodyEnd >= 2 && section[bodyEnd - 2] === 0x0d && section[bodyEnd - 1] === 0x0a) {
-      bodyEnd -= 2;
-    } else if (bodyEnd >= 1 && section[bodyEnd - 1] === lfByte) {
-      bodyEnd -= 1;
-    }
-
-    const body = section.slice(bodyStart, bodyEnd);
-
-    parts.push({ name, contentType, body });
+    if (!next) throw new MultipartCodecError('missing closing boundary');
+    const part = { name, contentType, body: data.slice(pos, bodyEnd) };
+    validateHeaderValues(part);
+    parts.push(part);
+    delimiter = next;
   }
-
+  if (delimiter.end !== data.length) throw new MultipartCodecError('data after closing boundary');
   return parts;
-}
+};
 
-function startsWith(data: Uint8Array, prefix: Uint8Array, offset: number): boolean {
-  if (offset + prefix.length > data.length) return false;
-  for (let i = 0; i < prefix.length; i++) {
-    if (data[offset + i] !== prefix[i]) return false;
-  }
-  return true;
-}
-
-function splitOnDelimiter(data: Uint8Array, delimiter: Uint8Array, start: number): Uint8Array[] {
-  const sections: Uint8Array[] = [];
-  let pos = start;
-
-  while (pos < data.length) {
-    const next = indexOf(data.slice(pos), delimiter);
-    if (next === -1) {
-      sections.push(data.slice(pos));
-      break;
-    }
-    sections.push(data.slice(pos, pos + next));
-    pos = pos + next + delimiter.length;
-  }
-
-  return sections;
-}
-
-function findDoubleNewline(data: Uint8Array, start: number, crlf: Uint8Array): number {
-  // Look for \r\n\r\n
-  for (let i = start; i <= data.length - 4; i++) {
-    if (
-      data[i] === crlf[0] &&
-      data[i + 1] === crlf[1] &&
-      data[i + 2] === crlf[0] &&
-      data[i + 3] === crlf[1]
-    ) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function findDoubleNewlineLf(data: Uint8Array, start: number): number {
-  // Look for \n\n
-  for (let i = start; i <= data.length - 2; i++) {
-    if (data[i] === 0x0a && data[i + 1] === 0x0a) {
-      return i;
-    }
-  }
-  return -1;
-}
+export const extractBoundary = (mimeType: string): string | null => {
+  const sections = mimeType.split(';');
+  if (sections.shift()?.trim().toLowerCase() !== 'multipart/mixed') return null;
+  if (sections.length !== 1) return null;
+  const match = /^\s*boundary\s*=\s*(?:"([^"\\]*)"|([^\s"=]+))\s*$/i.exec(sections[0]!);
+  if (!match) return null;
+  if (match[2] !== undefined && !/^[A-Za-z0-9'+_.-]+$/.test(match[2])) return null;
+  const boundary = match[1] ?? match[2]!;
+  return validBoundary(boundary) ? boundary : null;
+};

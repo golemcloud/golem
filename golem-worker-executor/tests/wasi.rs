@@ -6375,6 +6375,120 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 }
 
 #[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn filesystem_escaping_relative_symlink_is_a_guest_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::PromiseId;
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    for (case, target, link) in [
+        ("root", "../etc", "/esc"),
+        ("nested", "../../etc", "/d/esc"),
+    ] {
+        let agent_id = agent_id!("FileSystem", format!("escaping-symlink-{case}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+
+        let written = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "write_file",
+                data_value!("/control", "sandbox control"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(written, Ok(()));
+
+        let inside_link = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_sym_link",
+                data_value!("control", "/inside"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(inside_link, Ok(()));
+
+        let inside_read = executor
+            .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/inside"))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(inside_read, Ok("sandbox control".to_string()));
+
+        let directory = executor
+            .invoke_and_await_agent(&component, &agent_id, "create_directory", data_value!("/d"))
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(directory, Ok(()));
+
+        let escaping_link = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_sym_link",
+                data_value!(target, link),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(escaping_link, Ok(()), "creating {link} -> {target}");
+
+        let denied = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "read_file",
+                data_value!(format!("{link}/hosts")),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(
+            denied,
+            Err("Permission denied (os error 2)".to_string()),
+            "reading through {link} -> {target} must return guest EACCES"
+        );
+
+        let promise = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_release_promise",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<PromiseId>()?;
+        assert_eq!(promise.agent_id, worker_id);
+
+        let ordinary_read = executor
+            .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/control"))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(ordinary_read, Ok("sandbox control".to_string()));
+
+        let metadata = executor
+            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
+            .await?;
+        assert_eq!(metadata.status, AgentStatus::Idle);
+    }
+
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn filesystem_symlink_replay_restores_file_times(
     last_unique_id: &LastUniqueId,

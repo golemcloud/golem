@@ -3,7 +3,7 @@ import { Image } from "astro:assets";
 import { hero } from "../data/homepage";
 import heroArt from "../assets/hero/golem-thinker.png";
 
-const { headingLines, expanderHtml, ctas, images } = hero;
+const { eyebrow, headingLines, expanderHtml, ctas, images } = hero;
 const heroImage = images[0];
 ---
 
@@ -11,6 +11,14 @@ const heroImage = images[0];
   <div class="container hero-inner">
     <div class="hero-text">
       <div class="hero-top">
+        {
+          eyebrow && (
+            <a href={eyebrow.href} class="hero-eyebrow">
+              {eyebrow.label}
+              <span aria-hidden="true">→</span>
+            </a>
+          )
+        }
         <h1 class="hero-heading">
           {
             headingLines.map((line, i) => (
@@ -92,6 +100,35 @@ const heroImage = images[0];
   .hero-top {
     display: flex;
     flex-direction: column;
+  }
+  .hero-eyebrow {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+    border-radius: 999px;
+    padding: 0.3rem 0.8rem;
+    margin-bottom: 0.9rem;
+    transition:
+      border-color 120ms ease,
+      color 120ms ease;
+  }
+  @media (max-width: 480px) {
+    .hero-eyebrow {
+      font-size: 0.66rem;
+      letter-spacing: 0.03em;
+    }
+  }
+  .hero-eyebrow:hover {
+    color: var(--accent-hover);
+    border-color: var(--accent);
   }
   .hero-heading {
     font-size: clamp(2.4rem, 5vw, 3.75rem);

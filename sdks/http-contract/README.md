@@ -9,5 +9,5 @@ Both SDKs consume it as a development dependency and bundle its code and declara
 npm packages. It needs no separate installation, build, or publication. Run its contract tests
 through `sdks/ts/packages/golem-ts-sdk/tests/http-router-contract.test.ts` and the SDK consumer tests.
 
-After changing this source package, rerun `pnpm install` in `sdks/ts` to refresh pnpm's local
-dependency copy before rebuilding the TypeScript SDK.
+The TypeScript SDK links it with `link:` (a symlink, not a pnpm copy), so changes here are picked
+up by the next SDK build without reinstalling.

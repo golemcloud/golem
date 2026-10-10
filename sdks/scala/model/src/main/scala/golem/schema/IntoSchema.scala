@@ -16,6 +16,7 @@
 
 package golem.schema
 
+import golem.schema.wire.{SchemaWire, WitSchemaGraph}
 import zio.blocks.schema.Schema
 
 /**
@@ -31,6 +32,8 @@ trait IntoSchema[A] {
 
   /** The self-contained schema graph for `A` (computed once per instance). */
   def graph: SchemaGraph
+
+  private[golem] final lazy val wireGraph: WitSchemaGraph = SchemaWire.schemaGraphToWit(graph)
 
   /** Encode a value of `A` into its structural value tree. */
   def toValue(value: A): SchemaValue

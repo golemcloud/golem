@@ -420,7 +420,10 @@ impl CursorTx<'_> {
             self.publish_deferred_events(retained.deferred_events);
             let handle = match retained.terminal {
                 Some((terminal_idx, terminal)) => {
-                    let receiver = self.st.concurrent_resolver.register(idx);
+                    let receiver = self
+                        .st
+                        .concurrent_resolver
+                        .register(idx, start_parent(&retained.entry));
                     let resolution = self.terminal_resolution(idx, terminal_idx, &terminal);
                     let resolved = self.st.concurrent_resolver.resolve_if_pending(
                         idx,
@@ -432,7 +435,10 @@ impl CursorTx<'_> {
                     self.notify_progress = true;
                     ReplayCallHandle::new(idx, receiver)
                 }
-                None => self.register_claimed_start(idx).await?,
+                None => {
+                    self.register_claimed_start(idx, start_parent(&retained.entry))
+                        .await?
+                }
             };
             return Ok(Some((handle, Box::new(retained.entry))));
         }
@@ -828,9 +834,11 @@ impl CursorTx<'_> {
         let Some((head_idx, head)) = self.st.replay_buffer.front() else {
             return Ok(());
         };
-        let owner = match (reader, head.entity_attribution()) {
-            (_, EntityAttribution::Unattributed)
-            | (PositionalReader::Ordinary, EntityAttribution::Agent) => return Ok(()),
+        let owner = match (reader, head_owner(head)) {
+            // A positional reader never classifies a nested `Start` left at the head: its parent
+            // may be a call of the reading Store.
+            (_, HeadOwner::Unattributed | HeadOwner::ParentStart(_))
+            | (PositionalReader::Ordinary, HeadOwner::Agent) => return Ok(()),
             (PositionalReader::InvocationBoundary, _) => {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     "AgentInvocationFinished",
@@ -839,7 +847,7 @@ impl CursorTx<'_> {
                     ),
                 ));
             }
-            (PositionalReader::Ordinary, EntityAttribution::EntityBody(owner)) => owner,
+            (PositionalReader::Ordinary, HeadOwner::EntityBody(owner)) => owner,
         };
         let owner_can_consume = self.st.retained_starts.contains_key(&owner)
             || self.st.claimed_starts.contains(&owner)
@@ -884,6 +892,71 @@ impl CursorTx<'_> {
                 ..
             }
         )
+    }
+
+    /// The owner named by the entry buffered at the cursor head, when the buffer holds the next
+    /// entry after the cursor and the head path stops at it (the claim's head fast path leaves it
+    /// there).
+    pub(super) fn buffered_head_owner(&self) -> Option<HeadOwner> {
+        let next = self.cursor.last_replayed_index().next();
+        self.st
+            .replay_buffer
+            .front()
+            .filter(|(index, entry)| {
+                *index == next && !is_drained_at_head(entry, self.head_drain_facts(*index, entry))
+            })
+            .map(|(_, entry)| head_owner(entry))
+    }
+
+    /// Collects the facts [`is_drained_at_head`] decides on for `entry` at `index`.
+    pub(super) fn head_drain_facts(&self, index: OplogIndex, entry: &OplogEntry) -> HeadDrainFacts {
+        HeadDrainFacts {
+            claimed_ahead: self.st.claimed_starts.contains(&index),
+            awaited_terminal: self.is_awaited_terminal(index, entry),
+        }
+    }
+
+    /// Gathers the facts [`missing_start_waits_for`] decides on for a `Start` claim that found no
+    /// match, and returns the subscription to wait on when the rule says the claim waits. `head`
+    /// is the owner named by the entry at the cursor head, and the claim was issued from the
+    /// Store whose call chain starts at `claim_parent`.
+    ///
+    /// Every fact comes from state the cursor already holds: the parents recorded by the claimed
+    /// `Start`s that are still awaiting their terminal, the retained `Start`s and the active-body
+    /// set. No oplog entry is read.
+    pub(super) fn active_body_owning_head(
+        &self,
+        head: Option<HeadOwner>,
+        claim_parent: Option<OplogIndex>,
+    ) -> Option<tokio::sync::watch::Receiver<HashSet<OplogIndex>>> {
+        if self.cursor.is_live() {
+            return None;
+        }
+        let head_parent = match head? {
+            HeadOwner::EntityBody(owner) | HeadOwner::ParentStart(owner) => owner,
+            HeadOwner::Unattributed | HeadOwner::Agent => return None,
+        };
+        let mut bodies = self.cursor.reconstruction_claims.subscribe_bodies();
+        let active_bodies = bodies.borrow_and_update().clone();
+        if active_bodies.is_empty() {
+            return None;
+        }
+        let parent_of = |index: OplogIndex| {
+            self.st
+                .concurrent_resolver
+                .claimed_parent(index)
+                .or_else(|| {
+                    self.st
+                        .retained_starts
+                        .get(&index)
+                        .and_then(|retained| start_parent(&retained.entry))
+                })
+        };
+        let head_body = nearest_active_body(head_parent, &active_bodies, parent_of);
+        let claim_is_live = claim_parent.is_some_and(|parent| parent > self.cursor.replay_target());
+        let claiming_body =
+            claim_parent.and_then(|parent| nearest_active_body(parent, &active_bodies, parent_of));
+        missing_start_waits_for(head_body, claiming_body, claim_is_live).map(|_| bodies)
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -1544,6 +1617,7 @@ impl CursorTx<'_> {
     async fn register_claimed_start(
         &mut self,
         start_idx: OplogIndex,
+        parent_start_index: Option<OplogIndex>,
     ) -> Result<ReplayCallHandle, WorkerExecutorError> {
         let prefetched = if let Some(marker) = self.completion_marker(start_idx) {
             let marker_idx = marker.index();
@@ -1607,7 +1681,10 @@ impl CursorTx<'_> {
             None
         };
 
-        let receiver = self.st.concurrent_resolver.register(start_idx);
+        let receiver = self
+            .st
+            .concurrent_resolver
+            .register(start_idx, parent_start_index);
         if let Some((terminal_idx, resolution)) = prefetched {
             self.st
                 .concurrent_resolver
@@ -1663,11 +1740,13 @@ impl CursorTx<'_> {
             .try_get_oplog_entry_leaving_unclaimed_starts(&matches_identity)
             .await?
         {
-            let handle = self.register_claimed_start(start_idx).await?;
+            let handle = self
+                .register_claimed_start(start_idx, start_parent(&entry))
+                .await?;
             return Ok(StartClaimAttempt::Claimed(handle, Box::new(entry)));
         }
         if self.blocked_on_completion_delivery {
-            return Ok(StartClaimAttempt::Blocked);
+            return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
         }
 
         // The head belongs to someone else: scan ahead for the first not-yet-claimed matching
@@ -1703,10 +1782,12 @@ impl CursorTx<'_> {
             OplogEntryLookupResult::Found { index, entry, .. } => {
                 if matches!(entry.as_ref(), OplogEntry::CompletionDelivered { .. }) {
                     self.blocked_on_completion_delivery = true;
-                    return Ok(StartClaimAttempt::Blocked);
+                    return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
                 }
                 self.st.claimed_starts.insert(index);
-                let handle = self.register_claimed_start(index).await?;
+                let handle = self
+                    .register_claimed_start(index, start_parent(&entry))
+                    .await?;
                 Ok(StartClaimAttempt::Claimed(handle, entry))
             }
             OplogEntryLookupResult::NotFound { .. } => Ok(StartClaimAttempt::Missing),
@@ -1739,7 +1820,7 @@ impl CursorTx<'_> {
         self.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
             .await?;
         if self.blocked_on_completion_delivery {
-            return Ok(StartClaimAttempt::Blocked);
+            return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
         }
 
         let already_claimed = self.st.claimed_starts.clone();
@@ -1775,7 +1856,7 @@ impl CursorTx<'_> {
             };
             if matches!(entry.as_ref(), OplogEntry::CompletionDelivered { .. }) {
                 self.blocked_on_completion_delivery = true;
-                return Ok(StartClaimAttempt::Blocked);
+                return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
             }
             let OplogEntry::Start {
                 request: Some(recorded_request),
@@ -1798,7 +1879,9 @@ impl CursorTx<'_> {
             })?;
             if payload_matches {
                 self.st.claimed_starts.insert(index);
-                let handle = self.register_claimed_start(index).await?;
+                let handle = self
+                    .register_claimed_start(index, start_parent(&entry))
+                    .await?;
                 return Ok(StartClaimAttempt::Claimed(handle, entry));
             }
 
@@ -1933,6 +2016,12 @@ impl CursorTx<'_> {
             .await?;
         if !matches!(outcome, StartClaimAttempt::Missing) {
             return Ok(outcome);
+        }
+        if let Some(bodies) = self.active_body_owning_head(
+            self.buffered_head_owner(),
+            claim.expected_parent_start_index(),
+        ) {
+            return Ok(StartClaimAttempt::Blocked(BlockedOn::ActiveBody(bodies)));
         }
         if !recover_missing {
             return Ok(StartClaimAttempt::Missing);
@@ -2202,6 +2291,8 @@ impl ReplayState {
             log_hashes: std::sync::Mutex::new(HashMap::new()),
             pending_replay_events: std::sync::Mutex::new(Vec::new()),
             progress: Notify::new(),
+            #[cfg(feature = "test-utils")]
+            active_body_waits: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
             primary_publication_gate: std::sync::Mutex::new(None),
         };
@@ -2465,6 +2556,17 @@ impl ReplayState {
         &self,
     ) -> Result<(), WorkerExecutorError> {
         self.wait_for_reconstruction_fences().await
+    }
+
+    /// Waits until `Start` claims of this replay have started to wait for an active entity body
+    /// at least `waits` times. A claim that wakes and waits again counts once more.
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_wait_for_claims_blocked_on_active_body(&self, waits: u64) {
+        let mut counted = self.cursor.active_body_waits.subscribe();
+        counted
+            .wait_for(|counted| *counted >= waits)
+            .await
+            .expect("the replay cursor owns the active-body wait counter");
     }
 
     #[cfg(feature = "test-utils")]
@@ -3833,7 +3935,7 @@ fn positional_reader_accepts(scope: Option<OplogIndex>) -> impl FnMut(&OplogEntr
     }
 }
 
-fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {
+pub(super) fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {
     entry.is_hint() && !matches!(entry, OplogEntry::CompletionDelivered { .. })
 }
 
@@ -4016,4 +4118,99 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::StreamCancel { .. }
         | OplogEntry::StreamSession { .. } => None,
     }
+}
+
+/// The Store whose replay consumes an entry left at the cursor head, as the entry itself records
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HeadOwner {
+    /// The entry does not record which Store appended it. A top-level `Start` is such an entry.
+    Unattributed,
+    /// The primary agent Store appended the entry.
+    Agent,
+    /// The entity body whose invocation `Start` is at this index appended the entry.
+    EntityBody(OplogIndex),
+    /// A nested `Start`: the durable call, scope or entity invocation whose `Start` is at this
+    /// index owns it.
+    ParentStart(OplogIndex),
+}
+
+/// Decides the owner of `entry` when it is at the cursor head. Positional reads use it to decide
+/// whether they may park on the head, and `Start` claims use it to decide whether a missing
+/// `Start` waits for an active entity body.
+pub(super) fn head_owner(entry: &OplogEntry) -> HeadOwner {
+    match entry {
+        OplogEntry::Start {
+            parent_start_index: Some(parent),
+            ..
+        } => HeadOwner::ParentStart(*parent),
+        _ => match entry.entity_attribution() {
+            EntityAttribution::Unattributed => HeadOwner::Unattributed,
+            EntityAttribution::Agent => HeadOwner::Agent,
+            EntityAttribution::EntityBody(owner) => HeadOwner::EntityBody(owner),
+        },
+    }
+}
+
+/// What the cursor knows about an entry that a scan passes at or after the cursor head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct HeadDrainFacts {
+    /// The entry is a `Start` that a claim already took ahead of the cursor.
+    pub(super) claimed_ahead: bool,
+    /// The entry is an `End` or `Cancelled` that a registered awaiter owns.
+    pub(super) awaited_terminal: bool,
+}
+
+/// Whether the head path drains `entry` instead of stopping at it: a hint, a `Start` claimed
+/// ahead of the cursor, or a terminal a registered awaiter owns. A scan that passes the cursor
+/// head uses it to find the entry the head path would stop at.
+pub(super) fn is_drained_at_head(entry: &OplogEntry, facts: HeadDrainFacts) -> bool {
+    is_auto_skippable_hint(entry) || facts.claimed_ahead || facts.awaited_terminal
+}
+
+/// The `parent_start_index` of a `Start` entry.
+pub(super) fn start_parent(entry: &OplogEntry) -> Option<OplogIndex> {
+    match entry {
+        OplogEntry::Start {
+            parent_start_index, ..
+        } => *parent_start_index,
+        _ => None,
+    }
+}
+
+/// The nearest active entity body that encloses the record at `index`: `index` itself when it is
+/// an active body, and otherwise the nearest active body that encloses its parent. `parent_of`
+/// gives the parent recorded by a `Start` the cursor still holds. A parent always precedes its
+/// child, so the walk only moves to earlier indices and ends.
+pub(super) fn nearest_active_body(
+    mut index: OplogIndex,
+    active_bodies: &HashSet<OplogIndex>,
+    parent_of: impl Fn(OplogIndex) -> Option<OplogIndex>,
+) -> Option<OplogIndex> {
+    loop {
+        if active_bodies.contains(&index) {
+            return Some(index);
+        }
+        index = parent_of(index).filter(|parent| *parent < index)?;
+    }
+}
+
+/// Decides whether a `Start` claim that found no match while the cursor replays waits instead of
+/// reporting the missing `Start`, and returns the entity body it waits for.
+///
+/// `head_body` is the nearest active body that encloses the entry at the cursor head, and
+/// `claiming_body` the nearest active body that encloses the claim's parent. The claim waits for
+/// `head_body`: that body, or the supervisor that drains its recorded terminal, can still consume
+/// the head, and the claim's `Start` may then turn out to be recorded after it or not at all. The
+/// claim does not wait when no active body encloses the head, when that body issued the claim
+/// (only that body can consume its own entry, so it would wait for itself), or when the claim's
+/// parent was appended live after the replay target. An entity nested in the head's body is
+/// another Store, so its claim waits like any other.
+pub(super) fn missing_start_waits_for(
+    head_body: Option<OplogIndex>,
+    claiming_body: Option<OplogIndex>,
+    claim_is_live: bool,
+) -> Option<OplogIndex> {
+    let body = head_body?;
+    (!claim_is_live && claiming_body != Some(body)).then_some(body)
 }

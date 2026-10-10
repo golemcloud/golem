@@ -2747,71 +2747,199 @@ async fn unknown_hard_link_effect_invalidates_without_retry() {
 }
 
 #[test]
-async fn a_hard_link_that_the_sandbox_refuses_with_a_permission_error_gives_not_permitted_and_keeps_the_generation()
- {
-    use futures::StreamExt as _;
+async fn a_cleanup_permission_failure_of_a_writable_open_invalidates_a_read_only_target() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_open(Err(FilesystemStorageError::cleanup_io(
+        "open cleanup",
+        Path::new("alias"),
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
+    )));
+    control.push_get_attributes(Ok(SandboxAttributes {
+        read_only: true,
+        ..sandbox_attributes(SandboxObjectKind::File)
+    }));
 
-    // A sandbox refuses a hard link of a directory with a permission error: EPERM on Linux and
-    // macOS, and ERROR_ACCESS_DENIED on Windows. It refuses a hard link of a file with EPERM or
-    // EACCES when a permission check fails. The lifecycle does not examine the source, so the
-    // scripted sandbox gives only the error.
-    futures::stream::iter(["file", "directory"])
-        .for_each(|source| async move {
-            let (filesystem, control, window) = metered_resident().await;
-            let generation_handle = resident_generation_handle(&filesystem);
-            let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
-            control.push_get_attributes(Err(missing("destination before the link")));
-            control.push_hard_link(Err(sandbox_error(
-                "hard link",
+    let opened = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "alias").unwrap(),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Write,
+            follow: Follow::Yes,
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(
+        matches!(opened, Err(Error::RuntimeInvalidated)),
+        "{:?}",
+        opened.as_ref().err()
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "later").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_cleanup_permission_failure_of_a_directory_hard_link_invalidates_the_generation() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Err(missing("destination before the link")));
+    control.push_hard_link(Err(FilesystemStorageError::cleanup_io(
+        "hard link cleanup",
+        Path::new("directory"),
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cleanup denied"),
+    )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
+
+    let linked = edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: PathTarget::at_root(&generation_handle, "directory").unwrap(),
+            destination: PathTarget::at_root(&generation_handle, "alias").unwrap(),
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert_eq!(call_count(&control, "hard_link("), 1);
+    assert!(
+        matches!(linked, Err(Error::RuntimeInvalidated)),
+        "{linked:?}"
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "later").unwrap(),
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_hard_link_permission_refusal_is_guest_policy_only_for_a_known_directory() {
+    // Linking a directory is a guest-policy refusal. A file, symlink, or failed source probe
+    // cannot establish that policy and leaves the native permission error terminal.
+    for source in ["file", "directory", "symlink", "missing", "refused-probe"] {
+        let (filesystem, control, window) = metered_resident().await;
+        let generation_handle = resident_generation_handle(&filesystem);
+        let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
+        let later_target = at("after-refused-link");
+        control.push_get_attributes(Err(missing("destination before the link")));
+        control.push_hard_link(Err(sandbox_error(
+            "hard link",
+            std::io::ErrorKind::PermissionDenied,
+        )));
+        control.push_get_attributes(match source {
+            "directory" => Ok(sandbox_attributes(SandboxObjectKind::Directory)),
+            "file" => Ok(sandbox_attributes(SandboxObjectKind::File)),
+            "symlink" => Ok(sandbox_attributes(SandboxObjectKind::Symlink)),
+            "missing" => Err(missing("source policy probe")),
+            "refused-probe" => Err(sandbox_error(
+                "source policy probe",
                 std::io::ErrorKind::PermissionDenied,
-            )));
-            let reads_before = call_count(&control, "get_path_attributes(");
+            )),
+            _ => unreachable!(),
+        });
+        let reads_before = call_count(&control, "get_path_attributes(");
 
-            let linked = edit_namespace(
-                &generation_handle,
-                NamespaceEdit::Link {
-                    source: at(source),
-                    destination: at("alias"),
-                },
-            )
-            .unwrap()
-            .await;
+        let linked = edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Link {
+                source: at(source),
+                destination: at("alias"),
+            },
+        )
+        .unwrap()
+        .await;
 
+        assert_eq!(call_count(&control, "hard_link("), 1, "{source}");
+        assert_eq!(
+            call_count(&control, "get_path_attributes("),
+            reads_before + 2,
+            "{source}"
+        );
+        let source_probe = control
+            .calls()
+            .into_iter()
+            .rev()
+            .find(|call| call.starts_with("get_path_attributes("))
+            .unwrap();
+        assert!(source_probe.contains(&format!("path: \"{source}\"")));
+        assert!(source_probe.contains("follow=No"));
+        if source == "directory" {
             assert!(
                 matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
                 "{source}: {linked:?}"
             );
-            assert_eq!(call_count(&control, "hard_link("), 1, "{source}");
-            // The only read is the read of the destination before the link.
-            assert_eq!(
-                call_count(&control, "get_path_attributes("),
-                reads_before + 1,
-                "{source}"
-            );
-            assert!(
-                !filesystem_activity(&filesystem).has_terminal_failure(),
-                "{source}"
-            );
+            assert!(!filesystem_activity(&filesystem).has_terminal_failure());
             control.push_get_attributes(Err(missing("directory before the insert")));
             control.push_create_directory(Ok(()));
             edit_namespace(
                 &generation_handle,
                 NamespaceEdit::Insert {
-                    destination: at("after-refused-link"),
+                    destination: later_target,
                     object: NewObject::Directory,
                 },
             )
             .unwrap()
             .await
             .unwrap();
+        } else {
+            assert!(
+                matches!(linked, Err(Error::RuntimeInvalidated)),
+                "{source}: {linked:?}"
+            );
+            assert!(filesystem_activity(&filesystem).has_terminal_failure());
+            assert!(matches!(
+                edit_namespace(
+                    &generation_handle,
+                    NamespaceEdit::Insert {
+                        destination: later_target,
+                        object: NewObject::Directory,
+                    },
+                ),
+                Err(AccessError::Revoked)
+            ));
+        }
 
-            close_window(window, Instant::now() + Duration::from_secs(1))
-                .await
-                .unwrap();
-            control.push_delete_and_verify(Ok(()));
-            delete(seal(filesystem)).await.unwrap();
-        })
-        .await;
+        close_window(window, Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        control.push_delete_and_verify(Ok(()));
+        delete(seal(filesystem)).await.unwrap();
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -3031,20 +3159,23 @@ async fn unknown_mutating_open_effect_invalidates_without_retry() {
 }
 
 #[test]
-async fn a_refused_creating_open_whose_postcondition_read_is_refused_too_gives_not_permitted_and_keeps_the_generation()
- {
+async fn a_refused_creating_open_whose_policy_probe_is_refused_invalidates_the_generation() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     control.push_open(Err(sandbox_error(
         "open",
         std::io::ErrorKind::PermissionDenied,
     )));
-    // The read of the postcondition is a part of the agent's call. Its permission error does not
-    // invalidate the generation, and the refused open proves that nothing changed.
+    // Neither the policy probe nor the postcondition can establish a read-only file refusal.
+    control.push_get_attributes(Err(sandbox_error(
+        "open policy probe",
+        std::io::ErrorKind::PermissionDenied,
+    )));
     control.push_get_attributes(Err(sandbox_error(
         "open postcondition",
         std::io::ErrorKind::PermissionDenied,
     )));
+    let later_target = PathTarget::at_root(&generation_handle, "after-refused-create").unwrap();
 
     let opened = open(
         &generation_handle,
@@ -3059,24 +3190,23 @@ async fn a_refused_creating_open_whose_postcondition_read_is_refused_too_gives_n
     .await;
 
     assert!(
-        matches!(opened, Err(Error::Access(AccessError::NotPermitted))),
+        matches!(opened, Err(Error::RuntimeInvalidated)),
         "{:?}",
         opened.as_ref().err()
     );
     assert_eq!(call_count(&control, "open("), 1);
-    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
-    control.push_get_attributes(Err(missing("directory before the insert")));
-    control.push_create_directory(Ok(()));
-    edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Insert {
-            destination: PathTarget::at_root(&generation_handle, "after-refused-create").unwrap(),
-            object: NewObject::Directory,
-        },
-    )
-    .unwrap()
-    .await
-    .unwrap();
+    assert_eq!(call_count(&control, "get_path_attributes("), 2);
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Insert {
+                destination: later_target,
+                object: NewObject::Directory,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
 
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
@@ -3140,7 +3270,7 @@ async fn unknown_attribute_effect_invalidates_without_retry() {
 }
 
 #[test]
-async fn a_refused_size_change_fails_only_that_call() {
+async fn a_native_permission_refusal_of_a_size_change_invalidates_the_generation() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let node = OpenNode::File(open_file(&generation_handle, &control, 26).await);
@@ -3153,14 +3283,15 @@ async fn a_refused_size_change_fails_only_that_call() {
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
-    // A permission refusal proves that the size did not change, so no postcondition read
-    // follows it. Nothing is programmed for one on purpose: a read here would take the
-    // empty-queue error and invalidate the generation, which is what this test guards.
+    // The native permission error is terminal even though it proves that no size changed.
     control.push_set_size(Err(sandbox_error(
         "set size",
         std::io::ErrorKind::PermissionDenied,
     )));
 
+    let later_target =
+        PathTarget::at_root(&generation_handle, "after-refused-size-change").unwrap();
+    let reads_before = call_count(&control, "get_node_attributes(");
     let refused = set_attributes(
         &generation_handle,
         Target::Open(&node),
@@ -3176,7 +3307,7 @@ async fn a_refused_size_change_fails_only_that_call() {
     .await;
 
     assert!(
-        matches!(refused, Err(Error::Access(AccessError::NotPermitted))),
+        matches!(refused, Err(Error::RuntimeInvalidated)),
         "{refused:?}"
     );
     assert_eq!(
@@ -3188,17 +3319,23 @@ async fn a_refused_size_change_fails_only_that_call() {
         1,
         "a proven refusal must not retry"
     );
-    let admitted = open(
-        &generation_handle,
-        PathTarget::at_root(&generation_handle, "after-refused-size-change").unwrap(),
-        OpenOptions::Existing {
-            expected: ObjectKind::File,
-            access: AccessMode::Read,
-            follow: Follow::Yes,
-        },
-    )
-    .expect("a refused size change invalidated the filesystem generation handle");
-    drop(admitted);
+    assert_eq!(
+        call_count(&control, "get_node_attributes("),
+        reads_before + 1
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            later_target,
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
 
     control.push_close(Ok(()));
     close(node).await.unwrap();
@@ -3210,7 +3347,7 @@ async fn a_refused_size_change_fails_only_that_call() {
 }
 
 #[test]
-async fn a_refused_time_change_fails_only_that_call() {
+async fn a_native_permission_refusal_of_a_time_change_invalidates_the_generation() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let node = OpenNode::File(open_file(&generation_handle, &control, 27).await);
@@ -3225,13 +3362,15 @@ async fn a_refused_time_change_fails_only_that_call() {
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
-    // As above: the refusal proves that the times did not change, so no postcondition read
-    // follows, and none is programmed.
+    // The native permission error is terminal even though it proves that no times changed.
     control.push_set_times(Err(sandbox_error(
         "set times",
         std::io::ErrorKind::PermissionDenied,
     )));
 
+    let later_target =
+        PathTarget::at_root(&generation_handle, "after-refused-time-change").unwrap();
+    let reads_before = call_count(&control, "get_node_attributes(");
     let refused = set_attributes(
         &generation_handle,
         Target::Open(&node),
@@ -3244,7 +3383,7 @@ async fn a_refused_time_change_fails_only_that_call() {
     .await;
 
     assert!(
-        matches!(refused, Err(Error::Access(AccessError::NotPermitted))),
+        matches!(refused, Err(Error::RuntimeInvalidated)),
         "{refused:?}"
     );
     assert_eq!(
@@ -3256,17 +3395,23 @@ async fn a_refused_time_change_fails_only_that_call() {
         1,
         "a proven refusal must not retry"
     );
-    let admitted = open(
-        &generation_handle,
-        PathTarget::at_root(&generation_handle, "after-refused-time-change").unwrap(),
-        OpenOptions::Existing {
-            expected: ObjectKind::File,
-            access: AccessMode::Read,
-            follow: Follow::Yes,
-        },
-    )
-    .expect("a refused time change invalidated the filesystem generation handle");
-    drop(admitted);
+    assert_eq!(
+        call_count(&control, "get_node_attributes("),
+        reads_before + 1
+    );
+    assert!(filesystem_activity(&filesystem).has_terminal_failure());
+    assert!(matches!(
+        open(
+            &generation_handle,
+            later_target,
+            OpenOptions::Existing {
+                expected: ObjectKind::File,
+                access: AccessMode::Read,
+                follow: Follow::Yes,
+            },
+        ),
+        Err(AccessError::Revoked)
+    ));
 
     control.push_close(Ok(()));
     close(node).await.unwrap();
@@ -3588,7 +3733,7 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
             },
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert_eq!(
         edit_namespace(
@@ -3599,7 +3744,7 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
             },
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert!(!has_call(&control, "create_directory("));
     assert!(!has_call(&control, "hard_link("));
@@ -4046,6 +4191,11 @@ async fn a_writable_open_through_a_symlink_that_the_sandbox_refuses_with_a_permi
         SandboxObjectKind::File,
     )
     .await;
+    // The policy recheck follows alias and confirms that the replacement is a read-only file.
+    control.push_get_attributes(Ok(SandboxAttributes {
+        read_only: true,
+        ..sandbox_attributes(SandboxObjectKind::File)
+    }));
     opening_gate.release();
 
     let opened = opening.await.unwrap();
@@ -4055,6 +4205,14 @@ async fn a_writable_open_through_a_symlink_that_the_sandbox_refuses_with_a_permi
         "{:?}",
         opened.as_ref().err()
     );
+    let policy_probe = control
+        .calls()
+        .into_iter()
+        .rev()
+        .find(|call| call.starts_with("get_path_attributes("))
+        .unwrap();
+    assert!(policy_probe.contains("path: \"alias\""));
+    assert!(policy_probe.contains("follow=Yes"));
     assert!(!has_call(&control, "close("));
     assert!(!filesystem_activity(&filesystem).has_terminal_failure());
     control.push_get_attributes(Err(missing("directory before the insert")));
@@ -8196,6 +8354,130 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
 }
 
 #[test]
+async fn directory_capabilities_bound_child_opens_and_deny_ungranted_io() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    for (id, mode) in [
+        AccessMode::None,
+        AccessMode::Read,
+        AccessMode::Write,
+        AccessMode::ReadWrite,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let directory =
+            open_directory_with_access(&generation_handle, &control, 900 + id as u64, mode).await;
+        let file = open_file_with_access(&generation_handle, &control, 910 + id as u64, mode).await;
+        let calls_before = control.calls().len();
+        if !mode.can_read() {
+            assert_eq!(
+                list_directory(&generation_handle, &directory).unwrap_err(),
+                AccessError::NotPermitted
+            );
+            assert_eq!(
+                read_file(
+                    &generation_handle,
+                    &file,
+                    ReadRange {
+                        offset: 0,
+                        length: 1
+                    }
+                )
+                .unwrap_err(),
+                AccessError::NotPermitted
+            );
+        } else {
+            drop(list_directory(&generation_handle, &directory).unwrap());
+            drop(
+                read_file(
+                    &generation_handle,
+                    &file,
+                    ReadRange {
+                        offset: 0,
+                        length: 1,
+                    },
+                )
+                .unwrap(),
+            );
+        }
+        if !mode.can_write() {
+            assert_eq!(
+                write(
+                    &generation_handle,
+                    &file,
+                    WritePlacement::At(0),
+                    Bytes::from_static(b"x")
+                )
+                .unwrap_err(),
+                AccessError::NotPermitted
+            );
+        }
+        for path in ["child", "."] {
+            for options in [
+                OpenOptions::Existing {
+                    expected: ObjectKind::File,
+                    access: AccessMode::Write,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::Existing {
+                    expected: ObjectKind::Directory,
+                    access: AccessMode::Write,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::File {
+                    access: AccessMode::None,
+                    disposition: FileDisposition::CreateIfMissing,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::File {
+                    access: AccessMode::Read,
+                    disposition: FileDisposition::TruncateExisting,
+                    follow: Follow::Yes,
+                },
+            ] {
+                let result = open(
+                    &generation_handle,
+                    PathTarget::at(&directory, path),
+                    options,
+                );
+                if mode.can_write() {
+                    drop(result.unwrap());
+                } else {
+                    assert_eq!(result.unwrap_err(), AccessError::ReadOnly);
+                }
+            }
+        }
+        let edit = edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Insert {
+                destination: PathTarget::at(&directory, "child"),
+                object: NewObject::Directory,
+            },
+        );
+        if mode.can_write() {
+            drop(edit.unwrap());
+        } else {
+            assert_eq!(edit.unwrap_err(), AccessError::ReadOnly);
+        }
+        assert_eq!(
+            control.calls().len(),
+            calls_before,
+            "capability checks must precede storage IO"
+        );
+        control.push_close(Ok(()));
+        close(OpenNode::File(file)).await.unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
+    }
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -8232,7 +8514,7 @@ async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
             }),
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert!(!has_call(&control, "set_times("));
     close_window(window, Instant::now() + Duration::from_secs(1))
@@ -8862,6 +9144,42 @@ async fn dropped_attribute_and_flush_observers_need_no_billing_close_coupling() 
 }
 
 #[test]
+fn a_host_storage_permission_failure_invalidates_the_generation() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ReadOnlyFilesystem,
+    ] {
+        let error = sandbox_error("open host storage", kind);
+        assert!(error.is_terminal_failure());
+        let cause = classify_failure(&error, FailureFacts::default());
+        assert_eq!(cause, FailureCause::TerminalInfrastructure);
+        assert_eq!(
+            decide_effect(cause, EffectEvidence::NoEffect, RetryBudget::new(2)),
+            EffectDecision::Invalidate
+        );
+    }
+}
+
+#[test]
+fn a_capability_escape_refusal_is_a_guest_error_without_effect() {
+    let root = tempfile::tempdir().unwrap();
+    let directory =
+        cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+    let refusal = directory.open("../outside").unwrap_err();
+    assert_eq!(refusal.kind(), std::io::ErrorKind::PermissionDenied);
+    let error = FilesystemStorageError::io("open sandbox path", root.path(), refusal);
+    assert!(!error.is_terminal_failure());
+    let cause = classify_failure(&error, FailureFacts::default());
+    assert_eq!(cause, FailureCause::Guest);
+    assert!(error_proves_no_effect(&error));
+    assert_eq!(
+        decide_effect(cause, EffectEvidence::NoEffect, RetryBudget::new(2)),
+        EffectDecision::ReturnFailure(FailureCause::Guest)
+    );
+    assert!(matches!(classified_error(cause, error), Error::Sandbox(_)));
+}
+
+#[test]
 fn cause_effect_decision_keeps_quota_pressure_and_postconditions_distinct() {
     let storage_full = sandbox_error("write", std::io::ErrorKind::StorageFull);
     assert_eq!(
@@ -8927,10 +9245,8 @@ fn cause_effect_decision_keeps_quota_pressure_and_postconditions_distinct() {
 }
 
 #[test]
-fn a_permission_error_is_a_guest_failure_without_effect_and_broken_storage_is_terminal() {
-    // A permission error is the error of the agent's operation: no effect, no retry,
-    // `not-permitted`. The storage predicate still counts it, for the usage reads of the executor.
-    assert!(!invalidates_generation(&sandbox_error(
+fn native_permission_errors_and_broken_storage_are_terminal() {
+    assert!(invalidates_generation(&sandbox_error(
         "refused",
         std::io::ErrorKind::PermissionDenied
     )));
@@ -8945,17 +9261,18 @@ fn a_permission_error_is_a_guest_failure_without_effect_and_broken_storage_is_te
                 )
             };
             assert!(refused().is_terminal_failure(), "errno {errno}");
-            assert!(!invalidates_generation(&refused()), "errno {errno}");
+            assert!(invalidates_generation(&refused()), "errno {errno}");
+            assert_eq!(refused().io_error().unwrap().raw_os_error(), Some(errno));
             assert_eq!(
                 classify_failure(&refused(), FailureFacts::default()),
-                FailureCause::Guest,
+                FailureCause::TerminalInfrastructure,
                 "errno {errno}"
             );
             assert!(error_proves_no_effect(&refused()), "errno {errno}");
             assert!(
                 matches!(
-                    classified_error(FailureCause::Guest, refused()),
-                    Error::Access(AccessError::NotPermitted)
+                    classified_error(FailureCause::TerminalInfrastructure, refused()),
+                    Error::RuntimeInvalidated
                 ),
                 "errno {errno}"
             );
@@ -8963,11 +9280,11 @@ fn a_permission_error_is_a_guest_failure_without_effect_and_broken_storage_is_te
     }
     assert_eq!(
         decide_effect(
-            FailureCause::Guest,
+            FailureCause::TerminalInfrastructure,
             EffectEvidence::NoEffect,
             RetryBudget::new(2),
         ),
-        EffectDecision::ReturnFailure(FailureCause::Guest)
+        EffectDecision::Invalidate
     );
     assert!(matches!(
         classified_error(FailureCause::Guest, missing("guest error")),

@@ -3228,7 +3228,7 @@ async fn put_raw_if_absent_gives_an_error_for_a_503_after_every_attempt() {
 async fn put_raw_if_absent_rejects_a_name_that_breaks_a_rule_without_a_request() {
     // The key of `namespace()` in a storage without an object prefix is the 36 bytes of the
     // nil UUID, `/`, and the name. The last name has 988 bytes, so its key has 1025. A root
-    // path is a directory, and a blob cannot be where a directory is.
+    // path is a directory that names no blob.
     let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
     let names = [
         "a\0b".to_string(),

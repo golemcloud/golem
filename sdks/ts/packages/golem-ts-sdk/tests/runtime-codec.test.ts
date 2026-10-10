@@ -5,6 +5,11 @@ import { registerAgentType } from '../src/runtime';
 import { s } from '../src/schema/markers';
 import { AgentStream } from '../src/schema/agentStream';
 import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
+import { defineAgent } from '../src/defineAgent';
+import { method } from '../src/method';
+import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
+import { getRawSelfAgentId } from '../src/host/hostapi';
+import { ResolvedAgent } from '../src/internal/resolvedAgent';
 
 describe('prepared runtime codecs', () => {
   it('keeps field order and principal injection separate from wire field count', () => {
@@ -91,5 +96,67 @@ describe('prepared runtime codecs', () => {
     expect(pulls).toBe(1);
     await expect(runtime.write({ values: stream })).rejects.toThrow();
     await decoded.values.return();
+  });
+
+  it('reads self identity within a method after a host transition and after snapshot restoration', async () => {
+    const input = schemaValueToWit(v.record([]));
+    const parent = `FreshIdentity(${JSON.stringify(input)})[1-2]`;
+    const child = `FreshIdentity(${JSON.stringify(input)})[3-5]`;
+    const previous = (globalThis as any).currentAgentId;
+    try {
+      (globalThis as any).currentAgentId = parent;
+      defineAgent({
+        name: 'FreshIdentity',
+        id: {},
+        snapshotting: { state: z.object({ saved: z.string() }) },
+        methods: { read: method({ input: {}, returns: z.string() }) },
+      }).implement({
+        init: () => ({ saved: getRawSelfAgentId().value }),
+        methods: {
+          async read() {
+            const before = this.getId().value;
+            (globalThis as any).currentAgentId = child;
+            await Promise.resolve();
+            return JSON.stringify({
+              saved: this.saved,
+              before,
+              after: this.getId().value,
+              phantom: this.getPhantomId()?.lowBits.toString(),
+            });
+          },
+        },
+      });
+      const initiator = AgentInitiatorRegistry.lookup('FreshIdentity')!;
+      const initialized = await initiator.initiate(input, { tag: 'anonymous' });
+      if (initialized.tag !== 'ok') throw new Error('initialization failed');
+      const agent = initialized.val as ResolvedAgent;
+      const result = await agent.invoke('read', input, { tag: 'anonymous' });
+      if (result.tag !== 'ok' || !result.val) throw new Error('invocation failed');
+      const decoded = schemaValueFromWit(result.val);
+      if (decoded.tag !== 'string') throw new Error('expected string');
+      expect(JSON.parse(decoded.value)).toEqual({
+        saved: parent,
+        before: parent,
+        after: child,
+        phantom: '5',
+      });
+      expect(agent.getId().value).toBe(child);
+      const snapshot = await agent.saveSnapshot();
+      expect(JSON.parse(new TextDecoder().decode(snapshot.data))).toEqual({ saved: parent });
+      const restored = await initiator.loadSnapshot(
+        input,
+        { tag: 'anonymous' },
+        snapshot.data,
+        'application/json',
+        { inMemory: [], fileDatabases: {} },
+      );
+      if (restored.tag !== 'ok') throw new Error('restoration failed');
+      expect(restored.val.getId().value).toBe(child);
+      expect(
+        JSON.parse(new TextDecoder().decode((await restored.val.saveSnapshot()).data)),
+      ).toEqual({ saved: parent });
+    } finally {
+      (globalThis as any).currentAgentId = previous;
+    }
   });
 });

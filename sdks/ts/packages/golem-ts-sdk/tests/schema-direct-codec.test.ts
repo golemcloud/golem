@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { Result } from '../src/host/result';
 import { s } from '../src/schema/markers';
+import { SchemaValueWriter, invocationSchemaValueReader } from '../src/schema/codec';
+import { schemaValueFromWit, schemaValueToWit } from '../src/internal/schema-model';
 import {
   compileSchema,
   directSchemaValueFromWit,
@@ -15,6 +17,115 @@ import {
 } from '../src/schema/public';
 
 describe('direct flat-wire schema codecs', () => {
+  it('matches invocation conversion rather than canonical application identity', () => {
+    let transforms = 0;
+    const schemas = [
+      z.object({
+        items: z.array(s.u8()),
+        label: z.string().transform((x) => {
+          transforms++;
+          return `${x}!`;
+        }),
+      }),
+      z.array(s.f32()),
+      z.array(z.number().min(5)),
+      z.array(z.literal('fixed')),
+    ];
+    const inputs = [
+      { items: [7, 255], label: 'already!', extra: 'discarded' },
+      [1.1, -0, Infinity, NaN],
+      [3, 8],
+      ['ignored', 'fixed'],
+    ];
+    schemas.forEach((schema, i) => {
+      const codec = compileSchema(schema);
+      expect(codec.invocationDirect).toBeDefined();
+      const writer = new SchemaValueWriter();
+      const root = codec.invocationDirect!.write(inputs[i], writer)!;
+      const wire = { valueNodes: writer.valueNodes, root };
+      const ordinary = schemaValueToWit(codec.toValue(inputs[i]));
+      expect(wire).toEqual(ordinary);
+      const reader = invocationSchemaValueReader(wire);
+      expect(codec.invocationDirect!.read(reader, root)).toEqual(
+        codec.fromValue(schemaValueFromWit(ordinary)),
+      );
+      reader.finish();
+    });
+    expect(transforms).toBe(0);
+  });
+
+  it('rejects sparse and typed-array results like ordinary list encoding', () => {
+    const codec = compileSchema(z.array(s.u8()));
+    const sparse = [7, 31];
+    delete sparse[1];
+    for (const value of [sparse, new Uint8Array([7, 31])]) {
+      expect(() => schemaValueToWit(codec.toValue(value))).toThrow();
+      expect(() => codec.invocationDirect!.write(value, new SchemaValueWriter())).toThrow();
+    }
+  });
+
+  it('keeps nullish, optional, results and recursive shapes on their ordinary path', () => {
+    const optional = compileSchema(z.object({ count: z.number().optional() }));
+    expect(optional.invocationDirect).toBeUndefined();
+    for (const value of [{}, { count: undefined }, { count: null }]) {
+      expect(
+        optional.fromValue(schemaValueFromWit(schemaValueToWit(optional.toValue(value)))),
+      ).toEqual({ count: undefined });
+    }
+    const nullable = compileSchema(z.string().nullable());
+    expect(nullable.invocationDirect).toBeUndefined();
+    expect(
+      nullable.fromValue(schemaValueFromWit(schemaValueToWit(nullable.toValue(undefined)))),
+    ).toBeNull();
+    expect(compileSchema(s.result(z.void(), z.string())).invocationDirect).toBeUndefined();
+    const tree: z.ZodType = z.lazy(() => z.object({ children: z.array(tree) }));
+    expect(compileSchema(tree).invocationDirect).toBeUndefined();
+  });
+
+  it('preserves ordinary alias and unreachable-node handling without skipping preflight', () => {
+    const codec = compileSchema(z.array(z.string()));
+    const wire = {
+      valueNodes: [
+        { tag: 'string-value' as const, val: 'shared' },
+        { tag: 'list-value' as const, val: [0, 0] },
+        { tag: 'u8-value' as const, val: 255 },
+      ],
+      root: 1,
+    };
+    const reader = invocationSchemaValueReader(wire);
+    expect(codec.invocationDirect!.read(reader, wire.root)).toEqual(
+      codec.fromValue(schemaValueFromWit(wire)),
+    );
+    reader.finish();
+    // Unreachable scalar domains are not checked by ordinary invocation preflight.
+    wire.valueNodes[2].val = 256;
+    expect(() => invocationSchemaValueReader(wire)).not.toThrow();
+    expect(() => schemaValueFromWit(wire)).not.toThrow();
+    wire.valueNodes[1].val = [9];
+    expect(() => invocationSchemaValueReader(wire)).toThrow(/out of range/);
+    expect(() => schemaValueFromWit(wire)).toThrow(/out of range/);
+  });
+
+  it('preserves invocation interpretation of unexpected scalar tags and extra nested record fields', () => {
+    const codec = compileSchema(z.array(z.object({ name: z.string() })));
+    const wire = schemaValueToWit({
+      tag: 'list',
+      elements: [
+        {
+          tag: 'record',
+          fields: [
+            { tag: 'bool', value: true },
+            { tag: 'u8', value: 31 },
+          ],
+        },
+      ],
+    });
+    const reader = invocationSchemaValueReader(wire);
+    expect(codec.invocationDirect!.read(reader, wire.root)).toEqual(
+      codec.fromValue(schemaValueFromWit(wire)),
+    );
+  });
+
   it('converts nested records, arrays, options, and results without generic model conversion', () => {
     const codec = compileSchema(
       z.object({ names: z.array(z.string()), count: z.number().optional() }),

@@ -46,6 +46,21 @@ For running specific tests during development:
 cargo test -p <crate> -- <test_name> --report-time
 ```
 
+Worker-executor integration tests need the same 32 MiB native thread stacks as the production
+runtime. The `worker-executor-tests*` cargo-make tasks set `RUST_MIN_STACK=33554432`. Direct Cargo,
+`cargo-test-r`, and prebuilt test-binary invocations bypass that task environment, so set it before
+launching the process:
+
+```shell
+RUST_MIN_STACK=33554432 cargo test -p golem-worker-executor --test integration -- <test_name> --report-time
+```
+
+Without this setting, the invocation stack guard can allocate and release a temporary stack on
+every poll, adding page faults and latency that production's reusable stacks avoid. This setting
+does not override tests that explicitly request a smaller stack. For an ignored test, use
+`--include-ignored` and verify a nonzero executed test count; `--ignored` can select the test
+without executing it in the pinned test-r version.
+
 For `golem-cli` structured output schema or generator changes, load the
 `modifying-cli-output-schema` skill. If arbitrary output generators changed,
 rerun this prop test a few times to catch generator/schema drift:

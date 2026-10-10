@@ -432,6 +432,7 @@ pub(crate) enum AccessError {
     Revoked,
     Transitioning,
     WrongGeneration,
+    ReadOnly,
     NotPermitted,
 }
 
@@ -443,6 +444,7 @@ impl Display for AccessError {
             Self::WrongGeneration => {
                 formatter.write_str("filesystem node belongs to another generation")
             }
+            Self::ReadOnly => formatter.write_str("filesystem directory lacks mutation capability"),
             Self::NotPermitted => formatter.write_str("filesystem target is read-only"),
         }
     }
@@ -2319,6 +2321,14 @@ pub(crate) struct PathTarget {
 }
 
 impl PathTarget {
+    pub(crate) fn require_mutable(&self) -> Result<(), AccessError> {
+        if self.access.can_write() {
+            Ok(())
+        } else {
+            Err(AccessError::ReadOnly)
+        }
+    }
+
     /// Creates a read-write path target relative to the filesystem root.
     ///
     /// Callers use this for preopens and root-relative host paths with an admitted reconstruction
@@ -2397,6 +2407,7 @@ pub(crate) enum ObjectKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccessMode {
+    None,
     Read,
     /// Reads, and changes the times of the object that the open pinned. A guest open never asks
     /// for this. The lifecycle uses it for a followed attribute change, where the change must
@@ -2404,6 +2415,20 @@ pub(crate) enum AccessMode {
     ReadAndSetTimes,
     Write,
     ReadWrite,
+}
+
+impl AccessMode {
+    pub(crate) fn can_read(self) -> bool {
+        matches!(self, Self::Read | Self::ReadAndSetTimes | Self::ReadWrite)
+    }
+
+    pub(crate) fn can_write(self) -> bool {
+        matches!(self, Self::Write | Self::ReadWrite)
+    }
+
+    fn can_set_times(self) -> bool {
+        self.can_write() || self == Self::ReadAndSetTimes
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2525,6 +2550,9 @@ pub(crate) fn open<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<Opened>, AccessError> {
     let generation = admit(generation_handle)?;
     validate_path_generation(&generation, &target)?;
+    if open_requires_mutable_target(options) {
+        target.require_mutable()?;
+    }
     let opened_access = open_access(options);
     let lease = generation
         .registry
@@ -2549,6 +2577,9 @@ pub(crate) fn read_file<Adapter: SandboxFilesystemAdapter>(
     range: ReadRange,
 ) -> Result<FilesystemCall<ReadResult>, AccessError> {
     let generation = admit_node(generation_handle, file.ownership.generation_id)?;
+    if !file.ownership.access.can_read() {
+        return Err(AccessError::NotPermitted);
+    }
     let lease = generation.registry.lease_call(CallEffect::Read)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
@@ -2631,6 +2662,9 @@ pub(crate) fn list_directory<Adapter: SandboxFilesystemAdapter>(
     directory: &Directory,
 ) -> Result<FilesystemCall<DirectoryEntries>, AccessError> {
     let generation = admit_node(generation_handle, directory.ownership.generation_id)?;
+    if !directory.ownership.access.can_read() {
+        return Err(AccessError::NotPermitted);
+    }
     let lease = generation.registry.lease_call(CallEffect::Read)?;
     let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
         unreachable!("directory wrapper must contain a sandbox directory")
@@ -2688,6 +2722,9 @@ pub(crate) fn write<Adapter: SandboxFilesystemAdapter>(
     bytes: Bytes,
 ) -> Result<FilesystemCall<WriteResult>, AccessError> {
     let generation = admit_node(generation_handle, file.ownership.generation_id)?;
+    if !file.ownership.access.can_write() {
+        return Err(AccessError::NotPermitted);
+    }
     let lease = generation.registry.lease_call(CallEffect::Changes)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
@@ -3007,6 +3044,28 @@ async fn execute_open<Adapter: SandboxFilesystemAdapter>(
         match result {
             Ok(opened) => return Ok(opened),
             Err(error) => {
+                if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
+                    && !error.is_sandbox_escape()
+                    && !error.cleanup_failed()
+                    && open_requires_mutable_target(options)
+                {
+                    let follow = match options {
+                        OpenOptions::Existing { follow, .. } | OpenOptions::File { follow, .. } => {
+                            follow
+                        }
+                    };
+                    let attributes = {
+                        let sandbox = generation.sandbox.read().await;
+                        let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
+                        sandbox
+                            .get_path_attributes(target.clone(), sandbox_follow(follow))
+                            .await
+                    };
+                    if matches!(attributes, Ok(attributes) if attributes.kind == SandboxObjectKind::File && attributes.read_only)
+                    {
+                        return Err(Error::Access(AccessError::NotPermitted));
+                    }
+                }
                 if open_changes_filesystem(options) {
                     match open_postcondition(&generation, &target, options).await {
                         Ok(true) => {
@@ -3812,6 +3871,16 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
+        if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
+            && !error.is_sandbox_escape()
+            && !error.cleanup_failed()
+            && matches!(
+                namespace_path_state(&generation, source.clone()).await,
+                Ok(NamespacePathState::Present(attributes)) if attributes.kind == SandboxObjectKind::Directory
+            )
+        {
+            return Err(Error::Access(AccessError::NotPermitted));
+        }
         let evidence = if error_proves_no_effect(&error) {
             EffectEvidence::NoEffect
         } else {
@@ -4219,7 +4288,7 @@ fn classify_query_error<Adapter: SandboxFilesystemAdapter>(
         generation.invalidate();
         Error::RuntimeInvalidated
     } else {
-        returned_storage_error(source)
+        Error::Sandbox(source)
     }
 }
 
@@ -4390,20 +4459,8 @@ fn classified_error(cause: FailureCause, source: FilesystemStorageError) -> Erro
         FailureCause::PhysicalCapacity => Error::PhysicalCapacity(source),
         FailureCause::TerminalInfrastructure => Error::RuntimeInvalidated,
         FailureCause::Guest | FailureCause::TransientBackend | FailureCause::UnclassifiedIo => {
-            returned_storage_error(source)
+            Error::Sandbox(source)
         }
-    }
-}
-
-/// Gives the error that a call returns for a storage error that leaves the generation valid.
-///
-/// A permission error gives `AccessError::NotPermitted`, as the read-only checks of the lifecycle
-/// do. Another error gives `Error::Sandbox` with its source.
-fn returned_storage_error(source: FilesystemStorageError) -> Error {
-    if source.io_kind() == Some(std::io::ErrorKind::PermissionDenied) {
-        Error::Access(AccessError::NotPermitted)
-    } else {
-        Error::Sandbox(source)
     }
 }
 
@@ -4444,12 +4501,16 @@ fn authorize_attribute_target(
     target: &Target<'_>,
     changes: AttributeChanges,
 ) -> Result<(), AccessError> {
-    let writable = match target {
-        Target::Open(node) => node_ownership(node).access != AccessMode::Read,
-        Target::Path(target, _) => target.access != AccessMode::Read,
-    };
-    if !writable {
-        return Err(AccessError::NotPermitted);
+    match target {
+        Target::Open(node) if !node_ownership(node).access.can_set_times() => {
+            return Err(if node.kind() == ObjectKind::Directory {
+                AccessError::ReadOnly
+            } else {
+                AccessError::NotPermitted
+            });
+        }
+        Target::Path(target, _) => target.require_mutable()?,
+        Target::Open(_) => {}
     }
     if matches!(changes, AttributeChanges::File { .. })
         && !matches!(target, &Target::Open(OpenNode::File(_)))
@@ -4506,7 +4567,7 @@ fn validate_namespace_generation<Adapter: SandboxFilesystemAdapter>(
 }
 
 fn authorize_namespace_edit(edit: &NamespaceEdit) -> Result<(), AccessError> {
-    let writable = |target: &PathTarget| target.access != AccessMode::Read;
+    let writable = |target: &PathTarget| target.access.can_write();
     let permitted = match edit {
         NamespaceEdit::Insert { destination, .. } => writable(destination),
         NamespaceEdit::Link {
@@ -4522,7 +4583,7 @@ fn authorize_namespace_edit(edit: &NamespaceEdit) -> Result<(), AccessError> {
     if permitted {
         Ok(())
     } else {
-        Err(AccessError::NotPermitted)
+        Err(AccessError::ReadOnly)
     }
 }
 
@@ -4553,7 +4614,7 @@ fn open_namespace_coordination(options: OpenOptions) -> Option<NamespaceCoordina
             expected: ObjectKind::Directory,
             ..
         } => Some(NamespaceCoordinationKind::Observe),
-        OpenOptions::Existing { access, .. } if access != AccessMode::Read => {
+        OpenOptions::Existing { access, .. } if access.can_set_times() => {
             Some(NamespaceCoordinationKind::Observe)
         }
         OpenOptions::File { .. } => Some(NamespaceCoordinationKind::Edit),
@@ -4563,7 +4624,7 @@ fn open_namespace_coordination(options: OpenOptions) -> Option<NamespaceCoordina
 
 fn open_requires_mutable_target(options: OpenOptions) -> bool {
     match options {
-        OpenOptions::Existing { access, .. } => access != AccessMode::Read,
+        OpenOptions::Existing { access, .. } => access.can_set_times(),
         OpenOptions::File { .. } => true,
     }
 }
@@ -4612,7 +4673,8 @@ fn sandbox_object_kind(kind: ObjectKind) -> SandboxObjectKind {
 
 fn sandbox_access_mode(mode: AccessMode) -> SandboxAccessMode {
     match mode {
-        AccessMode::Read => SandboxAccessMode::Read,
+        // Metadata-only handles use a native read open; lifecycle data operations enforce the capability.
+        AccessMode::None | AccessMode::Read => SandboxAccessMode::Read,
         AccessMode::ReadAndSetTimes => SandboxAccessMode::ReadAndSetTimes,
         AccessMode::Write => SandboxAccessMode::Write,
         AccessMode::ReadWrite => SandboxAccessMode::ReadWrite,
@@ -4770,12 +4832,10 @@ fn classify_failure(error: &FilesystemStorageError, facts: FailureFacts) -> Fail
 
 /// Tells whether a storage error in the tree of the agent invalidates the generation.
 ///
-/// A terminal failure of the storage invalidates the generation. A permission error does not
-/// invalidate it, although `FilesystemStorageError::is_terminal_failure` counts it. A permission
-/// error refuses only one operation in the tree, and that operation returns it. The usage reads
-/// after a storage exhaustion read the storage of the executor, so they use `is_terminal_failure`.
+/// A sandbox escape refuses only the operation. Host storage failures, including permission
+/// failures without a verified guest-policy refusal, invalidate the generation.
 fn invalidates_generation(error: &FilesystemStorageError) -> bool {
-    error.io_kind() != Some(std::io::ErrorKind::PermissionDenied) && error.is_terminal_failure()
+    error.is_terminal_failure()
 }
 
 fn error_proves_no_effect(error: &FilesystemStorageError) -> bool {

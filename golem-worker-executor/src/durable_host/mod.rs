@@ -5402,8 +5402,12 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        hydrated: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError> {
+        let crate::worker::HydratedInvocation {
+            invocation,
+            payload,
+        } = hydrated;
         if !self.state.durability_is_suppressed() {
             let stack = self.get_current_invocation_context().await;
 
@@ -5437,12 +5441,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::permission_denied("permission denied"));
             }
 
+            let (idempotency_key, _, _) = invocation.into_parts();
             let start_index = self
                 .public_state
                 .worker()
                 .oplog()
-                .add_agent_invocation_started_with_index(
-                    invocation,
+                .add_agent_invocation_started_from_pending(
+                    idempotency_key,
+                    payload,
                     stack,
                     InvocationWalletPin {
                         wallet_token: WalletVersionToken {

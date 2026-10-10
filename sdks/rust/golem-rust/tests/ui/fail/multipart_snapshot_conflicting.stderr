@@ -1,0 +1,13 @@
+error: Byte and multipart snapshot hooks cannot be combined
+  --> tests/ui/fail/multipart_snapshot_conflicting.rs:11:21
+   |
+11 | impl PartsAgent for PartsImpl {
+   |                     ^^^^^^^^^
+
+warning: unused imports: `MultipartSnapshot` and `SnapshotRestoreContext`
+ --> tests/ui/fail/multipart_snapshot_conflicting.rs:1:27
+  |
+1 | use golem_rust::agentic::{MultipartSnapshot, SnapshotRestoreContext};
+  |                           ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

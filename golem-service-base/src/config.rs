@@ -83,6 +83,13 @@ impl Default for BlobStorageConfig {
 }
 
 impl BlobStorageConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Self::S3(config) = self {
+            config.validate()?;
+        }
+        Ok(())
+    }
+
     pub fn default_s3() -> Self {
         Self::S3(S3BlobStorageConfig::default())
     }
@@ -142,6 +149,16 @@ pub struct S3BlobStorageConfig {
     pub initial_agent_files_bucket: String,
     pub components_bucket: String,
     pub filesystem_snapshots_bucket: String,
+}
+
+impl S3BlobStorageConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.filesystem_snapshots_bucket != self.custom_data_bucket,
+            "blob_storage.config.filesystem_snapshots_bucket must differ from blob_storage.config.custom_data_bucket"
+        );
+        Ok(())
+    }
 }
 
 impl SafeDisplay for S3BlobStorageConfig {
@@ -365,5 +382,101 @@ impl<T: ConfigLoaderConfig> MergedConfigLoaderOrDumper<T> {
 impl<T> MergedConfigLoaderOrDumper<T> {
     pub fn finish(self) -> Option<T> {
         self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlobStorageConfig, S3BlobStorageConfig};
+    use figment::Figment;
+    use figment::providers::{Format, Toml};
+    use test_r::test;
+
+    #[test]
+    fn s3_blob_storage_accepts_separate_snapshot_buckets() {
+        let config = S3BlobStorageConfig {
+            custom_data_bucket: "agent-data".to_string(),
+            filesystem_snapshots_bucket: "agent-snapshots".to_string(),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn blob_storage_defaults_are_valid() {
+        for config in [
+            BlobStorageConfig::default(),
+            BlobStorageConfig::default_s3(),
+            BlobStorageConfig::default_in_memory(),
+        ] {
+            config.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn blob_storage_config_files_and_examples_are_valid() {
+        for (name, source, has_s3_example) in [
+            (
+                "worker-executor",
+                include_str!("../../golem-worker-executor/config/worker-executor.toml"),
+                true,
+            ),
+            (
+                "registry-service",
+                include_str!("../../golem-registry-service/config/registry-service.toml"),
+                false,
+            ),
+            (
+                "component-compilation-service",
+                include_str!(
+                    "../../golem-component-compilation-service/config/component-compilation-service.toml"
+                ),
+                true,
+            ),
+        ] {
+            let config: BlobStorageConfig = Figment::new()
+                .merge(Toml::string(source))
+                .extract_inner("blob_storage")
+                .unwrap();
+            config.validate().unwrap();
+
+            let mut found_s3_example = false;
+            for example in source.split("# [blob_storage]").skip(1) {
+                let section = example
+                    .lines()
+                    .take_while(|line| {
+                        !line.starts_with("# [") || line.starts_with("# [blob_storage.")
+                    })
+                    .filter_map(|line| line.strip_prefix("# "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let config: BlobStorageConfig = Figment::new()
+                    .merge(Toml::string(&format!("[blob_storage]\n{section}")))
+                    .extract_inner("blob_storage")
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                config
+                    .validate()
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                found_s3_example |= matches!(config, BlobStorageConfig::S3(_));
+            }
+            assert_eq!(
+                found_s3_example, has_s3_example,
+                "{name}: S3 example coverage"
+            );
+        }
+    }
+
+    #[test]
+    fn s3_blob_storage_rejects_shared_snapshot_bucket() {
+        let config = S3BlobStorageConfig {
+            custom_data_bucket: "shared-bucket".to_string(),
+            filesystem_snapshots_bucket: "shared-bucket".to_string(),
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("filesystem_snapshots_bucket"), "{error}");
+        assert!(error.contains("custom_data_bucket"), "{error}");
     }
 }
