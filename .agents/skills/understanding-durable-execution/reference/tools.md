@@ -198,6 +198,18 @@ a handler is not operation cancellation (`tool/operation/mod.rs`). The entity `E
 completion, not full descendant settlement. A forward-only parent may record its `End` first to
 release nested filesystem work; its resources and admitted children remain retained.
 
+At the finished-body handoff, a separate executor-tracked retained task owns the Store/context
+and slot registration. Completion resources carry commands and a destruction join, never the
+Store. Normal preparation runs before terminal resolution; permit release precedes descendant
+settlement. Fencing cancels retained work both while idle and inside preparation or consuming
+settlement. Observer loss and executor shutdown also reclaim it. Cancellation drops the callback
+future first, then the Store/context, then the registration; registration destruction is the sole
+slot-removal event. Slot drainage therefore waits for physical destruction, not body completion.
+Explicit failure release completes the permit, requests disposal and joins destruction before
+group drainage; it never runs normal settlement on the disposed Store. This starts at the
+existing finished-body handoff and does not change body abort or pre-failure arbitration. It
+records no entity terminal or EOF and does not turn a stuck synchronous destructor into success.
+
 The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task.
 Destroying a healthy ancestor Store may drop its result observer but cannot drop the global
 settlement wait or primary wakeup. Replay-generation reset and owner retirement join the retained

@@ -97,9 +97,12 @@ const build = async (fixture: string, execute = true) => {
     const modules = Object.entries(chunk.modules)
       .filter(([, info]) => info.renderedLength > 0)
       .map(([id]) => id.replace(sdk + "/", ""))
-    const hosts = new Map<string, unknown>([["effect", EffectRuntime]])
+    const hosts = new Map<string, unknown>([
+      ["effect", EffectRuntime],
+      ["node:fs", { existsSync }],
+    ])
     for (const id of new Set([...chunk.imports, ...chunk.dynamicImports])) {
-      if (id === "effect") continue
+      if (hosts.has(id)) continue
       const alias = (config.resolve!.alias as Array<{ find: string; replacement: string }>).find(
         (a) => a.find === id,
       )

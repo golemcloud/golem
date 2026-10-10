@@ -21,6 +21,88 @@ import zio.test._
 
 object SnapshotMacroCompileErrorsSpec extends ZIOSpecDefault {
   def spec = suite("SnapshotMacroCompileErrorsSpec")(
+    test("multipart saver requires paired static companion loader") {
+      val errors: List[Error] = typeCheckErrors("""
+        import golem.*
+        import golem.runtime.*
+        import golem.runtime.annotations.*
+        import golem.runtime.autowire.AgentImplementation
+        import scala.concurrent.Future
+        @agentDefinition(snapshotting = "enabled")
+        trait A extends BaseAgent { class Id() }
+        @agentImplementation()
+        final class Impl() extends A {
+          def saveSnapshotParts(): Future[MultipartSnapshot] = ???
+        }
+        AgentImplementation.registerClass[A, Impl]
+      """)
+      assertTrue(errors.exists(_.message.contains("instance saveSnapshotParts")))
+    },
+    test("multipart loader rejects wrong payload signature") {
+      val errors: List[Error] = typeCheckErrors("""
+        import golem.*
+        import golem.runtime.*
+        import golem.runtime.annotations.*
+        import golem.runtime.autowire.AgentImplementation
+        import scala.concurrent.Future
+        @agentDefinition(snapshotting = "enabled")
+        trait A extends BaseAgent { class Id() }
+        @agentImplementation()
+        final class Impl() extends A {
+          def saveSnapshotParts(): Future[MultipartSnapshot] = ???
+        }
+        object Impl {
+          def loadSnapshotParts(bytes: Array[Byte], context: SnapshotRestoreContext): Future[Impl] = ???
+        }
+        AgentImplementation.registerClass[A, Impl]
+      """)
+      assertTrue(errors.exists(_.message.contains("instance saveSnapshotParts")))
+    },
+    test("multipart and byte hooks cannot be combined") {
+      val errors: List[Error] = typeCheckErrors("""
+        import golem.*
+        import golem.runtime.*
+        import golem.runtime.annotations.*
+        import golem.runtime.autowire.AgentImplementation
+        import scala.concurrent.Future
+        @agentDefinition(snapshotting = "enabled")
+        trait A extends BaseAgent { class Id() }
+        @agentImplementation()
+        final class Impl() extends A {
+          def saveSnapshot(): Future[Array[Byte]] = ???
+          def saveSnapshotParts(): Future[MultipartSnapshot] = ???
+        }
+        object Impl {
+          def loadSnapshot(bytes: Array[Byte], context: SnapshotRestoreContext): Future[Impl] = ???
+          def loadSnapshotParts(snapshot: MultipartSnapshot, context: SnapshotRestoreContext): Future[Impl] = ???
+        }
+        AgentImplementation.registerClass[A, Impl]
+      """)
+      assertTrue(errors.exists(_.message.contains("cannot be combined")))
+    },
+    test("multipart and explicitly selected Snapshotted cannot be combined") {
+      val errors: List[Error] = typeCheckErrors("""
+        import golem.*
+        import golem.runtime.*
+        import golem.runtime.annotations.*
+        import golem.runtime.autowire.AgentImplementation
+        import scala.concurrent.Future
+        import zio.blocks.schema.Schema
+        final case class State(value: Int) derives Schema
+        @agentDefinition(snapshotting = "enabled")
+        trait A extends BaseAgent { class Id() }
+        @agentImplementation()
+        final class Impl() extends A with Snapshotted[State] {
+          var state = State(0)
+          def saveSnapshotParts(): Future[MultipartSnapshot] = ???
+        }
+        object Impl {
+          def loadSnapshotParts(snapshot: MultipartSnapshot, context: SnapshotRestoreContext): Future[Impl] = ???
+        }
+        AgentImplementation.registerClass[A, Impl]
+      """)
+      assertTrue(errors.exists(_.message.contains("cannot be combined")))
+    },
     test("instance save without companion load reports the required pair") {
       val errors: List[Error] = typeCheckErrors("""
         import golem.*

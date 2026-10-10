@@ -58,8 +58,7 @@ use golem_common::model::oplog::{
     AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
-    OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -490,7 +489,7 @@ pub trait InvocationHooks {
     /// Called when a worker is about to be invoked
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        invocation: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.

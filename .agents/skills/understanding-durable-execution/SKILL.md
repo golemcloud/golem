@@ -809,6 +809,17 @@ result and waits for the commit receipt before waiters are notified. Durable age
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
 reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+
+The live loop hydrates an ordinary invocation from its committed Pending entry into an
+executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its
+cached serialized bytes, instead of serializing and uploading the payload again. Lowering uses
+a separate invocation clone and cannot replace the retained original payload. This does not
+reuse the Pending context or wallet pins: the start hook checks current authority, records the
+executing context and current wallet pin, and commits Started with `CommitLevel::Always` before
+guest execution. `ManualUpdate` takes its separate snapshot path and does not pass its Pending
+payload to this hook. Fork rehomes both references into the target owner; archive and revert do
+not individually delete a referenced payload blob.
+
 During replay the recorded result is compared with the recomputed one
 (`replay_equivalent`); a mismatch is an `unexpected_oplog_entry` determinism error. Tail work
 (`durable_host/tail_work.rs`) keeps the store loop running until no spawned task is still
@@ -983,6 +994,24 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
 
+Before loading a pending target, Worker validates its cached metadata with
+`services/component.rs::component_support_error`. Admission uses the same support policy.
+An unsupported target fails through `RawStartError::TargetUnsupported(reason)` with
+`UPDATE_TARGET_REFUSED`, preserving the reason, attempt index and assisted details without a
+snapshot fault or rejection. The current policy rejects WebAssembly threads (shared linear
+memory). Admission charges the source revision for an unsupported target, so an oversized
+target cannot park the agent before the refusal. After committing the refusal, startup releases
+the old memory admission and re-admits the next queued target, or reconstructs the source if no
+update remains. This restart does not consume the out-of-memory retry budget.
+
+Component compilation runs in a blocking task. A cancelled join becomes `Interrupted(Restart)`;
+a panicked join becomes `Runtime`. `RawStartError::TargetLoad` passes these executor failures
+through for every pending update, unlike metadata-fetch failures. Worker converts a passed
+target-load `Runtime` to `RecoveryRequired`, so the invocation loop retries with infrastructure
+backoff without consuming the invocation retry budget. Interruption keeps its exact kind, and
+retirement or a pending terminal interrupt still stops reconstruction. Ordinary parse errors
+remain target failures; generic metadata and instantiation errors keep their existing outcomes.
+
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
 agent differ from its initial files.
@@ -991,7 +1020,7 @@ Transient causes write no failed update, and the start retries: for every pendin
 `RestoreClass::Transient`, a reconstruction error, a full quota, an interrupted instantiation and
 the load's `Retry`; for an assisted head also `RecoveryRequired` and `Interrupted`, so a frozen
 assisted head retries with the same `S`; for a plain automatic head also `RecoveryRequired` (a
-store failure of the baseline payload). An `Interrupted` error that reaches `decide` fails a plain
+store failure of the baseline payload). A replay `Interrupted` error that reaches `decide` fails a plain
 automatic update with `UPDATE_REPLAY_FAILED`, and `RecoveryRequired` or `Interrupted` fail a
 pending manual update. A plain automatic head whose authoritative baseline does not restore
 (`Disabled`, `Restore(Lost | Fixed | DiskFull)`) takes the cell of that baseline: the start fails
@@ -1223,6 +1252,17 @@ or of the stat of an object classified as immutable, traps the invocation so a r
 a different oplog shape. The host-call observation counter is still incremented on the successful
 fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
 the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
+
+Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
+capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
+filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
+return `not-permitted` without invalidation when a failed writable open rechecks a read-only regular
+file, or a failed hard link rechecks a directory at the source without following the final symlink.
+A failed cleanup prevents either policy recheck from replacing the storage failure. A failed recheck
+or an object that does not establish that guest-policy refusal leaves the original permission failure
+terminal. These rechecks use the current object and do not identify the object
+that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` and the permission
+failure table in the executor walkthrough.
 
 ## Concurrency and guest completion delivery
 

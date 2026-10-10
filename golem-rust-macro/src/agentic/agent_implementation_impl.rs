@@ -22,6 +22,13 @@ use crate::agentic::helpers::{
 use crate::rpc_client_common::{Asyncness, FunctionOutputInfo, get_asyncness, is_static_method};
 use syn::visit_mut::VisitMut;
 
+#[derive(Clone, Copy)]
+enum SnapshotMode {
+    Auto,
+    Bytes,
+    Multipart,
+}
+
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = match parse_impl_block(&item) {
         Ok(b) => b,
@@ -87,7 +94,37 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         .into();
     }
 
-    let has_custom_snapshot = has_load_snapshot && has_save_snapshot;
+    let has_parts_hook = |name: &str| {
+        impl_block
+            .items
+            .iter()
+            .any(|item| matches!(item, syn::ImplItem::Fn(method) if method.sig.ident == name))
+    };
+    let has_load_parts = has_parts_hook("load_snapshot_parts");
+    let has_save_parts = has_parts_hook("save_snapshot_parts");
+    if has_load_parts != has_save_parts {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "Both load_snapshot_parts and save_snapshot_parts must be implemented together",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if has_load_parts && has_load_snapshot {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "Byte and multipart snapshot hooks cannot be combined",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let snapshot_mode = if has_load_parts {
+        SnapshotMode::Multipart
+    } else if has_load_snapshot {
+        SnapshotMode::Bytes
+    } else {
+        SnapshotMode::Auto
+    };
 
     let ctor_ident = &constructor_method.sig.ident;
 
@@ -104,7 +141,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &impl_generics,
         &ty_generics,
         where_clause,
-        has_custom_snapshot,
+        snapshot_mode,
     );
 
     let constructor_kind = get_asyncness(&constructor_method.sig);
@@ -138,7 +175,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &constructor_param_extraction,
         self_ty,
         &trait_path,
-        has_custom_snapshot,
+        snapshot_mode,
     );
 
     let register_initiator_fn = generate_register_initiator_fn(
@@ -240,7 +277,11 @@ fn build_match_arms(
                 continue;
             }
 
-            if method.sig.ident == "load_snapshot" || method.sig.ident == "save_snapshot" {
+            if method.sig.ident == "load_snapshot"
+                || method.sig.ident == "save_snapshot"
+                || method.sig.ident == "load_snapshot_parts"
+                || method.sig.ident == "save_snapshot_parts"
+            {
                 continue;
             }
 
@@ -375,26 +416,31 @@ fn generate_base_agent_impl(
     impl_generics: &syn::ImplGenerics<'_>,
     ty_generics: &syn::TypeGenerics<'_>,
     where_clause: Option<&syn::WhereClause>,
-    has_custom_snapshot: bool,
+    snapshot_mode: SnapshotMode,
 ) -> proc_macro2::TokenStream {
     let self_ty = &impl_block.self_ty;
 
-    let snapshot_impl = if has_custom_snapshot {
-        quote! {
-            async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
-                let data = self.save_snapshot().await?;
-                Ok(golem_rust::agentic::SnapshotData {
-                    data,
-                    mime_type: "application/octet-stream".to_string(),
-                })
+    let snapshot_impl = match snapshot_mode {
+        SnapshotMode::Multipart => quote! {
+              async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                  self.save_snapshot_parts().await?.try_into()
+              }
+        },
+        SnapshotMode::Bytes => {
+            quote! {
+                async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                    let data = self.save_snapshot().await?;
+                    Ok(golem_rust::agentic::SnapshotData::Bytes(data))
+                }
             }
         }
-    } else {
-        quote! {
-            async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
-                use golem_rust::agentic::snapshot_auto::SnapshotSaveFallback;
-                let helper = golem_rust::agentic::snapshot_auto::SaveHelper(self);
-                helper.snapshot_save()
+        SnapshotMode::Auto => {
+            quote! {
+                async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                    use golem_rust::agentic::snapshot_auto::SnapshotSaveFallback;
+                    let helper = golem_rust::agentic::snapshot_auto::SaveHelper(self);
+                    helper.snapshot_save()
+                }
             }
         }
     };
@@ -467,13 +513,22 @@ fn generate_initiator_impl(
     constructor_param_extraction: &proc_macro2::TokenStream,
     self_ty: &syn::Type,
     trait_path: &syn::Path,
-    has_custom_snapshot: bool,
+    snapshot_mode: SnapshotMode,
 ) -> proc_macro2::TokenStream {
-    let restore = if has_custom_snapshot {
-        quote! { <#self_ty as #trait_path>::load_snapshot(snapshot, context).await? }
-    } else {
-        quote! {
-            <#self_ty as #trait_path>::__golem_auto_load_snapshot(&snapshot)?
+    let restore = match snapshot_mode {
+        SnapshotMode::Multipart => quote! {
+          let snapshot: golem_rust::agentic::MultipartSnapshot = snapshot.try_into()?;
+          <#self_ty as #trait_path>::load_snapshot_parts(snapshot, context).await?
+        },
+        SnapshotMode::Bytes => quote! {
+          let golem_rust::agentic::SnapshotData::Bytes(snapshot) = snapshot else { return Err("expected byte snapshot".to_string()); };
+          <#self_ty as #trait_path>::load_snapshot(snapshot, context).await?
+        },
+        SnapshotMode::Auto => {
+            quote! {
+                let golem_rust::agentic::SnapshotData::Json(snapshot) = snapshot else { return Err("expected JSON snapshot".to_string()); };
+                <#self_ty as #trait_path>::__golem_auto_load_snapshot(&snapshot)?
+            }
         }
     };
     quote! {
@@ -488,10 +543,10 @@ fn generate_initiator_impl(
 
             async fn restore(
                 &self,
-                snapshot: Vec<u8>,
+                snapshot: golem_rust::agentic::SnapshotData,
                 context: golem_rust::agentic::SnapshotRestoreContext,
             ) -> Result<golem_rust::agentic::ResolvedAgent, String> {
-                let restored = #restore;
+                let restored = { #restore };
                 Ok(golem_rust::agentic::ResolvedAgent::new(Box::new(restored)))
             }
         }

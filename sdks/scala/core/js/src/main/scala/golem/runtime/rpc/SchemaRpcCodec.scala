@@ -281,8 +281,15 @@ private[golem] object SchemaRpcCodec {
   /**
    * Encode `value` into a self-contained `typed-schema-value` (graph + value).
    */
-  def encodeTyped[A](value: A)(implicit into: IntoSchema[A]): JsTypedSchemaValue =
-    SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(into.toTyped(value)))
+  def encodeTyped[A](value: A)(implicit into: IntoSchema[A]): JsTypedSchemaValue = {
+    val model = into.toTyped(value)
+    val graph = into.wireGraph
+    val tree  = SchemaWire.schemaValueToWit(model.value)
+    JsTypedSchemaValue(
+      SchemaWireInterop.graphToJs(graph),
+      SchemaWireInterop.valueTreeToJs(tree)
+    )
+  }
 
   /** Decode a `typed-schema-value` back into `A` using `FromSchema[A]`. */
   def decodeTyped[A](typed: JsTypedSchemaValue)(implicit from: FromSchema[A]): Either[String, A] =

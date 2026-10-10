@@ -9,8 +9,7 @@
  *   bound to a previously-allocated host promise. Used by
  *   `src/webhook.ts:create`.
  * - `golem:api/host@1.5.0.getSelfMetadata` — reads the running agent's
- *   full metadata. Used by the agent dispatcher to capture the
- *   structured `SelfAgentId` once at agent-init time, and by
+ *   full metadata. Used by the uncached `SelfAgentId` effect and by
  *   `src/agents.ts:getSelfMetadata` for user-facing reads.
  * - `golem:api/host@1.5.0.getAgentMetadata` / `updateAgent` /
  *   `forkAgent` / `revertAgent` / `fork` — agent-lifecycle calls used

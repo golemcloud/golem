@@ -47,7 +47,81 @@ inherit_test_dep!(
     #[tagged_as("agent_update_v1")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn self_revert_is_rejected_without_stopping_the_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("GolemHostApi", "self-revert");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    for (method, target) in [
+        ("revert_agent_result", 1u64),
+        ("revert_last_invocations_result", 1u64),
+        ("revert_last_invocations_result", u64::MAX),
+    ] {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            executor.invoke_and_await_agent(
+                &component,
+                &agent,
+                method,
+                data_value!(worker.clone(), target),
+            ),
+        )
+        .await??
+        .into_typed::<Result<(), String>>()?;
+        assert!(
+            result.unwrap_err().contains("Self-revert is not supported"),
+            "self rejection must precede count resolution"
+        );
+        let metadata = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "get_self_metadata_result",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(metadata, Ok(agent.to_string()));
+    }
+
+    executor.simulated_crash(&worker).await?;
+    let metadata = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "get_self_metadata_result",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(metadata, Ok(agent.to_string()));
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Revert { .. }))
+    );
+    Ok(())
+}
 
 #[test]
 #[tracing::instrument]

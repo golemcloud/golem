@@ -37,9 +37,6 @@ impl<T: serde::Serialize> SaveHelper<'_, T> {
     pub fn snapshot_save(&self) -> Result<super::SnapshotData, String> {
         let data = serde_json::to_vec(self.0)
             .map_err(|e| format!("Failed to serialize agent snapshot: {}", e))?;
-        Ok(super::SnapshotData {
-            data,
-            mime_type: "application/json".to_string(),
-        })
+        Ok(super::SnapshotData::Json(data))
     }
 }
