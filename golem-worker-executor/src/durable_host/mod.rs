@@ -250,6 +250,7 @@ use golem_common::model::invocation_context::{
     InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
+use golem_common::model::oplog::payload::types::SerializableWebsocketReconstructionPolicy;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
     OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, SnapshotAssistedUpdateDetails,
@@ -4880,10 +4881,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rep: u32,
         url: String,
         headers: Option<Vec<(String, String)>>,
+        reconstruction_policy: SerializableWebsocketReconstructionPolicy,
     ) {
-        self.state
-            .open_websocket_connections
-            .insert(rep, WebSocketConnectionState { url, headers });
+        self.state.open_websocket_connections.insert(
+            rep,
+            WebSocketConnectionState {
+                url,
+                headers,
+                reconstruction_policy,
+            },
+        );
     }
 
     /// Returns `Ok(())` if the host is in normal strictness mode, or if the host is in read-only
@@ -4938,6 +4945,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|state| WebSocketConnectionInfo {
                 url: state.url.clone(),
                 headers: state.headers.clone(),
+                reconstruction_policy: state.reconstruction_policy,
             })
     }
 
@@ -10804,12 +10812,14 @@ pub(crate) struct TcpTakenStreams {
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
+    pub reconstruction_policy: SerializableWebsocketReconstructionPolicy,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionInfo {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
+    pub reconstruction_policy: SerializableWebsocketReconstructionPolicy,
 }
 
 struct CardEventBoundaryScan {

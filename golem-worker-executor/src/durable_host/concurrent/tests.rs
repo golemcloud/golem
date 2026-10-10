@@ -439,6 +439,35 @@ async fn completion_delivery_suppress_records_no_marker() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn replay_discarded_accessor_delivery_waits_for_cancellation_after_restoration() {
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, None::<u32>);
+
+    store
+        .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+            // The caller restores its taken resource before reaching the delivery boundary.
+            let token = CompletionDelivery::replay_discarded();
+            accessor.with(|mut store| *store.data_mut() = Some(42));
+            let mut delivery = Box::pin(token.deliver_at_accessor_terminal(accessor));
+            assert!(
+                futures::poll!(&mut delivery).is_pending(),
+                "a discarded completion must not return its result to the guest"
+            );
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            // Cancelling the host future must leave the restored resource available.
+            drop(delivery);
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            Ok(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
 async fn completion_delivery_delivered_records_marker_via_drain() {
     // The successful guest handoff is itself durable. Queueing the marker is synchronous; the
     // receipt and permit remain in the drain queue until the append completes.

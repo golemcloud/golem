@@ -512,7 +512,8 @@ impl CompletionDelivery {
     /// lets a markerless `End` be tail-gated on replay — a completion consumed host-internally
     /// would legitimize durable tail entries that depend on an unmarked delivery.
     ///
-    /// Non-live tokens (replay and unpersisted calls) settle immediately; if the
+    /// Recorded discarded completions stay pending until cancellation, after the caller has
+    /// restored its resources. Unpersisted calls settle immediately; if the
     /// accessor has no guest-visible host subtask (e.g. a spawned background task), the token
     /// settles without a marker, matching the pre-observer behavior of consuming it at the host
     /// return. A tail-gated markerless replay token checks for that subtask *before* gating:
@@ -540,6 +541,11 @@ impl CompletionDelivery {
         T: 'static,
         D: HasData + ?Sized,
     {
+        if self.is_replay_discarded() {
+            // The caller has restored its resources after replaying the terminal. Withhold
+            // the discarded result until cancellation tears down this delivery future.
+            return std::future::pending().await;
+        }
         if matches!(
             &self.state,
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(_))

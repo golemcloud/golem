@@ -27,6 +27,7 @@ const WS_TAGS = new Set<WsClient.Error['tag']>([
   'send-failure',
   'receive-failure',
   'protocol-error',
+  'session-lost',
   'closed',
   'other',
 ]);
@@ -56,7 +57,7 @@ const extractWsError = (e: unknown): TaggedWsError | undefined => {
 /**
  * Raised when any host call into `golem:websocket/client@1.5.0` traps. The
  * `tag` mirrors the WIT `error` variant (`connection-failure` / `send-failure`
- * / `receive-failure` / `protocol-error` / `closed` / `other`) when it can be
+ * / `receive-failure` / `protocol-error` / `session-lost` / `closed` / `other`) when it can be
  * recovered from the thrown value, otherwise `undefined`. For a `closed`
  * error, {@link closeInfo} carries the host's close code / reason if present.
  */
@@ -118,6 +119,12 @@ export type WebSocketMessage =
 
 /** Options for {@link connectWebsocket}. */
 export interface ConnectOptions {
+  /**
+   * Reconstruction behavior after recovery. Absence uses the host default.
+   * @since 1.6.0
+   * @category models
+   */
+  readonly reconstructionPolicy?: WsClient.ReconstructionPolicy | undefined;
   /**
    * Headers forwarded verbatim to the host's `connect(url, headers)` — auth
    * tokens, `Sec-WebSocket-Protocol` subprotocols, etc.
@@ -191,7 +198,11 @@ export async function connectWebsocket(
   options?: ConnectOptions,
 ): Promise<WebSocketHandle> {
   const conn = wrap('connect', () =>
-    WsClient.WebsocketConnection.connect(url, toHostHeaders(options?.headers)),
+    WsClient.WebsocketConnection.connect(
+      url,
+      toHostHeaders(options?.headers),
+      options?.reconstructionPolicy ?? undefined,
+    ),
   );
   return makeHandle(conn);
 }

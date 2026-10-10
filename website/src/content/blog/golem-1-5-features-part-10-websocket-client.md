@@ -74,7 +74,7 @@ class ExampleAgent extends BaseAgent {
 #[agent_implementation]
 impl ExampleAgent for ExampleAgentImpl {
     async fn run() -> Result<(), WebSocketError> {
-        let ws = WebsocketConnection::connect("wss://example.com/chat", None)?;
+        let ws = WebsocketConnection::connect("wss://example.com/chat", None, None)?;
         println!("Connected");
 
         ws.send(&WebSocketMessage::Text("Hello, server!".to_string()))?;
@@ -133,7 +133,7 @@ case class ExampleAgentImpl() extends ExampleAgent {
 ```moonbit
 pub fn ExampleAgent::run(self : Self) -> Unit raise @common.AgentError {
   let conn = match @websocket_client.WebsocketConnection::connect(
-    "wss://example.com/chat", None,
+    "wss://example.com/chat", None, None,
   ) {
     Ok(c) => c
     Err(e) => raise @common.AgentError::InvalidInput("Connect failed: \{e}")

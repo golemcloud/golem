@@ -33,12 +33,14 @@ import * as WsMock from "../mocks/golem-websocket-client.js"
 export type WsResponder = (
   url: string,
   headers: [string, string][] | undefined,
+  reconstructionPolicy: WsClient.ReconstructionPolicy | undefined,
 ) => WsMock.WebsocketConnection
 
 /** Recorded entry per `WebsocketClient.connect(...)` call. */
 export interface WsConnectCall {
   readonly url: string
   readonly headers: [string, string][] | undefined
+  readonly reconstructionPolicy: WsClient.ReconstructionPolicy | undefined
 }
 
 export interface WsFake {
@@ -78,9 +80,9 @@ export const make: Effect.Effect<WsFake> = Effect.sync(() => {
   const layer = Layer.succeed(
     WebsocketClient,
     WebsocketClient.of({
-      connect: (url, headers) => {
+      connect: (url, headers, reconstructionPolicy) => {
         // Record the call up front so even failure cases are visible.
-        recorded.push({ url, headers })
+        recorded.push({ url, headers, reconstructionPolicy })
         if (Option.isSome(nextError)) {
           const err = nextError.value
           nextError = Option.none()
@@ -94,7 +96,11 @@ export const make: Effect.Effect<WsFake> = Effect.sync(() => {
         // `Pollable` class brand. Cast through `unknown` to bridge
         // the nominal vs. structural gap; the runtime behaviour is
         // exercised in full by the surrounding tests.
-        return responder(url, headers) as unknown as WsClient.WebsocketConnection
+        return responder(
+          url,
+          headers,
+          reconstructionPolicy,
+        ) as unknown as WsClient.WebsocketConnection
       },
     }),
   )
