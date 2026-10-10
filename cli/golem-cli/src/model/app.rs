@@ -2551,6 +2551,12 @@ impl Layer for ComponentLayer {
                 properties.config_schema.value().clone(),
             );
 
+            value.node_http_routers.apply_layer(
+                id,
+                selection,
+                properties.node_http_routers.value().clone(),
+            );
+
             value
                 .config
                 .apply_layer(id, selection, properties.config.value().clone());
@@ -2861,6 +2867,8 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
+    pub node_http_routers:
+        OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
     pub config: JsonProperty<ComponentLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2901,6 +2909,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
             config_schema: value.config_schema.into(),
+            node_http_routers: value.node_http_routers.into(),
             config: value.agent_properties.config.into(),
             initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
@@ -2927,6 +2936,7 @@ impl ComponentLayerProperties {
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
         self.config_schema.compact_trace();
+        self.node_http_routers.compact_trace();
         self.config.compact_trace();
         self.initial_card.compact_trace();
         self.env.compact_trace();
@@ -3580,6 +3590,19 @@ impl ComponentProperties {
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
 
+        let routers = merged.node_http_routers.value().clone().unwrap_or_default();
+        let routers =
+            serde_json::to_string(&routers).expect("router configuration is serializable");
+        let mut build = merged.build.value().clone();
+        for command in &mut build {
+            if let app_raw::BuildCommand::External(command) = command {
+                // A reserved build input, not an environment variable of deployed agents.
+                command
+                    .env
+                    .insert("GOLEM_NODE_HTTP_ROUTERS".to_string(), routers.clone());
+            }
+        }
+
         let properties = Self {
             dir,
             component_dir,
@@ -3590,7 +3613,7 @@ impl ComponentProperties {
                 merged.dependency_agents.value(),
                 merged.dependency_tools.value(),
             ),
-            build: merged.build.value().clone(),
+            build,
             custom_commands: merged
                 .custom_commands
                 .value()
@@ -6015,6 +6038,60 @@ mod test {
                 "app:main[debug]".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn node_http_router_layers_replace_clear_and_reserve_build_configuration() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            componentTemplates:
+              base:
+                nodeHttpRouters:
+                  "3000": { name: Template, mount: /template }
+                build:
+                  - command: npx rollup -c
+                    env: { GOLEM_NODE_HTTP_ROUTERS: authored, OTHER: retained }
+                presets:
+                  inherited: {}
+                  debug:
+                    nodeHttpRouters:
+                      "3001": { name: Preset, mount: /preset, auth: true }
+                  cleared:
+                    nodeHttpRouters: {}
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+        "# };
+        for (preset, expected) in [
+            (
+                None,
+                serde_json::json!({"3000": {"name": "Template", "mount": "/template"}}),
+            ),
+            (
+                Some("debug"),
+                serde_json::json!({"3001": {"name": "Preset", "mount": "/preset", "auth": true}}),
+            ),
+            (Some("cleared"), serde_json::json!({})),
+        ] {
+            let selected = preset.into_iter().collect::<Vec<_>>();
+            let (app, _) = load_app_for_env(source, "local", &selected);
+            let name = parse_component_name("app:main");
+            let component = app.component(&name);
+            let app_raw::BuildCommand::External(command) = &component.build_commands()[0] else {
+                panic!("external command expected")
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&command.env["GOLEM_NODE_HTTP_ROUTERS"])
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(command.env["OTHER"], "retained");
+            assert!(!component.env().contains_key("GOLEM_NODE_HTTP_ROUTERS"));
+        }
     }
 
     #[test]

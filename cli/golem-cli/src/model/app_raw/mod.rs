@@ -860,6 +860,39 @@ impl ComponentDependencies {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeHttpRouter {
+    pub name: String,
+    pub mount: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cors: Option<Vec<String>>,
+}
+
+fn deserialize_node_http_routers<'de, D>(
+    deserializer: D,
+) -> Result<Option<IndexMap<String, NodeHttpRouter>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let routers = Option::<IndexMap<String, NodeHttpRouter>>::deserialize(deserializer)?;
+    if let Some(routers) = &routers {
+        for port in routers.keys() {
+            if !port
+                .parse::<u16>()
+                .is_ok_and(|value| value > 0 && value.to_string() == *port)
+            {
+                return Err(serde::de::Error::custom(
+                    "nodeHttpRouters keys must be canonical decimal ports from 1 to 65535",
+                ));
+            }
+        }
+    }
+    Ok(routers)
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
@@ -877,6 +910,12 @@ pub struct ComponentTemplate {
     pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_node_http_routers"
+    )]
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -918,6 +957,7 @@ impl ComponentTemplate {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
+            node_http_routers: self.node_http_routers.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
@@ -952,6 +992,12 @@ pub struct Component {
     pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_node_http_routers"
+    )]
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -993,6 +1039,7 @@ impl Component {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
+            node_http_routers: self.node_http_routers.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
@@ -1025,6 +1072,12 @@ pub struct ComponentPreset {
     pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
     pub dependencies: ComponentDependencies,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_node_http_routers"
+    )]
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1064,6 +1117,7 @@ impl ComponentPreset {
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
             dependencies: self.dependencies,
+            node_http_routers: self.node_http_routers,
             build_merge_mode: self.build_merge_mode,
             build: self.build,
             custom_commands: self.custom_commands,
@@ -1683,6 +1737,7 @@ pub struct ComponentLayerProperties {
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
     pub dependencies: ComponentDependencies,
+    pub node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,

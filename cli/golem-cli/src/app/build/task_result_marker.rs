@@ -44,8 +44,8 @@ pub trait TaskResultMarkerHashSource {
     ///
     /// If id() returns None, then the source will be used as id.
     ///
-    /// Specifying the id is optional, as some tasks are their own identity, like external commands.
-    /// In those cases we can skip calculating values and hashes twice.
+    /// Specifying the id is optional when the complete input identifies the task.
+    /// Tasks that overwrite shared outputs need an identity independent of mutable inputs.
     ///
     /// The main difference between id and source is that it should not include
     /// generic "task properties", only ids for the task. E.g.: the hash_input for rpc linking
@@ -132,7 +132,11 @@ impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(&(
+            self.build_dir,
+            &self.command.command,
+            &self.command.targets,
+        ))?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -572,6 +576,39 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::tool_release::ToolReleaseId;
     use test_r::test;
+
+    #[test]
+    fn external_build_marker_tracks_shared_output_across_configuration_switches() {
+        let directory = tempfile::tempdir().unwrap();
+        let command = |mapping: &str| -> app_raw::ExternalCommand {
+            serde_json::from_value(serde_json::json!({
+                "command": "npx rollup -c",
+                "targets": ["main.js"],
+                "env": {"GOLEM_NODE_HTTP_ROUTERS": mapping}
+            }))
+            .unwrap()
+        };
+        let a = command("{\"3000\":{\"name\":\"A\",\"mount\":\"/a\"}}");
+        let b = command("{\"3000\":{\"name\":\"B\",\"mount\":\"/b\"}}");
+        let marker = |command| {
+            TaskResultMarker::new(
+                directory.path(),
+                ResolvedExternalCommandMarkerHash {
+                    build_dir: Path::new("component"),
+                    command,
+                },
+            )
+            .unwrap()
+        };
+        assert!(!marker(&a).is_up_to_date());
+        marker(&a).success().unwrap();
+        assert!(marker(&a).is_up_to_date());
+        assert!(!marker(&b).is_up_to_date());
+        marker(&b).success().unwrap();
+        assert!(!marker(&a).is_up_to_date());
+        marker(&a).success().unwrap();
+        assert!(marker(&a).is_up_to_date());
+    }
 
     #[test]
     fn bridge_sdk_marker_hash_source_includes_bridge_mode() {

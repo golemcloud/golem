@@ -15,6 +15,17 @@ import {
   type HttpRequest,
 } from '../dist/http-router.mjs';
 import { z } from 'zod';
+import { createServer } from 'node:http';
+import {
+  defineHttpRouter as publicDefineHttpRouter,
+  nodeHttpHandler,
+} from '@golemcloud/golem-ts-sdk/http-router';
+
+const server = createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('Hello from Golem');
+});
+publicDefineHttpRouter('Web').mount('/').implementRaw(nodeHttpHandler(server));
 
 defineHttpRouter('TypedRouter', { config: { message: z.string() } })
   .mount('/web', { auth: true, cors: ['https://example.test'] })
