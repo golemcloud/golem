@@ -320,7 +320,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.10", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", branch = "gol804-websocket-current-generator", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"

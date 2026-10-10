@@ -14,12 +14,13 @@
 
 use crate::durable_host::authorization::targets::websocket_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, DeferredCallReplayOutcome, DurableCallSession,
-    LeaveIncompleteOnDrop, NotCancellable, authorize_live_permissions_at_serialized_access,
+    AccessClaimOptions, DeferredCallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop,
+    NotCancellable, authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::websocket::client::{
     CloseInfo, Error, Host, HostWebsocketConnection, HostWebsocketConnectionWithStore, Message,
+    ReconstructionPolicy,
 };
 use crate::workerctx::WorkerCtx;
 use futures::future::Either;
@@ -28,6 +29,7 @@ use futures::{SinkExt, StreamExt, pin_mut};
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::payload::types::{
     SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializableWebsocketReconstructionPolicy,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestWebsocketClose, HostRequestWebsocketConnect,
@@ -73,11 +75,13 @@ impl LiveWebSocketConnection {
 pub enum TerminalWebSocketError {
     ConnectionFailure(String),
     Closed(Option<SerializableWebsocketCloseInfo>),
+    SessionLost,
 }
 
 impl TerminalWebSocketError {
     fn to_error(&self) -> Error {
         match self {
+            Self::SessionLost => Error::SessionLost,
             Self::ConnectionFailure(reason) => Error::ConnectionFailure(reason.clone()),
             Self::Closed(close_info) => {
                 Error::Closed(close_info.as_ref().map(|close_info| CloseInfo {
@@ -121,6 +125,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
         accessor: &Accessor<U, Self>,
         url: String,
         headers: Option<Vec<(String, String)>>,
+        reconstruction_policy: Option<ReconstructionPolicy>,
     ) -> anyhow::Result<Result<Resource<WebSocketConnectionEntry>, Error>> {
         accessor.with(|mut access| {
             access
@@ -129,9 +134,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
         });
         let mut denied = false;
         let mut authorization_checked = false;
+        let reconstruction_policy = match reconstruction_policy {
+            None | Some(ReconstructionPolicy::ReconnectAutomatically) => {
+                SerializableWebsocketReconstructionPolicy::ReconnectAutomatically
+            }
+            Some(ReconstructionPolicy::ReportConnectionLoss) => {
+                SerializableWebsocketReconstructionPolicy::ReportConnectionLoss
+            }
+        };
         let request = HostRequestWebsocketConnect {
             url: url.clone(),
             headers: headers.clone(),
+            reconstruction_policy,
         };
         let mut call = DurableCallSession::<
             host_functions::WebsocketClientConnect,
@@ -177,6 +191,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                                     resource.rep(),
                                     url.clone(),
                                     headers.clone(),
+                                    reconstruction_policy,
                                 );
                                 Ok::<_, anyhow::Error>(resource)
                             })?;
@@ -265,7 +280,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 let pushed = accessor.with(|mut access| {
                     let ctx = access.get();
                     let resource = ctx.as_wasi_view().table().push(entry)?;
-                    ctx.register_open_websocket(resource.rep(), url.clone(), headers.clone());
+                    ctx.register_open_websocket(
+                        resource.rep(),
+                        url.clone(),
+                        headers.clone(),
+                        reconstruction_policy,
+                    );
                     Ok::<_, anyhow::Error>(resource)
                 });
                 let resource = match pushed {
@@ -537,10 +557,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 let _ = ctx.as_wasi_view().table().get(&self_)?;
                 Ok::<_, anyhow::Error>(())
             })?;
-            match call.replay_access(accessor, accessor.getter()).await? {
-                CallReplayOutcome::Replayed(resp) => {
+            match call
+                .replay_access_deferred(accessor, accessor.getter())
+                .await?
+            {
+                DeferredCallReplayOutcome::Replayed(resp, delivery) => {
                     let resp: HostResponseWebsocketReceiveResponse = resp;
-                    return match resp.result {
+                    let result = match resp.result {
                         Ok(m) => Ok(Ok(serializable_message_to_message(m))),
                         Err(e) => {
                             let error = serializable_error_to_error(e);
@@ -552,8 +575,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                             Ok(Err(error))
                         }
                     };
+                    delivery.deliver_at_accessor_terminal(accessor).await?;
+                    return result;
                 }
-                CallReplayOutcome::Incomplete(live) => call = live,
+                DeferredCallReplayOutcome::Incomplete(live) => call = live,
             }
         }
 
@@ -613,7 +638,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             Err(e) => Err(error_to_serializable(e)),
         };
         let resp = HostResponseWebsocketReceiveResponse { result: ser_result };
-        call.complete_access(accessor, accessor.getter(), resp)
+        let (_, delivery) = call
+            .complete_access_deferred(accessor, accessor.getter(), resp)
             .await?;
         if let Some(terminal_error) = live_result
             .as_ref()
@@ -623,6 +649,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             accessor
                 .with(|mut access| mark_websocket_terminal(access.get(), &self_, terminal_error))?;
         }
+        delivery.deliver_at_accessor_terminal(accessor).await?;
         Ok(live_result)
     }
 
@@ -654,10 +681,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 let _ = ctx.as_wasi_view().table().get(&self_)?;
                 Ok::<_, anyhow::Error>(())
             })?;
-            match call.replay_access(accessor, accessor.getter()).await? {
-                CallReplayOutcome::Replayed(resp) => {
+            match call
+                .replay_access_deferred(accessor, accessor.getter())
+                .await?
+            {
+                DeferredCallReplayOutcome::Replayed(resp, delivery) => {
                     let resp: HostResponseWebsocketReceiveWithTimeoutResponse = resp;
-                    return match resp.result {
+                    let result = match resp.result {
                         Ok(Some(m)) => Ok(Ok(Some(serializable_message_to_message(m)))),
                         Ok(None) => Ok(Ok(None)),
                         Err(e) => {
@@ -670,8 +700,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                             Ok(Err(error))
                         }
                     };
+                    delivery.deliver_at_accessor_terminal(accessor).await?;
+                    return result;
                 }
-                CallReplayOutcome::Incomplete(live) => call = live,
+                DeferredCallReplayOutcome::Incomplete(live) => call = live,
             }
         }
 
@@ -754,7 +786,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             Err(e) => Err(error_to_serializable(e)),
         };
         let resp = HostResponseWebsocketReceiveWithTimeoutResponse { result: ser_result };
-        call.complete_access(accessor, accessor.getter(), resp)
+        let (_, delivery) = call
+            .complete_access_deferred(accessor, accessor.getter(), resp)
             .await?;
         if let Some(terminal_error) = live_result
             .as_ref()
@@ -764,6 +797,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             accessor
                 .with(|mut access| mark_websocket_terminal(access.get(), &self_, terminal_error))?;
         }
+        delivery.deliver_at_accessor_terminal(accessor).await?;
         Ok(live_result)
     }
 }
@@ -963,6 +997,19 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         fresh.unwrap_or(info)
     };
 
+    if info.reconstruction_policy == SerializableWebsocketReconstructionPolicy::ReportConnectionLoss
+    {
+        accessor.with(|mut access| {
+            mark_websocket_reconnect_failure_terminal(
+                access.get(),
+                resource,
+                &gate,
+                TerminalWebSocketError::SessionLost,
+            )
+        })?;
+        return Ok(Err(Error::SessionLost));
+    }
+
     // The read-only side-effect trap fires earlier: every caller of this helper goes through
     // `DurableCallSession::start_access` with `WriteRemote` first, which routes through
     // `DurabilityHost::begin_durable_function` — the single central read-only guard.
@@ -1080,7 +1127,13 @@ fn mark_websocket_terminal<Ctx: WorkerCtx>(
     ctx.unregister_open_websocket(resource.rep());
     let mut view = ctx.as_wasi_view();
     let entry = view.table().get_mut(resource)?;
-    *entry = WebSocketConnectionEntry::Terminal(error);
+    // Recorded historical terminals must not revive or relabel a lost session.
+    if !matches!(
+        entry,
+        WebSocketConnectionEntry::Terminal(TerminalWebSocketError::SessionLost)
+    ) {
+        *entry = WebSocketConnectionEntry::Terminal(error);
+    }
     Ok(())
 }
 
@@ -1151,6 +1204,7 @@ async fn read_next_user_or_close(stream: &mut SplitStream<WsStream>) -> Result<M
 
 fn terminal_websocket_error(error: &Error) -> Option<TerminalWebSocketError> {
     match error {
+        Error::SessionLost => Some(TerminalWebSocketError::SessionLost),
         Error::ConnectionFailure(reason) => {
             Some(TerminalWebSocketError::ConnectionFailure(reason.clone()))
         }
@@ -1206,6 +1260,7 @@ fn error_to_serializable(e: &Error) -> SerializableWebsocketError {
             }
         })),
         Error::Other(s) => SerializableWebsocketError::Other(s.clone()),
+        Error::SessionLost => SerializableWebsocketError::SessionLost,
     }
 }
 
@@ -1220,6 +1275,7 @@ fn serializable_error_to_error(e: SerializableWebsocketError) -> Error {
             reason: ci.reason,
         })),
         SerializableWebsocketError::Other(s) => Error::Other(s),
+        SerializableWebsocketError::SessionLost => Error::SessionLost,
     }
 }
 

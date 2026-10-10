@@ -179,6 +179,13 @@ stages do not.
 | Effect | Ambiguous window | What Golem provides | What the application must provide |
 |---|---|---|---|
 | HTTP request | Between send and `End` | Re-execution policy via `DurableFunctionType`; atomic regions to group calls; an `idempotency-key` header derived from the call's durable position (`http/policy.rs`, on unless the guest set one) or minted via `golem:api/host.generate-idempotency-key` | A peer that deduplicates on the key; otherwise a safe-to-retry design |
-| TCP / WebSocket connection | Any crash | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
+| TCP connection | Any reconstruction | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
+| WebSocket connection | Suspend, restart, or crash | Recorded outcomes replay unchanged; optional third connect parameter defaults to `reconnect-automatically`, or `report-connection-loss` terminalizes a reconstructed successful handle with `SessionLost` at live access without a handshake | Reconnect / resume protocol, or supervise a new guest session generation with explicit connect and initialization; loss is not proof an earlier send was undelivered |
 | Filesystem, stdio | Any crash | Recorded stream chunks replay; live tail continues | Nothing for replay; effects outside the worker filesystem are the app's problem |
 | Key-value / blob store | Between write and `End` | Same as HTTP; writes are re-executable when idempotent by construction | Value-level idempotency for non-idempotent writes |
+
+WebSocket reconstruction policy does not change ordinary live disconnect retries. `close` on a
+lost handle returns loss without reconnecting, and drop only releases the resource. Incomplete
+non-idempotent scopes trap through the central recovery guard before either policy; an `End`
+entry alone does not complete an unfinished scope. Atomic rollback can remove the recorded
+connect and legitimately execute a fresh handshake.

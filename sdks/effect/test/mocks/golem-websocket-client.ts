@@ -33,6 +33,7 @@ export type CloseInfo = {
 }
 
 export type WsError =
+  | { tag: "session-lost" }
   | { tag: "connection-failure"; val: string }
   | { tag: "send-failure"; val: string }
   | { tag: "receive-failure"; val: string }
@@ -77,7 +78,11 @@ export class WebsocketConnection {
    * inside a unit test (i.e. someone forgot to provide a fake
    * `WebsocketClient`), the trap below makes the mistake visible.
    */
-  static connect(_url: string, _headers: [string, string][] | undefined): WebsocketConnection {
+  static connect(
+    _url: string,
+    _headers: [string, string][] | undefined,
+    _policy: import("golem:websocket/client@1.5.0").ReconstructionPolicy | undefined,
+  ): WebsocketConnection {
     throw {
       tag: "connection-failure",
       val: "WebsocketConnection.connect (mock): tests must provide a WebsocketClient layer fake",

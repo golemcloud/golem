@@ -1,4 +1,5 @@
 use futures_concurrency::future::Join;
+use golem_rust::websocket::{WebSocketError, WebSocketReconstructionPolicy};
 use golem_rust::{
     PromiseId, WebSocketMessage, WebsocketConnection, agent_definition, agent_implementation,
 };
@@ -7,6 +8,17 @@ use std::cell::RefCell;
 #[agent_definition]
 pub trait WebsocketTest {
     fn new(name: String) -> Self;
+    fn connect_report_loss(&self, url: String) -> String;
+    fn replace_report_loss(&self, url: String) -> Result<String, String>;
+    fn connect_both_policies(&self, report_url: String, automatic_url: String) -> (String, String);
+    fn probe_both_policies(&self) -> (bool, String);
+    fn receive_is_closed(&self) -> bool;
+    fn live_disconnect_is_not_session_lost(&self) -> bool;
+    fn non_idempotent_report_connect(&self, url: String);
+    fn atomic_report_connect(&self, url: String) -> String;
+    async fn probe_report_loss(&self) -> (bool, bool, bool, bool);
+    async fn discard_report_loss(&self, cancel: PromiseId) -> bool;
+    fn drop_persisted(&self);
     fn echo(&self, url: String, msg: String) -> String;
     /// Like `echo`, but appends each echoed payload to agent-local history and returns `history.join("|")`.
     /// Used in tests to assert state survives replay across executor restarts.
@@ -50,6 +62,7 @@ pub struct WebsocketTestImpl {
     _name: String,
     echo_history: RefCell<Vec<String>>,
     persisted_ws: RefCell<Option<WebsocketConnection>>,
+    automatic_ws: RefCell<Option<WebsocketConnection>>,
 }
 
 #[agent_implementation]
@@ -59,11 +72,12 @@ impl WebsocketTest for WebsocketTestImpl {
             _name: name,
             echo_history: RefCell::new(Vec::new()),
             persisted_ws: RefCell::new(None),
+            automatic_ws: RefCell::new(None),
         }
     }
 
     fn echo(&self, url: String, msg: String) -> String {
-        let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
+        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
 
         ws.send(&WebSocketMessage::Text(msg)).expect("send failed");
 
@@ -80,7 +94,7 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn connect_and_receive_first(&self, url: String) -> String {
-        let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
+        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
         let first = match ws.blocking_receive().expect("receive failed") {
             WebSocketMessage::Text(t) => t,
             WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
@@ -137,12 +151,14 @@ impl WebsocketTest for WebsocketTestImpl {
         let (received, timed) = (ws.receive(), ws.receive_with_timeout(timeout_ms))
             .join()
             .await;
-        let received = received
-            .map(text)
-            .unwrap_or_else(|e| format!("Receive error: {e:?}"));
+        let received = received.map(text).unwrap_or_else(|e| match e {
+            WebSocketError::SessionLost => "session-lost".to_string(),
+            e => format!("Receive error: {e:?}"),
+        });
         let timed = match timed {
             Ok(Some(message)) => text(message),
             Ok(None) => "timeout".to_string(),
+            Err(WebSocketError::SessionLost) => "session-lost".to_string(),
             Err(e) => format!("Receive error: {e:?}"),
         };
         (received, timed)
@@ -161,8 +177,180 @@ impl WebsocketTest for WebsocketTestImpl {
         "ok".to_string()
     }
 
+    fn connect_report_loss(&self, url: String) -> String {
+        let ws = WebsocketConnection::connect(
+            &url,
+            None,
+            Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
+        )
+        .expect("connect failed");
+        let WebSocketMessage::Text(first) = ws.blocking_receive().expect("receive failed") else {
+            panic!("expected text greeting");
+        };
+        ws.send(&WebSocketMessage::Text("completed-before-crash".into()))
+            .expect("send failed");
+        assert!(
+            ws.blocking_receive_with_timeout(0)
+                .expect("timeout failed")
+                .is_none()
+        );
+        *self.persisted_ws.borrow_mut() = Some(ws);
+        first
+    }
+
+    fn replace_report_loss(&self, url: String) -> Result<String, String> {
+        let ws = WebsocketConnection::connect(
+            &url,
+            None,
+            Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
+        )
+        .map_err(|error| format!("Connect error: {error:?}"))?;
+        let first = ws
+            .blocking_receive()
+            .map_err(|error| format!("Initialize error: {error:?}"));
+        *self.persisted_ws.borrow_mut() = Some(ws);
+        match first? {
+            WebSocketMessage::Text(text) => Ok(text),
+            WebSocketMessage::Binary(_) => panic!("expected text greeting"),
+        }
+    }
+
+    fn connect_both_policies(&self, report_url: String, automatic_url: String) -> (String, String) {
+        let report = self.connect_report_loss(report_url);
+        let automatic = WebsocketConnection::connect(
+            &automatic_url,
+            None,
+            Some(WebSocketReconstructionPolicy::ReconnectAutomatically),
+        )
+        .expect("connect failed");
+        let WebSocketMessage::Text(first) = automatic.blocking_receive().expect("receive failed")
+        else {
+            panic!("expected text greeting");
+        };
+        *self.automatic_ws.borrow_mut() = Some(automatic);
+        (report, first)
+    }
+
+    fn probe_both_policies(&self) -> (bool, String) {
+        let report = self.persisted_ws.borrow();
+        let lost = matches!(
+            report
+                .as_ref()
+                .expect("report websocket missing")
+                .blocking_receive_with_timeout(0),
+            Err(WebSocketError::SessionLost)
+        );
+        let automatic = self.automatic_ws.borrow();
+        let WebSocketMessage::Text(message) = automatic
+            .as_ref()
+            .expect("automatic websocket missing")
+            .blocking_receive()
+            .expect("automatic reconnect failed")
+        else {
+            panic!("expected text greeting");
+        };
+        (lost, message)
+    }
+
+    async fn probe_report_loss(&self) -> (bool, bool, bool, bool) {
+        let ws = self.persisted_ws.borrow();
+        let ws = ws
+            .as_ref()
+            .expect("persisted websocket was not initialized");
+        let (received, timed) = (ws.receive(), ws.receive_with_timeout(0)).join().await;
+        (
+            matches!(received, Err(WebSocketError::SessionLost)),
+            matches!(timed, Err(WebSocketError::SessionLost)),
+            matches!(
+                ws.send(&WebSocketMessage::Text("must-not-send".into())),
+                Err(WebSocketError::SessionLost)
+            ),
+            matches!(ws.close(None, None), Err(WebSocketError::SessionLost)),
+        )
+    }
+
+    async fn discard_report_loss(&self, cancel: PromiseId) -> bool {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let ws = self.persisted_ws.borrow();
+        let ws = ws.as_ref().expect("persisted websocket missing");
+        let mut receive = Box::pin(ws.receive());
+        poll_fn(|cx| match receive.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("discarded receive was redelivered: {result:?}"),
+        })
+        .await;
+        golem_rust::await_promise(&cancel).await;
+        poll_fn(|cx| match receive.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("discarded receive was redelivered: {result:?}"),
+        })
+        .await;
+        drop(receive);
+        // The exclusive clock call acknowledges that guest cancellation has run.
+        let _ = wasi::clocks::wall_clock::now();
+        matches!(
+            ws.blocking_receive_with_timeout(0),
+            Err(WebSocketError::SessionLost)
+        )
+    }
+
+    fn drop_persisted(&self) {
+        self.persisted_ws.borrow_mut().take();
+    }
+
+    fn receive_is_closed(&self) -> bool {
+        let ws = self.persisted_ws.borrow();
+        matches!(
+            ws.as_ref()
+                .expect("persisted websocket missing")
+                .blocking_receive(),
+            Err(WebSocketError::Closed(_))
+        )
+    }
+
+    fn live_disconnect_is_not_session_lost(&self) -> bool {
+        let ws = self.persisted_ws.borrow();
+        match ws
+            .as_ref()
+            .expect("persisted websocket missing")
+            .blocking_receive()
+        {
+            Err(WebSocketError::SessionLost) | Ok(_) => false,
+            Err(_) => true,
+        }
+    }
+
     fn create_promise(&self) -> PromiseId {
         golem_rust::create_promise()
+    }
+
+    fn non_idempotent_report_connect(&self, url: String) {
+        let _guard = golem_rust::use_idempotence_mode(false);
+        let _ws = WebsocketConnection::connect(
+            &url,
+            None,
+            Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
+        )
+        .expect("connect failed");
+    }
+
+    fn atomic_report_connect(&self, url: String) -> String {
+        let _guard = golem_rust::use_idempotence_mode(false);
+        golem_rust::atomically(|| {
+            let ws = WebsocketConnection::connect(
+                &url,
+                None,
+                Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
+            )
+            .expect("connect failed");
+            let WebSocketMessage::Text(first) = ws.blocking_receive().expect("receive failed")
+            else {
+                panic!("expected text greeting");
+            };
+            first
+        })
     }
 
     fn replay_reconnect_roundtrip(
@@ -170,7 +358,7 @@ impl WebsocketTest for WebsocketTestImpl {
         url: String,
         barrier: PromiseId,
     ) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None)
+        let ws = WebsocketConnection::connect(&url, None, None)
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
         let mut received = Vec::new();
 
@@ -209,7 +397,7 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
-        let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
+        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
 
         match ws
             .blocking_receive_with_timeout(timeout_ms)
@@ -222,7 +410,7 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     async fn async_bidi_test(&self, url: String) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None)
+        let ws = WebsocketConnection::connect(&url, None, None)
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
 
         let payloads = ["msg-a", "msg-b", "msg-c"];
@@ -248,13 +436,13 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn connect_result(&self, url: String) -> Result<(), String> {
-        WebsocketConnection::connect(&url, None)
+        WebsocketConnection::connect(&url, None, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
     }
 
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None)
+        let ws = WebsocketConnection::connect(&url, None, None)
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
         match ws
             .blocking_receive_with_timeout(timeout_ms)
@@ -272,7 +460,7 @@ impl WebsocketTest for WebsocketTestImpl {
         timeout_ms: u64,
         max_timeouts: u32,
     ) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None)
+        let ws = WebsocketConnection::connect(&url, None, None)
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
 
         for _ in 0..max_timeouts {
