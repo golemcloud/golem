@@ -15,8 +15,6 @@
 use super::*;
 use rustix::fs::{CloneFlags, StatVfsMountFlags, fclonefileat, fstatvfs};
 use std::io::Write;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::MetadataExt;
 
 pub(super) fn bind(
     root: &Path,
@@ -27,13 +25,14 @@ pub(super) fn bind(
     let directory = File::open(root)
         .map_err(|error| FilesystemStorageError::io("open APFS development root", root, error))?;
     probe_clone(root, probe_contents)?;
-    let name_mode = name_mode(&directory).map_err(|error| {
-        FilesystemStorageError::io("read APFS volume case sensitivity", root, error)
-    })?;
     tracing::info!(root = %root.display(), "APFS storage is for local development and tests only");
     Ok((
         FilesystemVolume::copy_on_write(Arc::new(directory)),
-        directories::DirectoryProvisioning::new(Some(Arc::from(root)), cleanup_retry, name_mode),
+        directories::DirectoryProvisioning::new(
+            Some(Arc::from(root)),
+            cleanup_retry,
+            NativeNameModeSource::NativeDetection,
+        ),
     ))
 }
 
@@ -73,17 +72,6 @@ fn probe_contents(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn name_mode(root: &File) -> std::io::Result<NativeNameModeSource> {
-    // SAFETY: the descriptor is open, and the selector is valid on macOS.
-    let case_sensitive = unsafe { libc::fpathconf(root.as_raw_fd(), libc::_PC_CASE_SENSITIVE) };
-    apfs_name_source(
-        case_sensitive,
-        FilesystemIdentity {
-            device: root.metadata()?.dev(),
-        },
-    )
-}
-
 pub(super) fn clone_file(
     source: &File,
     parent: impl std::os::fd::AsFd,
@@ -113,24 +101,6 @@ pub(super) fn observe_space(root: &File) -> std::io::Result<FilesystemSpace> {
         capacity.f_files,
         capacity.f_ffree,
     )
-}
-
-/// Syncs directories without following symlinks or flushing the source of a clone.
-pub(super) fn sync_directories(root: &Path) -> std::io::Result<()> {
-    fn sync(directory: &cap_std::fs::Dir) -> std::io::Result<()> {
-        directory.entries()?.try_for_each(|entry| {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                sync(&directory.open_dir_nofollow(entry.file_name())?)?;
-            }
-            Ok::<_, std::io::Error>(())
-        })?;
-        rustix::fs::fsync(directory).map_err(std::io::Error::from)
-    }
-    sync(&cap_std::fs::Dir::open_ambient_dir(
-        root,
-        cap_std::ambient_authority(),
-    )?)
 }
 
 #[cfg(test)]
@@ -171,6 +141,70 @@ mod tests {
     }
 
     #[test]
+    #[test_r::timeout("60s")]
+    async fn apfs_seed_does_not_scan_an_unrelated_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+            &FilesystemStorageMode::Apfs {
+                root: root.path().into(),
+            },
+            RetryConfig::default(),
+        )
+        .await
+        .unwrap();
+        let filesystem = provisioning
+            .create_fresh(
+                SandboxFilesystemName::new(
+                    "environment".into(),
+                    "component".into(),
+                    "apfs-seed-scope".into(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let source_directory = HostDirectory::create_in(
+            directories.scratch.path(),
+            std::ffi::OsStr::new("seed-source"),
+        )
+        .await
+        .unwrap();
+        let source = source_directory
+            .path()
+            .child(std::ffi::OsStr::new("source"))
+            .unwrap();
+        std::fs::write(source.as_path(), b"seeded").unwrap();
+        let unrelated = filesystem.root().join("unrelated").into_boxed_path();
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::set_permissions(&unrelated, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let result = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([SeedEntry {
+                source,
+                target: SandboxPath::at_root("new/ancestor/file"),
+                access: SeedAccess::ReadWrite,
+                placement: SeedPlacement::CreateNew,
+            }]),
+        )
+        .await;
+        std::fs::set_permissions(&unrelated, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            result.is_ok(),
+            "a seed must not scan unrelated directories: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read(filesystem.root().join("new/ancestor/file")).unwrap(),
+            b"seeded"
+        );
+        source_directory.discard().await.unwrap();
+        SandboxFilesystem::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
     #[test_r::timeout("120s")]
     async fn apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes() {
         const FILE_BYTES: usize = 64 * 1024 * 1024;
@@ -194,7 +228,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let path = filesystem.root().join("file");
+        let path = filesystem.root().join("file").into_boxed_path();
         let mut source = File::options()
             .read(true)
             .write(true)

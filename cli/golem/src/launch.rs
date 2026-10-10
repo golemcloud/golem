@@ -16,10 +16,8 @@ use crate::compat::{preflight_registry_db_compat, write_registry_db_compat};
 use crate::router::start_router;
 use crate::{StartedComponents, registry_db_path};
 use anyhow::Context;
-use figment::Figment;
-use figment::providers::{Format, Serialized, Toml};
 use golem_cli::fs;
-use golem_common::config::{DbConfig, DbSqliteConfig, env_config_provider};
+use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -40,8 +38,8 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig as WorkerExecutorConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
@@ -200,13 +198,12 @@ async fn start_components(
     let worker_executor = {
         let mut config =
             worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
-        let filesystem = Figment::from(Serialized::defaults(&config))
-            .merge(Toml::file_exact(
-                golem_worker_executor::services::golem_config::make_config_loader()
-                    .config_file_name,
-            ))
-            .merge(env_config_provider());
-        let (storage, snapshots) = crate::filesystem_config::prepare(&args.data_dir, filesystem)?;
+        let (storage, snapshots) = crate::filesystem_config::prepare(
+            &args.data_dir,
+            &golem_worker_executor::services::golem_config::make_config_loader().config_file_name,
+            args.agent_filesystem_root.as_deref(),
+            golem_common::config::env_config_provider(),
+        )?;
         config.filesystem_storage = storage;
         config.filesystem_snapshots = snapshots;
         run_worker_executor(config, join_set).await?
@@ -454,15 +451,6 @@ fn worker_executor_config(
         },
         agent_webhooks_service: AgentWebhooksServiceConfig {
             use_https_for_webhook_url: false,
-            ..Default::default()
-        },
-        filesystem_storage: FilesystemStorageConfig {
-            mode: args
-                .agent_filesystem_root
-                .clone()
-                .map_or(FilesystemStorageMode::Temporary, |root| {
-                    FilesystemStorageMode::Directory { root: root.into() }
-                }),
             ..Default::default()
         },
         ..Default::default()

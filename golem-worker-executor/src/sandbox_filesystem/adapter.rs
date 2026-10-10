@@ -482,8 +482,9 @@ impl PartialEq<SandboxNamespaceCoordinationKey> for SandboxDirectoryCoordination
 #[derive(Clone)]
 pub(crate) struct SandboxResolvedNamespaceTarget {
     parent: SandboxDirectory,
-    name: OsString,
+    name: Box<std::ffi::OsStr>,
     coordination_key: SandboxNamespaceCoordinationKey,
+    parent_byte_exact_lookup_proven: bool,
     final_directory_key: Option<SandboxDirectoryCoordinationKey>,
     read_only_file: bool,
     followed_read_only_file: NativeReadOnlyResolution,
@@ -500,6 +501,12 @@ enum NativeReadOnlyResolution {
 }
 
 impl SandboxResolvedNamespaceTarget {
+    /// Reports a positive proof that lookup in this parent requires the exact stored spelling.
+    /// False means no such proof. This does not establish any ancestor's spelling.
+    pub(crate) fn has_byte_exact_lookup_proof(&self) -> bool {
+        self.parent_byte_exact_lookup_proven
+    }
+
     /// Returns the semantic key used to coordinate access to this namespace entry.
     pub(crate) fn coordination_key(&self) -> SandboxNamespaceCoordinationKey {
         self.coordination_key.clone()
@@ -514,7 +521,7 @@ impl SandboxResolvedNamespaceTarget {
     ///
     /// Namespace operations should use this instead of resolving the original ambient path again.
     pub(crate) fn target(&self) -> SandboxPath {
-        SandboxPath::at(self.parent.clone(), PathBuf::from(&self.name))
+        SandboxPath::at(self.parent.clone(), PathBuf::from(self.name.as_ref()))
     }
 
     /// Tells whether the resolved object is a regular file without write permission.
@@ -542,7 +549,7 @@ impl SandboxResolvedNamespaceTarget {
                 );
                 Err(FilesystemStorageError::io(
                     "resolve sandbox filesystem target permissions",
-                    &self.parent.path.join(&self.name),
+                    &self.parent.path.join(self.name.as_ref()),
                     source,
                 ))
             }
@@ -2141,7 +2148,9 @@ fn resolve_host_namespace_target(
             path: parent_path,
             coordination_key: coordination_key.parent.clone(),
         },
-        name,
+        name: name.into_boxed_os_str(),
+        parent_byte_exact_lookup_proven: coordination_key.name.mode
+            == NativeNameComparisonMode::Exact,
         coordination_key,
         final_directory_key,
         read_only_file,
@@ -2244,30 +2253,11 @@ fn native_name_comparison_mode(
             NativeNameComparisonMode::WindowsInsensitive
         });
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
-        let _ = (directory, probe);
-        Ok(macos_name_comparison_mode(source, parent))
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
+        // Case sensitivity does not prove byte-exact lookup. APFS also aliases Unicode spellings.
         let _ = (directory, parent, source, probe);
         Ok(NativeNameComparisonMode::Conservative)
-    }
-}
-
-#[cfg(all(unix, any(test, target_os = "macos")))]
-fn macos_name_comparison_mode(
-    source: NativeNameModeSource,
-    parent: &SandboxDirectoryCoordinationKey,
-) -> NativeNameComparisonMode {
-    match (source, &parent.0) {
-        (NativeNameModeSource::ApfsExact(identity), NativeFileIdentity::Unix { device, .. })
-            if identity.device == *device =>
-        {
-            NativeNameComparisonMode::Exact
-        }
-        _ => NativeNameComparisonMode::Conservative,
     }
 }
 
@@ -3298,7 +3288,9 @@ mod scripted {
                 programmed.parent_identity,
                 format!("programmed-directory-{}", programmed.parent_identity),
             ),
-            name,
+            name: name.into_boxed_os_str(),
+            // A programmed canonical label proves equivalence, not byte-exact lookup.
+            parent_byte_exact_lookup_proven: false,
             coordination_key: SandboxNamespaceCoordinationKey {
                 parent: parent_key,
                 name: NativeNameCoordinationKey {
@@ -3378,6 +3370,7 @@ mod scripted {
                     _ => unreachable!("scripted namespace parent identity must be scripted"),
                 },
             ),
+            parent_byte_exact_lookup_proven: true,
             coordination_key: SandboxNamespaceCoordinationKey {
                 parent: parent_key,
                 name: NativeNameCoordinationKey {
@@ -3385,7 +3378,7 @@ mod scripted {
                     mode: NativeNameComparisonMode::Exact,
                 },
             },
-            name,
+            name: name.into_boxed_os_str(),
             final_directory_key: None,
             read_only_file: false,
             followed_read_only_file: NativeReadOnlyResolution::Resolved(false),
@@ -4114,6 +4107,26 @@ mod tests {
         assert!(first.coordination_key() == second.coordination_key());
         assert!(first.final_directory_key() == second.final_directory_key());
         assert_eq!(first.target().path, PathBuf::from("First"));
+        assert!(
+            !first.has_byte_exact_lookup_proof(),
+            "a canonical coordination label is not a lookup proof"
+        );
+        assert!(!second.has_byte_exact_lookup_proof());
+
+        let default = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("default"))
+            .await
+            .unwrap();
+        assert!(default.has_byte_exact_lookup_proof());
+        control.push_namespace_resolution(41, "First", Some(42));
+        let same_label = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("First"))
+            .await
+            .unwrap();
+        assert!(
+            !same_label.has_byte_exact_lookup_proof(),
+            "matching a canonical label does not prove the parent's lookup"
+        );
     }
 
     fn coordination_key_hash(key: &SandboxNamespaceCoordinationKey) -> u64 {
@@ -4168,33 +4181,23 @@ mod tests {
         assert!(first.may_conflict_with(&exact));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn apfs_name_mode_uses_the_root_case_result_only_on_its_device() {
-        let parent =
-            |device| SandboxDirectoryCoordinationKey(NativeFileIdentity::Unix { device, inode: 1 });
-        let identity = FilesystemIdentity { device: 17 };
-        [
-            (1, 17, NativeNameComparisonMode::Exact),
-            (1, 18, NativeNameComparisonMode::Conservative),
-            (0, 17, NativeNameComparisonMode::Conservative),
-            (0, 18, NativeNameComparisonMode::Conservative),
-        ]
-        .into_iter()
-        .for_each(|(case_sensitive, device, expected)| {
-            let source = apfs_name_source(case_sensitive, identity).unwrap();
-            assert_eq!(
-                macos_name_comparison_mode(source, &parent(device)),
-                expected
-            );
-        });
-        [-1, 2].into_iter().for_each(|value| {
-            assert!(apfs_name_source(value, identity).is_err());
-        });
+    fn apfs_conservative_keys_cover_normalization_aliases_and_parent_scope() {
+        let composed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "caf\u{00e9}.txt");
+        let decomposed =
+            SandboxNamespaceCoordinationKey::scripted_conservative(1, "cafe\u{0301}.txt");
+        let sibling = SandboxNamespaceCoordinationKey::scripted_conservative(1, "notes.txt");
+        let other_parent =
+            SandboxNamespaceCoordinationKey::scripted_conservative(2, "cafe\u{0301}.txt");
+
+        assert!(composed == decomposed);
         assert_eq!(
-            macos_name_comparison_mode(NativeNameModeSource::NativeDetection, &parent(17)),
-            NativeNameComparisonMode::Conservative,
+            coordination_key_hash(&composed),
+            coordination_key_hash(&decomposed)
         );
+        assert!(composed.may_conflict_with(&decomposed));
+        assert!(composed.may_conflict_with(&sibling));
+        assert!(!composed.may_conflict_with(&other_parent));
     }
 
     #[cfg(target_os = "linux")]
@@ -4284,7 +4287,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    async fn apfs_native_name_mode_matches_the_volumes_filename_behavior() {
+    async fn apfs_native_coordination_preserves_filename_spelling_and_lookup() {
         let root = tempfile::tempdir().unwrap();
         let provisioning = SandboxFilesystemProvisioning::new(
             &FilesystemStorageMode::Apfs {
@@ -4295,18 +4298,105 @@ mod tests {
         .unwrap();
         let filesystem = provisioning.create_fresh(name()).await.unwrap();
         std::fs::write(filesystem.root().join("CaseProbe"), b"case").unwrap();
-        let case_sensitive = !filesystem.root().join("caseprobe").exists();
-        let target = filesystem
-            .resolve_namespace_target(SandboxPath::at_root("sibling"))
+        let case_alias_exists = filesystem.root().join("caseprobe").exists();
+        let case_exact = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("CaseProbe"))
+            .await
+            .unwrap();
+        let case_alias = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("caseprobe"))
             .await
             .unwrap();
         assert_eq!(
-            target.coordination_key().name.mode,
-            if case_sensitive {
-                NativeNameComparisonMode::Exact
-            } else {
-                NativeNameComparisonMode::Conservative
-            },
+            case_exact.target().path.as_os_str(),
+            std::ffi::OsStr::new("CaseProbe")
+        );
+        assert_eq!(
+            case_alias.target().path.as_os_str(),
+            std::ffi::OsStr::new("caseprobe")
+        );
+        let case_object = filesystem
+            .get_path_attributes(case_exact.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        let alias_result = filesystem
+            .get_path_attributes(case_alias.target(), SandboxFollow::No)
+            .await;
+        if case_alias_exists {
+            assert_eq!(case_object, alias_result.unwrap().object);
+        } else {
+            assert_eq!(
+                alias_result.unwrap_err().io_kind(),
+                Some(std::io::ErrorKind::NotFound)
+            );
+        }
+        let composed = "caf\u{00e9}.txt";
+        let decomposed = "cafe\u{0301}.txt";
+        let created = filesystem
+            .open(
+                SandboxPath::at_root(decomposed),
+                SandboxOpenOptions::File {
+                    access: SandboxAccessMode::ReadWrite,
+                    disposition: SandboxFileDisposition::CreateExclusive,
+                    follow: SandboxFollow::No,
+                },
+            )
+            .await
+            .unwrap();
+        filesystem.close(created.into_node()).await.unwrap();
+        std::fs::write(filesystem.root().join("notes.txt"), b"distinct").unwrap();
+        let first = filesystem
+            .resolve_namespace_target(SandboxPath::at_root(composed))
+            .await
+            .unwrap();
+        let alias = filesystem
+            .resolve_namespace_target(SandboxPath::at_root(decomposed))
+            .await
+            .unwrap();
+        let sibling = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("notes.txt"))
+            .await
+            .unwrap();
+        assert_eq!(
+            first.target().path.as_os_str(),
+            std::ffi::OsStr::new(composed)
+        );
+        assert_eq!(
+            alias.target().path.as_os_str(),
+            std::ffi::OsStr::new(decomposed)
+        );
+        assert!(first.coordination_key() == alias.coordination_key());
+        assert!(
+            first
+                .coordination_key()
+                .may_conflict_with(&sibling.coordination_key())
+        );
+        let first_object = filesystem
+            .get_path_attributes(first.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        let alias_object = filesystem
+            .get_path_attributes(alias.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        let sibling_object = filesystem
+            .get_path_attributes(sibling.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        assert_eq!(first_object, alias_object);
+        assert_ne!(first_object, sibling_object);
+        assert!(
+            std::fs::read_dir(filesystem.root())
+                .unwrap()
+                .any(|entry| { entry.unwrap().file_name() == std::ffi::OsStr::new(decomposed) })
+        );
+        assert_eq!(
+            filesystem.root().join("caseprobe").exists(),
+            case_alias_exists
         );
         <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
             .await

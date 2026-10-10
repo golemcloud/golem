@@ -4,7 +4,7 @@ import { Callout, Steps } from "nextra/components"
 
 A filesystem snapshot is a copy of an agent's files that the worker executor keeps in blob storage. A snapshot record in the oplog of the agent names it. With filesystem snapshots, an agent keeps its files after a start from a snapshot record, after a manual update and after a snapshot-assisted automatic update. [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots) describes what agents see. This page describes how to enable and operate the feature.
 
-Filesystem snapshots are disabled by default. A disabled executor does not save agent files. It writes a snapshot record, without a filesystem snapshot name, only when the agent's files can come back with it: when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory. An agent whose files changed takes no automatic snapshot and recovers by a replay, and a snapshot-based manual update of it fails. See [Availability](/next/develop/snapshotting#availability). Ephemeral agents take no snapshots.
+Standalone executors and local servers on other platforms disable filesystem snapshots by default. The local server on macOS enables them with APFS. A disabled executor does not save agent files. It writes a snapshot record, without a filesystem snapshot name, only when the agent's files can come back with it: when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory. An agent whose files changed takes no automatic snapshot and recovers by a replay, and a snapshot-based manual update of it fails. See [Availability](/next/develop/snapshotting#availability). Ephemeral agents take no snapshots.
 
 ## Requirements
 
@@ -16,15 +16,23 @@ These requirements apply to production. For local development and tests on macOS
 - With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
 
-The storage mode is one setting, `[filesystem_storage.mode]`. `Temporary` is the default and makes a temporary directory for each agent. `Directory` makes plain directories under a root. These two modes make byte copies, so they cannot enable filesystem snapshots. `Apfs` is the local development mode on macOS that adds copy-on-write copies and volume free-space checks.
+The storage mode is one setting, `[filesystem_storage.mode]`. `Temporary` is the standalone executor default and makes a temporary directory for each agent. `Directory` makes plain directories under a root. These two modes make byte copies, so they cannot enable filesystem snapshots. `Apfs` is the local development mode on macOS that adds copy-on-write copies and volume free-space checks.
 
 ## Local development on macOS
+
+The local `golem server run` command on macOS uses `Apfs` at `<data_dir>/agents` and enables `Managed` filesystem snapshots by default. It uses local file system blob storage at `<data_dir>/blobs` and supplies the repository key. No TOML file or environment settings are needed:
+
+```shell
+golem server run --data-dir .golem/data
+```
+
+The `--agent-filesystem-root` option changes the default root. Explicit filesystem TOML and environment settings override these defaults. On other platforms, the local server keeps `Temporary` storage and disabled filesystem snapshots by default.
 
 Use `Apfs` for local development and tests only. It works on the Mac's existing APFS volume, whether the volume is case-sensitive or case-insensitive. It needs no special volume, disk image or privilege. Production still needs Linux 5.8 or later with XFS and reflink.
 
 The executor makes the root directory if it does not exist, as `Directory` does. It then makes a file clone under the root with `fclonefileat`, reads the clone and removes the probe directory. If the clone fails, the executor does not start. It does not check the filesystem type, take an exclusive lock on the root or check the volume identity. Do not run two executors with the same root. At startup, the executor logs `APFS storage is for local development and tests only`.
 
-Set the normal executor configuration in `config/worker-executor.toml`:
+To override the local defaults, set the normal executor configuration in `config/worker-executor.toml`:
 
 ```toml
 [filesystem_storage.mode]
@@ -37,7 +45,7 @@ root = ".golem/agents"
 type = "Managed"
 ```
 
-The local `golem server run` command reads the filesystem settings from this file, relative to the working directory. Then it applies the `GOLEM__` environment variables, which override the file. You can use these variables instead of the file:
+The local server reads the filesystem settings from this optional file, relative to the working directory. It does not search parent directories. An existing file with invalid TOML prevents startup. Then it applies the `GOLEM__` environment variables, which override the file. You can use these variables instead of the file:
 
 ```shell
 export GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=Apfs
@@ -46,7 +54,7 @@ export GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Managed
 golem server run --data-dir .golem/data
 ```
 
-There is no second switch for local filesystem snapshots. They are disabled by default. Setting `Managed` requires a storage mode that makes copy-on-write copies. An agent also needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
+There is no second switch for local filesystem snapshots. The macOS local server enables `Managed` by default. A standalone executor must configure it. Setting `Managed` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
 
 When no `repository_key` is configured, the local server generates a 64-byte key and keeps its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`. On Unix, it creates the file with permissions `0600`. It uses the same key on later starts. A configured `repository_key` takes precedence over this file. Without a configured key, a corrupt file makes startup fail; the server does not replace it. Keep the key with the local data. Replacing or deleting it prevents the server from reading snapshots made with it.
 
@@ -57,7 +65,7 @@ The snapshots use the executor's blob storage. On the local server, this is file
 - `seed` and `copy_contents` make a copy-on-write clone of each file. Captures and restored trees use the same operations as XFS. The executor makes `.scratch` and `.initial-files` under the root and removes what an earlier process left there at startup.
 - There are no project quotas, per-agent disk limits or per-agent usage reports. The storage has `AgentAccounting::Unaccounted`, so every disk limit resolves to `Unlimited`. An agent can fill the volume. An executor with `[resource_usage_metering] filesystem = true` does not start.
 - The executor reads volume free space with `fstatvfs`. Startup capacity checks, capture admission and write pressure recovery use these values. APFS volumes in one container share free bytes, so byte targets are approximate. The filesystem object counts are synthetic and very large, so the object targets always pass.
-- At startup, the executor reads `pathconf(_PC_CASE_SENSITIVE)` on the root. A case-sensitive volume uses `Exact` name comparison. A case-insensitive volume uses `Conservative` name comparison, which permits less concurrency within one directory. Both work without special setup.
+- The executor uses `Conservative` filename coordination on both case-sensitive and case-insensitive APFS volumes. A directory entry edit waits for conflicting operations in the same parent directory. Two observations can run together. macOS keeps its native filename spelling, case sensitivity and lookup behavior. Users do not need to normalize names. The executor does not read the root's case sensitivity to select coordination.
 
 ## Enable filesystem snapshots
 

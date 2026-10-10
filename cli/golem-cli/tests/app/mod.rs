@@ -164,11 +164,11 @@ use uuid::Uuid;
 
 const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
 
-fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
-    static SOURCES: OnceLock<Vec<(PathBuf, String)>> = OnceLock::new();
+fn builtin_artifact_sources() -> &'static [(Box<Path>, Box<str>)] {
+    static SOURCES: OnceLock<Box<[(Box<Path>, Box<str>)]>> = OnceLock::new();
 
     SOURCES.get_or_init(|| {
-        let workspace = workspace_path();
+        let workspace = workspace_path().into_boxed_path();
         let manifest: serde_json::Value = serde_json::from_slice(
             &std::fs::read(workspace.join("builtin-artifacts.lock.json"))
                 .expect("failed to read builtin-artifacts.lock.json"),
@@ -190,18 +190,18 @@ fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
         local_artifacts
             .into_iter()
             .map(|(artifact_id, relative_path)| {
-                let source = workspace.join(relative_path);
+                let source = workspace.join(relative_path).into_boxed_path();
                 let expected = artifacts[artifact_id]["sha256"]
                     .as_str()
                     .expect("default built-in artifacts must have a SHA-256")
-                    .to_string();
+                    .into();
                 let bytes = std::fs::read(&source).unwrap_or_else(|error| {
                     panic!(
                         "failed to read built-in artifact '{}': {error}; run 'cargo make fetch-builtin-artifacts' first",
                         source.display()
                     )
                 });
-                let actual = format!("{:x}", Sha256::digest(bytes));
+                let actual = format!("{:x}", Sha256::digest(bytes)).into_boxed_str();
                 assert_eq!(
                     actual,
                     expected,

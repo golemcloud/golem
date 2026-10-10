@@ -692,6 +692,28 @@ fn call_count(control: &ScriptedSandboxFilesystemControl, operation: &str) -> us
         .count()
 }
 
+fn assert_hard_link_source_probe(calls: &[String]) {
+    let link = calls
+        .iter()
+        .position(|call| call.starts_with("hard_link("))
+        .unwrap();
+    let probe = calls
+        .iter()
+        .rposition(|call| call.starts_with("get_path_attributes("))
+        .unwrap();
+    assert!(probe > link);
+    let source = calls[link]
+        .strip_prefix("hard_link(source=")
+        .unwrap()
+        .split_once(", destination=")
+        .unwrap()
+        .0;
+    assert_eq!(
+        calls[probe],
+        format!("get_path_attributes(target={source}, follow=No)")
+    );
+}
+
 async fn assert_insert_coordination(
     generation_handle: &FilesystemGenerationHandle<ScriptedSandboxFilesystem>,
     control: &ScriptedSandboxFilesystemControl,
@@ -2504,6 +2526,7 @@ async fn decisive_namespace_guest_errors_skip_observation_and_pressure_recovery(
         "hard link existing destination",
         std::io::ErrorKind::AlreadyExists,
     )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     assert!(matches!(
         edit_namespace(
             &generation_handle,
@@ -2626,6 +2649,7 @@ async fn hard_link_preexisting_destination_is_no_effect_without_identity_inferen
         "hard link existing destination",
         std::io::ErrorKind::AlreadyExists,
     )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
 
     assert!(matches!(
         edit_namespace(
@@ -2800,6 +2824,281 @@ async fn a_cleanup_permission_failure_of_a_writable_open_invalidates_a_read_only
 }
 
 #[test]
+async fn a_directory_hard_link_over_an_existing_destination_gives_not_permitted() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_hard_link(Err(sandbox_error(
+        "hard link",
+        std::io::ErrorKind::AlreadyExists,
+    )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
+
+    let linked = edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: PathTarget::at_root(&generation_handle, "directory").unwrap(),
+            destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+        "{linked:?}"
+    );
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    assert_eq!(call_count(&control, "hard_link("), 1);
+    assert_hard_link_source_probe(&control.calls().into_boxed_slice());
+    control.push_get_attributes(Err(missing("directory before the insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "after-refused-link").unwrap(),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_results() {
+    use futures::StreamExt as _;
+
+    let proofs: Box<[_]> = Box::new([
+        (Some(900), Ok(sandbox_attributes(SandboxObjectKind::File))),
+        (
+            Some(900),
+            Ok(sandbox_attributes(SandboxObjectKind::Symlink)),
+        ),
+        (None, Err(missing("source proof"))),
+        (
+            None,
+            Err(FilesystemStorageError::verification(
+                "source proof",
+                Path::new("source"),
+            )),
+        ),
+        (
+            None,
+            Err(sandbox_error(
+                "source proof",
+                std::io::ErrorKind::Interrupted,
+            )),
+        ),
+    ]);
+    futures::stream::iter(proofs).for_each(|(hint, proof)| async move {
+        let (filesystem, control, window) = metered_resident().await;
+        let generation_handle = resident_generation_handle(&filesystem);
+        control.push_namespace_resolution(1, "source", hint);
+        control.push_namespace_resolution(1, "existing", None);
+        control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+        control.push_hard_link(Err(sandbox_error("hard link", std::io::ErrorKind::AlreadyExists)));
+        control.push_get_attributes(proof);
+        let linked = edit_namespace(&generation_handle, NamespaceEdit::Link {
+            source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+            destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+        }).unwrap().await;
+        assert!(matches!(linked, Err(Error::Sandbox(ref error)) if error.io_kind() == Some(std::io::ErrorKind::AlreadyExists)), "{linked:?}");
+        assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+        assert_eq!(call_count(&control, "hard_link("), 1);
+        assert_eq!(call_count(&control, "get_path_attributes("), 2);
+        assert_hard_link_source_probe(&control.calls().into_boxed_slice());
+        control.push_get_attributes(Err(missing("directory before the insert")));
+        control.push_create_directory(Ok(()));
+        edit_namespace(&generation_handle, NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "after-refused-link").unwrap(),
+            object: NewObject::Directory,
+        }).unwrap().await.unwrap();
+        close_window(window, Instant::now() + Duration::from_secs(1)).await.unwrap();
+        control.push_delete_and_verify(Ok(()));
+        delete(seal(filesystem)).await.unwrap();
+    }).await;
+}
+
+#[test]
+async fn a_terminal_source_probe_after_hard_link_collision_invalidates_the_generation() {
+    use futures::StreamExt as _;
+
+    let errors: Box<[_]> = Box::new([
+        sandbox_error("source proof", std::io::ErrorKind::PermissionDenied),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        FilesystemStorageError::io(
+            "source proof",
+            Path::new("source"),
+            std::io::Error::from_raw_os_error(libc::EIO),
+        ),
+    ]);
+    futures::stream::iter(errors)
+        .for_each(|probe_error| async move {
+            let (filesystem, control, window) = metered_resident().await;
+            let generation_handle = resident_generation_handle(&filesystem);
+            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+            control.push_hard_link(Err(sandbox_error(
+                "hard link",
+                std::io::ErrorKind::AlreadyExists,
+            )));
+            control.push_get_attributes(Err(probe_error));
+            let linked = edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                    destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+                },
+            )
+            .unwrap()
+            .await;
+            assert!(
+                matches!(linked, Err(Error::RuntimeInvalidated)),
+                "{linked:?}"
+            );
+            assert!(filesystem_activity(&filesystem).has_terminal_failure());
+            assert_eq!(call_count(&control, "hard_link("), 1);
+            assert_hard_link_source_probe(&control.calls().into_boxed_slice());
+            assert!(matches!(
+                edit_namespace(
+                    &generation_handle,
+                    NamespaceEdit::Insert {
+                        destination: PathTarget::at_root(&generation_handle, "after-refused-link")
+                            .unwrap(),
+                        object: NewObject::Directory,
+                    }
+                ),
+                Err(AccessError::Revoked)
+            ));
+            close_window(window, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            delete(seal(filesystem)).await.unwrap();
+        })
+        .await;
+}
+
+#[test]
+async fn hard_link_policy_proof_does_not_replace_escape_or_cleanup_errors() {
+    use futures::StreamExt as _;
+
+    let errors: Box<[_]> = Box::new([
+        FilesystemStorageError::io(
+            "hard link",
+            Path::new("source"),
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "a path led outside of the filesystem",
+            ),
+        ),
+        FilesystemStorageError::cleanup_io(
+            "hard link",
+            Path::new("source"),
+            std::io::Error::new(std::io::ErrorKind::AlreadyExists, "cleanup"),
+        ),
+    ]);
+    futures::stream::iter(errors)
+        .for_each(|link_error| async move {
+            let (filesystem, control, window) = metered_resident().await;
+            let generation_handle = resident_generation_handle(&filesystem);
+            let expected_kind = link_error.io_kind();
+            let expected_escape = link_error.is_sandbox_escape();
+            let expected_cleanup = link_error.cleanup_failed();
+            control.push_namespace_resolution(1, "source", Some(900));
+            control.push_namespace_resolution(1, "existing", None);
+            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+            control.push_hard_link(Err(link_error));
+            let linked = edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                    destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+                },
+            )
+            .unwrap()
+            .await;
+            assert!(
+                matches!(linked, Err(Error::Sandbox(ref error))
+            if error.io_kind() == expected_kind
+            && error.is_sandbox_escape() == expected_escape
+            && error.cleanup_failed() == expected_cleanup),
+                "{linked:?}"
+            );
+            assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+            assert_eq!(call_count(&control, "hard_link("), 1);
+            assert_eq!(call_count(&control, "get_path_attributes("), 1);
+            close_window(window, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            delete(seal(filesystem)).await.unwrap();
+        })
+        .await;
+}
+
+#[test]
+#[timeout("10s")]
+async fn directory_hard_link_classification_holds_coordination_through_the_source_probe() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_hard_link(Err(sandbox_error(
+        "hard link",
+        std::io::ErrorKind::AlreadyExists,
+    )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
+    let link_gate = control.block("hard_link");
+    let linking = tokio::spawn(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Link {
+                source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+            },
+        )
+        .unwrap(),
+    );
+    link_gate.wait_started().await;
+    let probe_gate = control.block("get_path_attributes");
+    link_gate.release();
+    probe_gate.wait_started().await;
+    control.push_get_attributes(Err(missing("destination before rename")));
+    control.push_rename(Ok(()));
+    let mut replacing = Box::pin(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Move {
+                source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                destination: PathTarget::at_root(&generation_handle, "moved-source").unwrap(),
+            },
+        )
+        .unwrap(),
+    );
+    assert!(futures::poll!(replacing.as_mut()).is_pending());
+    assert_eq!(call_count(&control, "rename("), 0);
+    probe_gate.release();
+    let linked = linking.await.unwrap();
+    assert!(
+        matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+        "{linked:?}"
+    );
+    replacing.await.unwrap();
+    assert_eq!(call_count(&control, "rename("), 1);
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn a_cleanup_permission_failure_of_a_directory_hard_link_invalidates_the_generation() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -2941,7 +3240,7 @@ async fn a_hard_link_permission_refusal_is_guest_policy_only_for_a_known_directo
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postcondition() {
     let (filesystem, control, window) = metered_resident().await;
@@ -5227,6 +5526,50 @@ async fn conservative_sandbox_names_serialize_only_within_their_parent() {
     )
     .await
     .expect("sibling must proceed after the conflicting lease is dropped");
+}
+
+#[test]
+#[timeout("10s")]
+async fn apfs_conservative_coordination_covers_both_edit_observation_orders() {
+    let coordinator = Arc::new(NamespaceCoordinator::new());
+    let composed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "caf\u{00e9}.txt");
+    let decomposed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "cafe\u{0301}.txt");
+    let first_observe = coordinator
+        .coordinate(NamespaceCoordinationKind::Observe, vec![composed.clone()])
+        .await;
+    let mut alias_observe = Box::pin(
+        coordinator.coordinate(NamespaceCoordinationKind::Observe, vec![decomposed.clone()]),
+    );
+    let second_observe = match futures::poll!(alias_observe.as_mut()) {
+        std::task::Poll::Ready(lease) => lease,
+        std::task::Poll::Pending => panic!("equivalent observations must remain concurrent"),
+    };
+    let mut blocked_edit =
+        Box::pin(coordinator.coordinate(NamespaceCoordinationKind::Edit, vec![decomposed]));
+    assert!(futures::poll!(blocked_edit.as_mut()).is_pending());
+    drop(first_observe);
+    assert!(futures::poll!(blocked_edit.as_mut()).is_pending());
+    drop(second_observe);
+    let held_edit = blocked_edit.await;
+
+    let mut blocked_observe =
+        Box::pin(coordinator.coordinate(NamespaceCoordinationKind::Observe, vec![composed]));
+    assert!(futures::poll!(blocked_observe.as_mut()).is_pending());
+    let mut other_parent_edit = Box::pin(coordinator.coordinate(
+        NamespaceCoordinationKind::Edit,
+        vec![SandboxNamespaceCoordinationKey::scripted_conservative(
+            2,
+            "cafe\u{0301}.txt",
+        )],
+    ));
+    let other_parent = match futures::poll!(other_parent_edit.as_mut()) {
+        std::task::Poll::Ready(lease) => lease,
+        std::task::Poll::Pending => panic!("different parent identities must remain independent"),
+    };
+    drop(held_edit);
+    let resumed_observe = blocked_observe.await;
+    drop(resumed_observe);
+    drop(other_parent);
 }
 
 #[test]

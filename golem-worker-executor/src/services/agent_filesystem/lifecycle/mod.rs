@@ -3807,15 +3807,23 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
-            && !error.is_sandbox_escape()
+        if matches!(
+            error.io_kind(),
+            Some(std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AlreadyExists)
+        ) && !error.is_sandbox_escape()
             && !error.cleanup_failed()
-            && matches!(
-                namespace_path_state(&generation, source.clone()).await,
-                Ok(NamespacePathState::Present(attributes)) if attributes.kind == SandboxObjectKind::Directory
-            )
         {
-            return Err(Error::Access(AccessError::NotPermitted));
+            match namespace_path_state(&generation, source.clone()).await {
+                Ok(NamespacePathState::Present(attributes))
+                    if attributes.kind == SandboxObjectKind::Directory =>
+                {
+                    return Err(Error::Access(AccessError::NotPermitted));
+                }
+                Err(probe_error) if invalidates_generation(&probe_error) => {
+                    return Err(classify_query_error(&generation, probe_error));
+                }
+                _ => {}
+            }
         }
         let evidence = if error_proves_no_effect(&error) {
             EffectEvidence::NoEffect

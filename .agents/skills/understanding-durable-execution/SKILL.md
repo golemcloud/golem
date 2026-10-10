@@ -1081,10 +1081,12 @@ and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `T
 `seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other
 storage. `Apfs` makes the root as `Directory` does, then probes a file clone with `fclonefileat`
 under it. A failed clone prevents startup. There is no filesystem type check, exclusive root lock
-or volume identity check. Startup reads `pathconf(_PC_CASE_SENSITIVE)` on the root. A case-sensitive
-volume uses `Exact` name comparison. A case-insensitive volume uses `Conservative`, which permits
-less concurrency within one directory. No special volume, disk image or privilege is required.
-The mode logs that it is for local development and tests only.
+or volume identity check. Both case-sensitive and case-insensitive APFS volumes use `Conservative`
+filename coordination. An entry edit waits for conflicting operations in the same parent directory;
+two observations can run together. macOS keeps its native filename spelling, case sensitivity and
+lookup behavior. Users do not normalize names. Case sensitivity does not prove byte-exact lookup,
+because both APFS variants alias Unicode normalization forms. No special volume, disk image or
+privilege is required. The mode logs that it is for local development and tests only.
 
 `Apfs` states `AgentAccounting::Unaccounted`, as `ReflinkXfs` does. All disk limits resolve to
 `Unlimited`; the mode has no project quotas or per-agent usage reports, and filesystem metering
@@ -1093,11 +1095,15 @@ admission and write pressure recovery apply. APFS volumes in one container share
 so byte targets are approximate. Object counts are synthetic and very large, so object targets
 always pass. `Temporary` and `Directory` do not use this pressure recovery.
 
-The local `golem server run` command reads filesystem settings from
-`config/worker-executor.toml` in the working directory, then applies `GOLEM__` environment variables.
-Set `filesystem_storage.mode.type = "Apfs"`, `filesystem_storage.mode.config.root` and
-`filesystem_snapshots.type = "Managed"`. Snapshots are disabled by default; there is no second local
-switch. Without a configured `repository_key`, the local server generates a 64-byte key and keeps
+On macOS, the local `golem server run` command defaults to `Apfs` at `<data_dir>/agents` and
+`Managed` filesystem snapshots. No filesystem TOML or environment settings are needed. The
+`--agent-filesystem-root` option changes the default root. The server reads filesystem settings
+from the optional exact `config/worker-executor.toml` in the working directory, without searching
+parent directories, then applies `GOLEM__` environment variables. These settings override the
+defaults. An existing file with invalid TOML prevents startup. Standalone executors and local
+servers on other platforms keep disabled snapshots by default. To choose `Directory` or `Temporary`
+on macOS, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting
+policy. Without a configured `repository_key`, the local server generates a 64-byte key and keeps
 its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions `0600`
 on Unix. Later starts use the same key. A configured key takes precedence. Without one, a corrupt
 kept key prevents startup and is not replaced. The snapshot store uses the executor's blob storage,
@@ -1224,12 +1230,19 @@ suffix-rollback check reads `StartFilesystem::replay()` before the filesystem is
 manual-update record without a name restores the initial files of the source revision when they
 are all read-only, and then applies the initial files of the target revision.
 
+A capture leaves out initial-file bytes only when every stored path component has the declaration's
+exact spelling. Native alias lookup is not that proof. An APFS file or parent renamed to a Unicode
+or case alias stays in the tree under its stored spelling; its declared path is not in `left_out`.
+The check retains sorted, boxed names for each relevant parent within one fenced operation.
+A separate positive byte-exact lookup proof avoids that name listing on validated XFS parents.
+Canonical coordination labels alone are not a lookup proof.
+
 An application snapshot is used only when the files of the agent can come back with it. With
 `filesystem_snapshots` disabled, the admission answers `InitialFilesOnly`, and the snapshot checks
 the tree in place of the capture (`agent_filesystem::check_initial_files`): the same fence and
 the same rule as a capture, with no host directory, copy or store call. The tree holds only
 initial files when each declaration is a read-only initial file that is untouched and has a single
-name, no entity-provisioned file exists, no call set a chosen modification time, and the tree
+name, every stored path component has the declaration's exact spelling, no entity-provisioned file exists, no call set a chosen modification time, and the tree
 holds nothing else; a read-write initial file counts as a change. A rename or hard link of any
 file, or a given time that the agent sets, counts as a change; a time that Golem puts back from a
 recorded stat does not. A tree of initial files gives a record without a name. Any other tree,
@@ -1289,9 +1302,13 @@ Filesystem permission failures carry their cause. `FilesystemStorageError::io` t
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
 return `not-permitted` without invalidation when a failed writable open rechecks a read-only regular
-file, or a failed hard link rechecks a directory at the source without following the final symlink.
-A failed cleanup prevents either policy recheck from replacing the storage failure. A failed recheck
-or an object that does not establish that guest-policy refusal leaves the original permission failure
+file, or a hard link fails with `PermissionDenied` or `AlreadyExists` and rechecks a directory at the
+source without following the final symlink. The hard-link recheck holds the namespace edit lease, so a
+coordinated replacement cannot change the source during classification. A terminal failure of that
+recheck invalidates the generation through `classify_query_error`. A missing source, a non-directory
+source or a nonterminal recheck failure leaves the original link error in control. A failed cleanup
+prevents either policy recheck from replacing the storage failure. A failed writable-open recheck or
+an object that does not establish its guest-policy refusal leaves the original permission failure
 terminal. These rechecks use the current object and do not identify the object
 that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` and the permission
 failure table in the executor walkthrough.

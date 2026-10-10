@@ -433,13 +433,9 @@ pub(super) fn seed_entry(
     let entry = tree_entry(&source_parent, source_name, PathBuf::from(source_name))?;
     match &entry.kind {
         TreeEntryKind::File => seed_file(context, &source_parent, &entry, base, destination),
-        TreeEntryKind::Symlink(link_target) => seed_symlink(
-            base,
-            destination,
-            link_target,
-            entry.modified,
-            context.placement,
-        ),
+        TreeEntryKind::Symlink(link_target) => {
+            seed_symlink(context, base, destination, link_target, entry.modified)
+        }
         TreeEntryKind::Directory => seed_directory(
             context,
             &source_parent.open_dir_nofollow(source_name)?,
@@ -463,43 +459,48 @@ fn seed_file(
     directory: &cap_std::fs::Dir,
     destination: &Path,
 ) -> std::io::Result<()> {
-    let (parent, name) = create_capability_copy_parent(directory, destination)?;
-    let source_file = open_file_nofollow(source_directory, &source.relative)?;
-    #[cfg(target_os = "macos")]
-    let mut temporary = match context.transfer {
-        SeedTransfer::Reflink => CapabilityTempFile::from_clone(parent, &source_file)?,
-        _ => CapabilityTempFile::new(parent)?,
-    };
-    #[cfg(not(target_os = "macos"))]
-    let mut temporary = CapabilityTempFile::new(parent)?;
-    let temporary_file = temporary.as_file().try_clone()?.into_std();
-    match context.transfer {
-        SeedTransfer::Bytes => {
-            std::io::copy(&mut &source_file, temporary.as_file_mut())?;
+    let (parent, name) = create_capability_copy_parent(directory, destination, context.transfer)?;
+    let seeded = (|| {
+        let source_file = open_file_nofollow(source_directory, &source.relative)?;
+        #[cfg(target_os = "macos")]
+        let mut temporary = match context.transfer {
+            SeedTransfer::Reflink => CapabilityTempFile::from_clone(parent.as_dir(), &source_file)?,
+            _ => CapabilityTempFile::new(parent.as_dir())?,
+        };
+        #[cfg(not(target_os = "macos"))]
+        let mut temporary = CapabilityTempFile::new(parent.as_dir())?;
+        let temporary_file = temporary.as_file().try_clone()?.into_std();
+        match context.transfer {
+            SeedTransfer::Bytes => {
+                std::io::copy(&mut &source_file, temporary.as_file_mut())?;
+            }
+            SeedTransfer::Reflink => {
+                #[cfg(not(target_os = "macos"))]
+                transfer_file(FileCopyMode::Reflink, &source_file, &temporary_file)?;
+            }
+            SeedTransfer::ReflinkIntoProject(project_id) => {
+                reflink_into_project(project_id, &temporary_file, &source_file)?
+            }
         }
-        SeedTransfer::Reflink => {
-            #[cfg(not(target_os = "macos"))]
-            transfer_file(FileCopyMode::Reflink, &source_file, &temporary_file)?;
+        temporary_file.set_permissions(seeded_permissions(
+            host_permissions(&source.permissions, &temporary_file)?,
+            context.access,
+        ))?;
+        if let Some(modified) = source.modified {
+            temporary_file.set_modified(modified)?;
         }
-        SeedTransfer::ReflinkIntoProject(project_id) => {
-            reflink_into_project(project_id, &temporary_file, &source_file)?
+        temporary_file.sync_all()?;
+        // `CreateNew` makes the name with one no-clobber call. Its `AlreadyExists` error applies the
+        // `Refuse` row of `placement_action` for every object that is already there, atomically.
+        match context.placement {
+            SeedPlacement::CreateNew => temporary.persist_noclobber(&name)?,
+            SeedPlacement::Replace => temporary.persist_replacing(&name)?,
         }
-    }
-    temporary_file.set_permissions(seeded_permissions(
-        host_permissions(&source.permissions, &temporary_file)?,
-        context.access,
-    ))?;
-    if let Some(modified) = source.modified {
-        temporary_file.set_modified(modified)?;
-    }
-    temporary_file.sync_all()?;
-    // `CreateNew` makes the name with one no-clobber call. Its `AlreadyExists` error applies the
-    // `Refuse` row of `placement_action` for every object that is already there, atomically.
-    match context.placement {
-        SeedPlacement::CreateNew => temporary.persist_noclobber(&name)?,
-        SeedPlacement::Replace => temporary.persist_replacing(&name)?,
-    }
-    Ok(())
+        Ok(())
+    })();
+    // Temporary cleanup finishes before the parent is synced, also when seeding fails.
+    let synced = sync_seed_directory(context.transfer, parent.as_dir());
+    seeded.and(synced)
 }
 
 /// Makes a symlink to `link_target` at `destination` under `directory`, with the modification
@@ -509,26 +510,31 @@ fn seed_file(
 /// applies the `Refuse` row of [`placement_action`]. A symlink that takes the place of a target is
 /// made under a temporary name first.
 fn seed_symlink(
+    context: SeedContext,
     directory: &cap_std::fs::Dir,
     destination: &Path,
     link_target: &Path,
     modified: Option<SystemTime>,
-    placement: SeedPlacement,
 ) -> std::io::Result<()> {
-    let (parent, name) = create_capability_copy_parent(directory, destination)?;
-    let parent = parent.as_dir();
-    match placement {
-        SeedPlacement::CreateNew => make_symlink(parent, link_target, &name, modified),
-        SeedPlacement::Replace => {
-            let temporary = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
-            make_symlink(parent, link_target, &temporary, modified)
-                .and_then(|()| clear_for_replacement(parent, &name))
-                .and_then(|()| parent.rename(&temporary, parent, &name))
-                .inspect_err(|_| {
-                    let _ = parent.remove_file(&temporary);
-                })
+    let (parent, name) = create_capability_copy_parent(directory, destination, context.transfer)?;
+    let seeded = {
+        let directory = parent.as_dir();
+        match context.placement {
+            SeedPlacement::CreateNew => make_symlink(directory, link_target, &name, modified),
+            SeedPlacement::Replace => {
+                let temporary = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()))
+                    .into_boxed_path();
+                make_symlink(directory, link_target, &temporary, modified)
+                    .and_then(|()| clear_for_replacement(directory, &name))
+                    .and_then(|()| directory.rename(&temporary, directory, &name))
+                    .inspect_err(|_| {
+                        let _ = directory.remove_file(&temporary);
+                    })
+            }
         }
-    }
+    };
+    let synced = sync_seed_directory(context.transfer, parent.as_dir());
+    seeded.and(synced)
 }
 
 /// Makes a symlink to `link_target` at `link` in `directory`, with the modification time
@@ -562,11 +568,12 @@ fn seed_directory(
     if destination.as_os_str().is_empty() {
         return seed_directory_contents(context, source, base);
     }
-    let (parent, name) = create_capability_copy_parent(base, destination)?;
-    let seeded = seed_directory_at(parent.as_dir(), &name, context.placement)?;
-    seed_directory_contents(context, source, &parent.as_dir().open_dir_nofollow(&name)?)?;
+    let (parent, name) = create_capability_copy_parent(base, destination, context.transfer)?;
+    let seeded = seed_directory_at(context, parent.as_dir(), &name)?;
+    let target = parent.as_dir().open_dir_nofollow(&name)?;
+    seed_directory_contents(context, source, &target)?;
     if seeded == SeededDirectory::Made {
-        set_seeded_directory_attributes(parent.as_dir(), &name, source_entry)
+        set_seeded_directory_attributes(context.transfer, parent.as_dir(), &name, source_entry)
     } else {
         Ok(())
     }
@@ -585,9 +592,9 @@ fn seed_directory_contents(
     let made = entries.iter().try_fold(Vec::new(), |made, entry| {
         seed_listed_entry(context, source, target, entry, made)
     })?;
-    made.iter()
-        .rev()
-        .try_for_each(|entry| set_seeded_directory_attributes(target, &entry.relative, entry))
+    made.iter().rev().try_for_each(|entry| {
+        set_seeded_directory_attributes(context.transfer, target, &entry.relative, entry)
+    })
 }
 
 /// Seeds one listed entry under `target`.
@@ -603,19 +610,27 @@ fn seed_listed_entry<'a>(
 ) -> std::io::Result<Vec<&'a TreeEntry>> {
     match &entry.kind {
         TreeEntryKind::Directory => {
-            if seed_directory_at(target, &entry.relative, context.placement)?
-                == SeededDirectory::Made
-            {
+            #[cfg(target_os = "macos")]
+            let seeded = if context.transfer == SeedTransfer::Reflink {
+                let (parent, name) =
+                    create_capability_copy_parent(target, &entry.relative, context.transfer)?;
+                seed_directory_at(context, parent.as_dir(), &name)?
+            } else {
+                seed_directory_at(context, target, &entry.relative)?
+            };
+            #[cfg(not(target_os = "macos"))]
+            let seeded = seed_directory_at(context, target, &entry.relative)?;
+            if seeded == SeededDirectory::Made {
                 made.push(entry);
             }
         }
         TreeEntryKind::File => seed_file(context, source, entry, target, &entry.relative)?,
         TreeEntryKind::Symlink(link_target) => seed_symlink(
+            context,
             target,
             &entry.relative,
             link_target,
             entry.modified,
-            context.placement,
         )?,
     }
     Ok(made)
@@ -638,16 +653,16 @@ enum SeededDirectory {
 /// removal and the second creation of `Replace` are separate calls, so a concurrent change between
 /// them gives an error.
 fn seed_directory_at(
+    context: SeedContext,
     directory: &cap_std::fs::Dir,
     path: &Path,
-    placement: SeedPlacement,
 ) -> std::io::Result<SeededDirectory> {
-    match directory.create_dir(path) {
+    let seeded = (|| match directory.create_dir(path) {
         Ok(()) => Ok(SeededDirectory::Made),
         Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
         Err(error) => {
             let occupant = occupant(&directory.symlink_metadata(path)?);
-            match placement_action(&TreeEntryKind::Directory, occupant, placement) {
+            match placement_action(&TreeEntryKind::Directory, occupant, context.placement) {
                 PlacementAction::Merge => Ok(SeededDirectory::Merged),
                 PlacementAction::Refuse => Err(error),
                 PlacementAction::Overwrite => {
@@ -662,7 +677,22 @@ fn seed_directory_at(
                 }
             }
         }
+    })();
+    #[cfg(target_os = "macos")]
+    if context.transfer == SeedTransfer::Reflink && !matches!(&seeded, Ok(SeededDirectory::Merged))
+    {
+        let child_synced = if matches!(&seeded, Ok(SeededDirectory::Made)) {
+            directory
+                .open_dir_nofollow(path)
+                .and_then(|child| sync_seed_directory(context.transfer, &child))
+        } else {
+            Ok(())
+        };
+        // A failed replacement can still have removed the old entry.
+        let parent_synced = sync_seed_directory(context.transfer, directory);
+        return seeded.and_then(|seeded| child_synced.and(parent_synced).map(|()| seeded));
     }
+    seeded
 }
 
 /// What a seed finds at the target path of an entry, without following a symlink.
@@ -741,10 +771,27 @@ pub(super) fn clear_for_replacement(
 /// Gives the directory at `path` in `directory` the permissions and the modification time of its
 /// listed source entry.
 fn set_seeded_directory_attributes(
+    transfer: SeedTransfer,
     directory: &cap_std::fs::Dir,
     path: &Path,
     source: &TreeEntry,
 ) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    if transfer == SeedTransfer::Reflink {
+        // Permissions can prevent path-based time changes and reopening the directory for sync.
+        let opened = directory.open_dir_nofollow(path)?;
+        let attributed = (|| {
+            let file = opened.try_clone()?.into_std_file();
+            file.set_permissions(host_permissions(&source.permissions, &file)?)?;
+            source
+                .modified
+                .map_or(Ok(()), |modified| file.set_modified(modified))
+        })();
+        let synced = sync_seed_directory(transfer, &opened);
+        return attributed.and(synced);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = transfer;
     directory.set_permissions(path, source.permissions.clone())?;
     if let Some(modified) = source.modified {
         cap_fs_ext::DirExt::set_times(directory, path, None, Some(capability_time(modified)))?;
@@ -800,10 +847,24 @@ fn reflink_into_project(
     }
 }
 
-/// Syncs the XFS volume or the directories of an APFS sandbox after a seed.
+/// Syncs an APFS seed directory that may have changed, including on a failed operation.
+/// Other storage modes need no per-directory sync.
+pub(super) fn sync_seed_directory(
+    transfer: SeedTransfer,
+    directory: &cap_std::fs::Dir,
+) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    if transfer == SeedTransfer::Reflink {
+        return rustix::fs::fsync(directory).map_err(std::io::Error::from);
+    }
+    let _ = (transfer, directory);
+    Ok(())
+}
+
+/// Syncs the XFS volume once after a seed batch, also when an entry fails.
 ///
-/// A seed call does this once, after its last entry, also when an entry fails. Buffered copies do
-/// not sync the volume.
+/// APFS seeds sync directories that may have changed at each operation, including failures.
+/// Buffered copies do not sync the volume.
 pub(super) fn sync_after_reflink(
     mode: FileCopyMode,
     materialization_root: &Path,
@@ -817,7 +878,8 @@ pub(super) fn sync_after_reflink(
             }
             #[cfg(target_os = "macos")]
             {
-                apfs::sync_directories(materialization_root)
+                let _ = materialization_root;
+                Ok(())
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             {
@@ -1443,6 +1505,189 @@ mod tests {
         assert_eq!(
             std::fs::read(destination.path().join("data/file")).unwrap(),
             b"new"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_files_preserve_attributes_and_cleanup_after_placement_failure() {
+        [
+            SeedTransfer::Bytes,
+            #[cfg(target_os = "macos")]
+            SeedTransfer::Reflink,
+        ]
+        .into_iter()
+        .for_each(|transfer| {
+            let source = tempfile::tempdir().unwrap();
+            let file = source.path().join("file").into_boxed_path();
+            std::fs::write(&file, b"seeded file").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o640)).unwrap();
+            let modified = UNIX_EPOCH + Duration::from_secs(1_700_000_007);
+            File::open(&file).unwrap().set_modified(modified).unwrap();
+            let destination = tempfile::tempdir().unwrap();
+            let base = open(destination.path());
+            let context = SeedContext {
+                transfer,
+                access: SeedAccess::ReadOnly,
+                placement: SeedPlacement::CreateNew,
+            };
+
+            seed_entry(context, &base, &file, Path::new("ancestor/file")).unwrap();
+
+            let target = destination.path().join("ancestor/file").into_boxed_path();
+            let attributes = std::fs::metadata(&target).unwrap();
+            assert_eq!(attributes.permissions().mode() & 0o777, 0o440);
+            assert_eq!(attributes.modified().unwrap(), modified);
+            [
+                ("ancestor/file", std::io::ErrorKind::AlreadyExists),
+                ("ancestor/\0", std::io::ErrorKind::InvalidInput),
+            ]
+            .into_iter()
+            .for_each(|(path, expected)| {
+                let error = seed_entry(context, &base, &file, Path::new(path)).unwrap_err();
+                assert_eq!(error.kind(), expected, "{transfer:?}: {error}");
+                assert_eq!(std::fs::read(&target).unwrap(), b"seeded file");
+                assert_eq!(
+                    sorted_names(&base.open_dir_nofollow("ancestor").unwrap()).unwrap(),
+                    [OsString::from("file")],
+                    "a failed placement must remove its temporary file"
+                );
+            });
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_symlinks_preserve_times_and_cleanup_after_placement_failure() {
+        [
+            SeedTransfer::Bytes,
+            #[cfg(target_os = "macos")]
+            SeedTransfer::Reflink,
+        ]
+        .into_iter()
+        .for_each(|transfer| {
+            let source = tempfile::tempdir().unwrap();
+            let link = source.path().join("link").into_boxed_path();
+            std::os::unix::fs::symlink("missing-target", &link).unwrap();
+            let modified = UNIX_EPOCH + Duration::from_secs(1_700_000_008);
+            open(source.path())
+                .set_symlink_times("link", None, Some(capability_time(modified)))
+                .unwrap();
+            let destination = tempfile::tempdir().unwrap();
+            let base = open(destination.path());
+            let context = SeedContext {
+                transfer,
+                access: SeedAccess::FromSource,
+                placement: SeedPlacement::CreateNew,
+            };
+
+            seed_entry(context, &base, &link, Path::new("ancestor/link")).unwrap();
+            let error = seed_entry(context, &base, &link, Path::new("ancestor/link")).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+            let replacing = SeedContext {
+                placement: SeedPlacement::Replace,
+                ..context
+            };
+            let error = seed_entry(replacing, &base, &link, Path::new("ancestor/\0")).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            seed_entry(replacing, &base, &link, Path::new("ancestor/link")).unwrap();
+
+            let target = destination.path().join("ancestor/link").into_boxed_path();
+            assert_eq!(
+                std::fs::read_link(&target).unwrap(),
+                Path::new("missing-target")
+            );
+            assert_eq!(
+                std::fs::symlink_metadata(&target)
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                modified
+            );
+            assert_eq!(
+                sorted_names(&base.open_dir_nofollow("ancestor").unwrap()).unwrap(),
+                [OsString::from("link")],
+                "placement and error cleanup must leave no temporary symlink"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_merges_an_empty_directory_without_opening_it_for_sync() {
+        [
+            SeedTransfer::Bytes,
+            #[cfg(target_os = "macos")]
+            SeedTransfer::Reflink,
+        ]
+        .into_iter()
+        .for_each(|transfer| {
+            let source = tempfile::tempdir().unwrap();
+            let destination = tempfile::tempdir().unwrap();
+            let base = open(destination.path());
+            base.create_dir("merged").unwrap();
+            base.set_permissions(
+                "merged",
+                cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o0)),
+            )
+            .unwrap();
+            let mut entry = listed("merged", None);
+            entry.kind = TreeEntryKind::Directory;
+            let context = SeedContext {
+                transfer,
+                access: SeedAccess::FromSource,
+                placement: SeedPlacement::CreateNew,
+            };
+
+            let result =
+                seed_listed_entry(context, &open(source.path()), &base, &entry, Vec::new());
+            std::fs::set_permissions(
+                destination.path().join("merged"),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+
+            assert!(result.unwrap().is_empty(), "a merged directory is not made");
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apfs_seed_syncs_directory_attributes_through_restrictive_permissions() {
+        let destination = tempfile::tempdir().unwrap();
+        let base = open(destination.path());
+        base.create_dir("made").unwrap();
+        let mut entry = listed("made", None);
+        entry.kind = TreeEntryKind::Directory;
+        entry.permissions =
+            cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o0));
+        let modified = UNIX_EPOCH + Duration::from_secs(1_234_567);
+        entry.modified = Some(modified);
+        let result = set_seeded_directory_attributes(
+            SeedTransfer::Reflink,
+            &base,
+            Path::new("made"),
+            &entry,
+        );
+        let mode = base.symlink_metadata("made").unwrap().permissions().mode() & 0o777;
+        std::fs::set_permissions(
+            destination.path().join("made"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+
+        assert!(
+            result.is_ok(),
+            "sync must use the open directory: {result:?}"
+        );
+        assert_eq!(mode, 0);
+        assert_eq!(
+            base.symlink_metadata("made")
+                .unwrap()
+                .modified()
+                .unwrap()
+                .into_std(),
+            modified
         );
     }
 

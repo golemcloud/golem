@@ -377,6 +377,7 @@ enum FilesystemVolumeMode {
     },
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FilesystemIdentity {
     device: u64,
@@ -518,25 +519,6 @@ enum NativeNameModeSource {
     NativeDetection,
     #[cfg(target_os = "linux")]
     ValidatedXfs(xfs::ValidatedXfsNameMode),
-    #[cfg(all(unix, any(test, target_os = "macos")))]
-    ApfsExact(FilesystemIdentity),
-    #[cfg(all(unix, any(test, target_os = "macos")))]
-    ApfsConservative,
-}
-
-#[cfg(all(unix, any(test, target_os = "macos")))]
-fn apfs_name_source(
-    case_sensitive: i64,
-    identity: FilesystemIdentity,
-) -> std::io::Result<NativeNameModeSource> {
-    match case_sensitive {
-        0 => Ok(NativeNameModeSource::ApfsConservative),
-        1 => Ok(NativeNameModeSource::ApfsExact(identity)),
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "volume case sensitivity is unavailable",
-        )),
-    }
 }
 
 #[derive(Clone, Default)]
@@ -571,6 +553,29 @@ enum NativeFileIdentity {
     Scripted(String),
 }
 
+enum AppendCoordinatorAction {
+    Reuse(Arc<AsyncMutex<()>>),
+    Allocate,
+}
+
+fn keep_append_coordinator(strong_count: usize) -> bool {
+    strong_count != 0
+}
+
+fn decide_append_coordinator(existing: Option<Arc<AsyncMutex<()>>>) -> AppendCoordinatorAction {
+    match existing {
+        Some(coordinator) => AppendCoordinatorAction::Reuse(coordinator),
+        None => AppendCoordinatorAction::Allocate,
+    }
+}
+
+#[cfg(test)]
+fn live_append_coordinators(strong_counts: impl Iterator<Item = usize>) -> usize {
+    strong_counts
+        .filter(|count| keep_append_coordinator(*count))
+        .count()
+}
+
 #[derive(Default)]
 struct AppendCoordinatorRegistry {
     coordinators: Mutex<HashMap<NativeFileIdentity, Weak<AsyncMutex<()>>>>,
@@ -591,10 +596,11 @@ impl AppendCoordinatorRegistry {
         #[cfg(test)]
         self.lookups
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        coordinators.retain(|_, coordinator| coordinator.strong_count() != 0);
-        match coordinators.get(&identity).and_then(Weak::upgrade) {
-            Some(coordinator) => coordinator,
-            None => {
+        coordinators.retain(|_, coordinator| keep_append_coordinator(coordinator.strong_count()));
+        let observed = coordinators.get(&identity).and_then(Weak::upgrade);
+        match decide_append_coordinator(observed) {
+            AppendCoordinatorAction::Reuse(coordinator) => coordinator,
+            AppendCoordinatorAction::Allocate => {
                 let coordinator = Arc::new(AsyncMutex::new(()));
                 coordinators.insert(identity, Arc::downgrade(&coordinator));
                 #[cfg(test)]
@@ -624,10 +630,7 @@ impl AppendCoordinatorRegistry {
             allocations: self.allocations.load(Ordering::Relaxed),
             lock_acquisitions: self.lock_acquisitions.load(Ordering::Relaxed),
             registered: coordinators.len(),
-            live: coordinators
-                .values()
-                .filter(|coordinator| coordinator.strong_count() != 0)
-                .count(),
+            live: live_append_coordinators(coordinators.values().map(Weak::strong_count)),
         }
     }
 }
@@ -1457,7 +1460,8 @@ impl CapabilityCopyParent<'_> {
 fn create_capability_copy_parent<'a>(
     base: &'a cap_std::fs::Dir,
     target: &Path,
-) -> std::io::Result<(CapabilityCopyParent<'a>, PathBuf)> {
+    transfer: SeedTransfer,
+) -> std::io::Result<(CapabilityCopyParent<'a>, Box<Path>)> {
     let mut components = target.components().peekable();
     let mut parent = CapabilityCopyParent::Borrowed(base);
     while let Some(component) = components.next() {
@@ -1470,7 +1474,7 @@ fn create_capability_copy_parent<'a>(
         if components.peek().is_none() {
             #[cfg(test)]
             record_capability_copy_parent(base, &parent);
-            return Ok((parent, PathBuf::from(component)));
+            return Ok((parent, Path::new(component).into()));
         }
         match parent.as_dir().symlink_metadata(component) {
             Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
@@ -1483,8 +1487,17 @@ fn create_capability_copy_parent<'a>(
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                parent.as_dir().create_dir(component)?;
-                parent = CapabilityCopyParent::Owned(parent.as_dir().open_dir_nofollow(component)?);
+                let child = parent
+                    .as_dir()
+                    .create_dir(component)
+                    .and_then(|()| parent.as_dir().open_dir_nofollow(component))
+                    .and_then(|child| {
+                        tree_copy::sync_seed_directory(transfer, &child).map(|()| child)
+                    });
+                // The parent may have changed even if opening or syncing the new child failed.
+                let synced = tree_copy::sync_seed_directory(transfer, parent.as_dir());
+                parent =
+                    CapabilityCopyParent::Owned(child.and_then(|child| synced.map(|()| child))?);
             }
             Err(error) => return Err(error),
         }
@@ -1558,22 +1571,23 @@ fn record_capability_copy_parent(base: &cap_std::fs::Dir, parent: &CapabilityCop
 }
 
 struct CapabilityTempFile<'a> {
-    directory: CapabilityCopyParent<'a>,
+    directory: &'a cap_std::fs::Dir,
     name: Option<Box<Path>>,
     file: cap_std::fs::File,
 }
 
 impl<'a> CapabilityTempFile<'a> {
-    fn new(directory: CapabilityCopyParent<'a>) -> std::io::Result<Self> {
+    fn new(directory: &'a cap_std::fs::Dir) -> std::io::Result<Self> {
         loop {
-            let name = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
+            let name =
+                PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path();
             let mut options = cap_std::fs::OpenOptions::new();
             options.read(true).write(true).create_new(true);
-            match directory.as_dir().open_with(&name, &options) {
+            match directory.open_with(&name, &options) {
                 Ok(file) => {
                     return Ok(Self {
                         directory,
-                        name: Some(name.into_boxed_path()),
+                        name: Some(name),
                         file,
                     });
                 }
@@ -1584,26 +1598,24 @@ impl<'a> CapabilityTempFile<'a> {
     }
 
     #[cfg(target_os = "macos")]
-    fn from_clone(directory: CapabilityCopyParent<'a>, source: &File) -> std::io::Result<Self> {
+    fn from_clone(directory: &'a cap_std::fs::Dir, source: &File) -> std::io::Result<Self> {
         let name = std::iter::repeat_with(|| {
-            PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()))
+            PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path()
         })
-        .find_map(
-            |name| match apfs::clone_file(source, directory.as_dir(), &name) {
-                Ok(()) => Some(Ok(name)),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
-                Err(error) => Some(Err(error)),
-            },
-        )
+        .find_map(|name| match apfs::clone_file(source, directory, &name) {
+            Ok(()) => Some(Ok(name)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+            Err(error) => Some(Err(error)),
+        })
         .expect("an unbounded clone-name iterator must return a result")?;
-        match directory.as_dir().open(&name) {
+        match directory.open(&name) {
             Ok(file) => Ok(Self {
                 directory,
-                name: Some(name.into_boxed_path()),
+                name: Some(name),
                 file,
             }),
             Err(error) => {
-                directory.as_dir().remove_file(&name)?;
+                directory.remove_file(&name)?;
                 Err(error)
             }
         }
@@ -1623,9 +1635,8 @@ impl<'a> CapabilityTempFile<'a> {
             .as_ref()
             .expect("capability temporary file name missing");
         self.directory
-            .as_dir()
-            .hard_link(name, self.directory.as_dir(), destination)?;
-        self.directory.as_dir().remove_file(name)?;
+            .hard_link(name, self.directory, destination)?;
+        self.directory.remove_file(name)?;
         self.name = None;
         Ok(())
     }
@@ -1637,10 +1648,8 @@ impl<'a> CapabilityTempFile<'a> {
             .name
             .as_ref()
             .expect("capability temporary file name missing");
-        tree_copy::clear_for_replacement(self.directory.as_dir(), destination)?;
-        self.directory
-            .as_dir()
-            .rename(name, self.directory.as_dir(), destination)?;
+        tree_copy::clear_for_replacement(self.directory, destination)?;
+        self.directory.rename(name, self.directory, destination)?;
         self.name = None;
         Ok(())
     }
@@ -1649,7 +1658,7 @@ impl<'a> CapabilityTempFile<'a> {
 impl Drop for CapabilityTempFile<'_> {
     fn drop(&mut self) {
         if let Some(name) = self.name.take() {
-            let _ = self.directory.as_dir().remove_file(name);
+            let _ = self.directory.remove_file(name);
         }
     }
 }
@@ -1883,10 +1892,8 @@ mod tests {
     #[test]
     fn apfs_startup_refuses_other_platforms_without_creating_the_root() {
         let parent = tempfile::tempdir().unwrap();
-        let root = parent.path().join("agents");
-        let storage = FilesystemStorageMode::Apfs {
-            root: root.as_path().into(),
-        };
+        let root = parent.path().join("agents").into_boxed_path();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
         let error = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
             .err()
             .unwrap();
@@ -1902,11 +1909,9 @@ mod tests {
     #[test]
     fn apfs_startup_refuses_a_file_as_its_root_with_a_clear_error() {
         let parent = tempfile::tempdir().unwrap();
-        let root = parent.path().join("agents");
+        let root = parent.path().join("agents").into_boxed_path();
         std::fs::write(&root, b"not a directory").unwrap();
-        let storage = FilesystemStorageMode::Apfs {
-            root: root.as_path().into(),
-        };
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
         let error = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
             .err()
             .unwrap();
@@ -1919,10 +1924,8 @@ mod tests {
     #[test]
     fn apfs_startup_makes_and_probes_a_development_root() {
         let parent = tempfile::tempdir().unwrap();
-        let root = parent.path().join("agents");
-        let storage = FilesystemStorageMode::Apfs {
-            root: root.clone().into(),
-        };
+        let root = parent.path().join("agents").into_boxed_path();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
         let provisioning = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
             .expect("APFS must start on the existing Mac volume");
 
