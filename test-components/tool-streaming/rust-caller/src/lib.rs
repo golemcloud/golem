@@ -686,6 +686,7 @@ pub trait ToolStreamingCaller {
     async fn clock_races_through_tool_entity(&self) -> Vec<String>;
     async fn long_clock_through_tool_entity(&self) -> Vec<String>;
     async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String>;
+    async fn local_clocks_then_tool_clocks(&self, local_reads: u32, tool_calls: u32) -> u32;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
     async fn builtin_cli(&self, tool: String, cwd: String, args: Vec<String>) -> CliToolEvidence;
     async fn filesystem_policy_write_read(
@@ -2732,6 +2733,22 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("await long P3 clock");
         let follow_up = client.follow_up().await.expect("clock follow-up");
         vec![timer.to_string(), follow_up]
+    }
+
+    async fn local_clocks_then_tool_clocks(&self, local_reads: u32, tool_calls: u32) -> u32 {
+        for _ in 0..local_reads {
+            let _ = golem_rust::wasip3::clocks::system_clock::now();
+        }
+        let client = ClockRaceClient::new();
+        let mut completed = 0;
+        for _ in 0..tool_calls {
+            client
+                .read_clocks()
+                .await
+                .expect("read clocks in tool body");
+            completed += 1;
+        }
+        completed
     }
 
     async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String> {

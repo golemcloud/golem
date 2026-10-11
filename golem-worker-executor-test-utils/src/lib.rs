@@ -916,6 +916,15 @@ impl TestWorkerExecutor {
         })
     }
 
+    /// Returns the number of entries the agent's opened oplog returned from `Oplog::read_exact`.
+    pub fn oplog_entries_read(&self, agent_id: &AgentId) -> u64 {
+        self.additional_test_deps
+            .oplog_entries_read(&OwnedAgentId::new(
+                self.context.default_environment_id,
+                agent_id,
+            ))
+    }
+
     pub fn oplog_service_call_count(&self, agent_id: &AgentId, api: &'static str) -> usize {
         self.additional_test_deps.oplog_call_count(
             &OwnedAgentId::new(self.context.default_environment_id, agent_id),
@@ -1324,27 +1333,6 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         worker.queue_card_revocation(card_id).await?;
         Ok(())
-    }
-
-    pub async fn queue_uncommitted_card_revocation(
-        &self,
-        agent_id: &AgentId,
-        card_id: CardId,
-    ) -> anyhow::Result<OplogIndex> {
-        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(&owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
-        Ok(worker
-            .add_to_oplog(OplogEntry::card_event_queued(
-                None,
-                Box::new(golem_common::base_model::oplog::QueuedCardEvent::revoke(
-                    card_id,
-                )),
-            ))
-            .await?)
     }
 
     pub async fn queue_card_install(
@@ -5410,6 +5398,8 @@ impl Oplog for TestOplog {
         }
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "read_exact");
+        self.additional_test_deps
+            .record_oplog_entries_read(&self.owned_agent_id, n);
         self.oplog.read_exact(oplog_index, n).await
     }
 
@@ -5847,6 +5837,7 @@ pub struct AdditionalTestDeps {
     native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
+    oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
@@ -5926,6 +5917,7 @@ impl AdditionalTestDeps {
             oplog_failures,
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6414,6 +6406,24 @@ impl AdditionalTestDeps {
             .unwrap()
             .entry((owned_agent_id.clone(), api))
             .or_default() += 1;
+    }
+
+    fn record_oplog_entries_read(&self, owned_agent_id: &OwnedAgentId, entries: u64) {
+        *self
+            .oplog_entries_read
+            .lock()
+            .unwrap()
+            .entry(owned_agent_id.clone())
+            .or_default() += entries;
+    }
+
+    fn oplog_entries_read(&self, owned_agent_id: &OwnedAgentId) -> u64 {
+        self.oplog_entries_read
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     fn oplog_call_count(&self, owned_agent_id: &OwnedAgentId, api: &'static str) -> usize {

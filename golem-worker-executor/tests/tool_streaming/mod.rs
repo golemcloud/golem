@@ -15182,6 +15182,103 @@ async fn clock_races_complete_through_tool_entity_without_suspending_owner(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn tool_bodies_read_pending_card_events_without_scanning_the_invocation_oplog(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const LOCAL_READS: u32 = 500;
+    const TOOL_CALLS: u32 = 15;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent = agent_id!("ToolStreamingCaller", "card-boundary-tool-owner");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let entries_read_before = executor.oplog_entries_read(&worker);
+    let completed = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "local_clocks_then_tool_clocks",
+            data_value!(LOCAL_READS, TOOL_CALLS),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(completed, TOOL_CALLS);
+    let entries_read = executor.oplog_entries_read(&worker) - entries_read_before;
+
+    let interval = executor.get_oplog(&worker, boundary).await?;
+    let tool_bodies = interval
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    assert_eq!(tool_bodies, TOOL_CALLS as usize);
+    let invocation_entries = interval
+        .iter()
+        .filter(|entry| entry.oplog_index > boundary)
+        .count() as u64;
+    // Each tool body crosses the card event boundary in a new entity Store. Reading the
+    // pending card events must not depend on how many entries the invocation appended before.
+    assert!(
+        entries_read < invocation_entries,
+        "tool bodies read {entries_read} oplog entries during an invocation of \
+         {invocation_entries} entries"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn long_clock_through_tool_entity_suspends_and_reconstructs_owner(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
