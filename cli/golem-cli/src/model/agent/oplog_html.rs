@@ -22,11 +22,25 @@ const VIEWER_TEMPLATE: &str = include_str!("oplog_viewer.html");
 const DATA_PLACEHOLDER: &str = "__OPLOG_DATA__";
 const TITLE_PLACEHOLDER: &str = "__OPLOG_TITLE__";
 
+/// How the viewer page obtains its entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OplogViewerMode {
+    /// Every entry is embedded in the page.
+    Static,
+    /// The page loads entries page by page from the local viewer server
+    /// (see `crate::command_handler::agent::oplog_serve`).
+    Live,
+}
+
 /// The document embedded into the HTML oplog viewer. `entries` has the same shape as the
 /// `agent.oplog` structured output documents, so the viewer can also load a `--format json` dump.
+/// In live mode `entries` is empty and `from` and `query` are the initial position and server
+/// query of the viewer.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OplogViewerDocument {
+    pub mode: OplogViewerMode,
     pub agent_id: String,
     pub component_name: String,
     pub component_id: String,
@@ -34,6 +48,8 @@ pub struct OplogViewerDocument {
     pub cli_version: String,
     pub from: Option<u64>,
     pub query: Option<String>,
+    /// Number of entries one page of the live API returns.
+    pub page_size: u64,
     pub entries: Vec<AgentOplogEntryView>,
 }
 
@@ -74,6 +90,7 @@ mod tests {
 
     fn document(entries: Vec<AgentOplogEntryView>) -> OplogViewerDocument {
         OplogViewerDocument {
+            mode: OplogViewerMode::Static,
             agent_id: "CounterAgent(\"<counter>\")".to_string(),
             component_name: "app:counter".to_string(),
             component_id: "00000000-0000-0000-0000-000000000000".to_string(),
@@ -81,6 +98,7 @@ mod tests {
             cli_version: "test".to_string(),
             from: None,
             query: None,
+            page_size: 100,
             entries,
         }
     }

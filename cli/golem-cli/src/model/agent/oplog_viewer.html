@@ -160,6 +160,18 @@ header .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 #help.on { display: block; }
 #help td { padding: 1px 8px 1px 0; }
 .empty { padding: 40px; text-align: center; color: var(--fg3); }
+#livebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--fg2); width: 100%; }
+#livebar .pill { border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; background: var(--bg3); font-family: var(--mono); font-size: 11px; }
+#livebar .pill.live { color: var(--c-log); border-color: color-mix(in srgb, var(--c-log) 50%, transparent); }
+#livebar .pill.status-Failed, #livebar .pill.status-Exited { color: var(--c-error); }
+#livebar .pill.status-Running { color: var(--c-host); }
+#livebar button { padding: 1px 8px; font-size: 11.5px; }
+#livebar button:disabled { opacity: .4; cursor: default; }
+#livebar .busy { color: var(--accent); }
+#sq-wrap { display: inline-flex; gap: 4px; align-items: center; }
+#squery { width: 260px; }
+.tag.ctx { color: var(--accent); cursor: pointer; }
+#minimap canvas { height: 34px; }
 </style>
 </head>
 <body>
@@ -169,6 +181,7 @@ header .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
     <h1>Oplog <span class="agent" id="h-agent"></span></h1>
     <div class="meta" id="h-meta"></div>
     <div class="spacer"></div>
+    <div id="livebar" class="hidden"></div>
     <div class="tools">
       <button id="btn-expand" title="Expand all groups (e)">Expand all</button>
       <button id="btn-collapse" title="Collapse all groups (c)">Collapse all</button>
@@ -180,7 +193,8 @@ header .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
     </div>
   </header>
   <div id="toolbar">
-    <input type="text" id="search" placeholder="Search (text, function, payload…)  /">
+    <input type="text" id="search" placeholder="Filter loaded entries (text, function, payload…)  /">
+    <span id="sq-wrap" class="hidden" title="Lucene query evaluated by the server over the whole oplog"><input type="text" id="squery" placeholder="Server query (Lucene), Enter to run"><button id="btn-sq-clear" title="Clear the server query and load the oplog from the start">✕</button></span>
     <div class="chips" id="chips"></div>
     <label><input type="checkbox" id="cb-hints" checked> hints</label>
     <label>min log <select id="loglevel"><option>Stdout</option><option>Stderr</option><option>Trace</option><option>Debug</option><option>Info</option><option>Warn</option><option>Error</option><option>Critical</option></select></label>
@@ -614,7 +628,7 @@ function detailFields(e) {
 // Structure: build a tree of groups (invocations, host calls, entity chains,
 // atomic regions, transactions) from the flat entry list.
 // ---------------------------------------------------------------------------
-function buildTree(entries) {
+function buildTree(entries, extraDropped) {
   const root = { kind: 'root', children: [], members: [], parent: null };
   const mk = (kind, e, parent) => { const n = { kind, e, children: [], members: [], parent, frames: [] }; parent.children.push(n); return n; };
   const leaf = (e, parent) => mk('entry', e, parent);
@@ -655,8 +669,9 @@ function buildTree(entries) {
     if (n) nodeOf.set(e.index, n);
   }
   if (invocation) invocation.unfinished = true;
-  // Dropped regions from Jump / Revert entries.
-  const dropped = [];
+  // Dropped regions from Jump / Revert entries, plus the regions the agent metadata reports
+  // (needed in live mode, where the Jump or Revert entry may lie outside the loaded window).
+  const dropped = [...(extraDropped || [])];
   for (const e of entries) { const p = e.entry; if (e.type === 'Jump' && p.jump) dropped.push([idxOf(p.jump.start), idxOf(p.jump.end), e.index]); if (e.type === 'Revert' && p.droppedRegion) dropped.push([idxOf(p.droppedRegion.start), idxOf(p.droppedRegion.end), e.index]); }
   if (dropped.length) for (const e of entries) for (const [s, en, by] of dropped) if (e.index >= s && e.index <= en) { e.dropped = by; break; }
   // Revision dividers.
@@ -668,7 +683,8 @@ function buildTree(entries) {
 // ---------------------------------------------------------------------------
 // State and rendering of the list.
 // ---------------------------------------------------------------------------
-const state = { entries: [], root: null, nodeOf: new Map(), t0: 0, t1: 0, cats: new Set(CATEGORIES), types: null, hints: true, minLog: 0, q: '', from: null, to: null, rel: false, selected: null, expandedDefault: true, meta: {} };
+const state = { entries: [], root: null, nodeOf: new Map(), t0: 0, t1: 0, cats: new Set(CATEGORIES), types: null, hints: true, minLog: 0, q: '', from: null, to: null, rel: false, selected: null, expandedDefault: true, meta: {}, openKeys: new Map(), forceOpen: null, live: null };
+let LIVE = false;
 let elCache = new Map();
 
 function searchText(e) {
@@ -716,13 +732,13 @@ function groupHeader(n) {
   const parts = []; let cls = 'row'; let right = [];
   if (n.kind === 'invocation') {
     const inv = e.entry.invocation; const inp = invocationInput(inv);
-    parts.push(badge(e.type), h('span', { class: 'sum' }, span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, n.end ? (() => { const r = n.end.entry.result; const err = resultError(r); const out = resultOutput(r); return err ? [span('err', ' ✗ ' + trunc(err, 80))] : out ? [arrow(), span('val', typedText(out, 80))] : [arrow(), span('ok', 'ok')]; })() : span('err', ' · unfinished')));
+    parts.push(badge(e.type), h('span', { class: 'sum' }, span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, n.end ? (() => { const r = n.end.entry.result; const err = resultError(r); const out = resultOutput(r); return err ? [span('err', ' ✗ ' + trunc(err, 80))] : out ? [arrow(), span('val', typedText(out, 80))] : [arrow(), span('ok', 'ok')]; })() : span(beyondWindow() ? 'val' : 'err', beyondWindow() ? ' · continues past the loaded window' : ' · unfinished')));
     if (n.end) { right.push(h('span', { class: 'tag dur' }, fmtDur(n.end.ts - e.ts))); if (n.end.entry.consumedFuel) right.push(h('span', { class: 'tag fuel', title: 'consumed fuel' }, '⛽ ' + n.end.entry.consumedFuel)); }
     const errs = countErrors(n); if (errs) right.push(h('span', { class: 'tag warn' }, errs + ' error' + (errs > 1 ? 's' : '')));
     right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
   } else if (n.kind === 'host') {
     const p = e.entry; const end = n.end;
-    parts.push(badge(end ? (end.type === 'Cancelled' ? 'Cancelled' : 'Start') : 'Start'), h('span', { class: 'sum' }, span('fn', p.functionName), span('val', '(' + typedText(p.request, 90) + ')'), end ? (end.type === 'Cancelled' ? [span('err', ' ✗ cancelled'), end.entry.partial != null ? span('val', ' partial: ' + typedText(end.entry.partial, 60)) : null] : end.entry.response != null ? [arrow(), span('val', typedText(end.entry.response, 110))] : [arrow(), span('ok', 'done')]) : span('err', ' · no end recorded')));
+    parts.push(badge(end ? (end.type === 'Cancelled' ? 'Cancelled' : 'Start') : 'Start'), h('span', { class: 'sum' }, span('fn', p.functionName), span('val', '(' + typedText(p.request, 90) + ')'), end ? (end.type === 'Cancelled' ? [span('err', ' ✗ cancelled'), end.entry.partial != null ? span('val', ' partial: ' + typedText(end.entry.partial, 60)) : null] : end.entry.response != null ? [arrow(), span('val', typedText(end.entry.response, 110))] : [arrow(), span('ok', 'done')]) : span(beyondWindow() ? 'val' : 'err', beyondWindow() ? ' · end not loaded yet' : ' · no end recorded')));
     if (end) right.push(h('span', { class: 'tag dur' }, fmtDur(end.ts - e.ts)));
     right.push(h('span', { class: 'tag', title: 'durable function type' }, dft(p.durableFunctionType)));
     if (n.completion) right.push(h('span', { class: 'tag ' + (n.completion.type === 'CompletionDiscarded' ? 'warn' : ''), title: n.completion.type }, n.completion.type === 'CompletionDiscarded' ? 'discarded' : 'delivered'));
@@ -740,6 +756,8 @@ function groupHeader(n) {
   }
   return { parts, cls, right };
 }
+// In live mode an open group may simply continue past the loaded window.
+function beyondWindow() { return LIVE && state.live.hasMore; }
 function countErrors(n) { let c = 0; if (n.e && n.e.type === 'Error') c++; for (const k of n.children) c += countErrors(k); return c; }
 
 function renderNodeEl(n, prev) {
@@ -758,19 +776,21 @@ function renderNodeEl(n, prev) {
     if (e.type === 'AgentInvocationFinished' && e.entry.consumedFuel) right.push(h('span', { class: 'tag fuel' }, '⛽ ' + e.entry.consumedFuel));
     if (e.type === 'Error') right.push(h('span', { class: 'tag warn' }, 'attempt ' + e.attempt));
     const a = attrTag(e); if (a) right.push(a);
+    if (state.live && state.live.serverQuery) right.push(h('span', { class: 'tag ctx', title: 'load the oplog around this entry', onclick: ev => { ev.stopPropagation(); showContext(e.index); } }, 'context'));
     row.append(h('span', { class: 'kind' }, badge(e.type)), h('span', { class: 'sum' }, ...summary(e)), h('span', { class: 'right' }, ...right));
   }
   el.append(row);
   if (e) prev.ts = e.ts;
   row.addEventListener('click', ev => { if (ev.target.closest('.idxlink, button, a')) return; select(el, n); if (isGroup && ev.target.closest('.caret')) toggleGroup(el, n); else toggleDetails(el, n); });
   if (isGroup) {
-    const open = n.open !== undefined ? n.open : defaultOpen(n);
+    const key = nodeKey(n);
+    const open = state.openKeys.has(key) ? state.openKeys.get(key) : defaultOpen(n);
     if (open) { el.classList.add('open'); el.append(renderChildren(n, prev)); }
   }
   elCache.set(nodeKey(n), el);
   return el;
 }
-function defaultOpen(n) { if (n.kind === 'host') return false; if (n.kind === 'invocation') return state.expandedDefault; return true; }
+function defaultOpen(n) { if (state.forceOpen !== null) return state.forceOpen; if (n.kind === 'host') return false; if (n.kind === 'invocation') return state.expandedDefault; return true; }
 function renderChildren(n, prev) {
   const c = h('div', { class: 'children' });
   const p = prev || { ts: n.e ? n.e.ts : null };
@@ -780,7 +800,7 @@ function renderChildren(n, prev) {
 }
 function toggleGroup(el, n, force) {
   const open = force !== undefined ? force : !el.classList.contains('open');
-  n.open = open;
+  state.openKeys.set(nodeKey(n), open);
   el.classList.toggle('open', open);
   const existing = el.querySelector(':scope > .children');
   if (open && !existing) el.append(renderChildren(n));
@@ -819,7 +839,7 @@ function renderMore() {
   rows.append(frag);
 }
 function lastTs(n) { let last = n.e ? n.e.ts : null; if (n.end) last = n.end.ts; for (const k of n.children) { const t = lastTs(k); if (t != null) last = t; } return last; }
-new IntersectionObserver(es => { if (es[0].isIntersecting && renderCursor < topLevel.length) renderMore(); }, { root: $('#list'), rootMargin: '600px' }).observe($('#sentinel'));
+new IntersectionObserver(es => { if (!es[0].isIntersecting) return; if (renderCursor < topLevel.length) renderMore(); else if (LIVE && state.live.hasMore && !state.live.loading) loadMore(); }, { root: $('#list'), rootMargin: '600px' }).observe($('#sentinel'));
 
 function ensureRendered(n) {
   const chain = []; for (let p = n; p && p.kind !== 'root'; p = p.parent) chain.push(p);
@@ -835,10 +855,13 @@ function ensureRendered(n) {
   }
   return el;
 }
-function goTo(index) {
+function goTo(index, loaded) {
   index = Number(index);
   const n = state.nodeOf.get(index);
-  if (!n) { toast('Entry #' + index + ' is not in this dump'); return; }
+  if (!n) {
+    if (LIVE && !loaded) { loadWindow({ from: index, query: null }).then(() => goTo(index, true)); return; }
+    toast(LIVE ? 'Entry #' + index + ' does not exist' : 'Entry #' + index + ' is not in this dump'); return;
+  }
   const check = computeVisible(n) > 0 && chainVisible(n);
   if (!check) { clearFilters(); renderList(); }
   const el = ensureRendered(n);
@@ -853,7 +876,7 @@ function clearFilters() {
   $('#search').value = ''; $('#cb-hints').checked = true; $('#loglevel').selectedIndex = 0; $('#idx-from').value = ''; $('#idx-to').value = '';
   renderChips(); toast('Filters cleared');
 }
-function setAllOpen(open) { const walk = n => { if (n.kind !== 'root' && n.kind !== 'entry') n.open = open; n.children.forEach(walk); }; walk(state.root); renderList(); }
+function setAllOpen(open) { state.forceOpen = open; state.openKeys.clear(); renderList(); }
 
 // ---------------------------------------------------------------------------
 // Toolbar, chips, minimap, sidebar.
@@ -878,14 +901,17 @@ function drawMinimap() {
   const cs = getComputedStyle(document.documentElement);
   const colors = {}; for (const c of CATEGORIES) colors[c] = cs.getPropertyValue('--c-' + c).trim();
   const px = Math.max(1, W / n);
+  // In live mode a thin bar at the bottom shows where the loaded window lies in the whole oplog.
+  const H2 = LIVE ? H - 5 : H;
+  if (LIVE && state.live.meta && state.live.meta.lastOplogIndex) { const last = state.live.meta.lastOplogIndex; ctx.fillStyle = colors.lifecycle; ctx.globalAlpha = .25; ctx.fillRect(0, H - 4, W, 4); ctx.globalAlpha = 1; ctx.fillStyle = cs.getPropertyValue('--accent').trim(); const x0 = ((state.live.lo - 1) / last) * W; const x1 = (state.live.hi / last) * W; ctx.fillRect(x0, H - 4, Math.max(2, x1 - x0), 4); }
   // Draw invocations as a background band, entries as ticks.
   for (let i = 0; i < n; i++) {
     const e = state.entries[i]; const [, cat] = kindInfo(e.type);
     const x = (i / n) * W;
-    if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H); ctx.globalAlpha = 1; }
+    if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
     const tall = cat === 'error' || cat === 'update' || cat === 'invocation';
     ctx.fillStyle = colors[cat] || '#888';
-    ctx.fillRect(x, tall ? 4 : 12, Math.max(px, 1), tall ? H - 8 : H - 20);
+    ctx.fillRect(x, tall ? 4 : 12, Math.max(px, 1), tall ? H2 - 8 : H2 - 20);
   }
 }
 function setupMinimap() {
@@ -903,6 +929,7 @@ function renderSidebar() {
   const first = state.entries[0]; const last = state.entries[state.entries.length - 1];
   const stats = $('#pane-stats'); stats.replaceChildren();
   const tbl = (rows) => { const t = h('table'); for (const [k, v] of rows) t.append(h('tr', null, h('td', null, k), h('td', { class: 'num' }, v))); return t; };
+  if (LIVE) stats.append(h('div', { class: 'muted', style: 'margin-top:8px' }, 'Statistics cover the loaded window only.'));
   stats.append(h('h3', null, 'overview'), tbl([
     ['entries', state.entries.length], ['index range', first ? `#${first.index} – #${last.index}` : '–'],
     ['time span', first ? fmtDur(last.ts - first.ts) : '–'], ['invocations', invocations], ['errors', errors], ['log entries', logs], ['fuel consumed', fuel.toLocaleString()],
@@ -942,7 +969,7 @@ function renderSidebar() {
   // About
   const ab = $('#pane-about'); ab.replaceChildren();
   const m = state.meta;
-  ab.append(h('h3', null, 'source'), tbl([['agent', m.agentId || ''], ['component', m.componentName || ''], ['component id', m.componentId || ''], ['generated', m.generatedAt ? fmtDate(Date.parse(m.generatedAt)) : ''], ['cli version', m.cliVersion || ''], ['--from', m.from != null ? m.from : '–'], ['--query', m.query || '–']]),
+  ab.append(h('h3', null, 'source'), tbl([['mode', LIVE ? 'live (served by golem-cli, loads pages through the API)' : 'static (entries embedded in the page)'], ['agent', m.agentId || ''], ['component', m.componentName || ''], ['component id', m.componentId || ''], ['generated', m.generatedAt ? fmtDate(Date.parse(m.generatedAt)) : ''], ['cli version', m.cliVersion || ''], ['--from', m.from != null ? m.from : '–'], ['--query', m.query || '–']]),
     h('h3', null, 'legend'), h('div', null, CATEGORIES.map(c => h('div', { style: 'margin:2px 0' }, h('span', { class: 'badge', style: `--c:${catColor(c)}` }, c), ' ', h('span', { class: 'muted' }, LEGEND[c])))),
     h('h3', null, 'notes'), h('div', { class: 'muted' }, 'Hint entries are not consumed during replay. Entries struck through lie in a region skipped by a JUMP or dropped by a REVERT. A START row is merged with its END / CANCELLED entry; expand it to see stream frames, the end entry and completion markers. Entries executed by a tool entity are nested under the tool invocation.'));
 }
@@ -958,24 +985,166 @@ function normalize(doc) {
   entries.sort((a, b) => a.index - b.index);
   return entries;
 }
+function docMeta(doc) { return { agentId: doc.agentId, componentName: doc.componentName, componentId: doc.componentId, generatedAt: doc.generatedAt, cliVersion: doc.cliVersion, from: doc.from, query: doc.query }; }
 function load(doc) {
-  state.meta = doc.entries ? { agentId: doc.agentId, componentName: doc.componentName, componentId: doc.componentId, generatedAt: doc.generatedAt, cliVersion: doc.cliVersion, from: doc.from, query: doc.query } : (state.meta.agentId ? state.meta : {});
-  state.entries = normalize(doc);
-  state.t0 = state.entries.length ? state.entries[0].ts : 0;
-  state.t1 = state.entries.length ? state.entries[state.entries.length - 1].ts : 0;
-  state.expandedDefault = state.entries.length <= 3000;
-  const { root, nodeOf } = buildTree(state.entries);
-  state.root = root; state.nodeOf = nodeOf;
+  state.meta = doc.entries ? docMeta(doc) : (state.meta.agentId ? state.meta : {});
+  state.openKeys.clear();
+  setEntries(normalize(doc));
+}
+// Replaces the entry set (the whole dump, or the loaded window in live mode) and re-renders.
+// `opts.keepScroll` keeps the list position when entries were appended; `opts.anchorIndex`
+// scrolls the entry with that index to the top, used when entries were prepended.
+function setEntries(entries, opts) {
+  opts = opts || {};
+  const list = $('#list'); const scrollTop = list.scrollTop; const renderedTop = topLevel.length;
+  const selectedIndex = state.selected && state.selected.n.e ? state.selected.n.e.index : null;
+  state.entries = entries;
+  state.t0 = entries.length ? entries[0].ts : 0;
+  state.t1 = entries.length ? entries[entries.length - 1].ts : 0;
+  state.expandedDefault = entries.length <= 3000;
+  const { root, nodeOf } = buildTree(entries, LIVE ? metadataDroppedRegions() : []);
+  state.root = root; state.nodeOf = nodeOf; state.selected = null;
   $('#h-agent').textContent = state.meta.agentId || '(loaded dump)';
   document.title = 'Golem oplog · ' + (state.meta.agentId || 'dump');
   $('#h-meta').replaceChildren(...[
     state.meta.componentName ? h('span', null, 'component ', h('b', null, state.meta.componentName)) : null,
-    h('span', null, h('b', null, state.entries.length), ' entries'),
-    state.entries.length ? h('span', null, fmtDate(state.t0), ' → ', fmtDate(state.t1), ' (', fmtDur(state.t1 - state.t0), ')') : null,
-    state.meta.query ? h('span', null, 'query ', h('code', null, state.meta.query)) : null,
-    state.meta.from != null ? h('span', null, 'from #' + state.meta.from) : null,
+    h('span', null, h('b', null, entries.length), LIVE ? ' entries loaded' : ' entries'),
+    entries.length ? h('span', null, fmtDate(state.t0), ' → ', fmtDate(state.t1), ' (', fmtDur(state.t1 - state.t0), ')') : null,
+    !LIVE && state.meta.query ? h('span', null, 'query ', h('code', null, state.meta.query)) : null,
+    !LIVE && state.meta.from != null ? h('span', null, 'from #' + state.meta.from) : null,
   ].filter(Boolean));
-  renderChips(); renderList(); drawMinimap(); renderSidebar();
+  renderChips(); renderList(); drawMinimap(); renderSidebar(); renderLiveBar();
+  if (opts.keepScroll) { while (renderCursor < Math.min(renderedTop, topLevel.length)) renderMore(); list.scrollTop = scrollTop; }
+  if (opts.anchorIndex != null) { const n = state.nodeOf.get(opts.anchorIndex); const el = n && ensureRendered(n); if (el) el.scrollIntoView({ block: 'start' }); }
+  if (selectedIndex != null) { const n = state.nodeOf.get(selectedIndex); const el = n && elCache.get(nodeKey(n)); if (el) select(el, n); }
+}
+
+// ---------------------------------------------------------------------------
+// Live mode: the page is served by `golem agent oplog --serve` and loads entries page by page
+// through the server's JSON API, which forwards to the worker service.
+// ---------------------------------------------------------------------------
+async function api(path, params) {
+  const url = new URL(path, location.href);
+  for (const [k, v] of Object.entries(params || {})) if (v !== null && v !== undefined && v !== '') url.searchParams.set(k, v);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`);
+  return res.json();
+}
+function fetchPage(params) {
+  const cursor = params.cursor;
+  return api('api/oplog', { from: params.from, cursorIndex: cursor ? idxOf(cursor.nextOplogIndex) : null, cursorRevision: cursor ? cursor.currentComponentRevision : null, count: state.live.pageSize, query: params.query });
+}
+function setLoading(on) { state.live.loading = on; renderLiveBar(); }
+// The API hands out a cursor until a page comes back empty; the agent's last oplog index tells
+// earlier whether the loaded window already reached the end.
+function updateHasMore(page, received) {
+  const L = state.live; const last = L.meta && L.meta.lastOplogIndex;
+  L.next = page.next || null;
+  L.hasMore = !!page.next && received > 0 && !(last && !L.serverQuery && L.hi >= last);
+}
+function metadataDroppedRegions() {
+  const m = state.live && state.live.meta; if (!m) return [];
+  const regions = [...(m.skippedRegions || []), ...(m.deletedRegions || [])];
+  return regions.map(r => [idxOf(r.start), idxOf(r.end), 'the agent metadata']);
+}
+async function refreshAgent() {
+  try {
+    const m = await api('api/agent');
+    const before = JSON.stringify(metadataDroppedRegions());
+    state.live.meta = { status: m.status, lastOplogIndex: idxOf(m.lastOplogIndex), retryCount: m.retryCount, componentRevision: m.componentRevision, pendingInvocationCount: m.pendingInvocationCount, lastError: m.lastError, skippedRegions: m.skippedRegions || [], deletedRegions: m.deletedRegions || [] };
+    if (JSON.stringify(metadataDroppedRegions()) !== before && state.entries.length) setEntries(state.entries, { keepScroll: true });
+    if (state.live.hasMore && !state.live.serverQuery && state.live.hi >= state.live.meta.lastOplogIndex) state.live.hasMore = false;
+    renderLiveBar(); drawMinimap();
+  } catch (e) { toast('Could not load agent metadata: ' + e.message); }
+}
+// Loads a fresh window starting at `from` (or the start), optionally filtered by a server query.
+async function loadWindow(params) {
+  const L = state.live; if (L.loading) return;
+  setLoading(true);
+  try {
+    L.serverQuery = params.query ? params.query : null; $('#squery').value = L.serverQuery || '';
+    L.from = params.from || null;
+    const page = await fetchPage({ from: L.from, query: L.serverQuery });
+    const entries = normalize(page);
+    L.lo = entries.length ? entries[0].index : (L.from || 1); L.hi = entries.length ? entries[entries.length - 1].index : L.lo - 1;
+    updateHasMore(page, entries.length);
+    state.openKeys.clear(); state.forceOpen = null;
+    setEntries(entries);
+    $('#list').scrollTop = 0;
+  } catch (e) { toast('Loading failed: ' + e.message); }
+  finally { setLoading(false); }
+}
+async function loadMore() {
+  const L = state.live; if (!L || L.loading || !L.hasMore) return;
+  setLoading(true);
+  try {
+    const page = await fetchPage({ from: L.from, cursor: L.next, query: L.serverQuery });
+    const entries = normalize(page).filter(e => e.index > L.hi);
+    if (entries.length) L.hi = entries[entries.length - 1].index;
+    updateHasMore(page, entries.length);
+    if (entries.length) setEntries(state.entries.concat(entries), { keepScroll: true }); else renderLiveBar();
+  } catch (e) { toast('Loading failed: ' + e.message); }
+  finally { setLoading(false); }
+}
+// Prepends the page before the loaded window. Only available without a server query, because
+// query results are sparse and have no contiguous "before".
+async function loadEarlier() {
+  const L = state.live; if (!L || L.loading || L.lo <= 1 || L.serverQuery) return;
+  setLoading(true);
+  try {
+    const from = Math.max(1, L.lo - L.pageSize); const collected = []; let cursor = null;
+    for (let guard = 0; guard < 50; guard++) {
+      const page = await fetchPage({ from, cursor, query: null });
+      const got = normalize(page);
+      collected.push(...got.filter(e => e.index < L.lo));
+      cursor = page.next || null;
+      if (!cursor || !got.length || got[got.length - 1].index >= L.lo - 1) break;
+    }
+    if (collected.length) { const anchor = L.lo; L.lo = collected[0].index; L.from = L.lo; setEntries(collected.concat(state.entries), { anchorIndex: anchor }); }
+    else { L.lo = from; renderLiveBar(); }
+  } catch (e) { toast('Loading failed: ' + e.message); }
+  finally { setLoading(false); }
+}
+// Appends entries written after the loaded window, used by follow mode.
+async function pollNewEntries() {
+  const L = state.live; if (!L || L.loading || L.serverQuery) return;
+  if (L.hasMore) { await loadMore(); return; }
+  setLoading(true);
+  try {
+    const page = await fetchPage({ from: L.hi + 1, query: null });
+    const entries = normalize(page).filter(e => e.index > L.hi);
+    if (entries.length) L.hi = entries[entries.length - 1].index;
+    updateHasMore(page, entries.length);
+    if (entries.length) { setEntries(state.entries.concat(entries), { keepScroll: true }); if (L.follow) $('#sentinel').scrollIntoView({ block: 'end' }); }
+  } catch (e) { toast('Polling failed: ' + e.message); }
+  finally { setLoading(false); }
+  refreshAgent();
+}
+function showContext(index) { loadWindow({ from: Math.max(1, index - 25), query: null }).then(() => goTo(index, true)); }
+function renderLiveBar() {
+  if (!LIVE) return;
+  const L = state.live; const m = L.meta || {};
+  const bar = $('#livebar'); bar.replaceChildren();
+  bar.append(h('span', { class: 'pill live' }, 'live'));
+  if (m.status) bar.append(h('span', { class: 'pill status-' + m.status, title: m.lastError ? 'last error: ' + m.lastError : '' }, m.status + (m.retryCount ? ` · ${m.retryCount} retries` : '') + (m.pendingInvocationCount ? ` · ${m.pendingInvocationCount} pending` : '')));
+  const total = m.lastOplogIndex != null ? ` of #${m.lastOplogIndex}` : '';
+  bar.append(h('span', null, L.serverQuery ? `${state.entries.length} hits for ` : `loaded #${L.lo || '–'} – #${L.hi || '–'}${total}`, L.serverQuery ? h('code', null, L.serverQuery) : null, L.hasMore ? ' (more available)' : ''));
+  bar.append(h('button', { disabled: (L.lo <= 1 || L.serverQuery || L.loading) ? '' : null, onclick: loadEarlier, title: 'load the page before the loaded window' }, '◀ earlier'));
+  bar.append(h('button', { disabled: (!L.hasMore || L.loading) ? '' : null, onclick: loadMore, title: 'load the next page' }, 'more ▶'));
+  bar.append(h('button', { disabled: L.loading ? '' : null, onclick: () => { refreshAgent(); if (!L.serverQuery) pollNewEntries(); }, title: 'refresh the agent status and load new entries' }, '⟳'));
+  bar.append(h('label', { title: 'poll for new entries every 2 seconds' }, h('input', { type: 'checkbox', ...(L.follow ? { checked: '' } : {}), onchange: ev => { L.follow = ev.target.checked; if (L.follow) pollNewEntries(); } }), ' follow'));
+  if (L.loading) bar.append(h('span', { class: 'busy' }, 'loading…'));
+}
+function initLive(doc) {
+  LIVE = true;
+  state.meta = docMeta(doc);
+  state.live = { pageSize: Math.max(1, Number(doc.pageSize) || 100), lo: 0, hi: 0, from: doc.from || null, next: null, hasMore: false, serverQuery: doc.query || null, loading: false, follow: false, meta: null };
+  $('#livebar').classList.remove('hidden'); $('#sq-wrap').classList.remove('hidden'); $('#btn-load').classList.add('hidden');
+  $('#squery').value = state.live.serverQuery || '';
+  $('#squery').addEventListener('keydown', ev => { if (ev.key === 'Enter') loadWindow({ from: null, query: ev.target.value.trim() }); });
+  $('#btn-sq-clear').addEventListener('click', () => loadWindow({ from: null, query: null }));
+  setInterval(() => { if (state.live.follow) pollNewEntries(); }, 2000);
+  refreshAgent().finally(() => loadWindow({ from: state.live.from, query: state.live.serverQuery }));
 }
 function parseDump(text) {
   text = text.trim();
@@ -1000,7 +1169,7 @@ function init() {
   setupMinimap();
   const theme = localStorage.getItem('golem-oplog-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = theme;
-  load(doc);
+  if (doc.mode === 'live') initLive(doc); else load(doc);
   let deb;
   $('#search').addEventListener('input', ev => { clearTimeout(deb); deb = setTimeout(() => { state.q = ev.target.value.trim().toLowerCase(); renderList(); }, 180); });
   $('#cb-hints').addEventListener('change', ev => { state.hints = ev.target.checked; renderList(); });
