@@ -165,6 +165,7 @@ impl<Ctx: WorkerCtx> AgentFilesystemResources for DurableWorkerCtx<Ctx> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AgentOpenRequest {
     pub(crate) create: bool,
+    pub(crate) creation_mode: Option<u32>,
     pub(crate) directory: bool,
     pub(crate) exclusive: bool,
     pub(crate) truncate: bool,
@@ -233,6 +234,13 @@ pub(crate) fn decide_agent_open(
     if request.unsupported_sync {
         return Err(AgentOpenPolicyError::Unsupported);
     }
+    if request.create
+        && request
+            .creation_mode
+            .is_some_and(|mode| mode & !0o777 != 0 || mode & 0o200 == 0)
+    {
+        return Err(AgentOpenPolicyError::Unsupported);
+    }
     if request.directory && (request.create || request.exclusive || request.truncate) {
         return Err(AgentOpenPolicyError::Invalid);
     }
@@ -250,6 +258,11 @@ pub(crate) fn decide_agent_open(
             access: request.access(ObjectKind::File),
             disposition,
             follow,
+            creation_mode: if request.create {
+                request.creation_mode
+            } else {
+                None
+            },
         }))
     } else if request.directory {
         Ok(AgentOpenDecision::Open(OpenOptions::Existing {

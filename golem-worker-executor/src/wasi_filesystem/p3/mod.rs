@@ -266,6 +266,7 @@ fn p3_agent_open_request(
 ) -> AgentOpenRequest {
     AgentOpenRequest {
         create: open_flags.contains(types::OpenFlags::CREATE),
+        creation_mode: None,
         directory: open_flags.contains(types::OpenFlags::DIRECTORY),
         exclusive: open_flags.contains(types::OpenFlags::EXCLUSIVE),
         truncate: open_flags.contains(types::OpenFlags::TRUNCATE),
@@ -2729,6 +2730,7 @@ mod tests {
     fn open_request() -> AgentOpenRequest {
         AgentOpenRequest {
             create: false,
+            creation_mode: None,
             directory: false,
             exclusive: false,
             truncate: false,
@@ -2881,6 +2883,7 @@ mod tests {
                     access: AccessMode::None,
                     disposition,
                     follow: Follow::No,
+                    creation_mode: None,
                 }
             );
         }

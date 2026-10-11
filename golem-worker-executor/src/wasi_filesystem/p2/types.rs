@@ -212,6 +212,7 @@ pub(in crate::wasi_filesystem) fn p2_agent_open_request(
 ) -> AgentOpenRequest {
     AgentOpenRequest {
         create: open_flags.contains(OpenFlags::CREATE),
+        creation_mode: None,
         directory: open_flags.contains(OpenFlags::DIRECTORY),
         exclusive: open_flags.contains(OpenFlags::EXCLUSIVE),
         truncate: open_flags.contains(OpenFlags::TRUNCATE),

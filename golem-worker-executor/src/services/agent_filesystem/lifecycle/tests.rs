@@ -979,6 +979,7 @@ async fn a_file_that_the_agent_writes_at_the_path_of_a_deleted_read_only_initial
             access: AccessMode::ReadWrite,
             disposition: FileDisposition::CreateExclusive,
             follow: Follow::No,
+            creation_mode: None,
         },
     )
     .unwrap()
@@ -3101,6 +3102,7 @@ async fn a_creating_open_whose_postcondition_read_fails_terminally_invalidates_t
                 access: AccessMode::ReadWrite,
                 disposition: FileDisposition::CreateIfMissing,
                 follow: Follow::Yes,
+                creation_mode: None,
             },
         )
         .unwrap()
@@ -3135,6 +3137,7 @@ async fn unknown_mutating_open_effect_invalidates_without_retry() {
                 access: AccessMode::ReadWrite,
                 disposition: FileDisposition::CreateIfMissing,
                 follow: Follow::Yes,
+                creation_mode: None,
             },
         )
         .unwrap()
@@ -3183,6 +3186,7 @@ async fn a_refused_creating_open_whose_policy_probe_is_refused_invalidates_the_g
             access: AccessMode::ReadWrite,
             disposition: FileDisposition::CreateIfMissing,
             follow: Follow::Yes,
+            creation_mode: None,
         },
     )
     .unwrap()
@@ -4275,6 +4279,7 @@ async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_nam
             access: AccessMode::Write,
             disposition: FileDisposition::TruncateExisting,
             follow: Follow::Yes,
+            creation_mode: None,
         },
     )
     .unwrap()
@@ -4670,6 +4675,7 @@ async fn ambiguous_remove_retry_excludes_a_conflicting_file_recreation() {
                 access: AccessMode::ReadWrite,
                 disposition: FileDisposition::CreateOrTruncate,
                 follow: Follow::Yes,
+                creation_mode: None,
             },
         )
         .unwrap(),
@@ -4763,6 +4769,7 @@ async fn rename_evidence_excludes_a_conflicting_file_recreation() {
                 access: AccessMode::ReadWrite,
                 disposition: FileDisposition::CreateIfMissing,
                 follow: Follow::Yes,
+                creation_mode: None,
             },
         )
         .unwrap(),
@@ -4819,6 +4826,7 @@ async fn file_creation_open_blocks_only_conflicting_namespace_edits() {
                 access: AccessMode::ReadWrite,
                 disposition: FileDisposition::CreateExclusive,
                 follow: Follow::No,
+                creation_mode: None,
             },
         )
         .unwrap(),
@@ -4959,6 +4967,7 @@ fn every_file_disposition_is_a_namespace_edit_while_existing_files_are_not() {
                 access: AccessMode::ReadWrite,
                 disposition,
                 follow: Follow::Yes,
+                creation_mode: None,
             }),
             Some(NamespaceCoordinationKind::Edit)
         );
@@ -6402,6 +6411,7 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
             access: AccessMode::Read,
             disposition: FileDisposition::TruncateExisting,
             follow: Follow::Yes,
+            creation_mode: None,
         },
     )
     .unwrap()
@@ -6421,6 +6431,7 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
             access: AccessMode::Write,
             disposition: FileDisposition::CreateOrTruncate,
             follow: Follow::Yes,
+            creation_mode: None,
         },
     )
     .unwrap()
@@ -6530,6 +6541,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
             access: AccessMode::ReadWrite,
             disposition: FileDisposition::CreateOrTruncate,
             follow: Follow::Yes,
+            creation_mode: None,
         },
     )
     .unwrap()
@@ -8356,11 +8368,13 @@ async fn directory_capabilities_bound_child_opens_and_deny_ungranted_io() {
                     access: AccessMode::None,
                     disposition: FileDisposition::CreateIfMissing,
                     follow: Follow::Yes,
+                    creation_mode: None,
                 },
                 OpenOptions::File {
                     access: AccessMode::Read,
                     disposition: FileDisposition::TruncateExisting,
                     follow: Follow::Yes,
+                    creation_mode: None,
                 },
             ] {
                 let result = open(

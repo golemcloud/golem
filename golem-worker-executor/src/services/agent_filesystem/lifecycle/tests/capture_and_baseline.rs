@@ -2164,6 +2164,7 @@ async fn a_file_that_an_agent_creates_through_the_lifecycle_has_write_bits() {
             access: AccessMode::Write,
             disposition: FileDisposition::CreateExclusive,
             follow: Follow::No,
+            creation_mode: None,
         },
     )
     .unwrap()
@@ -2180,6 +2181,141 @@ async fn a_file_that_an_agent_creates_through_the_lifecycle_has_write_bits() {
         permissions.mode()
     );
     delete(seal(resident)).await.unwrap();
+}
+
+#[test]
+#[timeout("60s")]
+async fn executable_permissions_survive_capture_restore_and_preserve_read_only_protection() {
+    let agents = UnmanagedAgents::new().await;
+    let agent = agents.agent("permission-capture");
+    let immutable = agents
+        .store
+        .declare("/immutable", AgentFilePermissions::ReadOnly, b"protected")
+        .await;
+    let resident = agents
+        .start(&agent, std::slice::from_ref(&immutable), NO_RESTORE)
+        .await
+        .unwrap();
+    let generation = resident_generation_handle(&resident);
+    let created = open(
+        &generation,
+        PathTarget::at_root(&generation, "script").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::ReadWrite,
+            disposition: FileDisposition::CreateExclusive,
+            follow: Follow::Yes,
+            creation_mode: Some(0o600),
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    let file_path = agents.root(&agent).join("script");
+    let metadata = std::fs::metadata(&file_path).unwrap();
+    let first = capture(&resident, Duration::from_secs(5), None)
+        .await
+        .unwrap();
+    let CaptureOutcome::Captured {
+        capture: before,
+        mark,
+        ..
+    } = first
+    else {
+        panic!("created file must be captured");
+    };
+    set_attributes(
+        &generation,
+        Target::Open(&created.node),
+        AttributeChanges::Permissions(0o700),
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    assert_eq!(
+        permissions(&generation, Target::Open(&created.node))
+            .unwrap()
+            .await
+            .unwrap(),
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(&file_path).unwrap().modified().unwrap(),
+        metadata.modified().unwrap()
+    );
+    let denied = set_attributes(
+        &generation,
+        Target::Open(&created.node),
+        AttributeChanges::Permissions(0o500),
+    )
+    .unwrap()
+    .await;
+    assert!(matches!(
+        denied,
+        Err(Error::Access(AccessError::NotPermitted))
+    ));
+    let immutable_target = PathTarget::at_root(&generation, "immutable").unwrap();
+    let denied = set_attributes(
+        &generation,
+        Target::Path(&immutable_target, Follow::Yes),
+        AttributeChanges::Permissions(0o555),
+    )
+    .unwrap()
+    .await;
+    assert!(matches!(
+        denied,
+        Err(Error::Access(AccessError::NotPermitted))
+    ));
+    assert_eq!(
+        permissions(&generation, Target::Open(&created.node))
+            .unwrap()
+            .await
+            .unwrap(),
+        0o700
+    );
+    close(created.node).await.unwrap();
+    let second = capture(&resident, Duration::from_secs(5), Some(mark))
+        .await
+        .unwrap();
+    let CaptureOutcome::Captured { capture: after, .. } = second else {
+        panic!("mode-only change must invalidate capture reuse");
+    };
+    assert_eq!(
+        std::fs::metadata(before.directory().join("tree/script"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(after.directory().join("tree/script"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    delete(seal(resident)).await.unwrap();
+    let restored_agent = agents.agent("permission-restored");
+    let restored = agents
+        .start(&restored_agent, &[immutable], Some(copying_restore(&after)))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(agents.root(&restored_agent).join("script"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::read(agents.root(&restored_agent).join("immutable")).unwrap(),
+        b"protected"
+    );
+    delete(seal(restored)).await.unwrap();
+    before.discard().await.unwrap();
+    after.discard().await.unwrap();
 }
 
 /// The directory places of the path space of the restore property. A directory move renames only
@@ -2788,6 +2924,7 @@ async fn write_file(
         access: AccessMode::Write,
         disposition: FileDisposition::CreateOrTruncate,
         follow: Follow::Yes,
+        creation_mode: None,
     };
     let opened = match target.and_then(|target| open(generation_handle, target, options)) {
         Ok(call) => call.await,

@@ -1442,7 +1442,7 @@ enum Counted {
     Fresh,
     /// An install of initial files. The seeds copy the modification times of the cached files.
     Installed,
-    /// The change puts an existing or a chosen modification time at a path outside an install.
+    /// The change preserves or chooses mtime, including mode changes that leave mtime unchanged.
     Chosen,
     /// The times that a stat recorded are put back at a path, live or in a replay. A start from
     /// initial files does not hold such a time, but the agent did not choose it either: a replay
@@ -2378,6 +2378,7 @@ pub(crate) enum OpenOptions {
         access: AccessMode,
         disposition: FileDisposition,
         follow: Follow,
+        creation_mode: Option<u32>,
     },
 }
 
@@ -2406,6 +2407,7 @@ pub(crate) struct TimeChanges {
 pub(crate) enum AttributeChanges {
     Times(TimeChanges),
     File { size: u64, times: TimeChanges },
+    Permissions(u32),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2556,6 +2558,27 @@ pub(crate) fn attributes<Adapter: SandboxFilesystemAdapter>(
             Ok(attributes) => Ok(agent_attributes(attributes)),
             Err(source) => Err(classify_query_error(&generation, source)),
         }
+    }))
+}
+
+/// Reads permission bits through the admitted generation, preserving descriptor identity.
+pub(crate) fn permissions<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    target: Target<'_>,
+) -> Result<FilesystemCall<u32>, AccessError> {
+    let generation = admit(generation_handle)?;
+    let target = sandbox_target(&generation, target)?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    Ok(FilesystemCall::new(lease, async move {
+        let sandbox = generation.sandbox.read().await;
+        let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
+        let result = match target {
+            AttributeTarget::Open(node) => sandbox.get_node_permissions(node).await,
+            AttributeTarget::Path { target, follow } => {
+                sandbox.get_path_permissions(target, follow).await
+            }
+        };
+        result.map_err(|source| classify_query_error(&generation, source))
     }))
 }
 
@@ -3116,6 +3139,12 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
         AttributeChanges::Times(times) => {
             execute_set_times(generation, target, times, TimeOrigin::Call).await
         }
+        AttributeChanges::Permissions(mode) => {
+            let AttributeTarget::Open(SandboxNode::File(file)) = target else {
+                return Err(Error::Access(AccessError::NotPermitted));
+            };
+            execute_set_permissions(generation, file, mode).await
+        }
         AttributeChanges::File { size, times } => {
             let AttributeTarget::Open(SandboxNode::File(file)) = target else {
                 return Err(Error::Access(AccessError::WrongGeneration));
@@ -3216,6 +3245,41 @@ async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
     // the end of the operation does.
     refuse_read_only_change(opened.is_read_only_file())?;
     Ok(opened.into_node())
+}
+
+async fn execute_set_permissions<Adapter: SandboxFilesystemAdapter>(
+    generation: Arc<FilesystemGeneration<Adapter>>,
+    file: SandboxFile,
+    mode: u32,
+) -> Result<(), Error> {
+    let node = SandboxNode::File(file.clone());
+    let attributes = mutation_attributes(&generation, AttributeTarget::Open(node.clone())).await?;
+    refuse_read_only_change(attributes.read_only)?;
+    let sandbox = generation.sandbox.read().await;
+    let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
+    let before = sandbox
+        .get_node_permissions(node.clone())
+        .await
+        .map_err(|source| classify_query_error(&generation, source))?;
+    if mode & !0o777 != 0 || (mode ^ before) & !0o111 != 0 {
+        return Err(Error::Access(AccessError::NotPermitted));
+    }
+    if mode == before {
+        return Ok(());
+    }
+    // Permission changes can preserve size and mtime, so snapshot reuse must compare full content.
+    generation.registry.record(Counted::Chosen);
+    let result = sandbox.set_file_permissions(&file, mode).await;
+    match sandbox.get_node_permissions(node).await {
+        Ok(observed) if observed == mode => Ok(()),
+        Ok(observed) if observed == before && result.is_err() => {
+            Err(classify_query_error(&generation, result.unwrap_err()))
+        }
+        _ => {
+            generation.invalidate();
+            Err(Error::RuntimeInvalidated)
+        }
+    }
 }
 
 async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
@@ -4453,6 +4517,14 @@ fn authorize_attribute_target(
     {
         return Err(AccessError::WrongGeneration);
     }
+    if matches!(changes, AttributeChanges::Permissions(_))
+        && matches!(
+            target,
+            Target::Path(_, Follow::No) | Target::Open(OpenNode::Directory(_))
+        )
+    {
+        return Err(AccessError::NotPermitted);
+    }
     Ok(())
 }
 
@@ -4586,6 +4658,7 @@ fn sandbox_open_options(options: OpenOptions) -> SandboxOpenOptions {
             access,
             disposition,
             follow,
+            creation_mode,
         } => SandboxOpenOptions::File {
             access: sandbox_access_mode(access),
             disposition: match disposition {
@@ -4595,6 +4668,7 @@ fn sandbox_open_options(options: OpenOptions) -> SandboxOpenOptions {
                 FileDisposition::CreateOrTruncate => SandboxFileDisposition::CreateOrTruncate,
             },
             follow: sandbox_follow(follow),
+            creation_mode,
         },
     }
 }
