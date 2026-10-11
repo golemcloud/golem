@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-10-11: Metrics Density And Inspection
+
+- Audited Dashboard, expanded panels, and Explore across wide, medium, narrow,
+  short, and minimal terminal sizes against the locked minimal-Grafana
+  contract. Axes, units, stable series colors, legends, gaps, freshness,
+  exact/approximate labels, and exact sample inspection remain intact.
+- Replaced vertically squeezed Dashboard grids with a bounded panel window.
+  Panels retain a six-row minimum when the viewport permits, complete grid rows
+  fill the available area, selection remains visible, and overflow owns a
+  trailing-right scrollbar.
+- Unified keyboard, wheel, click-to-expand, and draggable-scrollbar ownership
+  around the selected panel. Narrow terminals retain the same interaction
+  model rather than switching to a separate compact representation.
+- Retained distinct loading, error, unavailable, and empty-series states; the
+  TUI does not fabricate samples or silently present bounded aggregates as
+  exact values.
+
+This completes the automated Ops UX consolidation slices. The input,
+lightweight Overview, hierarchy, Oplog master/details, cross-view handoffs,
+pointer parity, and Metrics density checkpoints are ready for one combined
+terminal visual review.
+
 ## 2026-10-11: Ops Pointer Parity
 
 - Made the shared segmented control strip expose exact hit regions, so Oplog

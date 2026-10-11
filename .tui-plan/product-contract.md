@@ -147,8 +147,11 @@ Agents. The Overview never presents loaded Agent rows as a total Agent count.
   metrics leaves that Agent scope dormant rather than applying it to server
   series.
 - Dashboard panels form a scrollable responsive grid: stats plus two columns
-  when wide, one panel per row at medium width, and one focused panel when
-  narrow.
+  when wide and one column at medium or narrow widths. Panels keep a six-row
+  minimum whenever the viewport is tall enough; shorter viewports show one
+  selected panel. When complete grid rows no longer fit, the dashboard windows
+  them, keeps selection visible, and exposes a trailing-right scrollbar instead
+  of squeezing every chart into the available height.
 - Charts expose axes, units, stable legends, gaps, freshness, and
   exact/approximate status. Focus supports keyboard/mouse value inspection and
   an expanded route. In-chart zoom is deferred.

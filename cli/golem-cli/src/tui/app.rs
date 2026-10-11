@@ -2043,6 +2043,25 @@ impl TuiApp {
                 self.stream.scroll_from_end = max.saturating_sub(start);
                 self.stream.follow = self.stream.scroll_from_end == 0;
             }
+            ScrollbarTarget::MetricsDashboard => {
+                let count = self
+                    .metrics
+                    .dashboard
+                    .as_ref()
+                    .map(|dashboard| dashboard.panels.len())
+                    .unwrap_or(0);
+                if count > 0 {
+                    let columns = self.metrics.dashboard_columns.get().max(1);
+                    let rows = count.div_ceil(columns);
+                    let row = scrollbar_value_from_pointer(area, y, rows.saturating_sub(1));
+                    let column = self.metrics.selected_panel % columns;
+                    self.metrics.selected_panel = row
+                        .saturating_mul(columns)
+                        .saturating_add(column)
+                        .min(count - 1);
+                    self.metrics.chart_cursor = None;
+                }
+            }
             ScrollbarTarget::MetricsFamilies => {
                 let count = self.metrics.families.len();
                 if count > 0 {
@@ -2198,6 +2217,15 @@ impl TuiApp {
                     && self.ops.active() == OpsDestination::Metrics =>
             {
                 self.move_metrics_chart_cursor(!up)
+            }
+            Some(RegionKind::MetricsDashboard | RegionKind::MetricsPanel(_))
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && self.metrics.mode == MetricsMode::Dashboard =>
+            {
+                for _ in 0..amount {
+                    self.move_metrics_selection(!up, event_tx);
+                }
             }
             Some(RegionKind::MetricsFamilies)
                 if self.active_workspace == Workspace::Ops
@@ -12185,24 +12213,45 @@ fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         return;
     }
     let columns = if panels_area.width >= 96 { 2 } else { 1 };
-    let visible_panels = if panels_area.width < 48 || panels_area.height < 8 {
-        vec![
-            app.metrics
-                .selected_panel
-                .min(dashboard.panels.len().saturating_sub(1)),
-        ]
+    const MIN_PANEL_HEIGHT: usize = 6;
+    let panel_count = dashboard.panels.len();
+    let total_rows = panel_count.div_ceil(columns);
+    let visible_rows = ((panels_area.height as usize) / MIN_PANEL_HEIGHT)
+        .max(1)
+        .min(total_rows);
+    let selected = app.metrics.selected_panel.min(panel_count - 1);
+    let start_row = selection_window_start(
+        selected / columns,
+        total_rows,
+        visible_rows as u16,
+        app.metrics.dashboard_first_visible.get() / columns,
+    );
+    let start = start_row.saturating_mul(columns);
+    let end = start
+        .saturating_add(visible_rows.saturating_mul(columns))
+        .min(panel_count);
+    app.metrics.dashboard_first_visible.set(start);
+    app.metrics.dashboard_visible_count.set(end - start);
+    app.metrics.dashboard_columns.set(columns);
+    let overflowing = visible_rows < total_rows;
+    let grid_area = if overflowing {
+        Rect {
+            width: panels_area.width.saturating_sub(1),
+            ..panels_area
+        }
     } else {
-        (0..dashboard.panels.len()).collect::<Vec<_>>()
+        panels_area
     };
-    let rows = visible_panels.len().div_ceil(columns).max(1);
-    let row_constraints = (0..rows)
-        .map(|_| Constraint::Ratio(1, rows as u32))
+    app.geometry
+        .add_region(RegionKind::MetricsDashboard, grid_area);
+    let row_constraints = (0..visible_rows)
+        .map(|_| Constraint::Ratio(1, visible_rows as u32))
         .collect::<Vec<_>>();
     let row_areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints(row_constraints)
-        .split(panels_area);
-    for (visible, panel_index) in visible_panels.into_iter().enumerate() {
+        .split(grid_area);
+    for (visible, panel_index) in (start..end).enumerate() {
         let row = visible / columns;
         let column = visible % columns;
         let column_areas = Layout::default()
@@ -12217,6 +12266,24 @@ fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             app,
             panel_index,
             &dashboard.panels[panel_index],
+        );
+    }
+    if overflowing {
+        let slot = PaneScrollbarSlot {
+            area: Rect::new(
+                panels_area.right().saturating_sub(1),
+                panels_area.y,
+                1,
+                panels_area.height,
+            ),
+        };
+        let mut scrollbar = ScrollbarState::new(total_rows)
+            .position(start_row)
+            .viewport_content_length(visible_rows);
+        render_scrollbar(frame, slot, &mut scrollbar, &theme());
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::MetricsDashboard),
+            slot.area,
         );
     }
 }
@@ -15191,7 +15258,12 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         } else {
             push_raw_help(&mut lines, width, "left / right", "Dashboard or Explore");
             if app.metrics.mode == MetricsMode::Dashboard {
-                push_raw_help(&mut lines, width, "up / down", "Select dashboard panel");
+                push_raw_help(
+                    &mut lines,
+                    width,
+                    "up / down / wheel",
+                    "Select dashboard panel",
+                );
                 push_raw_help(&mut lines, width, "enter / click", "Expand selected panel");
             } else {
                 push_raw_help(
@@ -21092,6 +21164,85 @@ mod tests {
     }
 
     #[test]
+    fn metrics_dashboard_windows_panels_without_squeezing_and_supports_pointer_scrolling() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.dashboard = Some(sample_metrics_dashboard(6));
+
+        render_app_text_at(&app, 60, 24);
+
+        let visible = app.metrics.dashboard_visible_count.get();
+        assert!((1..6).contains(&visible));
+        assert_eq!(app.metrics.dashboard_first_visible.get(), 0);
+        assert_eq!(app.metrics.dashboard_columns.get(), 1);
+        let first_panel = snapshot_region(&app, RegionKind::MetricsPanel(0));
+        assert!(first_panel.height >= 6, "{first_panel:?}");
+        let scrollbar = snapshot_region(
+            &app,
+            RegionKind::Scrollbar(ScrollbarTarget::MetricsDashboard),
+        );
+        assert_eq!(first_panel.right(), scrollbar.x);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::ScrollDown,
+                first_panel.x.saturating_add(1),
+                first_panel.y.saturating_add(1),
+            ),
+            None,
+        );
+        assert_eq!(app.metrics.selected_panel, 3);
+
+        render_app_text_at(&app, 60, 24);
+        let first_visible = app.metrics.dashboard_first_visible.get();
+        assert!(first_visible > 0);
+        assert!(
+            (first_visible..first_visible + app.metrics.dashboard_visible_count.get()).contains(&3)
+        );
+        snapshot_region(&app, RegionKind::MetricsPanel(3));
+
+        let scrollbar = snapshot_region(
+            &app,
+            RegionKind::Scrollbar(ScrollbarTarget::MetricsDashboard),
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+        assert_eq!(app.metrics.selected_panel, 5);
+
+        render_app_text_at(&app, 60, 24);
+        snapshot_region(&app, RegionKind::MetricsPanel(5));
+
+        app.metrics.selected_panel = 1;
+        app.metrics.dashboard_first_visible.set(0);
+        render_app_text_at(&app, 140, 20);
+        assert_eq!(app.metrics.dashboard_columns.get(), 2);
+        let left_panel = snapshot_region(&app, RegionKind::MetricsPanel(0));
+        let right_panel = snapshot_region(&app, RegionKind::MetricsPanel(1));
+        assert_eq!(left_panel.y, right_panel.y);
+        assert!(left_panel.height >= 6, "{left_panel:?}");
+        let scrollbar = snapshot_region(
+            &app,
+            RegionKind::Scrollbar(ScrollbarTarget::MetricsDashboard),
+        );
+        assert_eq!(right_panel.right(), scrollbar.x);
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+        assert_eq!(app.metrics.selected_panel, 5);
+    }
+
+    #[test]
     fn metrics_dashboard_panel_expands_and_inspects_exact_samples() {
         let mut app = test_app();
         app.ops.select(OpsDestination::Metrics);
@@ -24866,6 +25017,57 @@ environments:
 
     fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
+    }
+
+    fn sample_metrics_dashboard(panel_count: usize) -> LocalMetricDashboardResponse {
+        LocalMetricDashboardResponse {
+            source: LocalMetricSource::Agents,
+            range: LocalMetricTimeRange {
+                from_unix_nanos: 10,
+                to_unix_nanos: 20,
+            },
+            generated_at_unix_nanos: 20,
+            freshest_sample_unix_nanos: Some(20),
+            stats: vec![LocalMetricDashboardStat {
+                id: "invocations".to_string(),
+                label: "Invocations started".to_string(),
+                value: Some(42.0),
+                unit: "1".to_string(),
+                approximate: false,
+            }],
+            panels: (0..panel_count)
+                .map(|index| LocalMetricDashboardPanel {
+                    id: format!("panel-{index}"),
+                    title: format!("Panel {index}"),
+                    kind: LocalMetricDashboardPanelKind::TimeSeries,
+                    series: vec![LocalMetricDashboardSeries {
+                        key: format!("series-{index}"),
+                        label: format!("Series {index}"),
+                        unit: "invocations/s".to_string(),
+                        samples: vec![
+                            LocalMetricSample {
+                                timestamp_unix_nanos: 10,
+                                value: index as f64,
+                                statistic: "rate".to_string(),
+                                source_oplog_index: Some(index as u64),
+                            },
+                            LocalMetricSample {
+                                timestamp_unix_nanos: 20,
+                                value: index.saturating_add(1) as f64,
+                                statistic: "rate".to_string(),
+                                source_oplog_index: Some(index.saturating_add(1) as u64),
+                            },
+                        ],
+                        latest_value: Some(index.saturating_add(1) as f64),
+                        approximate: false,
+                    }],
+                    empty_reason: None,
+                    observed_from_unix_nanos: Some(10),
+                    observed_to_unix_nanos: Some(20),
+                    approximate: false,
+                })
+                .collect(),
+        }
     }
 
     fn render_buffer_text(buffer: &Buffer) -> String {

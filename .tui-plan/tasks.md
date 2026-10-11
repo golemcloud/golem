@@ -78,7 +78,7 @@
 - [x] Rebuild Oplog as a navigable master/details journal and forensic viewer.
 - [x] Bring row selection, pane scrolling, split resizing, and scrollbar
   interaction to pointer parity on every Ops destination.
-- [ ] Review Metrics chart density, legends, inspection, and empty/error states
+- [x] Review Metrics chart density, legends, inspection, and empty/error states
   as a final minimal-Grafana pass.
 - [ ] Complete terminal visual review of each finished checkpoint before Ops
   acceptance.

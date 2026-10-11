@@ -700,5 +700,8 @@ renderers are no longer live contracts.
   expose scope-aware related links in their owning title row, including exact
   Metrics sample/bucket correlation and safe passive Stream navigation.
   Shared controls, collection panes, wheel routing, split handles, and
-  scrollbars now have pointer parity across Ops. The final Metrics review
-  remains tracked in `tasks.md`.
+  scrollbars now have pointer parity across Ops. The final Metrics pass retains
+  axes, units, legends, gaps, freshness, exact/approximate truth, and
+  keyboard/mouse sample inspection while preventing medium and narrow
+  dashboards from squeezing all panels below a readable height. Automated
+  acceptance is complete; combined terminal visual review remains open.

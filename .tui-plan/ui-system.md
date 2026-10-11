@@ -241,6 +241,14 @@ Agent telemetry explicit. Oplog separates Grouped from exact Entries. Stream
 is an exact-Agent live session. Fake telemetry belongs only to visibly labelled
 preview/test providers and must never appear as live production data.
 
+The Metrics Dashboard uses two columns only when the content width can support
+them and otherwise uses one. Once six content rows are available, no dashboard
+panel receives fewer; a shorter viewport shows one selected panel. The viewport
+shows only complete grid rows beyond that limit, follows keyboard or pointer
+selection without recentering a visible row, and owns one trailing-right
+scrollbar cell. Density pressure must window panels rather than collapse their
+axes, legend, values, and empty-state copy into unreadable rows.
+
 Oplog uses the shared Ops master/details layout in both representations.
 Grouped rows are readable journal units and their detail contains durable
 identity, typed grouping metadata, and the syntax-colored payload of each exact
