@@ -1005,86 +1005,89 @@ export async function schemaValueToWitAsync(
     if (aborted || signal?.aborted) throw new SchemaEncodeError("stream conversion interrupted")
   }
 
-  async function prepare(current: SchemaValue): Promise<SchemaValue> {
+  const streams: Array<Extract<SchemaValue, { tag: "stream" }>> = []
+  function prepare(current: SchemaValue): SchemaValue {
     checkActive()
     switch (current.tag) {
       case "stream": {
-        const stream = current.handle.peek()
-        if (stream === undefined) {
-          throw new SchemaEncodeError("schema value stream was already transferred")
-        }
-        if (stream.kind === "wrapped") return current
-
-        current.handle.reserve(transaction)
-        const entry = {
-          original: current.handle,
-          proxy: new PreparedStream(stream.value),
-          wrapped: undefined as unknown,
-        }
-        prepared.push(entry)
-        const { SchemaValueStream } = await import("golem:core/types@2.0.0")
-        checkActive()
-        const wrapped = await SchemaValueStream.wrap(entry.proxy)
-        if (aborted) {
-          dispose(wrapped)
-          checkActive()
-        }
-        entry.wrapped = wrapped
-        return {
-          tag: "stream",
-          handle: new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
-            kind: "wrapped",
-            value: wrapped,
-          }),
-        }
+        const copy = { ...current }
+        streams.push(copy)
+        return copy
       }
       case "record": {
         const fields: SchemaValue[] = []
-        for (const field of current.fields) fields.push(await prepare(field))
+        for (const field of current.fields) fields.push(prepare(field))
         return { ...current, fields }
       }
       case "tuple":
       case "list":
       case "fixed-list": {
         const elements: SchemaValue[] = []
-        for (const element of current.elements) elements.push(await prepare(element))
+        for (const element of current.elements) elements.push(prepare(element))
         return { ...current, elements }
       }
       case "variant":
         return {
           ...current,
-          payload: current.payload === undefined ? undefined : await prepare(current.payload),
+          payload: current.payload === undefined ? undefined : prepare(current.payload),
         }
       case "map": {
         const entries: Array<{ key: SchemaValue; value: SchemaValue }> = []
         for (const entry of current.entries) {
-          entries.push({ key: await prepare(entry.key), value: await prepare(entry.value) })
+          entries.push({ key: prepare(entry.key), value: prepare(entry.value) })
         }
         return { ...current, entries }
       }
       case "option":
         return {
           ...current,
-          value: current.value === undefined ? undefined : await prepare(current.value),
+          value: current.value === undefined ? undefined : prepare(current.value),
         }
       case "result":
         return {
           ...current,
           result: {
             ...current.result,
-            value:
-              current.result.value === undefined ? undefined : await prepare(current.result.value),
+            value: current.result.value === undefined ? undefined : prepare(current.result.value),
           },
         }
       case "union":
-        return { ...current, body: await prepare(current.body) }
+        return { ...current, body: prepare(current.body) }
       default:
         return current
     }
   }
 
   try {
-    const ready = await prepare(value)
+    const ready = prepare(value)
+    for (const current of streams) {
+      checkActive()
+      const stream = current.handle.peek()
+      if (stream === undefined) {
+        throw new SchemaEncodeError("schema value stream was already transferred")
+      }
+      if (stream.kind === "wrapped") continue
+
+      current.handle.reserve(transaction)
+      const entry = {
+        original: current.handle,
+        proxy: new PreparedStream(stream.value),
+        wrapped: undefined as unknown,
+      }
+      prepared.push(entry)
+      const { SchemaValueStream } = await import("golem:core/types@2.0.0")
+      checkActive()
+      const wrapped = await SchemaValueStream.wrap(entry.proxy)
+      if (aborted) {
+        dispose(wrapped)
+        checkActive()
+      }
+      entry.wrapped = wrapped
+      current.handle = new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
+        kind: "wrapped",
+        value: wrapped,
+      })
+    }
     checkActive()
     for (const entry of prepared) {
       if (!entry.proxy.pending || entry.original.peek() === undefined) {
