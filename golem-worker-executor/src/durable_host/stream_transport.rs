@@ -128,6 +128,13 @@ pub(super) fn accounted_output_stream_pair(
         lifecycle: lifecycle.clone(),
         runtime_source: runtime_source.clone(),
     };
+    #[cfg(feature = "test-utils")]
+    tracing::debug!(
+        lifecycle = Arc::as_ptr(&lifecycle) as usize,
+        teardown_probe = Arc::as_ptr(&runtime_teardown) as *const () as usize,
+        event = "created",
+        "LiveOutputConsumer.handoff"
+    );
     Ok((
         LiveOutputConsumer {
             publisher,
@@ -243,9 +250,31 @@ pub(super) struct LiveOutputConsumer {
 
 impl LiveOutputConsumer {
     fn begin_terminal_publication(&mut self) {
+        #[cfg(feature = "test-utils")]
+        let lifecycle = Arc::as_ptr(&self.lifecycle) as usize;
+        #[cfg(feature = "test-utils")]
+        let teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize;
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            lifecycle,
+            teardown_probe,
+            event = "finish_requested",
+            "LiveOutputConsumer.handoff"
+        );
         self.terminal_requested = true;
         let publisher = self.publisher.clone();
-        self.pending = Some(Box::pin(async move { publisher.publish_end().await }));
+        self.pending = Some(Box::pin(async move {
+            let result = publisher.publish_end().await;
+            #[cfg(feature = "test-utils")]
+            tracing::debug!(
+                lifecycle,
+                teardown_probe,
+                event = "finish_publication_completed",
+                ok = result.is_ok(),
+                "LiveOutputConsumer.handoff"
+            );
+            result
+        }));
     }
 
     fn poll_pending(&mut self, cx: &mut Context<'_>) -> Poll<wasmtime::Result<StreamResult>> {
@@ -257,6 +286,14 @@ impl LiveOutputConsumer {
                     if !self.terminal_requested
                         && let Poll::Ready(kind) = self.interrupt.as_mut().poll(cx)
                     {
+                        #[cfg(feature = "test-utils")]
+                        tracing::debug!(
+                            lifecycle = Arc::as_ptr(&self.lifecycle) as usize,
+                            teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize,
+                            event = "pending_publication_interrupt_ready",
+                            interrupt_kind = ?std::mem::discriminant(&kind),
+                            "LiveOutputConsumer.handoff"
+                        );
                         return Poll::Ready(Err(wasmtime::Error::from_anyhow(kind.into())));
                     }
                     return Poll::Pending;
@@ -265,6 +302,16 @@ impl LiveOutputConsumer {
             },
             None => return Poll::Ready(Ok(StreamResult::Completed)),
         };
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            lifecycle = Arc::as_ptr(&self.lifecycle) as usize,
+            teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize,
+            event = "publication_ready",
+            terminal_requested = self.terminal_requested,
+            ok = result.is_ok(),
+            closed = matches!(&result, Err(LiveStreamPublishError::Closed)),
+            "LiveOutputConsumer.handoff"
+        );
         self.pending = None;
         match result {
             Ok(_) => match self.pending_failure.take() {
@@ -294,6 +341,19 @@ impl LiveOutputConsumer {
 
 impl Drop for LiveOutputConsumer {
     fn drop(&mut self) {
+        #[cfg(feature = "test-utils")]
+        let lifecycle_id = Arc::as_ptr(&self.lifecycle) as usize;
+        #[cfg(feature = "test-utils")]
+        let teardown_probe = Arc::as_ptr(&self.runtime_teardown) as *const () as usize;
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            lifecycle = lifecycle_id,
+            teardown_probe,
+            event = "drop_enter",
+            pending = self.pending.is_some(),
+            terminal_requested = self.terminal_requested,
+            "LiveOutputConsumer.handoff"
+        );
         let pending = self.pending.take();
         let terminal_requested = self.terminal_requested;
         let publisher = self.publisher.clone();
@@ -306,18 +366,66 @@ impl Drop for LiveOutputConsumer {
         tokio::spawn(async move {
             let _activity = activity;
             if let Some(pending) = pending {
-                let _ = pending.await;
+                let result = pending.await;
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(
+                    lifecycle = lifecycle_id,
+                    teardown_probe,
+                    event = "drop_pending_completed",
+                    ok = result.is_ok(),
+                    "LiveOutputConsumer.handoff"
+                );
+                let _ = result;
             }
             if !terminal_requested {
                 tokio::task::yield_now().await;
-                if runtime_teardown() {
+                let teardown = runtime_teardown();
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(
+                    lifecycle = lifecycle_id,
+                    teardown_probe,
+                    event = "drop_teardown_decision",
+                    teardown,
+                    "LiveOutputConsumer.handoff"
+                );
+                if teardown {
                     lifecycle.abort();
+                    #[cfg(feature = "test-utils")]
+                    tracing::debug!(
+                        lifecycle = lifecycle_id,
+                        teardown_probe,
+                        event = "drop_aborted",
+                        "LiveOutputConsumer.handoff"
+                    );
                 } else {
-                    let _ = publisher.publish_end().await;
+                    #[cfg(feature = "test-utils")]
+                    tracing::debug!(
+                        lifecycle = lifecycle_id,
+                        teardown_probe,
+                        event = "drop_publication_enter",
+                        "LiveOutputConsumer.handoff"
+                    );
+                    let result = publisher.publish_end().await;
+                    #[cfg(feature = "test-utils")]
+                    tracing::debug!(
+                        lifecycle = lifecycle_id,
+                        teardown_probe,
+                        event = "drop_publication_completed",
+                        ok = result.is_ok(),
+                        "LiveOutputConsumer.handoff"
+                    );
+                    let _ = result;
                     lifecycle.finish();
                 }
             } else {
                 lifecycle.finish();
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(
+                    lifecycle = lifecycle_id,
+                    teardown_probe,
+                    event = "drop_terminal_finished",
+                    "LiveOutputConsumer.handoff"
+                );
             }
         });
     }

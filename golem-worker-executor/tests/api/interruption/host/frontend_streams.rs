@@ -1,15 +1,20 @@
 use super::*;
 use anyhow::{Context as _, ensure};
+use futures::FutureExt;
 use golem_api_grpc::proto::golem::worker::{
     ExternalToolInvocation, InputStreamEnd, InputStreamItem, InvocationRequest, InvocationStart,
     ToolByteStreamRole, input_stream_item, invocation_request, invocation_response,
     invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::agent::extraction::extract_component_metadata;
-use golem_common::model::agent::{GolemUserPrincipal, Principal};
+use golem_common::model::agent::{AgentMode, GolemUserPrincipal, Principal};
+use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::durable_host::durable_session::DurableSourceObserverForTest;
+use golem_worker_executor::services::oplog::OplogOps;
+use golem_worker_executor::services::{HasOplog, HasOplogService};
 use golem_worker_executor::worker::MonthlyClockForTest;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
@@ -225,6 +230,16 @@ async fn durable_native_stdin_memory_quota_pending_source(
             .iter()
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Cancelled(_)))
     );
+    eprintln!(
+        "STDIN_STOPPED key={key:?} stream={stdin_id} durable_stream={durable_stream_id:?} epoch={} worker={} startup={:?} generation={} ordinal={} returned={} dropped={}",
+        accepted.epoch,
+        Arc::as_ptr(&worker) as usize,
+        worker.startup_attempt_for_test(),
+        worker.resident_generation_for_test(),
+        observer.ordinal.load(Ordering::SeqCst),
+        observer.returned.load(Ordering::SeqCst),
+        observer.dropped.load(Ordering::SeqCst),
+    );
     // Keep the same accepted session and key. Submit the first byte only after physical release.
     let bytes = vec![17, 255];
     sender
@@ -255,8 +270,37 @@ async fn durable_native_stdin_memory_quota_pending_source(
     executor.resume(&id, false).await?;
     let mut output = Vec::new();
     let mut results = 0;
-    tokio::time::timeout(Duration::from_secs(30), async {
+    let mut receipts = Vec::new();
+    let continuation = tokio::time::timeout(Duration::from_secs(30), async {
         while let Some(response) = responses.message().await? {
+            let receipt = match response.response.as_ref() {
+                Some(invocation_response::Response::InputAck(ack)) => format!(
+                    "InputAck stream={} durable_stream={:?} epoch={} sequence={} count={} offset={:?}",
+                    ack.transport_stream_id, ack.durable_stream_id, ack.epoch,
+                    ack.highest_contiguous_sequence, ack.logical_item_count, ack.resulting_offset,
+                ),
+                Some(invocation_response::Response::OutputItem(item)) => format!(
+                    "OutputItem stream={} durable_stream={:?} epoch={} sequence={} count={} packed_bytes={} offset={:?}",
+                    item.transport_stream_id, item.durable_stream_id, item.epoch,
+                    item.producer_sequence, item.logical_item_count, item.packed_u8.len(), item.durable_offset,
+                ),
+                Some(invocation_response::Response::OutputEnd(end)) => format!(
+                    "OutputEnd stream={} durable_stream={:?} epoch={} sequence={} offset={:?}",
+                    end.transport_stream_id, end.durable_stream_id, end.epoch,
+                    end.producer_sequence, end.durable_offset,
+                ),
+                Some(invocation_response::Response::Result(result)) => format!(
+                    "Result agent={:?} key={:?} fingerprint={:?} index={:?} tool_result={}",
+                    result.agent_id, result.idempotency_key, result.agent_fingerprint, result.oplog_index,
+                    matches!(result.result, Some(invocation_session_result::Result::ToolResult(_))),
+                ),
+                Some(invocation_response::Response::Finished(finished)) => format!(
+                    "Finished success={}",
+                    matches!(finished.outcome, Some(invocation_session_completion::Outcome::Success(_))),
+                ),
+                other => format!("Other kind={:?}", other.map(std::mem::discriminant)),
+            };
+            receipts.push(receipt);
             match response.response {
                 Some(invocation_response::Response::OutputItem(item)) => {
                     output.extend(item.packed_u8)
@@ -291,8 +335,146 @@ async fn durable_native_stdin_memory_quota_pending_source(
         }
         Ok::<_, anyhow::Error>(())
     })
-    .await
-    .context("ordinary same-key native stdin continuation")??;
+    .await;
+    for (order, receipt) in receipts.iter().enumerate() {
+        eprintln!("STDIN_SESSION_RECEIPT order={order} {receipt}");
+    }
+    eprintln!(
+        "STDIN_CONTINUATION timeout={} inner_error={} output_bytes={} results={} worker={} startup={:?} generation={} loaded={:?} permit={:?} ordinal={} returned={} dropped={}",
+        continuation.is_err(),
+        matches!(&continuation, Ok(Err(_))),
+        output.len(),
+        results,
+        Arc::as_ptr(&worker) as usize,
+        worker.startup_attempt_for_test(),
+        worker.resident_generation_for_test(),
+        worker.is_loaded().now_or_never(),
+        worker.concurrent_agent_permit_is_held().now_or_never(),
+        observer.ordinal.load(Ordering::SeqCst),
+        observer.returned.load(Ordering::SeqCst),
+        observer.dropped.load(Ordering::SeqCst),
+    );
+    if !matches!(&continuation, Ok(Ok(()))) || results != 1 || output != bytes {
+        eprintln!(
+            "STDIN_COMMITTED_INSPECTION unavailable=true reason=continuation_or_original_result_oracle_failed"
+        );
+    }
+    continuation.context("ordinary same-key native stdin continuation")??;
     ensure!(results == 1 && output == bytes);
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let service = worker.oplog_service();
+    let tip = service.get_last_index(&owned, AgentMode::Durable).await;
+    let committed = service
+        .read_exact(
+            &owned,
+            AgentMode::Durable,
+            OplogIndex::INITIAL,
+            tip.as_u64(),
+        )
+        .await;
+    let oplog = worker.oplog();
+    for (index, entry) in committed {
+        match entry {
+            OplogEntry::AgentInvocationStarted {
+                idempotency_key, ..
+            } => eprintln!(
+                "STDIN_COMMITTED index={index} kind=AgentInvocationStarted key={idempotency_key:?}"
+            ),
+            OplogEntry::AgentInvocationFinished { method_name, .. } => eprintln!(
+                "STDIN_COMMITTED index={index} kind=AgentInvocationFinished method={method_name:?}"
+            ),
+            OplogEntry::Start {
+                parent_start_index,
+                function_name,
+                invocation_id,
+                ..
+            } => eprintln!(
+                "STDIN_COMMITTED index={index} kind=Start parent={parent_start_index:?} function={function_name} invocation_id={invocation_id:?}"
+            ),
+            OplogEntry::End { start_index, .. } => {
+                eprintln!("STDIN_COMMITTED index={index} kind=End start={start_index}")
+            }
+            OplogEntry::Cancelled { start_index, .. } => {
+                eprintln!("STDIN_COMMITTED index={index} kind=Cancelled start={start_index}")
+            }
+            OplogEntry::StreamItems { record, .. } => match oplog.download_payload(record).await {
+                Ok(record) => eprintln!(
+                    "STDIN_COMMITTED index={index} kind=StreamItems stream={:?} sequence={} count={} offsets={:?}",
+                    record.stream_id,
+                    record.first_sequence,
+                    record.payload.logical_item_count(),
+                    record.offsets,
+                ),
+                Err(_) => eprintln!(
+                    "STDIN_COMMITTED index={index} kind=StreamItems payload_inspection_failed=true"
+                ),
+            },
+            OplogEntry::StreamEnd { record, .. } => match oplog.download_payload(record).await {
+                Ok(record) => eprintln!(
+                    "STDIN_COMMITTED index={index} kind=StreamEnd stream={:?} sequence={} offset={:?}",
+                    record.stream_id, record.sequence, record.offset,
+                ),
+                Err(_) => eprintln!(
+                    "STDIN_COMMITTED index={index} kind=StreamEnd payload_inspection_failed=true"
+                ),
+            },
+            OplogEntry::StreamSession { record, .. } => {
+                match oplog.download_payload(record).await {
+                    Ok(record) => match record {
+                        StreamSessionRecord::Prepared(record) => eprintln!(
+                            "STDIN_COMMITTED index={index} kind=Prepared key={:?} mappings={}",
+                            record.session_key,
+                            record.stream_mappings.len(),
+                        ),
+                        StreamSessionRecord::InputHighWater(record) => eprintln!(
+                            "STDIN_COMMITTED index={index} kind=InputHighWater key={:?} stream={:?} epoch={} sequence={} count={} high_water={:?}",
+                            record.session_key,
+                            record.stream_id,
+                            record.epoch,
+                            record.first_sequence,
+                            record.payload.logical_item_count(),
+                            record.high_water,
+                        ),
+                        StreamSessionRecord::ConsumerItemValue(record) => eprintln!(
+                            "STDIN_COMMITTED index={index} kind=ConsumerItemValue key={:?} reader={:?} ordinal={} count={} offset={:?}",
+                            record.session_key,
+                            record.reader_id,
+                            record.consumer_read_ordinal,
+                            record.logical_item_count(),
+                            record.source_offset,
+                        ),
+                        StreamSessionRecord::ConsumerTerminal(record) => eprintln!(
+                            "STDIN_COMMITTED index={index} kind=ConsumerTerminal key={:?} reader={:?} ordinal={} offset={:?}",
+                            record.session_key,
+                            record.reader_id,
+                            record.consumer_read_ordinal,
+                            record.source_offset,
+                        ),
+                        StreamSessionRecord::InvocationResult(record) => eprintln!(
+                            "STDIN_COMMITTED index={index} kind=InvocationResult key={:?}",
+                            record.session_key,
+                        ),
+                        StreamSessionRecord::Finished(record) => eprintln!(
+                            "STDIN_COMMITTED index={index} kind=Finished key={:?} success={}",
+                            record.session_key,
+                            record.result.is_ok(),
+                        ),
+                        record => eprintln!(
+                            "STDIN_COMMITTED index={index} kind=OtherSession discriminant={:?} key={:?}",
+                            std::mem::discriminant(&record),
+                            record.local_session_key(),
+                        ),
+                    },
+                    Err(_) => eprintln!(
+                        "STDIN_COMMITTED index={index} kind=StreamSession payload_inspection_failed=true"
+                    ),
+                }
+            }
+            entry => eprintln!(
+                "STDIN_COMMITTED index={index} kind=Other discriminant={:?}",
+                std::mem::discriminant(&entry)
+            ),
+        }
+    }
     Ok(())
 }

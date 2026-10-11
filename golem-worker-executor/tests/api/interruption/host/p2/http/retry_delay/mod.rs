@@ -282,12 +282,11 @@ async fn pending_retry_delay(
                 tokio::task::yield_now().await;
             }
         }).await.context("original byte h was never delivered")??;
-        peer.release(1)?;
-        peer.wait_closed(1).await?;
         let phase = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let event = phases.recv().await.context("P2 native HTTP body observer closed")?;
-                ensure!(event.operation == "http_body_blocking_read" && event.invocation_key.as_ref() == Some(&key));
+                ensure!(event.operation == "http_body_blocking_read" && event.invocation_key.as_ref() == Some(&key),
+                    "wrong native body read: expected_key={key:?} event={event:?} state={:?}", event.state());
                 let start = event.start_index.context("HTTP body observer omitted child Start")?;
                 executor.commit_oplog(&id).await?;
                 let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -297,6 +296,10 @@ async fn pending_retry_delay(
                 ensure!(event.state() != P2NativeInputStateForTest::Dropped, "first HTTP body read was dropped");
             }
         }).await.context("second native body read never parked")??;
+        ensure!(phase.state() == P2NativeInputStateForTest::Pending,
+            "second native body read did not remain Pending while the peer was held: {phase:?} state={:?}", phase.state());
+        peer.release(1)?;
+        peer.wait_closed(1).await?;
         let delay = tokio::time::timeout(Duration::from_secs(10), phases.recv())
             .await.context("response-body retry delay never polled Pending")?
             .context("retry-delay observer closed")?;
