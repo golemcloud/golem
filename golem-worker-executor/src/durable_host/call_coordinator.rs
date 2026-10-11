@@ -39,6 +39,28 @@ impl<'a> DurableCallAdmission<'a> {
         }
     }
 
+    fn wallet_admission(
+        self,
+        runtime: &OwnerRuntime,
+        snapshotting: bool,
+        durable_call_is_live: bool,
+        automatic_update_unsettled: bool,
+    ) -> WalletAdmission {
+        if self.is_wallet_independent_value_read()
+            && *runtime == OwnerRuntime::Agent
+            && !snapshotting
+            && durable_call_is_live
+        {
+            if automatic_update_unsettled {
+                WalletAdmission::FinalizeUpdate
+            } else {
+                WalletAdmission::Independent
+            }
+        } else {
+            WalletAdmission::Synchronize
+        }
+    }
+
     fn is_wallet_independent_value_read(self) -> bool {
         use golem_common::model::oplog::host_functions::HostFunctionName;
         matches!(
@@ -63,6 +85,13 @@ impl<'a> DurableCallAdmission<'a> {
                 | HostFunctionName::P3RandomInsecureSeedGetInsecureSeed
         )
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WalletAdmission {
+    Independent,
+    FinalizeUpdate,
+    Synchronize,
 }
 
 /// The result of successful admission and durable-scope recovery for a host call.
@@ -105,15 +134,17 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         admission: DurableCallAdmission<'_>,
     ) -> Result<DurableCallBoundary, WorkerExecutorError> {
         self.check_allowed(admission)?;
-        if admission.is_wallet_independent_value_read()
-            && self.ctx.runtime == OwnerRuntime::Agent
-            && !self.ctx.state.snapshotting_mode
-            && self.ctx.state.durable_call_is_live()
-        {
+        match admission.wallet_admission(
+            &self.ctx.runtime,
+            self.ctx.state.snapshotting_mode,
+            self.ctx.state.durable_call_is_live(),
+            self.ctx.state.automatic_update_unsettled,
+        ) {
             // A fresh clock/random value needs no authority. Waiting for an accessor's wallet
             // reconciliation here can deadlock: this call owns the Store that accessor needs.
             // Automatic updates still fence target-only history until success is committed.
-            if self.ctx.state.automatic_update_unsettled {
+            WalletAdmission::Independent => {}
+            WalletAdmission::FinalizeUpdate => {
                 let _boundary = self.ctx.lock_synchronized_card_event_boundary().await?;
                 if self.ctx.state.automatic_update_unsettled {
                     return Err(WorkerExecutorError::runtime(
@@ -121,8 +152,9 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                     ));
                 }
             }
-        } else {
-            self.ctx.synchronize_agent_wallet_at_boundary().await?;
+            WalletAdmission::Synchronize => {
+                self.ctx.synchronize_agent_wallet_at_boundary().await?;
+            }
         }
         let begin_index = self.ctx.begin_function(admission.function_type).await?;
         Ok(DurableCallBoundary::from_begin_index(begin_index))
@@ -1545,4 +1577,47 @@ where
         )
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DurableCallAdmission, DurableFunctionType, OwnerRuntime, WalletAdmission};
+    use golem_common::model::entity::{AgentEntity, ToolMiddlewareName};
+    use test_r::test;
+
+    #[test]
+    fn wallet_independent_reads_still_fence_updates_and_replay() {
+        let clock = DurableCallAdmission::new(&DurableFunctionType::ReadLocal, "wall_clock::now");
+        assert_eq!(
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            WalletAdmission::Independent
+        );
+        assert_eq!(
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, true),
+            WalletAdmission::FinalizeUpdate
+        );
+        let entity = OwnerRuntime::Entity(AgentEntity::ToolMiddleware(
+            ToolMiddlewareName::try_from("middleware").unwrap(),
+        ));
+        for (runtime, snapshotting, live) in [
+            (OwnerRuntime::Agent, false, false),
+            (OwnerRuntime::Agent, true, true),
+            (entity, false, true),
+        ] {
+            for unsettled in [false, true] {
+                assert_eq!(
+                    clock.wallet_admission(&runtime, snapshotting, live, unsettled),
+                    WalletAdmission::Synchronize
+                );
+            }
+        }
+        let environment = DurableCallAdmission::new(
+            &DurableFunctionType::ReadLocal,
+            "cli::environment::get_environment",
+        );
+        assert_eq!(
+            environment.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            WalletAdmission::Synchronize
+        );
+    }
 }

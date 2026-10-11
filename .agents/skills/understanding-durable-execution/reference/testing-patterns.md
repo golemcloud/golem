@@ -199,7 +199,7 @@ caller_recovery_restarts_input_drain_after_rpc_result_commit}`,
 `tests/tool_streaming.rs::{deterministic_stream_crash_checkpoint_matrix,
 active_stream_crash_replays_pinned_activation_with_fresh_attachments,
 concurrent_tool_attempt_identity_survives_reordered_admission_and_replay,
-completed_reconstruction_claim_blocks_concurrent_replay_to_live}`.
+incomplete_custom_durability_waits_for_completed_reconstruction}`.
 
 ## Pattern 11: treat owner and entities as one lifecycle unit
 

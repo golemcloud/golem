@@ -819,21 +819,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
-        self.owner_execution
-            .test_should_skip_wall_clock_now_durability()
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn test_commit_pending_oplog_entries(&self) {
-        self.public_state
-            .worker()
-            .commit_oplog_and_update_state(CommitLevel::Always)
-            .await
-            .expect("test oplog commit was refused");
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn test_install_entity_tool_operation(
         &mut self,
         parent: OwnerInvocationId,
@@ -5456,11 +5441,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     ),
                 })?;
             self.primary_invocation_start_index = Some(start_index);
-
-            #[cfg(feature = "test-utils")]
-            self.owner_execution
-                .test_after_invocation_started_buffered()
-                .await;
 
             self.public_state
                 .worker()
