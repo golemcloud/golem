@@ -20,7 +20,7 @@ use crate::model::local_observability::{
     LocalMetricSample, LocalMetricSamplesResponse, LocalMetricSeries, LocalMetricSource,
     LocalMetricTemporality, LocalMetricTimeRange,
 };
-use crate::tui::ops::activity::{ActivityAgentProgress, ActivityEntry, ActivityQuery};
+use crate::tui::ops::activity::{ActivityAgentProgress, ActivityEntry};
 use crate::tui::ops::deployments::DeploymentRecord;
 use crate::tui::ops::resources::{ResourceField, ResourceFocus, ResourceRow};
 use ratatui::Terminal;
@@ -229,7 +229,10 @@ fn preview_app(case_id: &str) -> TuiApp {
     }
     match case_id {
         "ops-agent-detail" => populate_agent_detail(&mut app),
-        "ops-oplog" => populate_oplog(&mut app),
+        "ops-oplog" => {
+            populate_oplog(&mut app);
+            app.activity.selected = 3;
+        }
         "ops-oplog-entries" => {
             populate_oplog(&mut app);
             app.activity.representation = ActivityRepresentation::Entries;
@@ -297,18 +300,15 @@ fn populate_oplog(app: &mut TuiApp) {
             agent_id: orders.agent_id.clone(),
         },
     ];
-    app.activity.query = "checkout OR payment".into();
-    app.activity.applied_query = ActivityQuery {
-        text: app.activity.query.clone(),
-        ..ActivityQuery::default()
-    };
     app.activity.entries = vec![
-        preview_oplog_entry(&checkout, 1842, "ExportedFunctionInvoked", Some(1842)),
-        preview_oplog_entry(&checkout, 1843, "ImportedFunctionInvoked", Some(1842)),
-        preview_oplog_entry(&checkout, 1844, "ExportedFunctionCompleted", Some(1842)),
-        preview_oplog_entry(&orders, 916, "ExportedFunctionInvoked", Some(916)),
-        preview_oplog_entry(&orders, 917, "Log", Some(916)),
-        preview_oplog_entry(&orders, 918, "ExportedFunctionCompleted", Some(916)),
+        preview_oplog_entry(&checkout, 1846, "AgentInvocationFinished", None),
+        preview_oplog_entry(&checkout, 1845, "End", Some(1843)),
+        preview_oplog_entry(&checkout, 1844, "Log", None),
+        preview_oplog_entry(&checkout, 1843, "Start", Some(1843)),
+        preview_oplog_entry(&checkout, 1842, "AgentInvocationStarted", None),
+        preview_oplog_entry(&orders, 918, "Error", None),
+        preview_oplog_entry(&orders, 917, "AgentInvocationStarted", None),
+        preview_oplog_entry(&orders, 916, "AgentInvocationStarted", None),
     ];
     app.activity.progress = vec![
         preview_oplog_progress(&checkout, 1844, true),
@@ -331,13 +331,45 @@ fn preview_oplog_entry(
             timestamp: golem_common::model::Timestamp::from(index),
             kind: kind.into(),
             group: group.map(OplogEntryGroupKey::OplogIndex),
-            detail: serde_json::json!({
-                "index": index,
-                "kind": kind,
-                "agentId": agent.agent_id,
-                "function": "checkout"
-            }),
+            detail: preview_oplog_detail(index, kind, &agent.agent_id),
+            attribution: None,
+            entry: None,
+            search_text: std::sync::OnceLock::new(),
         },
+    }
+}
+
+fn preview_oplog_detail(index: u64, kind: &str, agent_id: &str) -> serde_json::Value {
+    match kind {
+        "AgentInvocationStarted" => serde_json::json!({
+            "type": kind,
+            "methodName": "checkout",
+            "agentId": agent_id,
+            "index": index,
+        }),
+        "AgentInvocationFinished" => serde_json::json!({
+            "type": kind,
+            "methodName": "checkout",
+            "consumedFuel": 18742,
+            "index": index,
+        }),
+        "Start" => serde_json::json!({
+            "type": kind,
+            "functionName": "golem:key-value/get",
+            "index": index,
+        }),
+        "Log" => serde_json::json!({
+            "type": kind,
+            "message": "inventory reserved",
+            "level": "info",
+            "index": index,
+        }),
+        "Error" => serde_json::json!({
+            "type": kind,
+            "error": "payment provider timed out",
+            "index": index,
+        }),
+        _ => serde_json::json!({"type": kind, "index": index}),
     }
 }
 

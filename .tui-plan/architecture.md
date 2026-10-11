@@ -101,8 +101,17 @@ and a continuation cursor.
   component-revision state advances through skipped entries.
 - Per-Agent continuations allow the TUI to stop/resume and merge at most 20
   explicit Agents with concurrency four.
-- A neutral `OplogEntryPresentation` is shared by CLI and TUI. TUI code never
-  parses ANSI or serialized JSON to infer entry type or timestamp.
+- A neutral `OplogEntryPresentation` retains the typed public entry and owner
+  attribution beside its JSON projection. TUI code never parses ANSI or
+  serialized JSON to infer entry type, timestamp, correlation, or ownership.
+- The grouping projection is per Agent and tolerant. Explicit typed keys win;
+  contiguous raw pages may additionally pair invocation start/finish markers
+  using best available loaded context. Unmatched and overlapping structures
+  remain visible with open, partial, or orphan state.
+- Sparse server-search results disable adjacency inference. The UI can fetch an
+  exact raw page around a selected hit before reconstructing context. A
+  separate client filter operates only on retained entries and cannot issue or
+  broaden a server query.
 
 The OTLP exporter attaches the exact source index to every metric point emitted
 from an oplog entry. Exact one-Agent samples jump directly; aggregate points

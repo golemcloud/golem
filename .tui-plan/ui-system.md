@@ -253,6 +253,15 @@ Oplog uses the shared Ops master/details layout in both representations.
 Grouped rows are readable journal units and their detail contains durable
 identity, typed grouping metadata, and the syntax-colored payload of each exact
 entry. Entries rows retain the per-Agent oplog index and show one exact payload.
+The input surface explicitly switches between Loaded filtering and Server
+search; the former updates immediately while the latter requires an apply
+action. A one-row, category-colored event map is labelled as loaded data and
+can move selection without claiming full-history coverage. Sparse search hits
+offer a context load before lenient hierarchy is inferred.
+Single-Agent lists omit the repeated AgentID and preserve it in page/detail
+context. Multi-Agent lists show a bounded middle-elided identity per row so a
+long AgentID cannot consume the event summary; exact identity remains in
+details.
 List and details own independent focus, scrolling, mouse hit regions, and
 trailing-right scrollbars. Selection movement reveals without recentering an
 already visible row; direct row clicks preserve the current viewport anchor.

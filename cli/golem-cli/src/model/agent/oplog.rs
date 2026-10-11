@@ -42,6 +42,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::OplogErrorKind;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +83,245 @@ pub struct OplogEntryPresentation {
     pub kind: String,
     pub group: Option<OplogEntryGroupKey>,
     pub detail: Value,
+    pub attribution: Option<PublicOplogEntryAttribution>,
+    pub entry: Option<PublicOplogEntry>,
+    pub search_text: OnceLock<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OplogEntryCategory {
+    Invocation,
+    HostCall,
+    Log,
+    Failure,
+    Trace,
+    State,
+    Lifecycle,
+    Other,
+}
+
+impl OplogEntryCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Invocation => "invoke",
+            Self::HostCall => "host",
+            Self::Log => "log",
+            Self::Failure => "failure",
+            Self::Trace => "trace",
+            Self::State => "state",
+            Self::Lifecycle => "lifecycle",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl OplogEntryPresentation {
+    pub fn structural_parent_group(&self) -> Option<OplogEntryGroupKey> {
+        if let Some(PublicOplogEntry::Start(params)) = self.entry.as_ref()
+            && let Some(parent) = params.parent_start_index
+        {
+            return Some(OplogEntryGroupKey::OplogIndex(parent.as_u64()));
+        }
+        if let Some(PublicOplogEntryAttribution::Entity(context)) = self.attribution.as_ref() {
+            return Some(OplogEntryGroupKey::OplogIndex(
+                context.invocation.start_index.as_u64(),
+            ));
+        }
+        None
+    }
+
+    pub fn category(&self) -> OplogEntryCategory {
+        use PublicOplogEntry as Entry;
+
+        match self.entry.as_ref() {
+            Some(
+                Entry::AgentInvocationStarted(_)
+                | Entry::AgentInvocationFinished(_)
+                | Entry::PendingAgentInvocation(_)
+                | Entry::CancelPendingInvocation(_),
+            ) => OplogEntryCategory::Invocation,
+            Some(
+                Entry::Start(_)
+                | Entry::End(_)
+                | Entry::Cancelled(_)
+                | Entry::CompletionDiscarded(_)
+                | Entry::CompletionDelivered(_)
+                | Entry::HostStreamFrame(_),
+            ) => OplogEntryCategory::HostCall,
+            Some(Entry::Log(_)) => OplogEntryCategory::Log,
+            Some(Entry::Error(_) | Entry::FailedUpdate(_)) => OplogEntryCategory::Failure,
+            Some(Entry::StartSpan(_) | Entry::FinishSpan(_) | Entry::SetSpanAttribute(_)) => {
+                OplogEntryCategory::Trace
+            }
+            Some(
+                Entry::BeginAtomicRegion(_)
+                | Entry::EndAtomicRegion(_)
+                | Entry::BeginRemoteTransaction(_)
+                | Entry::PreCommitRemoteTransaction(_)
+                | Entry::PreRollbackRemoteTransaction(_)
+                | Entry::CommittedRemoteTransaction(_)
+                | Entry::RolledBackRemoteTransaction(_)
+                | Entry::Snapshot(_)
+                | Entry::CreateResource(_)
+                | Entry::DropResource(_)
+                | Entry::StreamRegistered(_)
+                | Entry::StreamItems(_)
+                | Entry::StreamEnd(_)
+                | Entry::StreamCancel(_)
+                | Entry::StreamSession(_),
+            ) => OplogEntryCategory::State,
+            Some(
+                Entry::Create(_)
+                | Entry::Suspend(_)
+                | Entry::RecoverySucceeded(_)
+                | Entry::Jump(_)
+                | Entry::Interrupted(_)
+                | Entry::Exited(_)
+                | Entry::PendingUpdate(_)
+                | Entry::SuccessfulUpdate(_)
+                | Entry::Restart(_)
+                | Entry::Resumed(_)
+                | Entry::Revert(_),
+            ) => OplogEntryCategory::Lifecycle,
+            Some(_) => OplogEntryCategory::Other,
+            None => synthetic_category(&self.kind),
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        use PublicOplogEntry as Entry;
+
+        match self.entry.as_ref() {
+            Some(Entry::Create(params)) => format!("created {}", params.agent_id),
+            Some(Entry::Start(params)) => params.function_name.clone(),
+            Some(Entry::End(params)) => format!("completed host call #{}", params.start_index),
+            Some(Entry::Cancelled(params)) => {
+                format!("cancelled host call #{}", params.start_index)
+            }
+            Some(Entry::AgentInvocationStarted(params)) => invocation_summary(&params.invocation),
+            Some(Entry::AgentInvocationFinished(params)) => params
+                .method_name
+                .as_ref()
+                .map(|method| format!("completed {method}"))
+                .unwrap_or_else(|| "invocation completed".to_string()),
+            Some(Entry::PendingAgentInvocation(params)) => {
+                format!("queued {}", invocation_summary(&params.invocation))
+            }
+            Some(Entry::Error(params)) => params.error.clone(),
+            Some(Entry::Log(params)) => {
+                if params.context.is_empty() {
+                    params.message.clone()
+                } else {
+                    format!("{} · {}", params.context, params.message)
+                }
+            }
+            Some(Entry::PendingUpdate(params)) => {
+                format!("revision {} queued", params.target_revision)
+            }
+            Some(Entry::SuccessfulUpdate(params)) => {
+                format!("revision {} active", params.target_revision)
+            }
+            Some(Entry::FailedUpdate(params)) => params
+                .details
+                .clone()
+                .unwrap_or_else(|| format!("revision {} failed", params.target_revision)),
+            Some(Entry::StartSpan(params)) => format!("span {} started", params.span_id),
+            Some(Entry::FinishSpan(params)) => format!("span {} finished", params.span_id),
+            Some(Entry::SetSpanAttribute(params)) => {
+                format!("span {} · {}", params.span_id, params.key)
+            }
+            Some(Entry::HostStreamFrame(params)) => {
+                format!("{:?} frame for #{}", params.kind, params.parent_start_index)
+            }
+            Some(Entry::CompletionDelivered(params)) => {
+                format!("completion delivered for #{}", params.start_index)
+            }
+            Some(Entry::CompletionDiscarded(params)) => {
+                format!("completion discarded for #{}", params.start_index)
+            }
+            Some(Entry::BeginRemoteTransaction(params)) => {
+                format!("transaction {}", params.transaction_id)
+            }
+            Some(Entry::PreCommitRemoteTransaction(params)) => {
+                format!("prepare commit for #{}", params.begin_index)
+            }
+            Some(Entry::PreRollbackRemoteTransaction(params)) => {
+                format!("prepare rollback for #{}", params.begin_index)
+            }
+            Some(Entry::CommittedRemoteTransaction(params)) => {
+                format!("committed transaction #{}", params.begin_index)
+            }
+            Some(Entry::RolledBackRemoteTransaction(params)) => {
+                format!("rolled back transaction #{}", params.begin_index)
+            }
+            Some(Entry::Jump(params)) => {
+                format!("jump #{}..#{}", params.jump.start, params.jump.end)
+            }
+            Some(Entry::Revert(params)) => format!(
+                "reverted through #{}",
+                params.dropped_region.start.previous()
+            ),
+            Some(_) | None => summary_from_json(&self.detail).unwrap_or_default(),
+        }
+    }
+
+    pub fn tags(&self) -> Vec<String> {
+        use PublicOplogEntry as Entry;
+
+        let mut tags = Vec::new();
+        match self.entry.as_ref() {
+            Some(Entry::Start(params)) => {
+                tags.push(format!("{:?}", params.durable_function_type));
+                if let Some(parent) = params.parent_start_index {
+                    tags.push(format!("parent #{parent}"));
+                }
+            }
+            Some(Entry::AgentInvocationFinished(params)) => {
+                tags.push(format!("fuel {}", params.consumed_fuel));
+                tags.push(format!("revision {}", params.component_revision));
+            }
+            Some(Entry::Log(params)) => tags.push(format!("{:?}", params.level)),
+            Some(Entry::Error(params)) => tags.push(format!("{:?}", params.kind)),
+            Some(Entry::End(params)) if params.forced_commit => {
+                tags.push("forced commit".to_string())
+            }
+            _ => {}
+        }
+        if matches!(
+            self.attribution,
+            Some(PublicOplogEntryAttribution::Entity(_))
+        ) {
+            tags.push("entity".to_string());
+        }
+        tags
+    }
+
+    pub fn matches_loaded_filter(&self, filter: &str) -> bool {
+        let filter = filter.trim().to_lowercase();
+        if filter.is_empty() {
+            return true;
+        }
+        self.search_text
+            .get_or_init(|| {
+                let detail = serde_json::to_string(&self.detail).unwrap_or_default();
+                let attribution = self
+                    .attribution
+                    .as_ref()
+                    .and_then(|value| serde_json::to_string(value).ok())
+                    .unwrap_or_default();
+                format!(
+                    "{} {} {} {} {} {}",
+                    self.index,
+                    self.kind,
+                    self.category().label(),
+                    self.summary(),
+                    detail,
+                    attribution
+                )
+                .to_lowercase()
+            })
+            .contains(&filter)
+    }
 }
 
 impl From<AgentOplogEntryView> for OplogEntryPresentation {
@@ -142,8 +382,55 @@ impl From<AgentOplogEntryView> for OplogEntryPresentation {
             kind,
             group,
             detail,
+            attribution: Some(value.attribution),
+            entry: Some(value.entry),
+            search_text: OnceLock::new(),
         }
     }
+}
+
+fn invocation_summary(invocation: &PublicAgentInvocation) -> String {
+    match invocation {
+        PublicAgentInvocation::AgentInitialization(_) => "initialize".to_string(),
+        PublicAgentInvocation::AgentMethodInvocation(params) => params.method_name.clone(),
+        PublicAgentInvocation::SaveSnapshot(_) => "save snapshot".to_string(),
+        PublicAgentInvocation::LoadSnapshot(_) => "load snapshot".to_string(),
+        PublicAgentInvocation::ProcessOplogEntries(_) => "process oplog entries".to_string(),
+        PublicAgentInvocation::ManualUpdate(params) => {
+            format!("update to revision {}", params.target_revision)
+        }
+    }
+}
+
+fn synthetic_category(kind: &str) -> OplogEntryCategory {
+    match kind {
+        "AgentInvocationStarted" | "AgentInvocationFinished" | "PendingAgentInvocation" => {
+            OplogEntryCategory::Invocation
+        }
+        "Start" | "End" | "Cancelled" | "HostStreamFrame" => OplogEntryCategory::HostCall,
+        "Log" => OplogEntryCategory::Log,
+        "Error" | "FailedUpdate" => OplogEntryCategory::Failure,
+        "StartSpan" | "FinishSpan" | "SetSpanAttribute" => OplogEntryCategory::Trace,
+        "Create" | "Restart" | "Revert" | "Jump" => OplogEntryCategory::Lifecycle,
+        _ => OplogEntryCategory::Other,
+    }
+}
+
+fn summary_from_json(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    for key in [
+        "functionName",
+        "methodName",
+        "message",
+        "error",
+        "context",
+        "name",
+    ] {
+        if let Some(value) = object.get(key).and_then(Value::as_str) {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 impl StructuredOutput for AgentOplogEntryView {
@@ -1401,6 +1688,13 @@ mod tests {
         assert_eq!(start.kind, "Start");
         assert_eq!(start.timestamp, Timestamp::from(1000));
         assert_eq!(start.group, Some(OplogEntryGroupKey::OplogIndex(17)));
+        assert_eq!(start.category(), OplogEntryCategory::HostCall);
+        assert_eq!(start.summary(), "golem:test/run");
+        assert!(matches!(start.entry, Some(PublicOplogEntry::Start(_))));
+        assert!(matches!(
+            start.attribution,
+            Some(PublicOplogEntryAttribution::Agent(_))
+        ));
         assert_eq!(end.kind, "End");
         assert_eq!(end.timestamp, Timestamp::from(2000));
         assert_eq!(end.group, Some(OplogEntryGroupKey::OplogIndex(17)));

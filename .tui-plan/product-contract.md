@@ -106,11 +106,24 @@ Agents. The Overview never presents loaded Agent rows as a total Agent count.
 - The destination is named Oplog, matching the CLI.
 - `[Grouped]` is the default representation; Entries is the exact raw public
   entry view. Newest-first is default and can switch to chronological order.
-- Grouping is based only on typed relationships: invocation boundaries,
-  start/end or cancellation links, spans, atomic/transaction regions, and
-  durable-stream sessions. Ambiguous entries stay separate.
+- Explicit typed relationships are authoritative: start/end or cancellation
+  links, spans, atomic/transaction regions, entity attribution, and durable
+  stream ownership. On contiguous raw pages, invocation boundaries may also be
+  paired leniently for presentation. Missing boundaries, overlapping starts,
+  orphan terminals, and page edges produce visible open/partial/orphan groups;
+  they never make the viewer fail or silently discard an entry.
+- Server search is sparse by definition, so it never infers relationships from
+  adjacency. Search hits remain exact or use only explicit typed links and can
+  load a contiguous context page around the selected hit.
+- Loaded filtering is immediate and local to the retained result set. It keeps
+  a matching row's inferred ancestors for orientation and is visibly distinct
+  from server search. Counts and the event map always say that they describe
+  loaded data, never the complete oplog.
 - AgentID and per-Agent oplog index are durable identity. Timestamp order in a
   multi-Agent merge is presentation, not a global durability claim.
+- Single-Agent rows spend their width on event content and carry the full
+  AgentID in page/detail context. Multi-Agent rows retain a compact,
+  middle-elided Agent identity on every row. Grouping never crosses Agents.
 - Scope is one exact Agent or an explicit set of at most 20 Agents. Select All
   means the visible loaded candidates subject to that cap, never all backend
   matches.
@@ -119,7 +132,8 @@ Agents. The Overview never presents loaded Agent rows as a total Agent count.
 - A query fills one bounded result batch, then pauses until Load More.
 - Grouped and Entries both use a master/details explorer. The Grouped detail
   preserves the typed durable relationship and exposes every constituent exact
-  payload; the Entries detail exposes one exact public oplog entry.
+  payload; the Entries detail exposes one exact public oplog entry with
+  semantic category, summary, tags, owner attribution, and raw payload.
 - Journal selection and detail reading have independent focus and scroll state.
   The shared Ops split can be resized, placed right or bottom, or hidden; when
   the terminal cannot fit both panes, the list remains usable by itself.

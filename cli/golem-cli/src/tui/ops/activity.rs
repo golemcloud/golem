@@ -15,7 +15,7 @@
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::model::agent::RawAgentId;
-use crate::model::agent::oplog::OplogEntryPresentation;
+use crate::model::agent::oplog::{OplogEntryCategory, OplogEntryGroupKey, OplogEntryPresentation};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use golem_common::model::component::ComponentName;
@@ -61,6 +61,12 @@ pub(in crate::tui) enum ActivityOrder {
 pub(in crate::tui) enum ActivityFocus {
     List,
     Details,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum ActivityInputKind {
+    Loaded,
+    Server,
 }
 
 impl ActivityOrder {
@@ -132,6 +138,32 @@ pub(in crate::tui) struct ActivityGroup {
     pub(in crate::tui) timestamp: String,
     pub(in crate::tui) kinds: Vec<String>,
     pub(in crate::tui) entry_count: usize,
+    pub(in crate::tui) entry_indices: Vec<u64>,
+    pub(in crate::tui) depth: usize,
+    pub(in crate::tui) category: OplogEntryCategory,
+    pub(in crate::tui) summary: String,
+    pub(in crate::tui) status: ActivityGroupStatus,
+    pub(in crate::tui) context_only: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum ActivityGroupStatus {
+    Complete,
+    Open,
+    Orphan,
+    Partial,
+    Single,
+}
+
+impl ActivityGroupStatus {
+    pub(in crate::tui) fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Complete | Self::Single => None,
+            Self::Open => Some("open"),
+            Self::Orphan => Some("missing start"),
+            Self::Partial => Some("partial"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -156,8 +188,10 @@ pub(in crate::tui) struct ActivityState {
     pub(in crate::tui) task: Option<tokio::task::JoinHandle<()>>,
     pub(in crate::tui) representation: ActivityRepresentation,
     pub(in crate::tui) order: ActivityOrder,
+    pub(in crate::tui) input_kind: ActivityInputKind,
     pub(in crate::tui) query: String,
     pub(in crate::tui) applied_query: ActivityQuery,
+    pub(in crate::tui) loaded_filter: String,
     pub(in crate::tui) agents: Vec<ActivityAgent>,
     pub(in crate::tui) entries: Vec<ActivityEntry>,
     pub(in crate::tui) progress: Vec<ActivityAgentProgress>,
@@ -185,8 +219,10 @@ impl Default for ActivityState {
             task: None,
             representation: ActivityRepresentation::Grouped,
             order: ActivityOrder::Newest,
+            input_kind: ActivityInputKind::Loaded,
             query: String::new(),
             applied_query: ActivityQuery::default(),
+            loaded_filter: String::new(),
             agents: Vec::new(),
             entries: Vec::new(),
             progress: Vec::new(),
@@ -397,58 +433,298 @@ pub(in crate::tui) async fn load(
     })
 }
 
-pub(in crate::tui) fn grouped_entries(entries: &[ActivityEntry]) -> Vec<ActivityGroup> {
+pub(in crate::tui) fn filtered_entries<'a>(
+    entries: &'a [ActivityEntry],
+    loaded_filter: &str,
+) -> Vec<&'a ActivityEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry_matches_loaded_filter(entry, loaded_filter))
+        .collect()
+}
+
+fn entry_matches_loaded_filter(entry: &ActivityEntry, loaded_filter: &str) -> bool {
+    let filter = loaded_filter.trim().to_lowercase();
+    filter.is_empty()
+        || entry.component.to_lowercase().contains(&filter)
+        || entry.agent_id.to_lowercase().contains(&filter)
+        || entry.presentation.matches_loaded_filter(&filter)
+}
+
+pub(in crate::tui) fn grouped_entries(
+    entries: &[ActivityEntry],
+    loaded_filter: &str,
+    allow_inference: bool,
+) -> Vec<ActivityGroup> {
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
     enum Key {
-        Group(
-            String,
-            String,
-            crate::model::agent::oplog::OplogEntryGroupKey,
-        ),
+        Group(String, String, OplogEntryGroupKey),
         Entry(String, String, u64),
     }
 
+    #[derive(Clone)]
+    struct Assignment {
+        key: Key,
+        parent: Option<Key>,
+    }
+
+    let mut by_agent = HashMap::<(String, String), Vec<&ActivityEntry>>::new();
+    for entry in entries {
+        by_agent
+            .entry((entry.component.clone(), entry.agent_id.clone()))
+            .or_default()
+            .push(entry);
+    }
+    let mut assignments = HashMap::<(String, String, u64), Assignment>::new();
+    for ((component, agent_id), mut agent_entries) in by_agent {
+        agent_entries.sort_by_key(|entry| entry.presentation.index);
+        let mut open_invocations = Vec::<u64>::new();
+        for entry in agent_entries {
+            let entry_key = || {
+                Key::Entry(
+                    component.clone(),
+                    agent_id.clone(),
+                    entry.presentation.index,
+                )
+            };
+            let explicit_group = entry
+                .presentation
+                .group
+                .as_ref()
+                .map(|group| Key::Group(component.clone(), agent_id.clone(), group.clone()));
+            let active_invocation = open_invocations.last().copied();
+            let (key, inferred_parent) =
+                if allow_inference && entry.presentation.kind == "AgentInvocationStarted" {
+                    let key = Key::Group(
+                        component.clone(),
+                        agent_id.clone(),
+                        OplogEntryGroupKey::OplogIndex(entry.presentation.index),
+                    );
+                    open_invocations.push(entry.presentation.index);
+                    (key, None)
+                } else if allow_inference && entry.presentation.kind == "AgentInvocationFinished" {
+                    match open_invocations.pop() {
+                        Some(start) => (
+                            Key::Group(
+                                component.clone(),
+                                agent_id.clone(),
+                                OplogEntryGroupKey::OplogIndex(start),
+                            ),
+                            None,
+                        ),
+                        None => (entry_key(), None),
+                    }
+                } else {
+                    let key = explicit_group.unwrap_or_else(entry_key);
+                    let parent = allow_inference.then(|| {
+                        entry
+                            .presentation
+                            .structural_parent_group()
+                            .map(|group| Key::Group(component.clone(), agent_id.clone(), group))
+                            .or_else(|| {
+                                active_invocation.map(|start| {
+                                    Key::Group(
+                                        component.clone(),
+                                        agent_id.clone(),
+                                        OplogEntryGroupKey::OplogIndex(start),
+                                    )
+                                })
+                            })
+                    });
+                    (key, parent.flatten())
+                };
+            assignments.insert(
+                (
+                    component.clone(),
+                    agent_id.clone(),
+                    entry.presentation.index,
+                ),
+                Assignment {
+                    key,
+                    parent: inferred_parent,
+                },
+            );
+        }
+    }
+
     let mut positions = HashMap::<Key, usize>::new();
+    let mut parents = HashMap::<Key, Key>::new();
+    let mut matching = HashMap::<Key, bool>::new();
     let mut groups = Vec::<ActivityGroup>::new();
     for entry in entries {
-        let key = entry
-            .presentation
-            .group
-            .as_ref()
-            .map(|group| {
-                Key::Group(
-                    entry.component.clone(),
-                    entry.agent_id.clone(),
-                    group.clone(),
-                )
-            })
-            .unwrap_or_else(|| {
-                Key::Entry(
+        let assignment = assignments
+            .get(&(
+                entry.component.clone(),
+                entry.agent_id.clone(),
+                entry.presentation.index,
+            ))
+            .cloned()
+            .unwrap_or_else(|| Assignment {
+                key: Key::Entry(
                     entry.component.clone(),
                     entry.agent_id.clone(),
                     entry.presentation.index,
-                )
+                ),
+                parent: None,
             });
+        let key = assignment.key;
+        if let Some(parent) = assignment.parent {
+            parents.entry(key.clone()).or_insert(parent);
+        }
+        matching
+            .entry(key.clone())
+            .and_modify(|matches| *matches |= entry_matches_loaded_filter(entry, loaded_filter))
+            .or_insert_with(|| entry_matches_loaded_filter(entry, loaded_filter));
         if let Some(position) = positions.get(&key).copied() {
             let group = &mut groups[position];
             group.entry_count = group.entry_count.saturating_add(1);
+            group.entry_indices.push(entry.presentation.index);
             if !group.kinds.contains(&entry.presentation.kind) {
                 group.kinds.push(entry.presentation.kind.clone());
             }
+            if group.summary.is_empty()
+                || matches!(
+                    entry.presentation.kind.as_str(),
+                    "Start"
+                        | "AgentInvocationStarted"
+                        | "StartSpan"
+                        | "BeginAtomicRegion"
+                        | "BeginRemoteTransaction"
+                )
+            {
+                group.summary = entry.presentation.summary();
+            }
+            if entry.presentation.category() == OplogEntryCategory::Failure {
+                group.category = OplogEntryCategory::Failure;
+            }
         } else {
+            let assigned_group = match &key {
+                Key::Group(_, _, group) => Some(group.clone()),
+                Key::Entry(_, _, _) => None,
+            };
+            let first_index = assigned_group
+                .as_ref()
+                .and_then(OplogEntryGroupKey::start_index)
+                .unwrap_or(entry.presentation.index);
             positions.insert(key, groups.len());
             groups.push(ActivityGroup {
                 component: entry.component.clone(),
                 agent_id: entry.agent_id.clone(),
-                group: entry.presentation.group.clone(),
-                first_index: entry.presentation.index,
+                group: assigned_group,
+                first_index,
                 timestamp: entry.presentation.timestamp.to_string(),
                 kinds: vec![entry.presentation.kind.clone()],
                 entry_count: 1,
+                entry_indices: vec![entry.presentation.index],
+                depth: 0,
+                category: entry.presentation.category(),
+                summary: entry.presentation.summary(),
+                status: ActivityGroupStatus::Single,
+                context_only: false,
             });
         }
     }
+
+    for (key, position) in &positions {
+        let group = &mut groups[*position];
+        group.depth = parent_depth(key, &parents);
+        group.status = group_status(
+            &group.kinds,
+            group.entry_count,
+            allow_inference,
+            group.group.is_some(),
+        );
+    }
+
+    if loaded_filter.trim().is_empty() {
+        return groups;
+    }
+    let mut visible = matching
+        .iter()
+        .filter_map(|(key, matches)| matches.then_some(key.clone()))
+        .collect::<std::collections::HashSet<_>>();
+    let mut pending = visible.iter().cloned().collect::<Vec<_>>();
+    while let Some(key) = pending.pop() {
+        if let Some(parent) = parents.get(&key)
+            && visible.insert(parent.clone())
+        {
+            pending.push(parent.clone());
+        }
+    }
     groups
+        .into_iter()
+        .filter_map(|mut group| {
+            let key = group
+                .group
+                .as_ref()
+                .map(|group_key| {
+                    Key::Group(
+                        group.component.clone(),
+                        group.agent_id.clone(),
+                        group_key.clone(),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    Key::Entry(
+                        group.component.clone(),
+                        group.agent_id.clone(),
+                        group.first_index,
+                    )
+                });
+            visible.contains(&key).then(|| {
+                group.context_only = !matching.get(&key).copied().unwrap_or(false);
+                group
+            })
+        })
+        .collect()
+}
+
+fn parent_depth<Key: Eq + std::hash::Hash + Clone>(
+    key: &Key,
+    parents: &HashMap<Key, Key>,
+) -> usize {
+    let mut current = key;
+    let mut seen = std::collections::HashSet::new();
+    let mut depth = 0usize;
+    while let Some(parent) = parents.get(current) {
+        if !seen.insert(parent.clone()) {
+            break;
+        }
+        depth = depth.saturating_add(1).min(4);
+        current = parent;
+    }
+    depth
+}
+
+fn group_status(
+    kinds: &[String],
+    entry_count: usize,
+    allow_inference: bool,
+    explicitly_grouped: bool,
+) -> ActivityGroupStatus {
+    if !allow_inference && !explicitly_grouped {
+        return ActivityGroupStatus::Single;
+    }
+    let has = |kind: &str| kinds.iter().any(|candidate| candidate == kind);
+    let has_start = has("Start")
+        || has("AgentInvocationStarted")
+        || has("StartSpan")
+        || has("BeginAtomicRegion")
+        || has("BeginRemoteTransaction");
+    let has_terminal = has("End")
+        || has("Cancelled")
+        || has("AgentInvocationFinished")
+        || has("FinishSpan")
+        || has("EndAtomicRegion")
+        || has("CommittedRemoteTransaction")
+        || has("RolledBackRemoteTransaction");
+    match (has_start, has_terminal) {
+        (true, true) => ActivityGroupStatus::Complete,
+        (true, false) => ActivityGroupStatus::Open,
+        (false, true) => ActivityGroupStatus::Orphan,
+        (false, false) if entry_count > 1 || explicitly_grouped => ActivityGroupStatus::Partial,
+        (false, false) => ActivityGroupStatus::Single,
+    }
 }
 
 #[cfg(test)]
@@ -474,19 +750,26 @@ mod tests {
                 kind: kind.to_string(),
                 group: group.map(OplogEntryGroupKey::OplogIndex),
                 detail: serde_json::json!({"kind": kind}),
+                attribution: None,
+                entry: None,
+                search_text: std::sync::OnceLock::new(),
             },
         }
     }
 
     #[test]
     fn typed_groups_do_not_merge_agents_or_ambiguous_entries() {
-        let groups = grouped_entries(&[
-            entry("cart", "cart-1", 12, "End", Some(10)),
-            entry("cart", "cart-1", 10, "Start", Some(10)),
-            entry("cart", "cart-2", 11, "End", Some(10)),
-            entry("cart", "cart-1", 9, "Log", None),
-            entry("cart", "cart-1", 8, "Log", None),
-        ]);
+        let groups = grouped_entries(
+            &[
+                entry("cart", "cart-1", 12, "End", Some(10)),
+                entry("cart", "cart-1", 10, "Start", Some(10)),
+                entry("cart", "cart-2", 11, "End", Some(10)),
+                entry("cart", "cart-1", 9, "Log", None),
+                entry("cart", "cart-1", 8, "Log", None),
+            ],
+            "",
+            true,
+        );
 
         assert_eq!(groups.len(), 4);
         assert_eq!(groups[0].entry_count, 2);
@@ -494,5 +777,67 @@ mod tests {
         assert_eq!(groups[1].agent_id, "cart-2");
         assert_eq!(groups[2].entry_count, 1);
         assert_eq!(groups[3].entry_count, 1);
+    }
+
+    #[test]
+    fn lenient_invocation_grouping_keeps_partial_and_overlapping_history() {
+        let groups = grouped_entries(
+            &[
+                entry("cart", "cart-1", 8, "AgentInvocationFinished", None),
+                entry("cart", "cart-1", 7, "AgentInvocationFinished", None),
+                entry("cart", "cart-1", 6, "Log", None),
+                entry("cart", "cart-1", 5, "AgentInvocationStarted", None),
+                entry("cart", "cart-1", 4, "AgentInvocationStarted", None),
+                entry("cart", "cart-1", 3, "AgentInvocationFinished", None),
+            ],
+            "",
+            true,
+        );
+
+        assert!(groups.iter().any(|group| {
+            group.first_index == 5 && group.status == ActivityGroupStatus::Complete
+        }));
+        assert!(groups.iter().any(|group| {
+            group.first_index == 4 && group.status == ActivityGroupStatus::Complete
+        }));
+        assert!(groups.iter().any(|group| {
+            group.first_index == 3 && group.status == ActivityGroupStatus::Orphan
+        }));
+    }
+
+    #[test]
+    fn sparse_server_results_do_not_infer_invocation_pairs() {
+        let groups = grouped_entries(
+            &[
+                entry("cart", "cart-1", 12, "AgentInvocationFinished", None),
+                entry("cart", "cart-1", 10, "AgentInvocationStarted", None),
+            ],
+            "",
+            false,
+        );
+
+        assert_eq!(groups.len(), 2);
+        assert!(
+            groups
+                .iter()
+                .all(|group| group.status == ActivityGroupStatus::Single)
+        );
+    }
+
+    #[test]
+    fn loaded_filter_keeps_a_matching_childs_inferred_parent() {
+        let groups = grouped_entries(
+            &[
+                entry("cart", "cart-1", 3, "AgentInvocationFinished", None),
+                entry("cart", "cart-1", 2, "Needle", None),
+                entry("cart", "cart-1", 1, "AgentInvocationStarted", None),
+            ],
+            "needle",
+            true,
+        );
+
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().any(|group| group.context_only));
+        assert!(groups.iter().any(|group| group.kinds == ["Needle"]));
     }
 }

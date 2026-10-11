@@ -45,6 +45,19 @@
 - [x] Carry scanned progress and continuations across gRPC/service/REST/client.
 - [x] Add CLI time-range search flags and preserve structured entry output.
 - [x] Extract typed Oplog presentation and implement safe grouping.
+- [x] Retain typed entries and attribution in the Oplog explorer projection.
+- [x] Separate instant loaded filtering from bounded server search.
+- [x] Add per-Agent lenient grouping for contiguous pages and disable adjacency
+  inference for sparse server results.
+- [x] Mark open, partial, and orphan groups instead of rejecting malformed or
+  incomplete loaded history.
+- [x] Add semantic journal rows, loaded event map, and structured attribution
+  details.
+- [x] Adapt row identity density for single- and multi-Agent scopes with safe
+  handling for long AgentIDs.
+- [ ] After the journal checkpoint is visually accepted, add foldable
+  typed-schema trees, category/index navigation, and dedicated
+  invocation-timeline/console summary subviews.
 - [x] Implement exact/mixed scope, order, Stop/Resume, and Load More.
 - [x] Extract typed Stream transport from CLI output.
 - [x] Add persistent background Stream buffer, unread, reconnect, and drop state.

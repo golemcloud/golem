@@ -52,8 +52,9 @@ use crate::tui::nested_cli::{
     CommandExit, NestedCliEvent, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
 use crate::tui::ops::activity::{
-    self, ActivityAgent, ActivityAgentRequest, ActivityFocus, ActivityLoadPosition, ActivityOrder,
-    ActivityRefreshPayload, ActivityRepresentation, ActivityState,
+    self, ActivityAgent, ActivityAgentRequest, ActivityFocus, ActivityInputKind,
+    ActivityLoadPosition, ActivityOrder, ActivityRefreshPayload, ActivityRepresentation,
+    ActivityState,
 };
 use crate::tui::ops::deployments::{self, DeploymentChangeKind, DeploymentsState, RECENT_LIMIT};
 use crate::tui::ops::metrics::{
@@ -1160,6 +1161,16 @@ impl TuiApp {
             KeyCode::Esc
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Oplog
+                    && !self.activity.loaded_filter.is_empty()
+                    && self.activity.input_kind == ActivityInputKind::Loaded =>
+            {
+                self.activity.loaded_filter.clear();
+                self.activity.selected = 0;
+                self.activity.list_first_visible.set(0);
+            }
+            KeyCode::Esc
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
                     && self.activity.query != self.activity.applied_query.text =>
             {
                 self.activity.query = self.activity.applied_query.text.clone();
@@ -1191,7 +1202,8 @@ impl TuiApp {
             }
             KeyCode::Enter
                 if self.active_workspace == Workspace::Ops
-                    && self.ops.active() == OpsDestination::Oplog =>
+                    && self.ops.active() == OpsDestination::Oplog
+                    && self.activity.input_kind == ActivityInputKind::Server =>
             {
                 self.apply_activity_query(event_tx)
             }
@@ -1263,6 +1275,17 @@ impl TuiApp {
             KeyCode::Backspace
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Oplog
+                    && self.activity.input_kind == ActivityInputKind::Loaded
+                    && !self.activity.loaded_filter.is_empty() =>
+            {
+                self.mode.replace(InteractionMode::OplogFilter);
+                self.activity.loaded_filter.pop();
+                self.activity_filter_changed();
+            }
+            KeyCode::Backspace
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && self.activity.input_kind == ActivityInputKind::Server
                     && !self.activity.query.is_empty() =>
             {
                 self.mode.replace(InteractionMode::OplogFilter);
@@ -1275,7 +1298,13 @@ impl TuiApp {
                     && (!character.is_whitespace() || !self.activity.query.is_empty()) =>
             {
                 self.mode.replace(InteractionMode::OplogFilter);
-                self.activity.query.push(character);
+                match self.activity.input_kind {
+                    ActivityInputKind::Loaded => {
+                        self.activity.loaded_filter.push(character);
+                        self.activity_filter_changed();
+                    }
+                    ActivityInputKind::Server => self.activity.query.push(character),
+                }
             }
             _ => {}
         }
@@ -1347,6 +1376,29 @@ impl TuiApp {
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 self.set_activity_order(self.activity.order.toggle());
+            }
+            KeyCode::Enter
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.load_selected_activity_context(event_tx);
+            }
+            KeyCode::Char('f')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.activity.input_kind = ActivityInputKind::Loaded;
+                self.mode.replace(InteractionMode::OplogFilter);
+            }
+            KeyCode::Char('s')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Oplog
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.activity.input_kind = ActivityInputKind::Server;
+                self.mode.replace(InteractionMode::OplogFilter);
             }
             KeyCode::Char('s')
                 if self.active_workspace == Workspace::Ops
@@ -1633,22 +1685,38 @@ impl TuiApp {
         }
         match key.code {
             KeyCode::Esc => {
-                self.activity.query = self.activity.applied_query.text.clone();
+                if self.activity.input_kind == ActivityInputKind::Server {
+                    self.activity.query = self.activity.applied_query.text.clone();
+                }
                 self.mode.replace(InteractionMode::Normal);
             }
             KeyCode::Enter => {
-                self.apply_activity_query(event_tx);
+                if self.activity.input_kind == ActivityInputKind::Server {
+                    self.apply_activity_query(event_tx);
+                }
                 self.mode.replace(InteractionMode::Normal);
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.mode.replace(InteractionMode::Normal);
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.activity.query.clear();
+                match self.activity.input_kind {
+                    ActivityInputKind::Loaded => {
+                        self.activity.loaded_filter.clear();
+                        self.activity_filter_changed();
+                    }
+                    ActivityInputKind::Server => self.activity.query.clear(),
+                }
             }
-            KeyCode::Backspace => {
-                self.activity.query.pop();
-            }
+            KeyCode::Backspace => match self.activity.input_kind {
+                ActivityInputKind::Loaded => {
+                    self.activity.loaded_filter.pop();
+                    self.activity_filter_changed();
+                }
+                ActivityInputKind::Server => {
+                    self.activity.query.pop();
+                }
+            },
             KeyCode::Up => self.move_activity_selection(false),
             KeyCode::Down => self.move_activity_selection(true),
             KeyCode::Tab | KeyCode::BackTab => self.cycle_ops_pane_focus(),
@@ -1661,7 +1729,13 @@ impl TuiApp {
             KeyCode::Char(character)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                self.activity.query.push(character);
+                match self.activity.input_kind {
+                    ActivityInputKind::Loaded => {
+                        self.activity.loaded_filter.push(character);
+                        self.activity_filter_changed();
+                    }
+                    ActivityInputKind::Server => self.activity.query.push(character),
+                }
             }
             _ => {}
         }
@@ -2408,6 +2482,26 @@ impl TuiApp {
             Some(RegionKind::OpsList) if self.ops_activity_focused() => {
                 self.activity.focus = ActivityFocus::List;
                 self.select_activity_at_row(y);
+            }
+            Some(RegionKind::OplogMap) if self.ops_activity_focused() => {
+                if let Some(area) = self.geometry.region(RegionKind::OplogMap) {
+                    let count = self.activity_visible_len();
+                    if count > 0 {
+                        let prefix_width =
+                            (UnicodeWidthStr::width("loaded map ") as u16).min(area.width);
+                        let map_x = area.x.saturating_add(prefix_width);
+                        let map_width = area.width.saturating_sub(prefix_width).max(1);
+                        let offset = x.saturating_sub(map_x) as usize;
+                        self.activity.selected = offset
+                            .saturating_mul(count.saturating_sub(1))
+                            .checked_div(map_width.saturating_sub(1).max(1) as usize)
+                            .unwrap_or(0)
+                            .min(count.saturating_sub(1));
+                        self.activity.focus = ActivityFocus::List;
+                        self.activity.details_scroll = 0;
+                        self.activity.reveal_selection(count);
+                    }
+                }
             }
             Some(RegionKind::OpsList)
                 if self.active_workspace == Workspace::Ops
@@ -3530,14 +3624,14 @@ impl TuiApp {
     fn activity_selected_agent(&self) -> Option<AgentIdentity> {
         match self.activity.representation {
             ActivityRepresentation::Entries => self
-                .activity
-                .entries
+                .activity_filtered_entries()
                 .get(self.activity.selected)
                 .map(|entry| AgentIdentity {
                     component: entry.component.clone(),
                     agent_id: entry.agent_id.clone(),
                 }),
-            ActivityRepresentation::Grouped => activity::grouped_entries(&self.activity.entries)
+            ActivityRepresentation::Grouped => self
+                .activity_groups()
                 .get(self.activity.selected)
                 .map(|group| AgentIdentity {
                     component: group.component.clone(),
@@ -3707,6 +3801,14 @@ impl TuiApp {
                 }
                 (1, 0) => self.set_activity_order(ActivityOrder::Newest),
                 (1, 1) => self.set_activity_order(ActivityOrder::Oldest),
+                (2, 0) => {
+                    self.activity.input_kind = ActivityInputKind::Loaded;
+                    self.mode.replace(InteractionMode::OplogFilter);
+                }
+                (2, 1) => {
+                    self.activity.input_kind = ActivityInputKind::Server;
+                    self.mode.replace(InteractionMode::OplogFilter);
+                }
                 _ => {}
             },
             OpsDestination::Metrics => match (group, choice) {
@@ -4029,6 +4131,57 @@ impl TuiApp {
         self.refresh_activity(event_tx);
     }
 
+    fn activity_filter_changed(&mut self) {
+        self.activity.selected = 0;
+        self.activity.list_first_visible.set(0);
+        self.activity.details_scroll = 0;
+    }
+
+    fn load_selected_activity_context(&mut self, event_tx: Option<&TuiEventSender>) {
+        let target = match self.activity.representation {
+            ActivityRepresentation::Entries => self
+                .activity_filtered_entries()
+                .get(self.activity.selected)
+                .map(|entry| {
+                    (
+                        ActivityAgent {
+                            component: entry.component.clone(),
+                            agent_id: entry.agent_id.clone(),
+                        },
+                        entry.presentation.index,
+                    )
+                }),
+            ActivityRepresentation::Grouped => self
+                .activity_groups()
+                .get(self.activity.selected)
+                .map(|group| {
+                    (
+                        ActivityAgent {
+                            component: group.component.clone(),
+                            agent_id: group.agent_id.clone(),
+                        },
+                        group.first_index,
+                    )
+                }),
+        };
+        let Some((agent, index)) = target else {
+            return;
+        };
+        self.activity.query.clear();
+        self.activity.applied_query = activity::ActivityQuery::default();
+        self.activity.loaded_filter.clear();
+        self.activity.input_kind = ActivityInputKind::Loaded;
+        self.activity.pending_focus = Some((agent.clone(), index));
+        self.start_activity_load(
+            vec![ActivityAgentRequest {
+                agent,
+                position: ActivityLoadPosition::Around(index),
+            }],
+            false,
+            event_tx,
+        );
+    }
+
     fn load_more_activity(&mut self, event_tx: Option<&TuiEventSender>) {
         if self.activity.loading {
             return;
@@ -4079,12 +4232,14 @@ impl TuiApp {
         }
         let representation = self.activity.representation;
         let order = self.activity.order;
+        let input_kind = self.activity.input_kind;
         let details_visible = self.activity.details_visible;
         let generation = self.activity.generation.saturating_add(1);
         let mut activity = ActivityState::default();
         activity.generation = generation;
         activity.representation = representation;
         activity.order = order;
+        activity.input_kind = input_kind;
         activity.details_visible = details_visible;
         self.activity = activity;
     }
@@ -4142,11 +4297,21 @@ impl TuiApp {
 
     fn activity_visible_len(&self) -> usize {
         match self.activity.representation {
-            ActivityRepresentation::Grouped => {
-                activity::grouped_entries(&self.activity.entries).len()
-            }
-            ActivityRepresentation::Entries => self.activity.entries.len(),
+            ActivityRepresentation::Grouped => self.activity_groups().len(),
+            ActivityRepresentation::Entries => self.activity_filtered_entries().len(),
         }
+    }
+
+    fn activity_filtered_entries(&self) -> Vec<&activity::ActivityEntry> {
+        activity::filtered_entries(&self.activity.entries, &self.activity.loaded_filter)
+    }
+
+    fn activity_groups(&self) -> Vec<activity::ActivityGroup> {
+        activity::grouped_entries(
+            &self.activity.entries,
+            &self.activity.loaded_filter,
+            !self.activity.applied_query.active(),
+        )
     }
 
     fn sort_activity_entries(&mut self) {
@@ -4172,8 +4337,7 @@ impl TuiApp {
     ) -> Option<(String, String, Option<OplogEntryGroupKey>, u64, bool)> {
         match self.activity.representation {
             ActivityRepresentation::Entries => self
-                .activity
-                .entries
+                .activity_filtered_entries()
                 .get(self.activity.selected)
                 .map(|entry| {
                     (
@@ -4184,7 +4348,8 @@ impl TuiApp {
                         true,
                     )
                 }),
-            ActivityRepresentation::Grouped => activity::grouped_entries(&self.activity.entries)
+            ActivityRepresentation::Grouped => self
+                .activity_groups()
                 .get(self.activity.selected)
                 .map(|group| {
                     (
@@ -4210,28 +4375,28 @@ impl TuiApp {
             return;
         };
         let position = match self.activity.representation {
-            ActivityRepresentation::Entries => self.activity.entries.iter().position(|entry| {
-                entry.component == component
-                    && entry.agent_id == agent_id
-                    && if exact {
-                        entry.presentation.index == index
-                    } else if group.is_some() {
-                        entry.presentation.group == group
-                    } else {
-                        entry.presentation.index == index
-                    }
-            }),
-            ActivityRepresentation::Grouped => activity::grouped_entries(&self.activity.entries)
-                .iter()
-                .position(|entry| {
+            ActivityRepresentation::Entries => {
+                self.activity_filtered_entries().iter().position(|entry| {
                     entry.component == component
                         && entry.agent_id == agent_id
-                        && if group.is_some() {
-                            entry.group == group
+                        && if exact {
+                            entry.presentation.index == index
+                        } else if group.is_some() {
+                            entry.presentation.group == group || entry.presentation.index == index
                         } else {
-                            entry.first_index == index
+                            entry.presentation.index == index
                         }
-                }),
+                })
+            }
+            ActivityRepresentation::Grouped => self.activity_groups().iter().position(|entry| {
+                entry.component == component
+                    && entry.agent_id == agent_id
+                    && if group.is_some() {
+                        entry.group == group
+                    } else {
+                        entry.first_index == index
+                    }
+            }),
         };
         self.activity.selected = position.unwrap_or(0);
     }
@@ -11245,9 +11410,10 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let chrome = PaneChrome { area };
     chrome.render_header(frame, area, "Oplog", PaneFocus::Active, &theme());
     let outer_body = chrome.body_area(area);
-    let [controls_row, query_row, body] = Layout::default()
+    let [controls_row, query_row, map_row, body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(1),
@@ -11276,6 +11442,16 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             selected: app.activity.order == ActivityOrder::Oldest,
         },
     ];
+    let input_choices = [
+        ControlChoice {
+            label: "Loaded",
+            selected: app.activity.input_kind == ActivityInputKind::Loaded,
+        },
+        ControlChoice {
+            label: "Server",
+            selected: app.activity.input_kind == ActivityInputKind::Server,
+        },
+    ];
     let groups = [
         ControlGroup {
             label: "View",
@@ -11284,6 +11460,10 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         ControlGroup {
             label: "Order",
             choices: &order_choices,
+        },
+        ControlGroup {
+            label: "Find",
+            choices: &input_choices,
         },
     ];
     let (load_label, load_tone) = if app.activity.loading {
@@ -11360,8 +11540,27 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         (None, Some(to)) => format!("To {}", to.format("%H:%M:%S%.3fZ")),
         (None, None) => String::new(),
     };
+    let scope_status = match app.activity.agents.as_slice() {
+        [agent] => format!(
+            "Agent {}",
+            fit_middle(&format!("{}/{}", agent.component, agent.agent_id), 42)
+        ),
+        agents => format!("Scope {} Agents", agents.len()),
+    };
     let control_status = [
-        Some(format!("Scope {} Agent(s)", app.activity.agents.len())),
+        Some(scope_status),
+        (!app.activity.loaded_filter.is_empty()).then(|| {
+            format!(
+                "Matches {}/{} loaded",
+                activity::filtered_entries(&app.activity.entries, &app.activity.loaded_filter)
+                    .len(),
+                app.activity.entries.len()
+            )
+        }),
+        app.activity
+            .applied_query
+            .active()
+            .then_some("Sparse server hits".to_string()),
         (!time_filter.is_empty()).then_some(time_filter),
         (!scan_progress.is_empty()).then_some(scan_progress),
         (!scan_bound.is_empty()).then_some(scan_bound.to_string()),
@@ -11371,10 +11570,12 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     .collect::<Vec<_>>()
     .join("   ");
     render_ops_control_strip(frame, controls, app, &groups, Some(&control_status));
-    let query_state = if app.activity.query == app.activity.applied_query.text {
-        "(applied)"
-    } else {
-        "[enter to apply]"
+    let query_state = match app.activity.input_kind {
+        ActivityInputKind::Loaded => "(loaded only)",
+        ActivityInputKind::Server if app.activity.query == app.activity.applied_query.text => {
+            "(applied)"
+        }
+        ActivityInputKind::Server => "[enter to run]",
     };
     let status_width = (UnicodeWidthStr::width(query_state) + 3)
         .min(query_bar.width.saturating_sub(1) as usize) as u16;
@@ -11382,9 +11583,19 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(1), Constraint::Length(status_width)])
         .areas(query_bar);
+    let (input, placeholder) = match app.activity.input_kind {
+        ActivityInputKind::Loaded => (
+            app.activity.loaded_filter.as_str(),
+            "filter loaded entries (ctrl+s for server search)",
+        ),
+        ActivityInputKind::Server => (
+            app.activity.query.as_str(),
+            "search the server (ctrl+f for loaded filter)",
+        ),
+    };
     let search = SearchInput {
-        query: &app.activity.query,
-        placeholder: "type an Oplog text expression",
+        query: input,
+        placeholder,
     };
     frame.render_widget(
         Paragraph::new(search.line(query_input.width as usize, &theme())).style(surface_style()),
@@ -11406,6 +11617,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             query_input.y,
         ));
     }
+    render_activity_map(frame, chrome.content_area(map_row), app);
 
     if let Some(error) = &app.activity.error {
         render_metrics_notice(frame, chrome.content_area(body), NoticeKind::Warning, error);
@@ -11477,6 +11689,59 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
+fn render_activity_map(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    app.geometry.remove_region(RegionKind::OplogMap);
+    app.geometry.add_region(RegionKind::OplogMap, area);
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let labels = activity_list_labels(app);
+    let prefix = "loaded map ";
+    let prefix_width = UnicodeWidthStr::width(prefix).min(area.width as usize);
+    let available = area.width as usize - prefix_width;
+    let visual = theme();
+    let mut spans = vec![Span::styled(
+        fit(prefix, prefix_width),
+        Style::default().fg(visual.text_muted),
+    )];
+    let selected_cell = app
+        .activity
+        .selected
+        .saturating_mul(available.saturating_sub(1))
+        .checked_div(labels.len().saturating_sub(1).max(1))
+        .unwrap_or(0)
+        .min(available.saturating_sub(1));
+    for cell in 0..available {
+        let index = cell
+            .saturating_mul(labels.len().saturating_sub(1))
+            .checked_div(available.saturating_sub(1).max(1))
+            .unwrap_or(0)
+            .min(labels.len().saturating_sub(1));
+        let label = labels.get(index);
+        let selected = !labels.is_empty() && cell == selected_cell;
+        let color = label
+            .map(|label| match label.category {
+                crate::model::agent::oplog::OplogEntryCategory::Invocation => visual.accent,
+                crate::model::agent::oplog::OplogEntryCategory::HostCall => visual.info,
+                crate::model::agent::oplog::OplogEntryCategory::Log => visual.success,
+                crate::model::agent::oplog::OplogEntryCategory::Failure => visual.error,
+                crate::model::agent::oplog::OplogEntryCategory::Trace => visual.marker,
+                crate::model::agent::oplog::OplogEntryCategory::State => visual.text_secondary,
+                crate::model::agent::oplog::OplogEntryCategory::Lifecycle => visual.accent_hover,
+                crate::model::agent::oplog::OplogEntryCategory::Other => visual.text_muted,
+            })
+            .unwrap_or(visual.text_faint);
+        spans.push(Span::styled(
+            if selected { "┃" } else { "━" },
+            Style::default().fg(color),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(surface_style()),
+        area,
+    );
+}
+
 fn render_activity_explorer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, chrome: PaneChrome) {
     let (list_pane, divider, details_pane) = layout::ops_pane_regions(
         area,
@@ -11501,6 +11766,9 @@ fn render_activity_explorer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, chr
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(list_pane);
     let list_title = match app.activity.representation {
+        ActivityRepresentation::Grouped if app.activity.applied_query.active() => {
+            "Search hits · explicit links only"
+        }
         ActivityRepresentation::Grouped => "Journal",
         ActivityRepresentation::Entries => "Entries",
     };
@@ -11611,60 +11879,143 @@ fn render_activity_explorer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, chr
     }
 }
 
-fn activity_list_labels(app: &TuiApp) -> Vec<String> {
+struct ActivityListLabel {
+    text: String,
+    category: crate::model::agent::oplog::OplogEntryCategory,
+    context_only: bool,
+}
+
+fn activity_list_labels(app: &TuiApp) -> Vec<ActivityListLabel> {
     match app.activity.representation {
-        ActivityRepresentation::Grouped => activity::grouped_entries(&app.activity.entries)
+        ActivityRepresentation::Grouped => app
+            .activity_groups()
             .into_iter()
             .map(|group| {
                 let identity = if app.activity.agents.len() > 1 {
-                    format!("{}/{}", group.component, group.agent_id)
-                } else {
-                    group.agent_id
-                };
-                let anchor = group
-                    .group
-                    .as_ref()
-                    .and_then(OplogEntryGroupKey::start_index)
-                    .map(|index| format!("group #{index}"))
-                    .unwrap_or_else(|| format!("entry #{}", group.first_index));
-                let count = if group.entry_count > 1 {
-                    format!(" · {} entries", group.entry_count)
+                    fit_middle(&format!("{}/{}", group.component, group.agent_id), 32)
                 } else {
                     String::new()
                 };
-                format!(
-                    "{}  {}  {} · {}{}",
-                    group.timestamp,
-                    identity,
-                    anchor,
-                    group.kinds.join(" → "),
-                    count
-                )
+                let anchor = format!("#{:05}", group.first_index);
+                let count = if group.entry_count > 1 {
+                    format!(" · {}×", group.entry_count)
+                } else {
+                    String::new()
+                };
+                let status = group
+                    .status
+                    .label()
+                    .map(|label| format!(" · {label}"))
+                    .unwrap_or_default();
+                let summary = if group.summary.is_empty() {
+                    group.kinds.join(" → ")
+                } else {
+                    group.summary
+                };
+                let branch = match group.depth {
+                    0 => "",
+                    1 => "└─ ",
+                    _ => "  └─ ",
+                };
+                let identity = (!identity.is_empty())
+                    .then(|| format!("{identity} · "))
+                    .unwrap_or_default();
+                ActivityListLabel {
+                    text: format!(
+                        "{branch}{anchor}  {}  [{:<9}] {identity}{}{}{status}",
+                        group.timestamp,
+                        group.category.label(),
+                        summary,
+                        count,
+                    ),
+                    category: group.category,
+                    context_only: group.context_only,
+                }
             })
             .collect(),
         ActivityRepresentation::Entries => app
-            .activity
-            .entries
-            .iter()
+            .activity_filtered_entries()
+            .into_iter()
             .map(|entry| {
                 let identity = if app.activity.agents.len() > 1 {
-                    format!("{}/{}", entry.component, entry.agent_id)
+                    fit_middle(&format!("{}/{}", entry.component, entry.agent_id), 32)
                 } else {
-                    entry.agent_id.clone()
+                    String::new()
                 };
-                format!(
-                    "#{:05}  {}  {}  {}",
-                    entry.presentation.index,
-                    identity,
-                    entry.presentation.timestamp,
-                    entry.presentation.kind
-                )
+                let summary = entry.presentation.summary();
+                let tags = entry.presentation.tags();
+                let suffix = [
+                    (!summary.is_empty()).then_some(summary),
+                    (!tags.is_empty()).then_some(tags.join(" · ")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+                let identity = (!identity.is_empty())
+                    .then(|| format!("{identity} · "))
+                    .unwrap_or_default();
+                ActivityListLabel {
+                    text: format!(
+                        "#{:05}  {}  [{:<9}] {identity}{}{}",
+                        entry.presentation.index,
+                        entry.presentation.timestamp,
+                        entry.presentation.category().label(),
+                        entry.presentation.kind,
+                        (!suffix.is_empty())
+                            .then(|| format!(" · {suffix}"))
+                            .unwrap_or_default(),
+                    ),
+                    category: entry.presentation.category(),
+                    context_only: false,
+                }
             })
             .collect(),
     }
 }
 
-fn activity_selection_line(label: &str, index: usize, selected: bool, width: u16) -> Line<'static> {
+fn fit_middle(value: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= width {
+        return value.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+    let left_width = (width - 1) / 2;
+    let right_width = width - 1 - left_width;
+    let mut left = String::new();
+    let mut used = 0usize;
+    for character in value.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used.saturating_add(character_width) > left_width {
+            break;
+        }
+        left.push(character);
+        used = used.saturating_add(character_width);
+    }
+    let mut right = Vec::new();
+    used = 0;
+    for character in value.chars().rev() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used.saturating_add(character_width) > right_width {
+            break;
+        }
+        right.push(character);
+        used = used.saturating_add(character_width);
+    }
+    right.reverse();
+    format!("{left}…{}", right.into_iter().collect::<String>())
+}
+
+fn activity_selection_line(
+    label: &ActivityListLabel,
+    index: usize,
+    selected: bool,
+    width: u16,
+) -> Line<'static> {
     let visual = theme();
     let background = match (selected, index % 2) {
         (true, 0) => visual.table_selected_even_background,
@@ -11686,12 +12037,27 @@ fn activity_selection_line(label: &str, index: usize, selected: bool, width: u16
                 .bg(background),
         ),
         Span::styled(
-            fit(label, label_width),
+            fit(&label.text, label_width),
             Style::default()
                 .fg(if selected {
                     visual.table_selection_text
+                } else if label.context_only {
+                    visual.text_muted
                 } else {
-                    visual.text
+                    match label.category {
+                        crate::model::agent::oplog::OplogEntryCategory::Invocation => visual.accent,
+                        crate::model::agent::oplog::OplogEntryCategory::HostCall => visual.info,
+                        crate::model::agent::oplog::OplogEntryCategory::Log => visual.success,
+                        crate::model::agent::oplog::OplogEntryCategory::Failure => visual.error,
+                        crate::model::agent::oplog::OplogEntryCategory::Trace => visual.marker,
+                        crate::model::agent::oplog::OplogEntryCategory::State => visual.text,
+                        crate::model::agent::oplog::OplogEntryCategory::Lifecycle => {
+                            visual.accent_hover
+                        }
+                        crate::model::agent::oplog::OplogEntryCategory::Other => {
+                            visual.text_secondary
+                        }
+                    }
                 })
                 .bg(background),
         ),
@@ -11701,7 +12067,7 @@ fn activity_selection_line(label: &str, index: usize, selected: bool, width: u16
 fn build_activity_detail_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
     match app.activity.representation {
         ActivityRepresentation::Grouped => {
-            let groups = activity::grouped_entries(&app.activity.entries);
+            let groups = app.activity_groups();
             let Some(group) = groups.get(app.activity.selected) else {
                 return activity_empty_detail_lines();
             };
@@ -11712,10 +12078,7 @@ fn build_activity_detail_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
                 .filter(|entry| {
                     entry.component == group.component
                         && entry.agent_id == group.agent_id
-                        && match &group.group {
-                            Some(key) => entry.presentation.group.as_ref() == Some(key),
-                            None => entry.presentation.index == group.first_index,
-                        }
+                        && group.entry_indices.contains(&entry.presentation.index)
                 })
                 .collect::<Vec<_>>();
             let mut lines = vec![
@@ -11735,7 +12098,9 @@ fn build_activity_detail_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
             for (label, value) in [
                 ("Anchor", anchor),
                 ("Timestamp", group.timestamp.clone()),
+                ("Category", group.category.label().to_string()),
                 ("Kinds", group.kinds.join(" → ")),
+                ("Summary", group.summary.clone()),
             ] {
                 lines.push(
                     FieldRow {
@@ -11752,7 +12117,8 @@ fn build_activity_detail_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
             lines
         }
         ActivityRepresentation::Entries => {
-            let Some(entry) = app.activity.entries.get(app.activity.selected) else {
+            let visible = app.activity_filtered_entries();
+            let Some(entry) = visible.get(app.activity.selected) else {
                 return activity_empty_detail_lines();
             };
             let mut lines = vec![
@@ -11764,6 +12130,36 @@ fn build_activity_detail_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
                 Line::default(),
             ];
             push_activity_identity_lines(&mut lines, &entry.component, &entry.agent_id, width);
+            lines.push(
+                FieldRow {
+                    label: "Category",
+                    value: entry.presentation.category().label(),
+                    label_width: 10,
+                }
+                .line(&theme()),
+            );
+            let summary = entry.presentation.summary();
+            if !summary.is_empty() {
+                lines.push(
+                    FieldRow {
+                        label: "Summary",
+                        value: &summary,
+                        label_width: 10,
+                    }
+                    .line(&theme()),
+                );
+            }
+            let tags = entry.presentation.tags().join(" · ");
+            if !tags.is_empty() {
+                lines.push(
+                    FieldRow {
+                        label: "Tags",
+                        value: &tags,
+                        label_width: 10,
+                    }
+                    .line(&theme()),
+                );
+            }
             lines.push(
                 FieldRow {
                     label: "Kind",
@@ -11780,6 +12176,23 @@ fn build_activity_detail_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
                 }
                 .line(&theme()),
             );
+            if let Some(attribution) = &entry.presentation.attribution {
+                lines.push(Line::default());
+                lines.push(
+                    SectionHeading {
+                        title: "Attribution",
+                        detail: None,
+                    }
+                    .line(&theme()),
+                );
+                let attribution = serde_json::to_value(attribution).unwrap_or(Value::Null);
+                lines.extend(
+                    JsonDocument {
+                        value: &attribution,
+                    }
+                    .lines(width, &theme()),
+                );
+            }
             lines.push(Line::default());
             lines.push(
                 SectionHeading {
@@ -11855,6 +12268,41 @@ fn push_activity_entry_lines(
         }
         .line(&theme()),
     );
+    let summary = entry.presentation.summary();
+    if !summary.is_empty() {
+        lines.push(
+            FieldRow {
+                label: "Summary",
+                value: &summary,
+                label_width: 10,
+            }
+            .line(&theme()),
+        );
+    }
+    let tags = entry.presentation.tags().join(" · ");
+    if !tags.is_empty() {
+        lines.push(
+            FieldRow {
+                label: "Tags",
+                value: &tags,
+                label_width: 10,
+            }
+            .line(&theme()),
+        );
+    }
+    if let Some(attribution) = &entry.presentation.attribution {
+        lines.push(
+            FieldRow {
+                label: "Owner",
+                value: match attribution {
+                    golem_common::model::oplog::PublicOplogEntryAttribution::Agent(_) => "agent",
+                    golem_common::model::oplog::PublicOplogEntryAttribution::Entity(_) => "entity",
+                },
+                label_width: 10,
+            }
+            .line(&theme()),
+        );
+    }
     lines.extend(
         JsonDocument {
             value: &entry.presentation.detail,
@@ -15216,9 +15664,17 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             &mut lines,
             width,
             "type / backspace",
-            "Edit server-side search",
+            "Edit the selected Loaded filter or Server search",
         );
-        push_raw_help(&mut lines, width, "enter", "Apply search");
+        push_raw_help(&mut lines, width, "ctrl+f", "Filter entries already loaded");
+        push_raw_help(&mut lines, width, "ctrl+s", "Edit server-side search");
+        push_raw_help(&mut lines, width, "enter", "Run selected server search");
+        push_raw_help(
+            &mut lines,
+            width,
+            "ctrl+enter",
+            "Load contiguous context around the selected entry",
+        );
         push_raw_help(&mut lines, width, "ctrl+n", "Load the next bounded batch");
         push_raw_help(&mut lines, width, "ctrl+g", "Stop the active search");
         push_raw_help(&mut lines, width, "ctrl+o", "Toggle newest / oldest order");
@@ -20442,6 +20898,9 @@ mod tests {
                 kind: "Log".to_string(),
                 group: None,
                 detail: serde_json::json!({"message": "ready"}),
+                attribution: None,
+                entry: None,
+                search_text: std::sync::OnceLock::new(),
             },
         }];
 
@@ -22312,6 +22771,9 @@ mod tests {
                     7,
                 )),
                 detail: serde_json::json!({"type": kind, "index": index}),
+                attribution: None,
+                entry: None,
+                search_text: std::sync::OnceLock::new(),
             },
         };
         app.activity.entries = vec![entry(9, "End"), entry(7, "Start")];
@@ -22331,10 +22793,8 @@ mod tests {
 
         let grouped = render_app_text_at(&app, 120, 28);
         assert!(grouped.contains("Scan #9/#20   bounded"), "{grouped}");
-        assert!(
-            grouped.contains("group #7 · End → Start · 2 entries"),
-            "{grouped}"
-        );
+        assert!(grouped.contains("#00007"), "{grouped}");
+        assert!(grouped.contains("End → Start · 2×"), "{grouped}");
 
         app.activity.representation = ActivityRepresentation::Entries;
         let entries = render_app_text_at(&app, 120, 28);
@@ -22449,7 +22909,7 @@ mod tests {
     }
 
     #[test]
-    fn oplog_plain_text_edits_a_draft_and_enter_applies_it() {
+    fn oplog_server_search_edits_a_draft_and_enter_applies_it() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
         let agent = AgentIdentity {
@@ -22462,6 +22922,7 @@ mod tests {
             from_unix_nanos: None,
             to_unix_nanos: None,
         });
+        app.handle_key(modified_key(KeyCode::Char('s'), KeyModifiers::CONTROL));
 
         for character in "failed invocation".chars() {
             app.handle_key(key(KeyCode::Char(character)));
@@ -22519,6 +22980,7 @@ mod tests {
         app.ops.select(OpsDestination::Oplog);
         app.activity.applied_query.text = "applied".to_string();
         app.activity.query = "applied".to_string();
+        app.activity.input_kind = ActivityInputKind::Server;
 
         app.handle_key(key(KeyCode::Char('!')));
         assert_eq!(app.mode, InteractionMode::OplogFilter);
@@ -22527,6 +22989,84 @@ mod tests {
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.mode, InteractionMode::Normal);
         assert_eq!(app.activity.query, "applied");
+    }
+
+    #[test]
+    fn oplog_plain_text_filters_only_the_loaded_entries_by_default() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.entries = sample_activity_entries(3);
+
+        for character in "cart-01".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+
+        assert_eq!(app.activity.input_kind, ActivityInputKind::Loaded);
+        assert_eq!(app.activity.loaded_filter, "cart-01");
+        assert!(app.activity.applied_query.text.is_empty());
+        assert_eq!(app.activity_visible_len(), 1);
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("Matches 1/3 loaded"), "{frame}");
+        assert!(frame.contains("loaded only"), "{frame}");
+    }
+
+    #[test]
+    fn oplog_identity_density_adapts_to_single_and_multi_agent_scopes() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.details_visible = false;
+        let long_id =
+            "CheckoutAgent(\"tenant-with-a-very-long-prefix/order-with-a-distinct-tail-9472\")";
+        let mut first = sample_activity_entries(1).remove(0);
+        first.component = "checkout".to_string();
+        first.agent_id = long_id.to_string();
+        app.activity.agents = vec![ActivityAgent {
+            component: first.component.clone(),
+            agent_id: first.agent_id.clone(),
+        }];
+        app.activity.entries = vec![first.clone()];
+
+        let single = render_app_text_at(&app, 140, 24);
+        assert!(!single.contains(long_id), "{single}");
+        assert!(single.contains("…"), "{single}");
+
+        let mut second = first;
+        second.agent_id =
+            "CheckoutAgent(\"tenant-with-a-very-long-prefix/order-with-a-distinct-tail-1188\")"
+                .to_string();
+        second.presentation.index = 2;
+        app.activity.agents.push(ActivityAgent {
+            component: second.component.clone(),
+            agent_id: second.agent_id.clone(),
+        });
+        app.activity.entries.push(second);
+
+        let multi = render_app_text_at(&app, 140, 24);
+        assert!(multi.contains("2 Agents"), "{multi}");
+        assert!(multi.contains("…"), "{multi}");
+        assert!(multi.contains("9472\")"), "{multi}");
+        assert!(multi.contains("1188\")"), "{multi}");
+    }
+
+    #[test]
+    fn oplog_loaded_map_moves_the_visible_selection() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.entries = sample_activity_entries(12);
+
+        render_app_text_at(&app, 120, 24);
+        let map = snapshot_region(&app, RegionKind::OplogMap);
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                map.right().saturating_sub(1),
+                map.y,
+            ),
+            None,
+        );
+
+        assert_eq!(app.activity.selected, 11);
+        assert_eq!(app.activity.focus, ActivityFocus::List);
     }
 
     #[test]
@@ -24937,6 +25477,9 @@ environments:
                             "arguments": (0..40).collect::<Vec<_>>(),
                             "result": { "ok": true }
                         }),
+                        attribution: None,
+                        entry: None,
+                        search_text: std::sync::OnceLock::new(),
                     },
                 }
             })

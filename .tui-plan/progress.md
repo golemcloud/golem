@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-10-11: Typed, Lenient Oplog Journal
+
+- Preserved each typed public oplog entry and its Agent/entity attribution in
+  the TUI projection while keeping syntax-colored JSON as the exact fallback.
+- Split the input contract into an immediate Loaded filter and an explicitly
+  applied Server search. Loaded counts and the category-colored event map are
+  labelled as bounded loaded data.
+- Added per-Agent lenient hierarchy reconstruction for contiguous raw pages.
+  Explicit typed links remain authoritative; invocation boundaries tolerate
+  missing starts or finishes, overlap, and page edges by rendering open,
+  partial, or orphan state.
+- Kept sparse server-search hits exact: adjacency inference is disabled until
+  the user loads a contiguous context page around a selected result.
+- Added semantic category, summary, tags, ownership, group membership, and
+  richer details. Single-Agent rows omit repeated identity; multi-Agent rows
+  retain a bounded middle-elided identity so long AgentIDs do not starve event
+  content.
+
+Ready for terminal visual review. Foldable typed-schema values,
+category/index navigation, and dedicated invocation-timeline/console subviews
+remain later journal refinements rather than hidden completeness.
+
 ## 2026-10-11: Metrics Density And Inspection
 
 - Audited Dashboard, expanded panels, and Explore across wide, medium, narrow,

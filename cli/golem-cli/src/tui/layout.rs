@@ -135,6 +135,7 @@ pub(super) enum RegionKind {
     DevPrimarySplit,
     DevSecondarySplit,
     OpsList,
+    OplogMap,
     OpsDetails,
     OpsDetailsSplit,
     OpsStream,

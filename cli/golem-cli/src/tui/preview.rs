@@ -585,7 +585,7 @@ mod tests {
     fn destination_fixtures_contain_meaningful_ready_state() {
         for (case_id, expected) in [
             ("ops-agent-detail", "Agent type metadata"),
-            ("ops-oplog", "ExportedFunctionInvoked"),
+            ("ops-oplog", "payment provider timed out"),
             ("ops-oplog-entries", "Exact oplog entry"),
             ("ops-stream", "payment authorization started"),
             ("ops-metrics-dashboard", "Invocation rate"),
