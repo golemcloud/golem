@@ -262,6 +262,15 @@ pub struct RegistryServiceConfig {
     pub mcp_import: McpImportResolverConfig,
 }
 
+impl RegistryServiceConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.blob_storage.validate()?;
+        self.mcp_oauth.validate()?;
+        self.mcp_import.validate()?;
+        Ok(())
+    }
+}
+
 impl SafeDisplay for RegistryServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
@@ -863,8 +872,45 @@ mod tests {
     };
 
     #[test]
+    fn config_accepts_separate_s3_snapshot_buckets() {
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::default_s3(),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn default_config_is_valid() {
+        RegistryServiceConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn config_rejects_shared_s3_snapshot_bucket() {
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    custom_data_bucket: "shared-bucket".to_string(),
+                    filesystem_snapshots_bucket: "shared-bucket".to_string(),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("filesystem_snapshots_bucket"), "{error}");
+        assert!(error.contains("custom_data_bucket"), "{error}");
+    }
+
+    #[test]
     pub fn config_is_loadable() {
-        make_config_loader().load().expect("Failed to load config");
+        make_config_loader()
+            .load()
+            .expect("Failed to load config")
+            .validate()
+            .expect("Invalid config");
     }
 
     #[test]

@@ -20,7 +20,7 @@ use golem_common::model::entity::EntityInvocationId;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tokio::sync::Notify;
 use wasmtime::component::{
-    RuntimeActivityId, RuntimeInvalidation, RuntimeObservation, RuntimeObserver,
+    RuntimeActivityId, RuntimeInvalidation, RuntimeObservation, RuntimeObserver, RuntimeRunId,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -70,10 +70,10 @@ struct DriverState {
     active_poll: bool,
     generation: u64,
     blocked_generation: Option<u64>,
-    runtime_run: Option<RuntimeActivityId>,
+    runtime_run: Option<RuntimeRunId>,
+    runtime_run_retired: bool,
     runtime_watermark: usize,
     runtime_candidate: Option<usize>,
-    retired_runs: HashSet<RuntimeActivityId>,
 }
 
 #[derive(Default)]
@@ -213,10 +213,8 @@ impl OwnerSuspension {
             match state.activities.get(activity) {
                 Some(ActivityClass::SourceWait { store_id })
                     if state.stores.get(store_id).is_some_and(|store| {
-                        store
-                            .driver
-                            .runtime_run
-                            .is_some_and(|run| !store.driver.retired_runs.contains(&run))
+                        store.driver.runtime_run.is_some()
+                            && !store.driver.runtime_run_retired
                             && store.driver.blocked_generation == Some(store.driver.generation)
                             && store.activities.values().any(|activity| activity.root)
                     }) => {}
@@ -1192,7 +1190,7 @@ impl RuntimeObserver for RuntimeStore {
                 };
                 let driver = &mut store.driver;
                 if driver.runtime_run == Some(run)
-                    && !driver.retired_runs.contains(&run)
+                    && !driver.runtime_run_retired
                     && generation >= driver.runtime_watermark
                     && driver.active_poll
                 {
@@ -1210,13 +1208,14 @@ impl RuntimeObserver for RuntimeStore {
                         return;
                     };
                     let driver = &mut store.driver;
-                    if driver.retired_runs.contains(&run) {
+                    if driver.runtime_run.is_some_and(|current| {
+                        run < current || (run == current && driver.runtime_run_retired)
+                    }) {
                         return;
                     }
                     if reason == RuntimeInvalidation::Poll && driver.runtime_run != Some(run) {
-                        if let Some(previous) = driver.runtime_run.replace(run) {
-                            driver.retired_runs.insert(previous);
-                        }
+                        driver.runtime_run = Some(run);
+                        driver.runtime_run_retired = false;
                         driver.runtime_watermark = 0;
                     }
                     if driver.runtime_run != Some(run) {
@@ -1229,7 +1228,7 @@ impl RuntimeObserver for RuntimeStore {
                         invalidated = true;
                     }
                     if reason == RuntimeInvalidation::DriverDrop {
-                        driver.retired_runs.insert(run);
+                        driver.runtime_run_retired = true;
                     }
                 }
                 if invalidated {
@@ -1286,11 +1285,44 @@ pub(crate) mod tests {
         result
     }
 
+    fn runtime_run_ids(count: usize) -> Vec<RuntimeRunId> {
+        let mut config = Config::new();
+        config
+            .wasm_component_model_async(true)
+            .concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let ids = Arc::new(Mutex::new(Vec::new()));
+        let observed = ids.clone();
+        store
+            .as_context_mut()
+            .set_runtime_observer(Arc::new(move |event| {
+                if let RuntimeObservation::DriverInvalidated {
+                    run,
+                    reason: RuntimeInvalidation::Poll,
+                    ..
+                } = event
+                {
+                    observed.lock().unwrap().push(run);
+                }
+            }))
+            .unwrap();
+        for _ in 0..count {
+            let mut driver = Box::pin(store.run_concurrent(async |_| ()));
+            assert!(poll_once(driver.as_mut()).is_ready());
+        }
+        let result = ids.lock().unwrap().clone();
+        assert_eq!(result.len(), count);
+        assert!(result.windows(2).all(|pair| pair[0] < pair[1]));
+        result
+    }
+
     pub(crate) fn blocked_timer(
         owner: &Arc<OwnerSuspension>,
         deadline: Instant,
     ) -> (Arc<RuntimeStore>, RuntimeActivityId, SuspensionWait) {
         let ids = runtime_ids(2);
+        let run = runtime_run_ids(1)[0];
         let store = RuntimeStore::new(owner.clone());
         store.observe(RuntimeObservation::ActivityStarted {
             activity: ids[0],
@@ -1300,7 +1332,7 @@ pub(crate) mod tests {
         let timer = store.timer(ids[0], deadline).unwrap();
         let mut state = owner.state.lock().unwrap();
         let driver = &mut state.stores.get_mut(&store.store_id).unwrap().driver;
-        driver.runtime_run = Some(ids[1]);
+        driver.runtime_run = Some(run);
         driver.generation = 1;
         driver.blocked_generation = Some(1);
         drop(state);
@@ -1447,7 +1479,11 @@ pub(crate) mod tests {
     fn external_receive_requires_live_same_owner_source_and_a_real_wait() {
         let owner = OwnerSuspension::new();
         let now = Instant::now();
-        let (store, run, timer) = blocked_timer(&owner, now + Duration::from_secs(30));
+        let (store, _, timer) = blocked_timer(&owner, now + Duration::from_secs(30));
+        let run = owner.state.lock().unwrap().stores[&store.store_id]
+            .driver
+            .runtime_run
+            .unwrap();
         let foreign = RuntimeStore::new(OwnerSuspension::new()).source();
         let mut activity = owner.register_external();
         let mut receive = Box::pin(activity.receive(&foreign, pending::<()>()));
@@ -1475,8 +1511,7 @@ pub(crate) mod tests {
             .get_mut(&store.store_id)
             .unwrap()
             .driver
-            .retired_runs
-            .insert(run);
+            .runtime_run_retired = true;
         assert!(owner.prepare(now, Duration::ZERO).is_none());
         owner
             .state
@@ -1486,8 +1521,7 @@ pub(crate) mod tests {
             .get_mut(&store.store_id)
             .unwrap()
             .driver
-            .retired_runs
-            .remove(&run);
+            .runtime_run_retired = false;
         store.observe(RuntimeObservation::DriverInvalidated {
             run,
             generation: 2,
@@ -1863,7 +1897,7 @@ pub(crate) mod tests {
             kind: RuntimeActivityKind::Import,
         });
         let promise = store.promise(ids[1]).unwrap();
-        let run = runtime_ids(1)[0];
+        let run = runtime_run_ids(1)[0];
         let mut state = owner.state.lock().unwrap();
         let driver = &mut state.stores.get_mut(&store.store_id).unwrap().driver;
         driver.runtime_run = Some(run);
@@ -2182,7 +2216,11 @@ pub(crate) mod tests {
     fn wake_invalidates_prepare_and_blocked_proof() {
         let owner = OwnerSuspension::new();
         let now = Instant::now();
-        let (store, run, _timer) = blocked_timer(&owner, now + Duration::from_secs(10));
+        let (store, _, _timer) = blocked_timer(&owner, now + Duration::from_secs(10));
+        let run = owner.state.lock().unwrap().stores[&store.store_id]
+            .driver
+            .runtime_run
+            .unwrap();
         let attempt = owner.prepare(now, Duration::from_secs(1)).unwrap();
         store.observe(RuntimeObservation::DriverInvalidated {
             run,
@@ -2235,31 +2273,98 @@ pub(crate) mod tests {
     fn retired_run_poll_cannot_replace_current_run_and_old_callbacks_are_inert() {
         let owner = OwnerSuspension::new();
         let store = RuntimeStore::new(owner.clone());
-        let ids = runtime_ids(2);
+        let ids = runtime_run_ids(2);
         {
             let mut state = owner.state.lock().unwrap();
             let driver = &mut state.stores.get_mut(&store.store_id).unwrap().driver;
             driver.runtime_run = Some(ids[1]);
             driver.runtime_watermark = 7;
             driver.runtime_candidate = Some(8);
-            driver.retired_runs.insert(ids[0]);
+            driver.active_poll = true;
         }
         let revision = owner.state.lock().unwrap().revision;
-        store.observe(RuntimeObservation::DriverInvalidated {
-            run: ids[0],
-            generation: 9,
-            reason: RuntimeInvalidation::Poll,
-        });
-        store.observe(RuntimeObservation::DriverBlocked {
-            run: ids[0],
-            generation: 10,
-        });
+        for (run, retired) in [(ids[0], false), (ids[1], true)] {
+            owner
+                .state
+                .lock()
+                .unwrap()
+                .stores
+                .get_mut(&store.store_id)
+                .unwrap()
+                .driver
+                .runtime_run_retired = retired;
+            for reason in [
+                RuntimeInvalidation::Poll,
+                RuntimeInvalidation::Wake,
+                RuntimeInvalidation::DriverDrop,
+            ] {
+                store.observe(RuntimeObservation::DriverInvalidated {
+                    run,
+                    generation: 99,
+                    reason,
+                });
+            }
+            store.observe(RuntimeObservation::DriverBlocked {
+                run,
+                generation: 100,
+            });
+        }
         let state = owner.state.lock().unwrap();
         let driver = &state.stores.get(&store.store_id).unwrap().driver;
         assert_eq!(driver.runtime_run, Some(ids[1]));
         assert_eq!(driver.runtime_watermark, 7);
         assert_eq!(driver.runtime_candidate, Some(8));
         assert_eq!(state.revision, revision);
+    }
+
+    #[test]
+    fn only_a_newer_poll_admits_a_run_and_drop_is_terminal() {
+        let owner = OwnerSuspension::new();
+        let store = RuntimeStore::new(owner.clone());
+        let ids = runtime_run_ids(3);
+        for run in ids {
+            let revision = owner.state.lock().unwrap().revision;
+            for reason in [RuntimeInvalidation::Wake, RuntimeInvalidation::DriverDrop] {
+                store.observe(RuntimeObservation::DriverInvalidated {
+                    run,
+                    generation: 100,
+                    reason,
+                });
+            }
+            store.observe(RuntimeObservation::DriverBlocked {
+                run,
+                generation: 101,
+            });
+            assert_eq!(owner.state.lock().unwrap().revision, revision);
+            store.observe(RuntimeObservation::DriverInvalidated {
+                run,
+                generation: 2,
+                reason: RuntimeInvalidation::Poll,
+            });
+            {
+                let state = owner.state.lock().unwrap();
+                let driver = &state.stores[&store.store_id].driver;
+                assert_eq!(driver.runtime_run, Some(run));
+                assert_eq!(driver.runtime_watermark, 2);
+                assert!(!driver.runtime_run_retired);
+            }
+            // Retirement is terminal even when its generation does not advance.
+            store.observe(RuntimeObservation::DriverInvalidated {
+                run,
+                generation: 2,
+                reason: RuntimeInvalidation::DriverDrop,
+            });
+            let revision = owner.state.lock().unwrap().revision;
+            store.observe(RuntimeObservation::DriverInvalidated {
+                run,
+                generation: 200,
+                reason: RuntimeInvalidation::Poll,
+            });
+            let state = owner.state.lock().unwrap();
+            assert!(state.stores[&store.store_id].driver.runtime_run_retired);
+            assert_eq!(state.stores[&store.store_id].driver.runtime_watermark, 2);
+            assert_eq!(state.revision, revision);
+        }
     }
 
     #[test]
@@ -2327,8 +2432,12 @@ pub(crate) mod tests {
         let second = OwnerSuspension::new();
         let now = Instant::now();
         let (_first_store, _, _first_timer) = blocked_timer(&first, now + Duration::from_secs(10));
-        let (second_store, second_run, _second_timer) =
+        let (second_store, _, _second_timer) =
             blocked_timer(&second, now + Duration::from_secs(10));
+        let second_run = second.state.lock().unwrap().stores[&second_store.store_id]
+            .driver
+            .runtime_run
+            .unwrap();
         let attempt = first.prepare(now, Duration::from_secs(1)).unwrap();
         second_store.observe(RuntimeObservation::DriverInvalidated {
             run: second_run,

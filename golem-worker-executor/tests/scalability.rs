@@ -52,7 +52,6 @@ inherit_test_dep!(
 inherit_test_dep!(Tracing);
 
 #[test]
-#[ignore = "Short-sleep latency exceeds its bound on both baseline and candidate; performance investigation pending"]
 #[tracing::instrument]
 async fn spawning_many_workers_that_sleep(
     last_unique_id: &LastUniqueId,

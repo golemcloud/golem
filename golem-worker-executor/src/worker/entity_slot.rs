@@ -44,7 +44,6 @@ struct ActiveEntityInvocation {
     mode: InvocationExecutionMode,
     linear_memory: Option<LinearMemoryTracker>,
     cancellation: CancellationToken,
-    body_finished: bool,
     _activity: ActivityGuard,
 }
 
@@ -132,13 +131,8 @@ impl EntitySlot {
         state.fence_generation = state.fence_generation.wrapping_add(1);
         let mut active = state.active.keys().cloned().collect::<Vec<_>>();
         for invocation in state.active.values() {
-            if !invocation.body_finished && !invocation.cancellation.is_cancelled() {
-                invocation.cancellation.cancel();
-            }
+            invocation.cancellation.cancel();
         }
-        state
-            .active
-            .retain(|_, invocation| !invocation.body_finished);
         drop(state);
         active.sort_by_key(EntityInvocationId::start_index);
         active
@@ -177,8 +171,7 @@ impl EntitySlot {
             executable: scope.activation().executable_opt().cloned(),
             mode: scope.mode(),
             linear_memory: None,
-            cancellation,
-            body_finished: false,
+            cancellation: cancellation.clone(),
             _activity: activity,
         };
         match state.active.entry(invocation_id.clone()) {
@@ -194,39 +187,28 @@ impl EntitySlot {
 
         Ok(EntitySlotRegistration {
             slot: self.clone(),
-            invocation_id: Some(invocation_id),
+            invocation_id,
+            cancellation,
         })
     }
 }
 
 pub(crate) struct EntitySlotRegistration {
     slot: Arc<EntitySlot>,
-    invocation_id: Option<EntityInvocationId>,
+    invocation_id: EntityInvocationId,
+    cancellation: CancellationToken,
 }
 
 impl EntitySlotRegistration {
-    pub(crate) fn body_finished(&mut self) {
-        let Some(invocation_id) = self.invocation_id.as_ref() else {
-            return;
-        };
-        let mut state = self.slot.state.lock().unwrap();
-        if self.slot.activity.is_accepting() {
-            if let Some(invocation) = state.active.get_mut(invocation_id) {
-                invocation.body_finished = true;
-            }
-            return;
-        }
-        state.active.remove(invocation_id);
-        self.invocation_id = None;
+    pub(crate) fn cancellation(&self) -> CancellationToken {
+        self.cancellation.clone()
     }
 
     pub(crate) fn attach_linear_memory(
         &self,
         linear_memory: LinearMemoryTracker,
     ) -> Result<(), WorkerExecutorError> {
-        let invocation_id = self.invocation_id.as_ref().ok_or_else(|| {
-            WorkerExecutorError::runtime("Entity slot registration is already closed")
-        })?;
+        let invocation_id = &self.invocation_id;
         let mut state = self.slot.state.lock().unwrap();
         let invocation = state.active.get_mut(invocation_id).ok_or_else(|| {
             WorkerExecutorError::runtime(format!(
@@ -240,13 +222,11 @@ impl EntitySlotRegistration {
 
 impl Drop for EntitySlotRegistration {
     fn drop(&mut self) {
-        if let Some(invocation_id) = self.invocation_id.take() {
-            self.slot
-                .state
-                .lock()
-                .unwrap()
-                .active
-                .remove(&invocation_id);
-        }
+        self.slot
+            .state
+            .lock()
+            .unwrap()
+            .active
+            .remove(&self.invocation_id);
     }
 }

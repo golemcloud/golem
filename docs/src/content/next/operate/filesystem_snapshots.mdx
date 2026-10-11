@@ -181,7 +181,7 @@ filesystem_snapshots_bucket = "filesystem-snapshots"
 The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`.
 
 <Callout type="warning">
-  Use a separate bucket for filesystem snapshots. Do not set `filesystem_snapshots_bucket` to the value of `custom_data_bucket`. If the two buckets are the same:
+  Use a separate bucket for filesystem snapshots. The executor and the registry service refuse to start if `filesystem_snapshots_bucket` equals `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A shared bucket would cause these problems:
 
   - An agent can delete or overwrite the filesystem snapshots of other agents in its environment. The keys of both are below `<object_prefix>/<environment id>/`, so a `wasi:blobstore` container can have the same key prefix as the filesystem snapshots of an agent.
   - The blob storage quota of the account counts the filesystem snapshots.

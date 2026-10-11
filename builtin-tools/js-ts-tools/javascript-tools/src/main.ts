@@ -25,7 +25,7 @@ type NpmBundle = {
 };
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
-  .version('0.1.2')
+  .version('0.1.4')
   .doc("Run a JavaScript file or inline expression with Golem's Node-compatible runtime.")
   .annotations({ openWorld: false })
   .body((body) =>
@@ -45,7 +45,7 @@ const nodeTool = toolDefinition('node', { requiresFilesystem: true })
   );
 
 const npmTool = toolDefinition('npm', { requiresFilesystem: true })
-  .version('10.9.9+golem.2')
+  .version('10.9.9+golem.4')
   .doc('Install and manage JavaScript packages and run package scripts with npm.')
   .annotations({ openWorld: false })
   .body((body) =>
@@ -69,7 +69,7 @@ const npmTool = toolDefinition('npm', { requiresFilesystem: true })
   );
 
 const npxTool = toolDefinition('npx', { requiresFilesystem: true })
-  .version('10.9.9+golem.2')
+  .version('10.9.9+golem.4')
   .doc('Run a command provided by a local or downloaded npm package.')
   .annotations({ openWorld: false })
   .body((body) =>

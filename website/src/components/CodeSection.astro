@@ -141,5 +141,18 @@ const { eyebrow, heading, lead, tabs, snippets, defaultLang } = codeSection;
     margin: 0;
     background: var(--code-bg) !important;
     padding: 1.25rem 1.5rem !important;
+    tab-size: 4;
+  }
+  @media (max-width: 640px) {
+    .code-tabs {
+      flex-wrap: wrap;
+    }
+    .code-filename {
+      display: none;
+    }
+    .code-block :global(pre.astro-code) {
+      font-size: 0.78rem;
+      padding: 1rem 1.1rem !important;
+    }
   }
 </style>

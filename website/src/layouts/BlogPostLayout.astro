@@ -9,9 +9,10 @@ interface Props {
   author?: string;
   tags?: string[];
   description?: string;
+  image?: string;
 }
 
-const { title, date, author, tags = [], description } = Astro.props;
+const { title, date, author, tags = [], description, image } = Astro.props;
 
 const formattedDate = date
   ? new Intl.DateTimeFormat("en-US", {
@@ -22,7 +23,7 @@ const formattedDate = date
   : null;
 ---
 
-<BaseLayout title={`${title} — Golem`} description={description ?? title}>
+<BaseLayout title={`${title} — Golem`} description={description ?? title} {image}>
   <Nav />
   <main class="post-main">
     <div class="container post-container">
