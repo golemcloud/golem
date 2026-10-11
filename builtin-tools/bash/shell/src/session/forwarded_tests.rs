@@ -582,3 +582,383 @@ mod write {
         assert_eq!(content(&directory.join("out")), "first\n");
     }
 }
+
+mod edit {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+    };
+
+    use crate::commands::FileEditor;
+
+    /// What the file editor of a test does with a file.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        /// Writes the new content in upper case, so that a test can tell it from the work of
+        /// the command.
+        UpperCase,
+        /// Writes the new content as it is.
+        Exact,
+        /// Writes nothing and refuses: the command must replace the file itself.
+        Refuse,
+        /// Writes other bytes and then refuses, as a change that failed part of the way.
+        Spoil,
+        /// Writes one byte less than the new content and says that it changed the file.
+        TooShort,
+    }
+
+    /// One change that the file editor was asked for: the path, the old and the new content.
+    type Asked = (PathBuf, String, String);
+
+    struct Editor {
+        answer: Answer,
+        max_len: usize,
+        asked: Mutex<Vec<Asked>>,
+    }
+
+    impl FileEditor for Editor {
+        fn max_len(&self) -> usize {
+            self.max_len
+        }
+
+        fn edit(&self, path: &Path, old: &[u8], new: &[u8]) -> bool {
+            self.asked.lock().unwrap().push((
+                path.to_owned(),
+                String::from_utf8_lossy(old).into_owned(),
+                String::from_utf8_lossy(new).into_owned(),
+            ));
+            match self.answer {
+                Answer::UpperCase => std::fs::write(path, new.to_ascii_uppercase()).is_ok(),
+                Answer::Exact => std::fs::write(path, new).is_ok(),
+                Answer::Refuse => false,
+                Answer::Spoil => {
+                    let _ = std::fs::write(path, "other content, and more of it");
+                    false
+                }
+                Answer::TooShort => std::fs::write(path, &new[..new.len() - 1]).is_ok(),
+            }
+        }
+    }
+
+    /// The outcome of a script, and each change that the file editor was asked for.
+    struct Outcome {
+        status: u8,
+        stdout: String,
+        stderr: String,
+        asked: Vec<Asked>,
+    }
+
+    /// Runs `script` in a fresh session with a file editor that takes `max_len` bytes and does
+    /// `answer`.
+    fn run_limited(script: &str, answer: Answer, max_len: usize) -> Outcome {
+        let editor = Arc::new(Editor {
+            answer,
+            max_len,
+            asked: Mutex::default(),
+        });
+        let (status, stdout, stderr) = super::run(script, |session| {
+            session.forward_file_edits(editor.clone());
+        });
+        let asked = editor.asked.lock().unwrap().clone();
+        Outcome {
+            status,
+            stdout,
+            stderr,
+            asked,
+        }
+    }
+
+    fn run(script: &str, answer: Answer) -> Outcome {
+        run_limited(script, answer, 1024 * 1024)
+    }
+
+    fn directory(name: &str) -> PathBuf {
+        super::directory("edit", name)
+    }
+
+    fn content(path: &Path) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    /// The names in `directory`, in order.
+    fn names(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Runs `script` in a new directory `name` two times: with no file editor, and with one
+    /// that writes the new content as it is. Asserts that the status, the output and what
+    /// `show` prints after the script are the same. Returns what the file editor was asked for.
+    fn same_as_without_a_file_editor(name: &str, script: &str, show: &str) -> Vec<Asked> {
+        let script = |directory: &Path| format!("cd {}; {script}; {show}", directory.display());
+        let local = super::run(&script(&directory(name)), |_| ());
+        let outcome = run(&script(&directory(name)), Answer::Exact);
+        assert_eq!((outcome.status, outcome.stdout, outcome.stderr), local);
+        outcome.asked
+    }
+
+    /// Prints each name in the working directory with what it is and what it has.
+    const SHOW: &str = "for name in * .[!.]*; do [ -e \"$name\" ] || [ -L \"$name\" ] || continue; \
+                        [ -L \"$name\" ] && echo \"$name is a link\"; echo \"$name:\"; \
+                        cat \"$name\"; done";
+
+    #[test]
+    fn sed_gives_an_edit_in_place_to_the_file_editor() {
+        let directory = directory("regular");
+        let outcome = run(
+            &format!("sed -i s/one/1/ {}/f", directory.display()),
+            Answer::UpperCase,
+        );
+        assert_eq!(
+            (
+                outcome.status,
+                outcome.stdout.as_str(),
+                outcome.stderr.as_str()
+            ),
+            (0, "", "")
+        );
+        assert_eq!(
+            outcome.asked,
+            [(
+                directory.join("f"),
+                "one\ntwo\n".to_owned(),
+                "1\ntwo\n".to_owned()
+            )]
+        );
+        assert_eq!(content(&directory.join("f")), "1\nTWO\n");
+        assert_eq!(names(&directory), ["f"]);
+    }
+
+    #[test]
+    fn sed_asks_the_file_editor_with_the_absolute_path_of_a_relative_operand() {
+        let directory = directory("relative");
+        let outcome = run(
+            &format!(
+                "cd {}; sed -i -e s/one/1/ -e s/two/2/ f",
+                directory.display()
+            ),
+            Answer::UpperCase,
+        );
+        assert_eq!(
+            outcome.asked,
+            [(
+                directory.join("f"),
+                "one\ntwo\n".to_owned(),
+                "1\n2\n".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn sed_gives_each_file_operand_to_the_file_editor_in_order() {
+        let directory = directory("several");
+        std::fs::write(directory.join("g"), "one more\n").unwrap();
+        let outcome = run(
+            &format!("cd {}; sed -i s/one/1/ g f", directory.display()),
+            Answer::UpperCase,
+        );
+        assert_eq!(outcome.status, 0);
+        assert_eq!(
+            outcome.asked,
+            [
+                (
+                    directory.join("g"),
+                    "one more\n".to_owned(),
+                    "1 more\n".to_owned()
+                ),
+                (
+                    directory.join("f"),
+                    "one\ntwo\n".to_owned(),
+                    "1\ntwo\n".to_owned()
+                )
+            ]
+        );
+        assert_eq!(content(&directory.join("g")), "1 MORE\n");
+        assert_eq!(names(&directory), ["f", "g"]);
+    }
+
+    /// `sed -i` writes a file that it does not change, and so does the file editor.
+    #[test]
+    fn sed_gives_a_file_with_no_change_to_the_file_editor() {
+        let directory = directory("unchanged");
+        let outcome = run(
+            &format!("cd {}; sed -i s/none/1/ f", directory.display()),
+            Answer::UpperCase,
+        );
+        assert_eq!(
+            outcome.asked,
+            [(
+                directory.join("f"),
+                "one\ntwo\n".to_owned(),
+                "one\ntwo\n".to_owned()
+            )]
+        );
+        assert_eq!(content(&directory.join("f")), "ONE\nTWO\n");
+    }
+
+    #[test]
+    fn sed_replaces_the_file_itself_when_the_file_editor_refuses() {
+        let directory = directory("refuse");
+        let outcome = run(
+            &format!("cd {}; sed -i s/one/1/ f", directory.display()),
+            Answer::Refuse,
+        );
+        assert_eq!((outcome.status, outcome.stderr.as_str()), (0, ""));
+        assert_eq!(outcome.asked.len(), 1);
+        assert_eq!(content(&directory.join("f")), "1\ntwo\n");
+        assert_eq!(names(&directory), ["f"]);
+    }
+
+    #[test]
+    fn sed_replaces_the_file_itself_when_the_file_editor_left_other_content() {
+        let directory = directory("spoil");
+        let outcome = run(
+            &format!("cd {}; sed -i s/one/1/ f", directory.display()),
+            Answer::Spoil,
+        );
+        assert_eq!((outcome.status, outcome.stderr.as_str()), (0, ""));
+        assert_eq!(outcome.asked.len(), 1);
+        assert_eq!(content(&directory.join("f")), "1\ntwo\n");
+        assert_eq!(names(&directory), ["f"]);
+    }
+
+    #[test]
+    fn sed_replaces_the_file_itself_when_the_file_editor_wrote_another_length() {
+        let directory = directory("length");
+        let outcome = run(
+            &format!("cd {}; sed -i s/one/1/ f", directory.display()),
+            Answer::TooShort,
+        );
+        assert_eq!((outcome.status, outcome.stderr.as_str()), (0, ""));
+        assert_eq!(outcome.asked.len(), 1);
+        assert_eq!(content(&directory.join("f")), "1\ntwo\n");
+        assert_eq!(names(&directory), ["f"]);
+    }
+
+    #[test]
+    fn sed_gives_the_file_editor_content_up_to_its_limit() {
+        let directory = directory("limit");
+        let script = format!("cd {}; sed -i s/one/1/ f; cat f", directory.display());
+        // The file has 8 bytes before the change and 6 bytes after it.
+        let outcome = run_limited(&script, Answer::UpperCase, 8);
+        assert_eq!(outcome.asked.len(), 1);
+        std::fs::write(directory.join("f"), "one\ntwo\n").unwrap();
+        let outcome = run_limited(&script, Answer::UpperCase, 7);
+        assert_eq!(outcome.asked, []);
+        assert_eq!((outcome.status, outcome.stdout.as_str()), (0, "1\ntwo\n"));
+    }
+
+    /// The file editor changes the file that is there. `sed -i` with a suffix makes that file
+    /// the copy, and puts a new file in its place.
+    #[test]
+    fn sed_does_not_ask_the_file_editor_when_it_keeps_a_copy() {
+        for copy in ["", "echo an older copy > f.bak; "] {
+            let asked = same_as_without_a_file_editor(
+                "copy",
+                &format!("{copy}sed -i.bak s/one/1/ f; echo $?"),
+                SHOW,
+            );
+            assert_eq!(asked, [], "{copy}");
+        }
+    }
+
+    /// `sed -i` puts a regular file in the place of a symbolic link. The file editor writes
+    /// through the link.
+    #[test]
+    fn sed_does_not_ask_the_file_editor_for_a_symbolic_link() {
+        let asked = same_as_without_a_file_editor(
+            "link",
+            "ln -s f link; sed -i s/one/1/ link; echo $?",
+            SHOW,
+        );
+        assert_eq!(asked, []);
+    }
+
+    #[test]
+    fn sed_asks_the_file_editor_for_the_file_of_a_link_that_it_follows() {
+        let directory = directory("follow");
+        let outcome = run(
+            &format!(
+                "cd {}; ln -s f link; sed -i --follow-symlinks s/one/1/ link; echo $?; {SHOW}",
+                directory.display()
+            ),
+            Answer::UpperCase,
+        );
+        assert_eq!(
+            outcome.asked,
+            [(
+                directory.join("f"),
+                "one\ntwo\n".to_owned(),
+                "1\ntwo\n".to_owned()
+            )]
+        );
+        assert_eq!(
+            outcome.stdout,
+            "0\nf:\n1\nTWO\nlink is a link\nlink:\n1\nTWO\n"
+        );
+    }
+
+    /// `sed -i` leaves the other names of a file with the old content. The file editor changes
+    /// the content under each name.
+    #[test]
+    fn sed_does_not_ask_the_file_editor_for_a_file_with_another_name() {
+        let asked = same_as_without_a_file_editor(
+            "hard-link",
+            "ln f other; sed -i s/one/1/ f; echo $?",
+            SHOW,
+        );
+        assert_eq!(asked, []);
+    }
+
+    /// A descriptor that the script has open on the file keeps the old content after `sed -i`.
+    /// The file editor changes what that descriptor reads.
+    #[test]
+    fn sed_does_not_ask_the_file_editor_for_a_file_that_the_script_has_open() {
+        let asked = same_as_without_a_file_editor(
+            "open",
+            "exec 3< f; sed -i s/one/1/ f; echo $?; cat <&3; exec 3<&-",
+            SHOW,
+        );
+        assert_eq!(asked, []);
+        // The first `sed -i` leaves the descriptor of the loop on the old file. So the second
+        // one has a file that the script does not have open.
+        let asked = same_as_without_a_file_editor(
+            "open-loop",
+            "while read -r word; do sed -i \"s/$word/<$word>/\" f; done < f",
+            SHOW,
+        );
+        assert_eq!(
+            asked,
+            [(
+                Path::new("/tmp/bash-forwarded/edit/open-loop/f").to_owned(),
+                "<one>\ntwo\n".to_owned(),
+                "<one>\n<two>\n".to_owned()
+            )]
+        );
+    }
+
+    /// A descriptor on another file, and one that the script has closed, do not matter.
+    #[test]
+    fn sed_asks_the_file_editor_when_the_script_has_another_file_open() {
+        let asked = same_as_without_a_file_editor(
+            "open-other",
+            "echo other > g; exec 3< g; exec 4< f; exec 4<&-; sed -i s/one/1/ f; cat <&3",
+            SHOW,
+        );
+        assert_eq!(asked.len(), 1);
+    }
+
+    #[test]
+    fn sed_without_an_edit_in_place_does_not_ask_the_file_editor() {
+        let asked = same_as_without_a_file_editor(
+            "no-edit",
+            "sed s/one/1/ f; sed -n -s 1p f f; sed -i s/one/1/ missing; echo $?; mv f g",
+            SHOW,
+        );
+        assert_eq!(asked, []);
+    }
+}

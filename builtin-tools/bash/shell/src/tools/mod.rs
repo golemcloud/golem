@@ -5,6 +5,8 @@ pub(crate) mod diff;
 pub(crate) mod env_options;
 pub mod find;
 pub(crate) mod grep;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod in_place;
 pub mod install;
 pub(crate) mod jq;
 pub(crate) mod jq_syntax;

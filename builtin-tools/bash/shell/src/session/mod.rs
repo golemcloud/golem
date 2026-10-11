@@ -9,7 +9,7 @@ use brush_core::{
 };
 
 use crate::commands::{
-    CommandDescriptor, CommandInvoker, FileReader, FileWriter, InvocationCommands,
+    CommandDescriptor, CommandInvoker, FileEditor, FileReader, FileWriter, InvocationCommands,
 };
 
 mod baseline;
@@ -273,6 +273,13 @@ impl Session {
     pub fn forward_file_writes(&mut self, writer: Arc<dyn FileWriter>) {
         let mut commands = (*self.commands).clone();
         commands.forward_file_writes(writer);
+        self.commands = Arc::new(commands);
+    }
+
+    /// Lets local commands give a change of the content of a regular file to `editor`.
+    pub fn forward_file_edits(&mut self, editor: Arc<dyn FileEditor>) {
+        let mut commands = (*self.commands).clone();
+        commands.forward_file_edits(editor);
         self.commands = Arc::new(commands);
     }
 

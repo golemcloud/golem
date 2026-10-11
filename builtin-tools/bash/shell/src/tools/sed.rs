@@ -55,6 +55,25 @@ pub(crate) fn locale(env: &[(String, String)]) -> String {
         .unwrap_or_else(|| "C.UTF-8".to_owned())
 }
 
+/// Whether `argv` (the command name first) asks for an edit in place that keeps no copy of the
+/// file under a suffix.
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(dead_code, reason = "only the wasm32 command forwards an edit")
+)]
+pub(crate) fn edits_without_copy(argv: &[String]) -> bool {
+    let args = argv
+        .iter()
+        .map(|arg| crate::tools::shell_bytes::to_os_string(arg));
+    uu_sed::sed::uu_app()
+        .try_get_matches_from(uu_sed::sed::normalize_in_place(args))
+        .is_ok_and(|matches| {
+            matches
+                .get_one::<String>("in-place")
+                .is_some_and(String::is_empty)
+        })
+}
+
 /// Parse and compile `argv` (the command name first) in `locale`. The operands are returned as
 /// given; `-` is standard input.
 pub(crate) fn prepare(argv: &[String], locale: String) -> Result<(Engine, Vec<String>), Refusal> {
@@ -281,6 +300,32 @@ mod tests {
         assert!(!super::wants_stdin_script(&owned(&["sed", "s/a/b/", "-"])));
         assert!(!super::wants_stdin_script(&owned(&["sed", "-f", "-x"])));
         assert!(!super::wants_stdin_script(&owned(&["sed", "-e", "-"])));
+    }
+
+    #[test]
+    fn an_edit_in_place_keeps_no_copy_only_without_a_suffix() {
+        let owned = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        for args in [
+            &["sed", "-i", "s/a/b/", "f"][..],
+            &["sed", "--in-place", "s/a/b/", "f"],
+            &["sed", "-n", "-i", "p", "f"],
+            &["sed", "-ni", "p", "f"],
+            &["sed", "-i", "--follow-symlinks", "-e", "s/a/b/", "f"],
+        ] {
+            assert!(super::edits_without_copy(&owned(args)), "{args:?}");
+        }
+        for args in [
+            &["sed", "s/a/b/", "f"][..],
+            &["sed", "-s", "p", "f"],
+            &["sed", "-i.bak", "s/a/b/", "f"],
+            &["sed", "--in-place=.bak", "s/a/b/", "f"],
+            &["sed", "-ni.orig", "p", "f"],
+            &["sed", "-e", "s/a/-i/", "f"],
+            &["sed", "s/a/b/", "--", "-i"],
+            &["sed", "--no-such-option", "-i", "p", "f"],
+        ] {
+            assert!(!super::edits_without_copy(&owned(args)), "{args:?}");
+        }
     }
 
     #[test]

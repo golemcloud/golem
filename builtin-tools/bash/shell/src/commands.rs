@@ -58,11 +58,27 @@ pub trait FileWriter: Send + Sync {
     fn write(&self, path: &Path, content: &[u8]) -> bool;
 }
 
+/// Changes the content of a regular file for a local command that gives the change to a bound
+/// tool.
+///
+/// A call returns only when it has its answer. No other part of the script runs in that time, as
+/// for a change that the command makes itself.
+pub trait FileEditor: Send + Sync {
+    /// The most bytes that [`FileEditor::edit`] takes for the content of one file, before the
+    /// change and after it.
+    fn max_len(&self) -> usize;
+    /// Changes the content of the regular file at the absolute `path` from `old` to `new`.
+    /// Returns `false` when the command must replace the file itself; the file can then have any
+    /// content.
+    fn edit(&self, path: &Path, old: &[u8], new: &[u8]) -> bool;
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct InvocationCommands {
     entries: HashMap<String, (CommandDescriptor, Arc<dyn CommandInvoker>)>,
     file_reader: Option<Arc<dyn FileReader>>,
     file_writer: Option<Arc<dyn FileWriter>>,
+    file_editor: Option<Arc<dyn FileEditor>>,
 }
 impl InvocationCommands {
     pub fn contains(&self, name: &str) -> bool {
@@ -91,6 +107,16 @@ impl InvocationCommands {
     }
     pub fn forward_file_writes(&mut self, writer: Arc<dyn FileWriter>) {
         self.file_writer = Some(writer);
+    }
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(dead_code, reason = "only the wasm32 commands forward an edit")
+    )]
+    pub fn file_editor(&self) -> Option<Arc<dyn FileEditor>> {
+        self.file_editor.clone()
+    }
+    pub fn forward_file_edits(&mut self, editor: Arc<dyn FileEditor>) {
+        self.file_editor = Some(editor);
     }
 }
 

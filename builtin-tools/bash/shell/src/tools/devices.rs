@@ -155,7 +155,10 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use wasm::{discard_served, reopen, reopen_as, serve, serving, write_to_real_stderr};
+pub(crate) use wasm::{
+    descriptor_status, discard_served, open_descriptors, remove, reopen, reopen_as, serve, serving,
+    status, write_to_real_stderr,
+};
 
 #[cfg(target_arch = "wasm32")]
 #[allow(
@@ -166,7 +169,7 @@ mod wasm {
     use super::{Device, Entry, inside_dev, lookup};
     use brush_core::openfiles::OpenFile;
     use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::ffi::{CStr, c_char, c_int, c_void};
     use std::io::{self, Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -209,6 +212,43 @@ mod wasm {
         /// close.
         static REOPENED: RefCell<HashMap<c_int, std::sync::Arc<std::fs::File>>> =
             RefCell::new(HashMap::new());
+        /// The descriptors that libc has open on a path of the file system.
+        static OPEN: RefCell<BTreeSet<c_int>> = const { RefCell::new(BTreeSet::new()) };
+    }
+
+    /// Records a descriptor that libc has opened on a path, and returns it.
+    fn opened(fd: c_int) -> c_int {
+        if fd >= 0 {
+            OPEN.with_borrow_mut(|open| open.insert(fd));
+        }
+        fd
+    }
+
+    /// The descriptors that libc has open on a path of the file system.
+    pub(crate) fn open_descriptors() -> Vec<c_int> {
+        OPEN.with_borrow(|open| open.iter().copied().collect())
+    }
+
+    /// What `fstat` says about a descriptor of libc.
+    pub(crate) fn descriptor_status(fd: c_int) -> Option<libc::stat> {
+        // SAFETY: an all-zero `stat` is a valid value of this plain C struct.
+        let mut status: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `status` is writable storage for one `stat`.
+        (unsafe { __real_fstat(fd, &raw mut status) } == 0).then_some(status)
+    }
+
+    /// What `lstat` says about a path of the file system.
+    pub(crate) fn status(path: &CStr) -> Option<libc::stat> {
+        // SAFETY: an all-zero `stat` is a valid value of this plain C struct.
+        let mut status: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `path` is a NUL-terminated string and `status` is storage for one `stat`.
+        (unsafe { __real_lstat(path.as_ptr(), &raw mut status) } == 0).then_some(status)
+    }
+
+    /// Removes the file at a path of the file system.
+    pub(crate) fn remove(path: &CStr) -> bool {
+        // SAFETY: `path` is a NUL-terminated string.
+        unsafe { __real_unlink(path.as_ptr()) == 0 }
     }
 
     /// Serves a command's descriptors to the libc calls it makes until the guard drops: its
@@ -791,7 +831,7 @@ mod wasm {
             {
                 fail(libc::EACCES)
             }
-            None => unsafe { __real_open(path, flags, 0o666) },
+            None => opened(unsafe { __real_open(path, flags, 0o666) }),
         }
     }
 
@@ -817,7 +857,7 @@ mod wasm {
             {
                 fail(libc::EACCES)
             }
-            None => unsafe { __real_openat(directory, path, flags, 0o666) },
+            None => opened(unsafe { __real_openat(directory, path, flags, 0o666) }),
         }
     }
 
@@ -1072,8 +1112,11 @@ mod wasm {
                     None => fail(libc::EBADF),
                 }
             }),
-            // SAFETY: libc's contract, forwarded.
-            _ => unsafe { __real_close(fd) },
+            _ => {
+                OPEN.with_borrow_mut(|open| open.remove(&fd));
+                // SAFETY: libc's contract, forwarded.
+                unsafe { __real_close(fd) }
+            }
         }
     }
 
@@ -1335,6 +1378,16 @@ mod wasm {
             .or_else(|| unsafe { refused_change(libc::AT_FDCWD, new, libc::EACCES) });
         match refused {
             Some(errno) => fail(errno),
+            // The file editor of an edit in place has changed the file at `new`.
+            // SAFETY: libc's contract: both are NUL-terminated strings when not null.
+            None if !old.is_null()
+                && !new.is_null()
+                && crate::tools::in_place::replaces(unsafe { CStr::from_ptr(old) }, unsafe {
+                    CStr::from_ptr(new)
+                }) =>
+            {
+                0
+            }
             // SAFETY: libc's contract, forwarded.
             None => unsafe { __real_rename(old, new) },
         }

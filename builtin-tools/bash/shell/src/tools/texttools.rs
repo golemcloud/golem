@@ -226,6 +226,17 @@ impl SimpleCommand for Sed {
                 let args = argv
                     .iter()
                     .map(|arg| crate::tools::shell_bytes::to_os_string(arg));
+                // The file editor of the call makes an edit in place that keeps no copy.
+                #[cfg(target_arch = "wasm32")]
+                let _editing = super::sed::edits_without_copy(&argv)
+                    .then(|| {
+                        context
+                            .params
+                            .context::<crate::commands::InvocationCommands>()?
+                            .file_editor()
+                    })
+                    .flatten()
+                    .map(super::in_place::edit);
                 crate::tools::coreutils::run_uu(&context, "sed", move || uu_sed::sed::uumain(args))
             }
             Ok((mut engine, files)) => {
