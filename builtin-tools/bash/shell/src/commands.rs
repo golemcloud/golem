@@ -1,5 +1,5 @@
 //! Invocation-owned adapter for embedding typed tools behind ordinary shell commands.
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use brush_core::{
     CommandArg, Error, ExecutionContext, ExecutionResult,
@@ -36,9 +36,20 @@ pub trait PreparedCommand: Send + Sync {
     fn invoke(&self, stdin: Option<Vec<u8>>) -> CommandFuture<'_>;
 }
 
+/// Reads a regular file for a local command that takes the content from a bound tool.
+///
+/// A call returns only when it has its answer. No other part of the script runs in that time, as
+/// for a read that the command makes itself.
+pub trait FileReader: Send + Sync {
+    /// Returns the content of the regular file at the absolute `path`, which has `len` bytes, or
+    /// `None` when the command must read the file itself.
+    fn read(&self, path: &Path, len: u64) -> Option<Vec<u8>>;
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct InvocationCommands {
     entries: HashMap<String, (CommandDescriptor, Arc<dyn CommandInvoker>)>,
+    file_reader: Option<Arc<dyn FileReader>>,
 }
 impl InvocationCommands {
     pub fn contains(&self, name: &str) -> bool {
@@ -47,6 +58,16 @@ impl InvocationCommands {
     pub fn insert(&mut self, descriptor: CommandDescriptor, invoker: Arc<dyn CommandInvoker>) {
         self.entries
             .insert(descriptor.name.clone(), (descriptor, invoker));
+    }
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(dead_code, reason = "only the wasm32 commands forward a read")
+    )]
+    pub fn file_reader(&self) -> Option<&dyn FileReader> {
+        self.file_reader.as_deref()
+    }
+    pub fn forward_file_reads(&mut self, reader: Arc<dyn FileReader>) {
+        self.file_reader = Some(reader);
     }
 }
 

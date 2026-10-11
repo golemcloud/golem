@@ -20,7 +20,7 @@ use std::{
     collections::VecDeque,
     ffi::OsString,
     io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -861,27 +861,60 @@ pub(crate) fn operand<SE: ShellExtensions>(
     context: &ExecutionContext<'_, SE>,
     path: &str,
 ) -> Result<OpenFile, String> {
+    located_operand(context, path).map(|(file, _)| file)
+}
+
+/// Opens an operand as [`operand`] does. For a file that it opens by its path, it also returns
+/// the absolute path. Standard input under each of its names, a named descriptor and the null
+/// device have no such path.
+fn located_operand<SE: ShellExtensions>(
+    context: &ExecutionContext<'_, SE>,
+    path: &str,
+) -> Result<(OpenFile, Option<PathBuf>), String> {
     if path == "-" {
-        return Ok(input(context));
+        return Ok((input(context), None));
     }
     if names_stdin(context, path) {
         // A closed standard input has no `/proc/self/fd/0` for the name to open, as on Linux.
         if context.try_fd(OpenFiles::STDIN_FD).is_none() {
             return Err("No such file or directory".to_owned());
         }
-        return Ok(opened_again(input(context)));
+        return Ok((opened_again(input(context)), None));
     }
     if let Some(descriptor) = named_descriptor(context, path) {
-        return descriptor.map(opened_again);
+        return descriptor.map(|file| (opened_again(file), None));
     }
     let path = context.shell.absolute_path(Path::new(path));
-    let name = path.to_string_lossy();
-    if name == "/dev/null" {
-        return Ok(brush_core::openfiles::from_bytes(Vec::new()));
+    if path.to_string_lossy() == "/dev/null" {
+        return Ok((brush_core::openfiles::from_bytes(Vec::new()), None));
     }
-    std::fs::File::open(path)
-        .map(OpenFile::from)
-        .map_err(|error| super::io_message(&error))
+    match std::fs::File::open(&path) {
+        Ok(file) => Ok((OpenFile::from(file), Some(path))),
+        Err(error) => Err(super::io_message(&error)),
+    }
+}
+
+/// The content of the regular file `file`, which was opened at `path`, from the file reader of
+/// the call. `None` when no reader is installed, when `file` is not a regular file with content,
+/// and when the reader does not return each byte of the file: the command then reads `file`.
+fn forwarded<SE: ShellExtensions>(
+    context: &ExecutionContext<'_, SE>,
+    path: &Path,
+    file: &OpenFile,
+) -> Option<Vec<u8>> {
+    let commands = context
+        .params
+        .context::<crate::commands::InvocationCommands>()?;
+    let reader = commands.file_reader()?;
+    let OpenFile::File(file) = file else {
+        return None;
+    };
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return None;
+    }
+    let bytes = reader.read(path, metadata.len())?;
+    (u64::try_from(bytes.len()) == Ok(metadata.len())).then_some(bytes)
 }
 
 /// Report a uutils error as the utility's own `uumain` would. A clap usage error prints itself,
@@ -1067,8 +1100,8 @@ fn cat_impl<SE: ShellExtensions>(
             _ => None,
         };
         for path in files(&matches, "file") {
-            let mut source = match operand(&context, &path) {
-                Ok(source) => source,
+            let (mut source, location) = match located_operand(&context, &path) {
+                Ok(operand) => operand,
                 Err(error) => {
                     // GNU quotes a name that needs it; the empty one always does.
                     let name = if path.is_empty() { "''" } else { path.as_str() };
@@ -1096,6 +1129,13 @@ fn cat_impl<SE: ShellExtensions>(
                     .await?;
                 failed = true;
                 continue;
+            }
+            // The bytes become a stream that is ready at once, so the loop below reads them as
+            // it reads the file: with no wait before the first write.
+            if let Some(location) = &location
+                && let Some(bytes) = forwarded(&context, location, &source)
+            {
+                source = brush_core::openfiles::from_bytes(bytes);
             }
             loop {
                 match source.async_io().read(&mut buffer).await {
