@@ -19,7 +19,7 @@ cargo build --manifest-path builtin-tools/bash/Cargo.toml \
   -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
 W=builtin-tools/bash/target/wasm32-wasip2/release/examples/cooperative.wasm
 python3 builtin-tools/bash/conformance/conformance.py check --wasm $W     # against goldens
-python3 builtin-tools/bash/conformance/conformance.py forward --wasm $W   # cat with a file reader
+python3 builtin-tools/bash/conformance/conformance.py forward --wasm $W   # with file tool stand-ins
 python3 builtin-tools/bash/conformance/conformance.py coverage --wasm $W  # checklist gate
 python3 builtin-tools/bash/conformance/test_conformance.py              # harness tests
 # After adding or changing cases (needs Docker; builds oracle.Dockerfile):
@@ -32,15 +32,22 @@ CPU by default (`--jobs N`). `--case '<name>'` selects one case and `--prefix '<
 whose name starts with it; repeat either to select more. `--report FILE` writes the failures as
 JSON. The matrix needs Wasmtime with WASI 0.3/component-model async support.
 
-`forward` checks that a script cannot see where `cat` gets the content of a file. When the
-`read-file` tool is bound, the bash tool gives the shell a file reader, and `cat` takes the content
-of a regular file from that reader. `forward` runs each case whose script uses `cat` two times,
-without a file reader and with the example's probe file reader (`--forward-file-reads`), and fails
-when status, stdout or stderr differ. The probe answers as the tool's reader does: all bytes of a
-text file, and nothing for a path with `..`, a file above 1 MiB and content that is not UTF-8
-text. `forward` needs no golden. It also fails when the probe served no read, because such a run
-compares nothing. A case whose own output changes from run to run is reported as `UNSTABLE` and
-does not fail the run. `--tier all` takes the sweep-tier cases too.
+`forward` checks that a script cannot see which part of its work a local command gives to a bound
+file tool. When the tool is bound, the command does this part of its work through the tool:
+
+| Command | Work | Tool |
+|---|---|---|
+| `cat` | takes the content of a regular file from a file reader | `read-file` |
+| `tee` | gives the content of a regular file to a file writer | `write-file` |
+
+The example has a stand-in for each of these tools (`--file-tools`). `forward` runs each case
+whose script names one of these commands two times, without the stand-ins and with them, and
+fails when status, stdout or stderr differ. The stand-ins answer as the tools do: all bytes of a text file or nothing, and nothing
+for a path with `..`, for content above 1 MiB and for content that is not UTF-8 text. `forward`
+needs no golden. It also fails when a stand-in did no work in the cases that name its command,
+because such a run compares nothing for that command. A case whose own output changes from run to
+run is reported as `UNSTABLE` and does not fail the run. `--tier all` takes the sweep-tier cases
+too.
 
 `record` runs the oracle **twice** per case by default, each run in its own fresh container, and
 refuses to write a golden the two runs disagree on -- printing which case and which field (status,

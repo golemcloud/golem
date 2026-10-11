@@ -7,9 +7,10 @@ Golem's GOLEM_* variables, and a fresh `/tmp`. The oracle's answers are recorded
 
     conformance.py check --wasm W     compare our shell with the recorded goldens (the default);
                                       `--tier all` adds the sweep-tier corpora the slow job checks
-    conformance.py forward --wasm W   run each case that uses `cat` without and with a file
-                                      reader, and fail if the two outcomes differ; needs no
-                                      golden; `--tier all` as for `check`
+    conformance.py forward --wasm W   run each case that uses `cat` or `tee` without and with
+                                      stand-ins for the bound file tools, and fail if the two
+                                      outcomes differ; needs no golden; `--tier all` as for
+                                      `check`
     conformance.py record             run the oracle twice per case (`--runs 1` for one) and
                                       rewrite goldens for the selected cases; refuses a case its
                                       runs disagree on
@@ -289,12 +290,12 @@ def run_ours(case, wasm, wasmtime, base, cache):
     return run_shell(case, wasm, wasmtime, base, cache)[0]
 
 
-def run_shell(case, wasm, wasmtime, base, cache, forward_file_reads=False):
+def run_shell(case, wasm, wasmtime, base, cache, file_tools=False):
     """Run one case in the wasm shell with a fresh root.
 
-    Returns its outcome and, with `forward_file_reads`, the number of reads that the example's
-    probe file reader served (otherwise None). The reader is switched on with an argument, not
-    with a variable, so scripts never see it.
+    Returns its outcome and, with `file_tools`, how many times each stand-in of the example for a
+    bound file tool did its work (otherwise None). The stand-ins are switched on with an
+    argument, not with a variable, so scripts never see them.
     """
     root = pathlib.Path(tempfile.mkdtemp(dir=base))
     if not case.options.get("no_tmp"):
@@ -308,8 +309,8 @@ def run_shell(case, wasm, wasmtime, base, cache, forward_file_reads=False):
     for key, value in GOLEM_ENV.items():
         command += ["--env", f"{key}={value}"]
     command += [str(wasm), "--status-file", "/.conformance/status"]
-    if forward_file_reads:
-        command += ["--forward-file-reads", "/.conformance/forwarded-reads"]
+    if file_tools:
+        command += ["--file-tools", "/.conformance/file-tools"]
     calls = split_calls(case.script)
     if len(calls) > 1:
         # The example carries each call's final directory itself; the markers' are the oracle's.
@@ -318,13 +319,13 @@ def run_shell(case, wasm, wasmtime, base, cache, forward_file_reads=False):
         command.append(case.script)
     result = subprocess.run(command, capture_output=True, timeout=case.timeout)
     outcome = wasm_outcome(result, report)
-    if not forward_file_reads:
+    if not file_tools:
         return outcome, None
     try:
-        reads = int(report.with_name("forwarded-reads").read_text(encoding="ascii"))
+        served = parse_file_tool_report(report.with_name("file-tools").read_text(encoding="ascii"))
     except (OSError, ValueError) as error:
-        raise ValueError(f"missing or invalid report of forwarded reads: {error}") from error
-    return outcome, reads
+        raise ValueError(f"missing or invalid report of the file tool stand-ins: {error}") from error
+    return outcome, served
 
 
 # --- The oracle ---------------------------------------------------------------------------------
@@ -621,58 +622,85 @@ def command_check(args, cases):
     return compare_ours(args, cases, expectation)
 
 
-def uses_cat(script):
-    """Whether a script names the command `cat`. A match inside a longer word does not count."""
-    return re.search(r"(?<![\w-])cat(?![\w-])", script) is not None
+# The local commands that give part of their work to a bound file tool: for each kind of work
+# that the example's stand-ins count, the command that does it.
+FILE_TOOL_COMMANDS = {"reads": "cat", "writes": "tee"}
+
+
+def forwarded_work(script):
+    """The kinds of work that a script can give to a file tool: those whose command the script
+    names. A match inside a longer word does not count."""
+    return {
+        kind
+        for kind, command in FILE_TOOL_COMMANDS.items()
+        if re.search(rf"(?<![\w-]){re.escape(command)}(?![\w-])", script)
+    }
+
+
+def parse_file_tool_report(text):
+    """The report of the example's stand-ins: one line `KIND COUNT` for each kind of work."""
+    served = {}
+    for line in text.splitlines():
+        kind, count = line.split()
+        served[kind] = int(count)
+    if not served:
+        raise ValueError("no count")
+    return served
 
 
 def forwarding_verdict(plain, forwarded, plain_again):
-    """Judge one case of `forward` from its outcome without a file reader and with one.
+    """Judge one case of `forward` from its outcome without the stand-ins and with them.
 
-    When the two differ, the case ran once more without the reader (`plain_again`). A case whose
-    two plain runs differ answers differently from run to run by itself, so it says nothing about
-    the reader: it is `unstable`, not `different`.
+    When the two differ, the case ran once more without the stand-ins (`plain_again`). A case
+    whose two plain runs differ answers differently from run to run by itself, so it says nothing
+    about the stand-ins: it is `unstable`, not `different`.
     """
     if forwarded == plain:
         return "same"
     return "different" if plain_again == plain else "unstable"
 
 
-def forwarding_passes(cases, different, reads):
-    """`forward` passes when no case differs and, if any case ran, the reader served a read: a run
-    in which the reader was never asked compares nothing."""
-    return different == 0 and (reads > 0 or cases == 0)
+def forwarding_passes(different, cases, served):
+    """`forward` passes when no case differs and each stand-in whose command a case names did its
+    work: a run in which a stand-in was never asked compares nothing for its command. `cases` and
+    `served` have one count for each kind of work."""
+    return different == 0 and all(served.get(kind, 0) > 0 for kind, count in cases.items() if count)
 
 
 def command_forward(args, cases):
-    """Run each case that uses `cat` without and with the example's probe file reader.
+    """Run each case that uses `cat` or `tee` without and with the example's stand-ins for the
+    bound file tools.
 
-    With the reader, `cat` takes the content of a regular file from it and no longer reads the
-    file itself. A script must not see that: status, stdout and stderr must be equal to the run
-    without the reader. This needs no golden and no oracle.
+    With the stand-ins, `cat` takes the content of a regular file from a file reader, and `tee`
+    gives the content of a file to a file writer. A script must not see that: status, stdout and
+    stderr must be equal to the run without the stand-ins. This needs no golden and no oracle.
     """
-    cases = [case for case in cases if uses_cat(case.script)]
+    cases = [case for case in cases if forwarded_work(case.script)]
+    using = {
+        kind: sum(kind in forwarded_work(case.script) for case in cases)
+        for kind in FILE_TOOL_COMMANDS
+    }
     wasm = args.wasm.resolve()
     counts = {"same": 0, "different": 0, "unstable": 0, "skipped": 0}
-    reads = 0
+    served = dict.fromkeys(FILE_TOOL_COMMANDS, 0)
     with tempfile.TemporaryDirectory(prefix="golem-conformance-") as directory:
         base = pathlib.Path(directory)
         cache = base / "cache.toml"
         cache.write_text('[cache]\ndirectory = "' + str(base / "cache") + '"\n')
 
-        def run(case, forward_file_reads=False):
-            return run_shell(case, wasm, args.wasmtime, base, cache, forward_file_reads)
+        def run(case, file_tools=False):
+            return run_shell(case, wasm, args.wasmtime, base, cache, file_tools)
 
         def one(case):
-            """The verdict for a case, the line to print for it, and the reads that were served."""
+            """The verdict for a case, the line to print for it, and the work that was served."""
             try:
                 plain, _ = run(case)
             except (subprocess.TimeoutExpired, ValueError) as error:
-                return "skipped", f"SKIP {case.name}: no outcome without the reader: {error}", 0
+                return "skipped", f"SKIP {case.name}: no outcome without the stand-ins: {error}", {}
             try:
-                forwarded, served = run(case, forward_file_reads=True)
+                forwarded, work = run(case, file_tools=True)
             except (subprocess.TimeoutExpired, ValueError) as error:
-                return "different", f"FAIL {case.name}: no outcome with the reader: {error}", 0
+                return "different", f"FAIL {case.name}: no outcome with the stand-ins: {error}", {}
             again = None
             if forwarded != plain:
                 try:
@@ -682,25 +710,27 @@ def command_forward(args, cases):
             verdict = forwarding_verdict(plain, forwarded, again)
             line = {
                 "same": f"PASS {case.name}",
-                "unstable": f"UNSTABLE {case.name}: its outcome without the reader differs between runs",
-                "different": f"FAIL {case.name} without the reader {plain!r} with the reader {forwarded!r}",
+                "unstable": f"UNSTABLE {case.name}: its outcome without the stand-ins differs between runs",
+                "different": f"FAIL {case.name} without the stand-ins {plain!r} with the stand-ins {forwarded!r}",
             }[verdict]
-            return verdict, line, served
+            return verdict, line, work
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
-            for verdict, line, served in pool.map(one, cases):
+            for verdict, line, work in pool.map(one, cases):
                 counts[verdict] += 1
-                reads += served
+                for kind, count in work.items():
+                    served[kind] = served.get(kind, 0) + count
                 print(line, flush=True)
     print(
-        f"{counts['different']} differences of {len(cases)} cases that use cat "
-        f"({counts['unstable']} unstable, {counts['skipped']} skipped); "
-        f"the file reader served {reads} reads",
+        f"{counts['different']} differences of {len(cases)} cases "
+        f"({counts['unstable']} unstable, {counts['skipped']} skipped)",
         flush=True,
     )
-    if cases and reads == 0:
-        print("the file reader served no read, so the run compared nothing", flush=True)
-    return forwarding_passes(len(cases), counts["different"], reads)
+    for kind, command in FILE_TOOL_COMMANDS.items():
+        print(f"{command}: {using[kind]} cases, the stand-in served {served[kind]} {kind}", flush=True)
+        if using[kind] and not served[kind]:
+            print(f"the stand-in served no {kind}, so the run compared nothing for {command}", flush=True)
+    return forwarding_passes(counts["different"], using, served)
 
 
 def command_live(args, cases):

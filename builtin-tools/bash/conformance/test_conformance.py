@@ -194,11 +194,22 @@ class CallTests(unittest.TestCase):
 class ForwardTests(unittest.TestCase):
     PLAIN = (0, b"a\n", b"")
 
-    def test_a_script_uses_cat_only_as_a_whole_word(self):
+    def test_a_script_names_a_command_only_as_a_whole_word(self):
         for script in ["cat f", "x=$(cat f)", "seq 3 | cat", "/bin/cat f", "cat<f"]:
-            self.assertTrue(HARNESS.uses_cat(script), script)
-        for script in ["concatenate", "catalog f", "echo bobcat", "zcat f"]:
-            self.assertFalse(HARNESS.uses_cat(script), script)
+            self.assertEqual({"reads"}, HARNESS.forwarded_work(script), script)
+        for script in ["echo x | tee f", "tee -a f <<< x", "x=$(echo a|tee f)", "/bin/tee f"]:
+            self.assertEqual({"writes"}, HARNESS.forwarded_work(script), script)
+        for script in ["concatenate", "catalog f", "echo bobcat", "zcat f", "guarantee", "teeth"]:
+            self.assertEqual(set(), HARNESS.forwarded_work(script), script)
+        self.assertEqual({"reads", "writes"}, HARNESS.forwarded_work("cat f | tee g"))
+
+    def test_the_report_of_the_stand_ins_is_one_count_for_each_kind_of_work(self):
+        self.assertEqual(
+            {"reads": 3, "writes": 0}, HARNESS.parse_file_tool_report("reads 3\nwrites 0\n")
+        )
+        for text in ["", "reads\n", "reads x\n", "reads 1 2\n"]:
+            with self.assertRaises(ValueError, msg=repr(text)):
+                HARNESS.parse_file_tool_report(text)
 
     def test_equal_outcomes_are_the_same(self):
         self.assertEqual("same", HARNESS.forwarding_verdict(self.PLAIN, self.PLAIN, None))
@@ -215,11 +226,16 @@ class ForwardTests(unittest.TestCase):
             HARNESS.forwarding_verdict((0, b"1\n", b""), (0, b"2\n", b""), (0, b"3\n", b"")),
         )
 
-    def test_a_run_passes_only_without_differences_and_with_reads(self):
-        self.assertTrue(HARNESS.forwarding_passes(cases=3, different=0, reads=5))
-        self.assertFalse(HARNESS.forwarding_passes(cases=3, different=1, reads=5))
-        self.assertFalse(HARNESS.forwarding_passes(cases=3, different=0, reads=0))
-        self.assertTrue(HARNESS.forwarding_passes(cases=0, different=0, reads=0))
+    def test_a_run_passes_only_without_differences_and_with_work_for_each_command_of_its_cases(self):
+        passes = HARNESS.forwarding_passes
+        cases = {"reads": 3, "writes": 2}
+        self.assertTrue(passes(0, cases, {"reads": 5, "writes": 1}))
+        self.assertFalse(passes(1, cases, {"reads": 5, "writes": 1}))
+        self.assertFalse(passes(0, cases, {"reads": 5, "writes": 0}))
+        self.assertFalse(passes(0, cases, {"reads": 0, "writes": 4}))
+        self.assertFalse(passes(0, cases, {"reads": 5}))
+        self.assertTrue(passes(0, {"reads": 3, "writes": 0}, {"reads": 5, "writes": 0}))
+        self.assertTrue(passes(0, {"reads": 0, "writes": 0}, {}))
 
 
 if __name__ == "__main__":

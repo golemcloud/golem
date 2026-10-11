@@ -4,7 +4,8 @@
     reason = "acceptance fixture metadata is fixed and validated"
 )]
 use bash_shell::commands::{
-    CommandDescriptor, CommandFuture, CommandInvoker, CommandOutput, FileReader, PreparedCommand,
+    CommandDescriptor, CommandFuture, CommandInvoker, CommandOutput, FileReader, FileWriter,
+    PreparedCommand,
 };
 use brush_core::builtins::{ContentOptions, ContentType, SimpleCommand};
 use brush_core::commands::ExecutionContext;
@@ -22,8 +23,9 @@ use std::{
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static LEGACY_EXECUTIONS: AtomicUsize = AtomicUsize::new(0);
 static FORWARDED_READS: AtomicUsize = AtomicUsize::new(0);
-/// The largest file the probe file reader answers for, as for the tool's own reader.
-const MAX_FORWARDED_BYTES: u64 = 1024 * 1024;
+static FORWARDED_WRITES: AtomicUsize = AtomicUsize::new(0);
+/// The largest file that a stand-in for a file tool takes, as for the tool's own limit.
+const MAX_FORWARDED_BYTES: usize = 1024 * 1024;
 const COMPLETION_MARKER: &str = "/tmp/probe-completed";
 struct PendingCall;
 impl Drop for PendingCall {
@@ -137,6 +139,11 @@ impl PreparedCommand for Prepared {
         })
     }
 }
+/// Whether the file tools take `path`: it is UTF-8 and has no parent component.
+fn tool_path(path: &Path) -> bool {
+    path.to_str().is_some() && !path.components().any(|part| part == Component::ParentDir)
+}
+
 /// A file reader that answers as one that asks the `read-file` tool: each byte of a text file,
 /// and nothing for a path with a parent component, a file above the size limit, and content that
 /// has a NUL byte or is not UTF-8.
@@ -144,10 +151,7 @@ struct ProbeFileReader;
 
 impl FileReader for ProbeFileReader {
     fn read(&self, path: &Path, len: u64) -> Option<Vec<u8>> {
-        if len > MAX_FORWARDED_BYTES
-            || path.to_str().is_none()
-            || path.components().any(|part| part == Component::ParentDir)
-        {
+        if len > MAX_FORWARDED_BYTES as u64 || !tool_path(path) {
             return None;
         }
         let bytes = std::fs::read(path).ok()?;
@@ -159,14 +163,42 @@ impl FileReader for ProbeFileReader {
     }
 }
 
-/// Gives the session the probe file reader.
-pub(super) fn forward_file_reads(session: &mut bash_shell::session::Session) {
-    session.forward_file_reads(Arc::new(ProbeFileReader));
+/// A file writer that answers as one that asks the `write-file` tool: it makes a text the
+/// content of the file, and it refuses a path with a parent component, content above the size
+/// limit, and content that is not UTF-8.
+struct ProbeFileWriter;
+
+impl FileWriter for ProbeFileWriter {
+    fn max_len(&self) -> usize {
+        MAX_FORWARDED_BYTES
+    }
+
+    fn write(&self, path: &Path, content: &[u8]) -> bool {
+        if content.len() > MAX_FORWARDED_BYTES
+            || !tool_path(path)
+            || std::str::from_utf8(content).is_err()
+            || std::fs::write(path, content).is_err()
+        {
+            return false;
+        }
+        FORWARDED_WRITES.fetch_add(1, Ordering::SeqCst);
+        true
+    }
 }
 
-/// How many reads the probe file reader served.
-pub(super) fn forwarded_reads() -> usize {
-    FORWARDED_READS.load(Ordering::SeqCst)
+/// Gives the session a stand-in for each bound file tool that a local command uses.
+pub(super) fn use_file_tools(session: &mut bash_shell::session::Session) {
+    session.forward_file_reads(Arc::new(ProbeFileReader));
+    session.forward_file_writes(Arc::new(ProbeFileWriter));
+}
+
+/// How many times each stand-in did its work: one line `KIND COUNT` for each kind of work.
+pub(super) fn file_tool_report() -> String {
+    format!(
+        "reads {}\nwrites {}\n",
+        FORWARDED_READS.load(Ordering::SeqCst),
+        FORWARDED_WRITES.load(Ordering::SeqCst)
+    )
 }
 
 pub(super) fn install(session: &mut bash_shell::session::Session) {
