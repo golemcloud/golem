@@ -1618,6 +1618,64 @@ struct CancelTesterImpl {
     _name: String,
 }
 
+#[agent_definition(mode = "ephemeral")]
+pub trait EphemeralRpcCaller {
+    fn new(name: String) -> Self;
+
+    async fn await_counter(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+        asynchronous: bool,
+    ) -> u64;
+}
+
+struct EphemeralRpcCallerImpl;
+
+#[agent_implementation]
+impl EphemeralRpcCaller for EphemeralRpcCallerImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+
+    async fn await_counter(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+        asynchronous: bool,
+    ) -> u64 {
+        await_counter_result(counter_name, promise_id, asynchronous).await
+    }
+}
+
+async fn await_counter_result(
+    counter_name: String,
+    promise_id: PromiseId,
+    asynchronous: bool,
+) -> u64 {
+    let rpc = WasmRpc::new(
+        "RpcBlockingCounter",
+        encode_single_parameter(counter_name),
+        None,
+        Vec::new(),
+    );
+    let input = encode_single_parameter(promise_id);
+    let result = if asynchronous {
+        rpc.async_invoke_and_await("inc_after_promise", input, None)
+            .future
+            .get()
+            .await
+            .unwrap()
+            .unwrap()
+    } else {
+        rpc.invoke_and_await("inc_after_promise", input, None)
+            .unwrap()
+            .result
+            .unwrap()
+    };
+    u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+}
+
 #[agent_implementation]
 impl RpcAuthTester for RpcAuthTesterImpl {
     fn new(name: String) -> Self {
@@ -1752,27 +1810,7 @@ impl CancelTester for CancelTesterImpl {
         promise_id: PromiseId,
         asynchronous: bool,
     ) -> u64 {
-        let rpc = WasmRpc::new(
-            "RpcBlockingCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
-        let input = encode_single_parameter(promise_id);
-        let result = if asynchronous {
-            rpc.async_invoke_and_await("inc_after_promise", input, None)
-                .future
-                .get()
-                .await
-                .unwrap()
-                .unwrap()
-        } else {
-            rpc.invoke_and_await("inc_after_promise", input, None)
-                .unwrap()
-                .result
-                .unwrap()
-        };
-        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+        await_counter_result(counter_name, promise_id, asynchronous).await
     }
 
     async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64 {

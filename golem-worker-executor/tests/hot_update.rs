@@ -648,39 +648,14 @@ async fn snapshot_after_auto_update_recovers_with_updated_component_context(
         )
         .await?;
 
-    let snapshots_before_invocation = executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await?
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-    let before_snapshot = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "loaded_snapshot_revision",
-            data_value!(),
-        )
+    let revision_before_snapshot = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
         .await?;
-    assert_eq!(before_snapshot.into_typed::<u32>()?, 0);
+    assert_eq!(revision_before_snapshot.into_typed::<u32>()?, 2);
 
     // Automatic snapshot creation is queued after the invocation result is published.
-    let snapshot_count = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let count = executor
-                .get_oplog(&worker_id, OplogIndex::INITIAL)
-                .await?
-                .iter()
-                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-                .count();
-            if count > snapshots_before_invocation {
-                break Ok::<_, anyhow::Error>(count);
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
-    assert_eq!(snapshot_count, snapshots_before_invocation + 1);
+    let invocation_start = last_start_of(&executor, &worker_id, "revision_two_only").await?;
+    wait_for_snapshot_after(&executor, &worker_id, invocation_start).await?;
 
     drop(executor);
     let executor = start_with_snapshot_policy(

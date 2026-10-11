@@ -20,7 +20,7 @@
 //! over RPC.
 
 use crate::Tracing;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_type::SchemaType;
@@ -1851,9 +1851,11 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     let control_entries = executor
         .get_oplog(&control_worker_id, OplogIndex::INITIAL)
         .await?;
+    // Initialization memory-growth hints are persisted asynchronously and can land after the baseline.
     let single_invocation_entries = control_entries
         .iter()
         .filter(|entry| entry.oplog_index > control_before)
+        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
         .count();
 
     let agent_id = agent_id!(
@@ -1886,8 +1888,46 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     let appended = entries
         .iter()
         .filter(|entry| entry.oplog_index > before)
+        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
         .count();
     let (started, finished) = count_agent_invocation_pair_since(&entries, before);
+    for (label, baseline, history) in [
+        ("control", control_before, &control_entries),
+        ("coalesced", before, &entries),
+    ] {
+        eprintln!(
+            "READONLY_ENTRY_BOUNDARY worker={label} baseline={baseline} entries={}",
+            history.len()
+        );
+        for entry in history {
+            match serde_json::to_value(&entry.entry) {
+                Ok(record) => eprintln!(
+                    "READONLY_ENTRY worker={label} index={} suffix={} kind={:?} timestamp={:?} key={:?} growth_bytes={:?} function={:?} parent_start={:?} start={:?} invocation_id={:?} method={:?}",
+                    entry.oplog_index,
+                    entry.oplog_index > baseline,
+                    record.get("type"),
+                    record.get("timestamp"),
+                    record
+                        .get("invocation")
+                        .and_then(|invocation| invocation.get("idempotencyKey")),
+                    record.get("delta"),
+                    record.get("functionName"),
+                    record.get("parentStartIndex"),
+                    record.get("startIndex"),
+                    record.get("invocationId"),
+                    record.get("methodName"),
+                ),
+                Err(_) => eprintln!(
+                    "READONLY_ENTRY worker={label} index={} suffix={} diagnostic_serialization_failed=true",
+                    entry.oplog_index,
+                    entry.oplog_index > baseline,
+                ),
+            }
+        }
+    }
+    eprintln!(
+        "READONLY_ENTRY_COUNTS control={single_invocation_entries} coalesced={appended} started={started} finished={finished}"
+    );
     assert_eq!((started, finished), (1, 1));
     assert_eq!(
         appended, single_invocation_entries,

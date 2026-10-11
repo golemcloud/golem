@@ -3773,16 +3773,31 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     });
                     let task_result = {
                         let mut guard = task.lock().await;
+                        #[cfg(feature = "test-utils")]
+                        let observer = accessor.with(|mut access| {
+                            access
+                                .get()
+                                .public_state
+                                .worker()
+                                .rpc_result_observer_for_test(handle.start_index())
+                        });
                         tokio::select! {
                             biased;
                             _ = cancel_token.cancelled() => None,
                             result = async {
+                                let ready = async {
+                                    #[cfg(feature = "test-utils")]
+                                    if let Some(observer) = observer {
+                                        return observer.observe(&mut *guard).await;
+                                    }
+                                    (&mut *guard).await
+                                };
                                 match rpc_wait {
-                                    Some(wait) => wait.wait_result(&mut *guard, interrupt_signal).await,
+                                    Some(wait) => wait.wait_result(ready, interrupt_signal).await,
                                     None => tokio::select! {
                                         biased;
                                         kind = interrupt_signal => Err(kind),
-                                        result = &mut *guard => Ok(result),
+                                        result = ready => Ok(result),
                                     },
                                 }
                             } => match result {

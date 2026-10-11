@@ -35,6 +35,20 @@ pub trait HttpClient4 {
     /// Sends a GET request and reads the response body in chunks.
     async fn get_and_read_body_chunked(&self) -> String;
 
+    /// Awaits response headers, then consumes the complete body without a guest timeout.
+    async fn get_for_header_wait(&self, url: String) -> String;
+
+    /// Waits for response headers using the synchronous WASI HTTP P2 response poll.
+    fn get_for_p2_header_wait(&self, authority: String) -> String;
+
+    /// Reads one response-body byte, then blocks on the remainder without a guest timeout.
+    fn get_for_p2_body_wait(&self, authority: String) -> String;
+
+    /// Reads one byte, then blocks while skipping the second response-body byte.
+    fn get_for_p2_body_skip(&self, authority: String) -> String;
+
+    /// Reads a streamed response to EOF without a guest timeout.
+    async fn get_for_body_wait(&self, url: String) -> String;
     /// Sends a raw P2 GET, reads one byte, then blocking-reads the rest.
     fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String;
 
@@ -177,6 +191,174 @@ pub trait HttpClient4 {
     async fn get_in_spawned_task_after_return(&self) -> String;
 }
 
+#[agent_definition(mode = "ephemeral")]
+pub trait EphemeralHttpClient4 {
+    fn new() -> Self;
+
+    /// Awaits response headers, then consumes the complete body without a guest timeout.
+    async fn get_for_header_wait(&self, url: String) -> String;
+
+    /// Waits for response headers using the synchronous WASI HTTP P2 response poll.
+    fn get_for_p2_header_wait(&self, authority: String) -> String;
+
+    /// Reads one response-body byte, then blocks on the remainder without a guest timeout.
+    fn get_for_p2_body_wait(&self, authority: String) -> String;
+
+    /// Reads one byte, then blocks while skipping the second response-body byte.
+    fn get_for_p2_body_skip(&self, authority: String) -> String;
+
+    /// Reads a streamed response to EOF without a guest timeout.
+    async fn get_for_body_wait(&self, url: String) -> String;
+}
+
+struct EphemeralHttpClient4Impl;
+
+#[agent_implementation]
+impl EphemeralHttpClient4 for EphemeralHttpClient4Impl {
+    fn new() -> Self {
+        Self
+    }
+
+    async fn get_for_header_wait(&self, url: String) -> String {
+        do_get_for_header_wait(url).await
+    }
+
+    fn get_for_p2_header_wait(&self, authority: String) -> String {
+        do_get_for_p2_header_wait(authority)
+    }
+
+    fn get_for_p2_body_wait(&self, authority: String) -> String {
+        do_get_for_p2_body_wait(authority)
+    }
+
+    fn get_for_p2_body_skip(&self, authority: String) -> String {
+        do_get_for_p2_body_skip(authority)
+    }
+
+    async fn get_for_body_wait(&self, url: String) -> String {
+        do_get_for_body_wait(url).await
+    }
+}
+
+fn do_get_for_p2_body_wait(authority: String) -> String {
+    use wasi::http::{outgoing_handler, types};
+    use wasi::io::streams::StreamError;
+
+    let request = types::OutgoingRequest::new(types::Fields::new());
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request.set_authority(Some(&authority)).unwrap();
+    request.set_path_with_query(Some("/body-wait")).unwrap();
+    types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
+    let response = outgoing_handler::handle(request, None).unwrap();
+    let headers = loop {
+        match response.get() {
+            Some(Ok(Ok(headers))) => break headers,
+            Some(Ok(Err(error))) => panic!("HTTP response failed: {error:?}"),
+            Some(Err(error)) => panic!("HTTP response failed: {error:?}"),
+            None => {
+                let pollable = response.subscribe();
+                let _ = wasi::io::poll::poll(&[&pollable]);
+            }
+        }
+    };
+    let status = headers.status();
+    let body = headers.consume().unwrap();
+    let stream = body.stream().unwrap();
+    let first = stream.blocking_read(1).unwrap();
+    assert_eq!(first, b"h");
+    let mut rest = Vec::new();
+    loop {
+        match stream.blocking_read(1) {
+            Ok(bytes) => rest.extend_from_slice(&bytes),
+            Err(StreamError::Closed) => break,
+            Err(error) => panic!("P2 body read failed: {error:?}"),
+        }
+    }
+    format!("{status} h{}", String::from_utf8_lossy(&rest))
+}
+
+fn do_get_for_p2_body_skip(authority: String) -> String {
+    use wasi::http::{outgoing_handler, types};
+    use wasi::io::streams::StreamError;
+
+    let request = types::OutgoingRequest::new(types::Fields::new());
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request.set_authority(Some(&authority)).unwrap();
+    request.set_path_with_query(Some("/body-wait")).unwrap();
+    types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
+    let response = outgoing_handler::handle(request, None).unwrap();
+    let headers = loop {
+        match response.get() {
+            Some(Ok(Ok(headers))) => break headers,
+            Some(Ok(Err(error))) => panic!("HTTP response failed: {error:?}"),
+            Some(Err(error)) => panic!("HTTP response failed: {error:?}"),
+            None => {
+                let pollable = response.subscribe();
+                let _ = wasi::io::poll::poll(&[&pollable]);
+            }
+        }
+    };
+    let status = headers.status();
+    let body = headers.consume().unwrap();
+    let stream = body.stream().unwrap();
+    assert_eq!(stream.blocking_read(1).unwrap(), b"h");
+    let skipped = stream.blocking_skip(1).unwrap();
+    assert_eq!(skipped, 1);
+    assert!(matches!(stream.blocking_read(1), Err(StreamError::Closed)));
+    format!("{status} h skipped {skipped}")
+}
+
+async fn do_get_for_body_wait(url: String) -> String {
+    let response = wasi_fetch::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .expect("Request failed");
+    let status = response.status().as_u16();
+    let mut stream = response.into_body();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.chunk().await {
+        body.extend_from_slice(&chunk);
+    }
+    format!("{status} {}", String::from_utf8_lossy(&body))
+}
+
+fn do_get_for_p2_header_wait(authority: String) -> String {
+    use wasi::http::{outgoing_handler, types};
+
+    let request = types::OutgoingRequest::new(types::Fields::new());
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request.set_authority(Some(&authority)).unwrap();
+    request.set_path_with_query(Some("/header-wait")).unwrap();
+    types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
+    let response = outgoing_handler::handle(request, None).unwrap();
+    loop {
+        match response.get() {
+            Some(Ok(Ok(headers))) => return headers.status().to_string(),
+            Some(Ok(Err(error))) => panic!("HTTP response failed: {error:?}"),
+            Some(Err(error)) => panic!("HTTP response failed: {error:?}"),
+            None => {
+                let pollable = response.subscribe();
+                let _ = wasi::io::poll::poll(&[&pollable]);
+            }
+        }
+    }
+}
+
+async fn do_get_for_header_wait(url: String) -> String {
+    let response = wasi_fetch::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .expect("Request failed");
+    let status = response.status().as_u16();
+    let body = response.into_body().bytes().await;
+    format!("{status} {}", String::from_utf8_lossy(&body))
+}
+
 struct HttpClient4Impl {
     last_send_error: Option<String>,
     last_full_response: Option<String>,
@@ -256,6 +438,26 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn get_and_read_body_chunked(&self) -> String {
         do_get_chunked_read().await
+    }
+
+    async fn get_for_header_wait(&self, url: String) -> String {
+        do_get_for_header_wait(url).await
+    }
+
+    fn get_for_p2_header_wait(&self, authority: String) -> String {
+        do_get_for_p2_header_wait(authority)
+    }
+
+    fn get_for_p2_body_wait(&self, authority: String) -> String {
+        do_get_for_p2_body_wait(authority)
+    }
+
+    fn get_for_p2_body_skip(&self, authority: String) -> String {
+        do_get_for_p2_body_skip(authority)
+    }
+
+    async fn get_for_body_wait(&self, url: String) -> String {
+        do_get_for_body_wait(url).await
     }
 
     fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String {

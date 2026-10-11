@@ -21,6 +21,7 @@ use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{UpdateMode, log_event};
 use golem_common::model::account::AccountId;
+use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
@@ -37,16 +38,23 @@ use golem_common::model::{
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
 use golem_common::{agent_id, data_value};
+use golem_service_base::clients::registry::{
+    RegistryService, RegistryServiceError, ResourceUsageUpdate,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::{AccountResourceLimits, MonthlyResourcePolicy};
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, join_blob_key};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{
-    AgentResult, drain_connection, stdout_event_matching, stdout_events,
+    AgentResult, count_agent_invocation_pair_since, drain_connection, stdout_event_matching,
+    stdout_events,
 };
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::FilesystemStorageMode;
+use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
+use golem_worker_executor::services::resource_limits::{ResourceLimits, ResourceLimitsGrpc};
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::{
@@ -56,7 +64,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, fake_ownership, registry_test_card, start,
     start_customized, start_with_overrides, start_with_redis_storage,
-    take_agent_oplog_over_at_epoch,
+    start_with_resource_limits_and_configure, take_agent_oplog_over_at_epoch,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -71,6 +79,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::sync::Semaphore;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -87,6 +96,492 @@ inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("large_dynamic_memory")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_rust_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_rust_caller")]
+    PrecompiledComponent
+);
+#[derive(Clone, Copy, Debug)]
+enum IntegrationExhaustion {
+    Compute,
+    Memory,
+    DurableStorage,
+    EphemeralStorage,
+}
+
+struct MutableResourceLimitsRegistry {
+    limits: Mutex<golem_service_base::model::ResourceLimits>,
+    delayed_policy: Mutex<Option<DelayedPolicy>>,
+    applied_updates: Mutex<Vec<ResourceUsageUpdate>>,
+}
+
+struct DelayedPolicy {
+    limits: golem_service_base::model::ResourceLimits,
+    started: Arc<Semaphore>,
+    release: Arc<Semaphore>,
+}
+
+impl MutableResourceLimitsRegistry {
+    fn new(policy: MonthlyResourcePolicy) -> Self {
+        Self {
+            limits: Mutex::new(resource_limits_response(policy, 0)),
+            delayed_policy: Mutex::new(None),
+            applied_updates: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn set_policy(&self, policy: MonthlyResourcePolicy) {
+        let mut limits = self.limits.lock().unwrap();
+        assert_eq!(
+            policy.mode, limits.monthly_policy.mode,
+            "ordinary policy updates cannot change the owner consent mode"
+        );
+        limits.monthly_policy = policy;
+        limits.monthly_policy_revision += 1;
+    }
+
+    fn set_max_memory_per_worker(&self, max_memory_per_worker: u64) {
+        self.limits.lock().unwrap().max_memory_per_worker = max_memory_per_worker;
+    }
+
+    fn applied_updates(&self) -> Vec<ResourceUsageUpdate> {
+        self.applied_updates.lock().unwrap().clone()
+    }
+
+    fn applied_memory_byte_nanoseconds(&self) -> u128 {
+        self.applied_updates()
+            .into_iter()
+            .map(|update| {
+                (update.memory_gb_seconds_delta.max(0) as u128)
+                    .saturating_mul(
+                        golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND,
+                    )
+                    .saturating_add(update.memory_byte_nanoseconds_remainder as u128)
+            })
+            .sum()
+    }
+
+    fn applied_memory_byte_nanoseconds_at_revision(&self, revision: u64) -> u128 {
+        self.applied_updates()
+            .into_iter()
+            .filter(|update| update.monthly_policy_revision == revision)
+            .map(|update| {
+                (update.memory_gb_seconds_delta.max(0) as u128)
+                    .saturating_mul(
+                        golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND,
+                    )
+                    .saturating_add(update.memory_byte_nanoseconds_remainder as u128)
+            })
+            .sum()
+    }
+
+    fn delay_next_policy(&self, policy: MonthlyResourcePolicy) -> (Arc<Semaphore>, Arc<Semaphore>) {
+        let limits = self.limits.lock().unwrap();
+        assert_eq!(
+            policy.mode, limits.monthly_policy.mode,
+            "ordinary policy updates cannot change the owner consent mode"
+        );
+        let started = Arc::new(Semaphore::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let mut delayed_limits = limits.clone();
+        delayed_limits.monthly_policy = policy;
+        delayed_limits.monthly_policy_revision += 1;
+        let delayed = DelayedPolicy {
+            limits: delayed_limits,
+            started: started.clone(),
+            release: release.clone(),
+        };
+        assert!(
+            self.delayed_policy
+                .lock()
+                .unwrap()
+                .replace(delayed)
+                .is_none(),
+            "only one delayed policy may be pending"
+        );
+        (started, release)
+    }
+
+    fn current_limits(&self) -> golem_service_base::model::ResourceLimits {
+        self.limits.lock().unwrap().clone()
+    }
+
+    fn monthly_usage_mode_revision(&self) -> u64 {
+        self.limits.lock().unwrap().monthly_usage_mode_revision
+    }
+}
+
+fn resource_limits_response(
+    monthly_policy: MonthlyResourcePolicy,
+    monthly_usage_mode_revision: u64,
+) -> golem_service_base::model::ResourceLimits {
+    golem_service_base::model::ResourceLimits {
+        available_blob_storage_bytes: u64::MAX,
+        monthly_policy,
+        max_memory_per_worker: u64::MAX,
+        max_table_elements_per_worker: u64::MAX,
+        max_disk_space_per_worker: u64::MAX,
+        per_invocation_http_call_limit: u64::MAX,
+        per_invocation_rpc_call_limit: u64::MAX,
+        available_http_calls: u64::MAX,
+        available_rpc_calls: u64::MAX,
+        max_concurrent_agents_per_executor: u64::MAX,
+        oplog_writes_per_second: u64::MAX,
+        usage_update_applied: true,
+        monthly_usage_mode_revision,
+        monthly_policy_revision: monthly_usage_mode_revision,
+    }
+}
+
+#[async_trait]
+impl RegistryService for MutableResourceLimitsRegistry {
+    async fn authenticate_token(
+        &self,
+        _token: &golem_common::model::auth::TokenSecret,
+    ) -> Result<AuthCtx, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_resource_limits(
+        &self,
+        _account_id: AccountId,
+    ) -> Result<golem_service_base::model::ResourceLimits, RegistryServiceError> {
+        Ok(self.current_limits())
+    }
+
+    async fn update_worker_connection_limit(
+        &self,
+        _account_id: AccountId,
+        _agent_id: &AgentId,
+        _added: bool,
+    ) -> Result<(), RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn batch_update_resource_usage(
+        &self,
+        updates: HashMap<AccountId, ResourceUsageUpdate>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError> {
+        self.applied_updates
+            .lock()
+            .unwrap()
+            .extend(updates.values().copied());
+        let delayed = self.delayed_policy.lock().unwrap().take();
+        let limits = if let Some(delayed) = delayed {
+            delayed.started.add_permits(1);
+            delayed.release.acquire().await.unwrap().forget();
+            *self.limits.lock().unwrap() = delayed.limits.clone();
+            delayed.limits
+        } else {
+            self.current_limits()
+        };
+        Ok(AccountResourceLimits(
+            updates
+                .into_keys()
+                .map(|account_id| (account_id, limits.clone()))
+                .collect(),
+        ))
+    }
+
+    async fn download_component(
+        &self,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Vec<u8>, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_component_metadata(
+        &self,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<golem_service_base::model::component::Component, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_deployed_component_metadata(
+        &self,
+        _component_id: ComponentId,
+    ) -> Result<golem_service_base::model::component::Component, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_all_deployed_component_revisions(
+        &self,
+        _component_id: ComponentId,
+    ) -> Result<Vec<golem_service_base::model::component::Component>, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn resolve_component(
+        &self,
+        _resolving_account_id: AccountId,
+        _resolving_application_id: golem_common::model::application::ApplicationId,
+        _resolving_environment_id: EnvironmentId,
+        _component_slug: &str,
+    ) -> Result<golem_service_base::model::component::Component, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_all_agent_types(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Vec<golem_common::model::agent::RegisteredAgentType>, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_agent_type(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+        _name: &golem_common::model::agent::AgentTypeName,
+    ) -> Result<golem_common::model::agent::RegisteredAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+    {
+        unimplemented!()
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+        _oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+        _refresh: bool,
+    ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+    {
+        unimplemented!()
+    }
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        _app_name: &golem_common::model::application::ApplicationName,
+        _environment_name: &golem_common::model::environment::EnvironmentName,
+        _agent_type_name: &golem_common::model::agent::AgentTypeName,
+        _deployment_revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        _owner_account_email: Option<&str>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::agent::ResolvedAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_active_routes_for_domain(
+        &self,
+        _domain: &golem_common::model::domain_registration::Domain,
+    ) -> Result<golem_service_base::custom_api::CompiledRoutes, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_active_compiled_mcps_for_domain(
+        &self,
+        _domain: &golem_common::model::domain_registration::Domain,
+    ) -> Result<golem_service_base::mcp::CompiledMcp, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_current_environment_state(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<golem_service_base::model::environment::EnvironmentState, RegistryServiceError>
+    {
+        unimplemented!()
+    }
+
+    async fn get_resource_definition_by_id(
+        &self,
+        _resource_definition_id: golem_common::model::quota::ResourceDefinitionId,
+    ) -> Result<golem_common::model::quota::ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_resource_definition_by_name(
+        &self,
+        _environment_id: EnvironmentId,
+        _resource_name: golem_common::model::quota::ResourceName,
+    ) -> Result<golem_common::model::quota::ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn subscribe_registry_invalidations(
+        &self,
+        _last_seen_event_id: Option<u64>,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::RegistryInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    > {
+        unimplemented!()
+    }
+
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        _service_name: &'static str,
+        _shutdown_token: Option<CancellationToken>,
+        _handler: Arc<dyn golem_service_base::clients::registry::RegistryInvalidationHandler>,
+    ) {
+        unimplemented!()
+    }
+}
+
+fn exhaustion_error(exhaustion: IntegrationExhaustion) -> &'static str {
+    match exhaustion {
+        IntegrationExhaustion::Compute => "fuel exhausted",
+        IntegrationExhaustion::Memory
+        | IntegrationExhaustion::DurableStorage
+        | IntegrationExhaustion::EphemeralStorage => "cannot suspend",
+    }
+}
+
+fn probe_agent(exhaustion: IntegrationExhaustion) -> golem_common::model::agent::ParsedAgentId {
+    let name = format!("policy-probe-{exhaustion:?}-{}", uuid::Uuid::new_v4());
+    match exhaustion {
+        IntegrationExhaustion::DurableStorage => agent_id!("Counter", name),
+        IntegrationExhaustion::Compute
+        | IntegrationExhaustion::Memory
+        | IntegrationExhaustion::EphemeralStorage => agent_id!("EphemeralCounter", name),
+    }
+}
+
+fn policy_probe_uses_start(exhaustion: IntegrationExhaustion) -> bool {
+    matches!(
+        exhaustion,
+        IntegrationExhaustion::DurableStorage | IntegrationExhaustion::EphemeralStorage
+    )
+}
+
+async fn wait_for_policy_rejection(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    exhaustion: IntegrationExhaustion,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let probe = probe_agent(exhaustion);
+            let result = if policy_probe_uses_start(exhaustion) {
+                executor.start_agent(&component.id, probe).await.map(Some)
+            } else {
+                executor
+                    .invoke_and_await_agent(component, &probe, "increment", data_value!())
+                    .await
+                    .map(|_| None)
+            };
+            match result {
+                Err(error) if error.to_string().contains(exhaustion_error(exhaustion)) => {
+                    return Ok(());
+                }
+                Err(error) => return Err(anyhow!("unexpected probe rejection: {error}")),
+                Ok(Some(worker_id)) => {
+                    if executor
+                        .wait_for_status(
+                            &worker_id,
+                            AgentStatus::Suspended,
+                            Duration::from_millis(250),
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+                Ok(None) => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("refreshed {exhaustion:?} policy was not enforced locally"))?
+}
+
+async fn wait_for_policy_admission(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    exhaustion: IntegrationExhaustion,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let probe = probe_agent(exhaustion);
+            let result = if policy_probe_uses_start(exhaustion) {
+                executor.start_agent(&component.id, probe).await.map(Some)
+            } else {
+                executor
+                    .invoke_and_await_agent(component, &probe, "increment", data_value!())
+                    .await
+                    .map(|_| None)
+            };
+            match result {
+                Ok(Some(worker_id)) => {
+                    if executor
+                        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_millis(250))
+                        .await
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+                Ok(None) => return Ok(()),
+                Err(error) if error.to_string().contains(exhaustion_error(exhaustion)) => {}
+                Err(error) => return Err(anyhow!("unexpected probe failure: {error}")),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("refreshed {exhaustion:?} policy was not admitted locally"))?
+}
+
+async fn wait_for_invocation_pair(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    since: OplogIndex,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            match count_agent_invocation_pair_since(&oplog, since) {
+                (1, 1) => return Ok(()),
+                (started, finished) if started > 1 || finished > 1 => {
+                    return Err(anyhow!(
+                        "pending invocation executed more than once: {started} started, {finished} finished"
+                    ));
+                }
+                _ => tokio::task::yield_now().await,
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("timed out waiting for the pending invocation to finish"))?
+}
+
 inherit_test_dep!(
     #[tagged_as("agent_rpc")]
     PrecompiledComponent
@@ -289,42 +784,12 @@ impl WorkerDeletionHook for DeletionStageHook {
     }
 }
 
-#[test]
-#[tracing::instrument]
-#[timeout("2m")]
-async fn all_disabled_resource_metering_allows_startup_and_execution(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.resource_usage_metering = Default::default();
-            })),
-            ..TestExecutorOverrides::default()
-        },
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_counters)
-        .store()
-        .await?;
-    let counter_id = agent_id!("Counter", "unmetered-execution");
+test_r::tag_suite!(fenced_outcome, group5);
+test_r::tag_suite!(p2_ready, group5);
 
-    executor
-        .start_agent(&component.id, counter_id.clone())
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
-        .await?;
-
-    Ok(())
-}
+mod fenced_outcome;
+mod interruption;
+mod p2_ready;
 
 #[test]
 #[tracing::instrument]

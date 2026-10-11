@@ -1429,6 +1429,19 @@ impl ResourceUsageMeteringConfig {
     }
 }
 
+impl GolemConfig {
+    pub(crate) fn effective_resource_usage_metering(&self) -> ResourceUsageMeteringConfig {
+        ResourceUsageMeteringConfig {
+            filesystem: self.resource_usage_metering.filesystem
+                && matches!(
+                    self.filesystem_storage.mode,
+                    FilesystemStorageMode::ManagedXfs { .. }
+                ),
+            ..self.resource_usage_metering
+        }
+    }
+}
+
 impl SafeDisplay for ResourceUsageMeteringConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();

@@ -32,6 +32,7 @@ mod scope;
 mod spawner;
 mod store;
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) use runs::run_delay;
 pub(crate) use store::RusticSnapshotStore;
 

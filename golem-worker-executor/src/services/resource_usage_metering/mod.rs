@@ -15,11 +15,16 @@
 use crate::sandbox_filesystem::{AgentAccounting, FilesystemStorageError};
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
-use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
+use crate::services::byte_time_accumulator::{
+    ByteTimeAccumulator, ByteTimeSettlement, MeteringTime, PeriodByteTimeSettlement,
+};
 use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceUsageFlusher};
+use chrono::{DateTime, Utc};
+use golem_common::model::account_usage::AccountUsagePeriod;
 use golem_common::model::agent::AgentMode;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
@@ -56,6 +61,50 @@ pub(crate) trait FilesystemUsageReader: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>;
 }
 
+/// Scripted allocation observations for Worker tests, not native filesystem quota evidence.
+#[cfg(feature = "test-utils")]
+#[derive(Clone)]
+pub struct ScriptedFilesystemUsageForTest {
+    value: Arc<Mutex<FilesystemUsage>>,
+    observations: Arc<AtomicU64>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ScriptedFilesystemUsageForTest {
+    pub fn new(value: FilesystemUsage) -> Self {
+        Self {
+            value: Arc::new(Mutex::new(value)),
+            observations: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn set(&self, value: FilesystemUsage) {
+        *self.value.lock().unwrap() = value;
+    }
+
+    pub fn observations(&self) -> u64 {
+        self.observations.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn source(self) -> FilesystemUsageSource {
+        FilesystemUsageSource::new(Arc::new(self))
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl FilesystemUsageReader for ScriptedFilesystemUsageForTest {
+    fn observe(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let value = *self.value.lock().unwrap();
+            self.observations.fetch_add(1, Ordering::Release);
+            Ok(value)
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct FilesystemUsageSource {
     reader: Arc<dyn FilesystemUsageReader>,
@@ -87,6 +136,15 @@ impl FilesystemUsageSource {
 trait MeteringClock: Send + Sync {
     fn now(&self) -> Instant;
 
+    fn utc_now(&self) -> DateTime<Utc>;
+
+    fn time(&self) -> MeteringTime {
+        let before = self.now();
+        let utc = self.utc_now();
+        let after = self.now();
+        MeteringTime::between(before, utc, after)
+    }
+
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
@@ -95,6 +153,10 @@ struct SystemMeteringClock;
 impl MeteringClock for SystemMeteringClock {
     fn now(&self) -> Instant {
         Instant::now()
+    }
+
+    fn utc_now(&self) -> DateTime<Utc> {
+        Utc::now()
     }
 
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
@@ -110,6 +172,8 @@ pub(crate) struct ResourceUsageAccount {
     entry: Weak<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
     transition: Arc<Mutex<()>>,
+    #[cfg(feature = "test-utils")]
+    pub(crate) scripted_filesystem_usage: Option<ScriptedFilesystemUsageForTest>,
 }
 
 impl ResourceUsageAccount {
@@ -123,6 +187,8 @@ impl ResourceUsageAccount {
             entry: Arc::downgrade(&entry),
             transition: linear_memory.resource_transition(),
             linear_memory,
+            #[cfg(feature = "test-utils")]
+            scripted_filesystem_usage: None,
         }
     }
 
@@ -130,15 +196,16 @@ impl ResourceUsageAccount {
         self.linear_memory.current_bytes()
     }
 
-    fn record_usage(&self, memory_units: i64, storage_units: i64) {
+    fn record_settlement(&self, settlement: &ResourceUsageSettlement) {
         if let Some(entry) = self.entry.upgrade() {
-            entry.record_resource_usage(self.mode, memory_units, storage_units);
-        }
-    }
-
-    fn record_settlement(&self, settlement: ResourceUsageSettlement) {
-        if let Some(entry) = self.entry.upgrade() {
-            entry.record_resource_settlement(self.mode, settlement.memory, settlement.storage);
+            for (period, usage) in &settlement.periods {
+                entry.record_resource_settlement_for_period(
+                    self.mode,
+                    *period,
+                    usage.memory,
+                    usage.storage,
+                );
+            }
         }
     }
 }
@@ -186,6 +253,102 @@ enum MeterLifecycle {
 pub struct ResourceUsageMeteringWindow {
     shared: Option<Arc<WindowShared>>,
     permit: Option<ConcurrentAgentPermit>,
+    retained_meter: Option<Arc<MeterShared>>,
+    #[cfg(feature = "test-utils")]
+    lose_settlement_observer: bool,
+}
+
+impl ResourceUsageMeteringWindow {
+    pub(crate) fn observe_permit_release(
+        &mut self,
+        scope: &crate::metrics::resource_release::ReleaseScope,
+    ) {
+        if let Some(permit) = &mut self.permit {
+            permit.observe_release(scope);
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn lose_settlement_observer_for_test(&mut self) {
+        self.lose_settlement_observer = true;
+    }
+
+    /// Stop allocation reads while the drained filesystem still exists. The last authoritative
+    /// allocation remains billable until this window releases its permit, including deletion retries.
+    pub(crate) async fn freeze_allocation(&mut self) -> Result<(), MeteringCloseError> {
+        let Some(shared) = &self.shared else {
+            return Ok(());
+        };
+        self.retained_meter = shared.meter.upgrade();
+        shared.begin_close();
+        loop {
+            let changed = shared.sampler_changed.notified();
+            if !shared.state.lock().unwrap().sampling {
+                break;
+            }
+            changed.await;
+        }
+        let result = if shared.state.lock().unwrap().storage.is_some() {
+            let Some(observation) = shared.start_observation(WindowStatus::Closing) else {
+                return Err(MeteringCloseError::ObserverLost);
+            };
+            match observation.receiver.await {
+                Ok(result) => {
+                    let error = result
+                        .as_ref()
+                        .err()
+                        .map(|error| MeteringCloseError::Faulted(error.to_string()));
+                    shared.finish_observation(
+                        observation.active,
+                        result,
+                        shared.clock.time(),
+                        true,
+                    );
+                    error.map_or(Ok(()), Err)
+                }
+                Err(_) => {
+                    shared.suspend_observation(observation.active);
+                    shared.clear_observation(observation.active);
+                    Err(MeteringCloseError::ObserverLost)
+                }
+            }
+        } else {
+            Ok(())
+        };
+        let mut state = shared.state.lock().unwrap();
+        state.allocation_frozen = true;
+        if let Some(storage) = &mut state.storage {
+            storage.last_accepted_at = None;
+        }
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn track_permit_for_test(&mut self, held: Arc<std::sync::atomic::AtomicBool>) {
+        self.permit = self.permit.take().map(|permit| permit.track_held(held));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn settlement_observer(&self) -> impl Fn() -> bool + Send + 'static {
+        let shared = self.shared.clone();
+        move || {
+            shared
+                .as_ref()
+                .is_some_and(|shared| shared.state.lock().unwrap().status == WindowStatus::Closed)
+        }
+    }
+
+    pub(crate) fn monthly_memory_tracker(&self) -> Option<LinearMemoryTracker> {
+        let shared = self.shared.as_ref()?;
+        shared
+            .memory_enabled
+            .then(|| shared.account.linear_memory.clone())
+    }
+
+    pub(crate) fn usage_flusher(&self) -> Option<Weak<dyn ResourceUsageFlusher>> {
+        let meter: Arc<dyn ResourceUsageFlusher> = self.shared.as_ref()?.meter.upgrade()?;
+        Some(Arc::downgrade(&meter))
+    }
 }
 
 impl Debug for ResourceUsageMeteringWindow {
@@ -213,6 +376,7 @@ struct WindowShared {
 struct WindowState {
     status: WindowStatus,
     sampling: bool,
+    allocation_frozen: bool,
     next_observation: u64,
     active_observation: Option<ActiveObservation>,
     storage: Option<StorageState>,
@@ -222,7 +386,7 @@ struct WindowState {
 #[derive(Clone, Copy)]
 struct ActiveObservation {
     sequence: u64,
-    started_at: Instant,
+    started_at: MeteringTime,
 }
 
 struct StorageState {
@@ -232,7 +396,7 @@ struct StorageState {
 }
 
 impl StorageState {
-    fn new(opened_at: Instant) -> Self {
+    fn new(opened_at: MeteringTime) -> Self {
         Self {
             accumulator: ByteTimeAccumulator::new(BYTE_NANOSECONDS_PER_BYTE_SECOND, opened_at),
             level: None,
@@ -240,20 +404,23 @@ impl StorageState {
         }
     }
 
-    fn accrue_until(&mut self, at: Instant, pending_attempt: Option<Instant>) {
-        let mut charge_until = at;
+    fn accrue_until(&mut self, at: MeteringTime, pending_attempt: Option<Instant>) {
+        let mut charge_until = at.instant;
         if let Some(started_at) = pending_attempt {
             charge_until = charge_until.min(started_at);
         }
         if let Some(last_accepted_at) = self.last_accepted_at {
             charge_until = charge_until.min(last_accepted_at + FILESYSTEM_STALE_AFTER);
         }
-        self.accumulator.advance(charge_until, self.level);
-        if charge_until < at && pending_attempt.is_none_or(|started_at| started_at < at) {
+        self.accumulator
+            .advance(at.at_instant(charge_until), self.level);
+        if charge_until < at.instant
+            && pending_attempt.is_none_or(|started_at| started_at < at.instant)
+        {
             self.accumulator.advance(at, None);
             if self
                 .last_accepted_at
-                .is_some_and(|accepted| accepted + FILESYSTEM_STALE_AFTER <= at)
+                .is_some_and(|accepted| accepted + FILESYSTEM_STALE_AFTER <= at.instant)
             {
                 self.level = None;
                 self.last_accepted_at = None;
@@ -261,13 +428,13 @@ impl StorageState {
         }
     }
 
-    fn accept(&mut self, allocated_bytes: u64, at: Instant) {
+    fn accept(&mut self, allocated_bytes: u64, at: MeteringTime) {
         self.accrue_until(at, None);
         self.level = Some(allocated_bytes);
-        self.last_accepted_at = Some(at);
+        self.last_accepted_at = Some(at.instant);
     }
 
-    fn suspend_from(&mut self, attempt_started_at: Instant) {
+    fn suspend_from(&mut self, attempt_started_at: MeteringTime) {
         self.accrue_until(attempt_started_at, None);
         self.level = None;
         self.last_accepted_at = None;
@@ -287,6 +454,17 @@ pub enum MeteringOpenError {
     FilesystemObservation(FilesystemStorageError),
     MemoryMeterStopped,
     OpeningCancelled,
+}
+
+impl MeteringOpenError {
+    pub(crate) fn release_failure(&self) -> crate::metrics::resource_release::Failure {
+        use crate::metrics::resource_release::Failure;
+        match self {
+            Self::FilesystemObservation(_) => Failure::FilesystemObservation,
+            Self::AlreadyOpen | Self::MemoryMeterStopped => Failure::MeterFault,
+            Self::OpeningCancelled => Failure::Other,
+        }
+    }
 }
 
 impl Display for MeteringOpenError {
@@ -317,6 +495,18 @@ pub enum MeteringCloseError {
     ObserverLost,
 }
 
+impl MeteringCloseError {
+    pub(crate) fn release_failure(&self) -> crate::metrics::resource_release::Failure {
+        use crate::metrics::resource_release::Failure;
+        match self {
+            Self::Deadline => Failure::Deadline,
+            Self::FilesystemObservation(_) => Failure::FilesystemObservation,
+            Self::Faulted(_) => Failure::MeterFault,
+            Self::ObserverLost => Failure::ObserverLost,
+        }
+    }
+}
+
 impl Display for MeteringCloseError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -337,10 +527,28 @@ impl Display for MeteringCloseError {
 
 impl std::error::Error for MeteringCloseError {}
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResourceUsageSettlement {
+    periods: BTreeMap<AccountUsagePeriod, PeriodResourceUsageSettlement>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PeriodResourceUsageSettlement {
     pub(crate) memory: ByteTimeSettlement,
     pub(crate) storage: ByteTimeSettlement,
+}
+
+impl ResourceUsageSettlement {
+    fn new(memory: Vec<PeriodByteTimeSettlement>, storage: Vec<PeriodByteTimeSettlement>) -> Self {
+        let mut periods = BTreeMap::<AccountUsagePeriod, PeriodResourceUsageSettlement>::new();
+        for settlement in memory {
+            periods.entry(settlement.period).or_default().memory = settlement.usage;
+        }
+        for settlement in storage {
+            periods.entry(settlement.period).or_default().storage = settlement.usage;
+        }
+        Self { periods }
+    }
 }
 
 #[cfg(test)]
@@ -431,6 +639,9 @@ pub(crate) fn open_window(
             Ok(ResourceUsageMeteringWindow {
                 shared: None,
                 permit: Some(permit),
+                retained_meter: None,
+                #[cfg(feature = "test-utils")]
+                lose_settlement_observer: false,
             })
         });
     };
@@ -450,7 +661,8 @@ pub(crate) fn open_window(
         let _transition = meter
             .memory_enabled
             .then(|| meter.account.transition.lock().unwrap());
-        let opened_at = meter.clock.now();
+        let opened = meter.clock.time();
+        let opened_at = opened.instant;
         if meter.memory_enabled {
             let memory_bytes = meter.account.memory_bytes();
             if !meter
@@ -458,7 +670,7 @@ pub(crate) fn open_window(
                 .linear_memory
                 .meter_if_enabled()
                 .expect("memory metering is enabled")
-                .resume(memory_bytes, opened_at)
+                .resume_at(memory_bytes, opened)
             {
                 return Err(MeteringOpenError::MemoryMeterStopped);
             }
@@ -484,11 +696,10 @@ pub(crate) fn open_window(
             state: Mutex::new(WindowState {
                 status: WindowStatus::Active,
                 sampling: false,
+                allocation_frozen: false,
                 next_observation: 0,
                 active_observation: None,
-                storage: meter
-                    .filesystem_enabled
-                    .then(|| StorageState::new(opened_at)),
+                storage: meter.filesystem_enabled.then(|| StorageState::new(opened)),
                 settlement: None,
             }),
         });
@@ -501,6 +712,9 @@ pub(crate) fn open_window(
         Ok(ResourceUsageMeteringWindow {
             shared: Some(shared),
             permit: Some(permit),
+            retained_meter: None,
+            #[cfg(feature = "test-utils")]
+            lose_settlement_observer: false,
         })
     })
 }
@@ -511,31 +725,70 @@ pub fn close_window(
 ) -> Pin<
     Box<dyn Future<Output = Result<ResourceUsageSettlement, MeteringCloseError>> + Send + 'static>,
 > {
+    if window
+        .shared
+        .as_ref()
+        .is_some_and(|shared| shared.state.lock().unwrap().allocation_frozen)
+    {
+        let shared = window.shared.take().unwrap();
+        let settlement = shared.settle_close(shared.clock.time());
+        shared.account.record_settlement(&settlement);
+        shared.clear_meter();
+        drop(window);
+        return Box::pin(std::future::ready(Ok(settlement)));
+    }
+    let closing = close_window_retaining_permit(window, deadline);
+    Box::pin(async move {
+        let (result, permit) = closing.await;
+        drop(permit);
+        result
+    })
+}
+
+type RetainedPermitSettlement = (
+    Result<ResourceUsageSettlement, MeteringCloseError>,
+    Option<ConcurrentAgentPermit>,
+);
+
+pub(crate) fn close_window_retaining_permit(
+    mut window: ResourceUsageMeteringWindow,
+    deadline: Instant,
+) -> Pin<Box<dyn Future<Output = RetainedPermitSettlement> + Send + 'static>> {
     let Some(shared) = window.shared.take() else {
         let permit = window
             .permit
             .take()
             .expect("unmetered resource window lost its permit");
-        return Box::pin(async move {
-            drop(permit);
-            Ok(ResourceUsageSettlement::default())
-        });
+        return Box::pin(async move { (Ok(ResourceUsageSettlement::default()), Some(permit)) });
     };
     let permit = window
         .permit
         .take()
         .expect("metering window lost its permit");
+    let retained_meter = window.retained_meter.take();
+    #[cfg(feature = "test-utils")]
+    let lose_observer = window.lose_settlement_observer;
     shared.begin_close();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_metering_task(async move {
         let result = Arc::clone(&shared).complete_close(deadline).await;
-        drop(permit);
-        let _ = sender.send(result);
+        if let Err(error) = &result {
+            permit.release_failed(error.release_failure());
+        }
+        #[cfg(feature = "test-utils")]
+        if lose_observer {
+            permit.release_failed(crate::metrics::resource_release::Failure::ObserverLost);
+            drop((permit, retained_meter));
+            drop(sender);
+            return;
+        }
+        let _ = sender.send((result, Some(permit)));
+        drop(retained_meter);
     });
     Box::pin(async move {
         receiver
             .await
-            .unwrap_or(Err(MeteringCloseError::ObserverLost))
+            .unwrap_or((Err(MeteringCloseError::ObserverLost), None))
     })
 }
 
@@ -569,8 +822,8 @@ impl Drop for ResourceUsageMeteringWindow {
         };
         shared.begin_close();
         shared.detach_active_observation();
-        let settlement = shared.settle_close(shared.clock.now());
-        shared.account.record_settlement(settlement);
+        let settlement = shared.settle_close(shared.clock.time());
+        shared.account.record_settlement(&settlement);
         shared.clear_meter();
         drop(permit);
     }
@@ -596,18 +849,18 @@ impl ResourceUsageMeter {
         let Some(shared) = &self.shared else {
             return;
         };
-        shared.flush_at(now);
+        shared.flush_at(shared.clock.time().at_instant(now));
     }
 }
 
 impl ResourceUsageFlusher for MeterShared {
     fn flush_usage(&self) {
-        self.flush_at(self.clock.now());
+        self.flush_at(self.clock.time());
     }
 }
 
 impl MeterShared {
-    fn flush_at(&self, now: Instant) {
+    fn flush_at(&self, now: MeteringTime) {
         let window = {
             let lifecycle = self.lifecycle.lock().unwrap();
             match &*lifecycle {
@@ -618,30 +871,30 @@ impl MeterShared {
         let _transition = self
             .memory_enabled
             .then(|| self.account.transition.lock().unwrap());
-        let (memory_units, storage_units) = window.map_or((0, 0), |window| {
+        let settlement = window.map_or_else(ResourceUsageSettlement::default, |window| {
             let mut state = window.state.lock().unwrap();
             if state.status == WindowStatus::Closed {
-                return (0, 0);
+                return ResourceUsageSettlement::default();
             }
-            let memory_units = if self.memory_enabled {
+            let memory = if self.memory_enabled {
                 self.account
                     .linear_memory
                     .meter_if_enabled()
                     .expect("memory metering is enabled")
-                    .take_units(now)
+                    .take_settlement_at(now)
             } else {
-                0
+                Vec::new()
             };
             let pending_attempt = state
                 .active_observation
-                .map(|observation| observation.started_at);
-            let storage_units = state.storage.as_mut().map_or(0, |storage| {
+                .map(|observation| observation.started_at.instant);
+            let storage = state.storage.as_mut().map_or_else(Vec::new, |storage| {
                 storage.accrue_until(now, pending_attempt);
-                storage.accumulator.take_units()
+                storage.accumulator.take_settlements()
             });
-            (memory_units, storage_units)
+            ResourceUsageSettlement::new(memory, storage)
         });
-        self.account.record_usage(memory_units, storage_units);
+        self.account.record_settlement(&settlement);
     }
 }
 
@@ -691,7 +944,7 @@ impl WindowShared {
             let timed_out = self
                 .wait_for_periodic_result(&mut observation, FILESYSTEM_OBSERVATION_TIMEOUT)
                 .await;
-            let completed_at = self.clock.now();
+            let completed_at = self.clock.time();
             let succeeded = match timed_out {
                 PeriodicAttempt::Completed(result) => {
                     self.finish_observation(observation.active, result, completed_at, false)
@@ -699,7 +952,7 @@ impl WindowShared {
                 PeriodicAttempt::TimedOut => {
                     self.suspend_observation(observation.active);
                     let result = observation.receiver.await.ok();
-                    let at = self.clock.now();
+                    let at = self.clock.time();
                     result.is_some_and(|result| {
                         self.finish_observation(observation.active, result, at, false)
                     })
@@ -715,7 +968,7 @@ impl WindowShared {
                 let delay = FILESYSTEM_RETRY_DELAYS
                     [consecutive_failures.min(FILESYSTEM_RETRY_DELAYS.len() - 1)];
                 consecutive_failures = consecutive_failures.saturating_add(1);
-                deadline = completed_at + delay;
+                deadline = completed_at.instant + delay;
             }
         }
     }
@@ -751,7 +1004,7 @@ impl WindowShared {
                 .expect("filesystem usage observation sequence overflowed");
             let active = ActiveObservation {
                 sequence: state.next_observation,
-                started_at: self.clock.now(),
+                started_at: self.clock.time(),
             };
             state.active_observation = Some(active);
             active
@@ -810,7 +1063,7 @@ impl WindowShared {
         observation: &mut Observation,
         timeout: Duration,
     ) -> PeriodicAttempt {
-        let timeout_at = observation.active.started_at + timeout;
+        let timeout_at = observation.active.started_at.instant + timeout;
         tokio::select! {
             result = &mut observation.receiver => PeriodicAttempt::Completed(result.unwrap_or_else(|_| {
                 Err(FilesystemStorageError::verification(
@@ -826,7 +1079,7 @@ impl WindowShared {
         &self,
         observation: ActiveObservation,
         result: Result<FilesystemUsage, FilesystemStorageError>,
-        accepted_at: Instant,
+        accepted_at: MeteringTime,
         accept_while_closing: bool,
     ) -> bool {
         let mut state = self.state.lock().unwrap();
@@ -890,12 +1143,16 @@ impl WindowShared {
         self: Arc<Self>,
         deadline: Instant,
     ) -> Result<ResourceUsageSettlement, MeteringCloseError> {
-        if self.state.lock().unwrap().storage.is_some() {
+        let observe = {
+            let state = self.state.lock().unwrap();
+            state.storage.is_some() && !state.allocation_frozen
+        };
+        if observe {
             let final_deadline = deadline.min(self.clock.now() + FILESYSTEM_CLOSE_BUDGET);
             self.run_final_observation_sequence(final_deadline).await;
         }
-        let settlement = self.settle_close(self.clock.now());
-        self.account.record_settlement(settlement);
+        let settlement = self.settle_close(self.clock.time());
+        self.account.record_settlement(&settlement);
         self.clear_meter();
         Ok(settlement)
     }
@@ -912,8 +1169,9 @@ impl WindowShared {
             let Some(mut observation) = self.start_observation(WindowStatus::Closing) else {
                 return;
             };
-            let timeout_at =
-                (observation.active.started_at + FILESYSTEM_OBSERVATION_TIMEOUT).min(deadline);
+            let timeout_at = (observation.active.started_at.instant
+                + FILESYSTEM_OBSERVATION_TIMEOUT)
+                .min(deadline);
             let result = tokio::select! {
                 result = &mut observation.receiver => match result {
                     Ok(result) => FinalAttempt::Completed(result),
@@ -923,8 +1181,12 @@ impl WindowShared {
             };
             match result {
                 FinalAttempt::Completed(result) => {
-                    let accepted =
-                        self.finish_observation(observation.active, result, self.clock.now(), true);
+                    let accepted = self.finish_observation(
+                        observation.active,
+                        result,
+                        self.clock.time(),
+                        true,
+                    );
                     if accepted {
                         return;
                     }
@@ -952,7 +1214,7 @@ impl WindowShared {
                             let accepted = self.finish_observation(
                                 observation.active,
                                 result,
-                                self.clock.now(),
+                                self.clock.time(),
                                 true,
                             );
                             if accepted {
@@ -1012,17 +1274,17 @@ impl WindowShared {
         self.observation_changed.notify_waiters();
     }
 
-    fn settle_close(&self, closed_at: Instant) -> ResourceUsageSettlement {
+    fn settle_close(&self, closed_at: MeteringTime) -> ResourceUsageSettlement {
         let _transition = self
             .memory_enabled
             .then(|| self.account.transition.lock().unwrap());
         let mut state = self.state.lock().unwrap();
-        if let Some(settlement) = state.settlement {
-            return settlement;
+        if let Some(settlement) = &state.settlement {
+            return settlement.clone();
         }
         let pending_attempt = state
             .active_observation
-            .map(|observation| observation.started_at);
+            .map(|observation| observation.started_at.instant);
         if let Some(storage) = state.storage.as_mut() {
             storage.accrue_until(closed_at, pending_attempt);
         }
@@ -1033,23 +1295,21 @@ impl WindowShared {
                 .linear_memory
                 .meter_if_enabled()
                 .expect("memory metering is enabled");
-            meter.set_bytes(memory_bytes, closed_at);
-            meter.pause(closed_at);
+            meter.set_bytes_at(memory_bytes, closed_at);
+            meter.pause_at(closed_at);
         }
-        let settlement = ResourceUsageSettlement {
-            memory: self.account.linear_memory.meter_if_enabled().map_or_else(
-                ByteTimeSettlement::default,
-                AgentMemoryMeter::take_settlement,
-            ),
-            storage: state
+        let settlement = ResourceUsageSettlement::new(
+            self.account
+                .linear_memory
+                .meter_if_enabled()
+                .map_or_else(Vec::new, AgentMemoryMeter::take_settlement),
+            state
                 .storage
                 .as_mut()
-                .map_or_else(ByteTimeSettlement::default, |storage| {
-                    storage.accumulator.take_settlement()
-                }),
-        };
+                .map_or_else(Vec::new, |storage| storage.accumulator.take_settlements()),
+        );
         state.status = WindowStatus::Closed;
-        state.settlement = Some(settlement);
+        state.settlement = Some(settlement.clone());
         settlement
     }
 

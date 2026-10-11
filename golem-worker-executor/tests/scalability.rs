@@ -562,6 +562,8 @@ async fn interrupt_during_oom_backoff_is_durable_before_restart(
     let agent = agent_id!("LargeDynamicMemoryAgent", "interrupt-during-backoff");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owner = executor.active_agent(&owned).await.unwrap().primary();
+    let generation = owner.resident_generation_for_test();
     let key = IdempotencyKey::fresh();
     let invocation = {
         let executor = executor.clone();
@@ -584,12 +586,23 @@ async fn interrupt_during_oom_backoff_is_durable_before_restart(
     })
     .await?;
     assert!(executor.worker_is_cached(&owned).await);
+    owner.retained_cleanup_for_test().await?;
+    assert!(!owner.concurrent_agent_permit_is_held().await);
+    assert_eq!(owner.resident_generation_for_test(), generation);
+    let acquisitions = owner.permit_acquisitions_for_test();
+    assert_eq!(
+        owner.selected_owner_failure_for_test().await,
+        None,
+        "ordinary OOM unload must not elect a synthetic terminal stop"
+    );
 
     // The interrupt must finish while the OOM retry is still in its 60-second backoff.
     tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&worker)).await??;
     executor
         .wait_for_status(&worker, AgentStatus::Interrupted, Duration::from_secs(5))
         .await?;
+    assert_eq!(owner.resident_generation_for_test(), generation);
+    assert_eq!(owner.permit_acquisitions_for_test(), acquisitions);
     assert!(
         tokio::time::timeout(Duration::from_secs(5), invocation)
             .await??

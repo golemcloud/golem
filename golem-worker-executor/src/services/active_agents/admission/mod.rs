@@ -303,6 +303,7 @@ impl AdmissionController {
                 controller: Some(self.clone()),
                 bytes: request_bytes,
                 reserved_bytes: request_bytes,
+                release_receipts: Vec::new(),
             }),
             AdmissionDecision::Reject => None,
         }
@@ -327,9 +328,27 @@ pub(crate) struct MemoryGrant {
     controller: Option<Arc<AdmissionController>>,
     bytes: u64,
     reserved_bytes: u64,
+    release_receipts: Vec<crate::metrics::resource_release::ReleaseReceipt>,
 }
 
 impl MemoryGrant {
+    pub(crate) fn observe_release(
+        &mut self,
+        scope: &crate::metrics::resource_release::ReleaseScope,
+    ) {
+        if self
+            .release_receipts
+            .iter()
+            .any(|receipt| receipt.belongs_to(scope))
+        {
+            return;
+        }
+        if self.is_tracked() && self.reserved_bytes != 0 {
+            self.release_receipts
+                .push(scope.receipt(crate::metrics::resource_release::Stage::MemoryGrantRelease));
+        }
+    }
+
     pub(crate) fn bytes(&self) -> u64 {
         self.bytes
     }
@@ -357,6 +376,7 @@ impl MemoryGrant {
             controller: None,
             bytes,
             reserved_bytes: 0,
+            release_receipts: Vec::new(),
         }
     }
 
@@ -367,6 +387,7 @@ impl MemoryGrant {
     pub(crate) fn merge(&mut self, mut other: MemoryGrant) {
         self.bytes += other.bytes;
         self.reserved_bytes += other.reserved_bytes;
+        self.release_receipts.append(&mut other.release_receipts);
         if other.controller.is_some() {
             // Adopt the controller so a merged grant acquired while admission was
             // enabled still releases, even if `self` started inert.
@@ -394,6 +415,7 @@ impl Drop for MemoryGrant {
     fn drop(&mut self) {
         if let Some(controller) = &self.controller {
             controller.release(self.reserved_bytes);
+            crate::metrics::resource_release::ReleaseReceipt::complete_all(&self.release_receipts);
         }
     }
 }

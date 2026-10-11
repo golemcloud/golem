@@ -151,6 +151,7 @@ struct FilesystemGeneration<Adapter: SandboxFilesystemAdapter> {
     pressure_recovery: Option<FilesystemWriteRecovery>,
     accounting: AgentAccounting,
     namespace: Arc<NamespaceCoordinator>,
+    release_metrics: std::sync::OnceLock<crate::metrics::resource_release::FilesystemRelease>,
     scratch: Arc<HostDirectory>,
 }
 
@@ -223,6 +224,41 @@ impl<Stage: FilesystemStage, Adapter: SandboxFilesystemAdapter> Drop
 }
 
 impl<Stage: FilesystemStage, Adapter: SandboxFilesystemAdapter> AgentFilesystem<Stage, Adapter> {
+    #[cfg(test)]
+    pub(crate) fn set_release_metrics_for_test(
+        &self,
+        local: crate::metrics::resource_release::ReleaseScope,
+    ) {
+        assert!(
+            self.generation
+                .as_ref()
+                .unwrap()
+                .release_metrics
+                .set(crate::metrics::resource_release::FilesystemRelease::new(
+                    local
+                ))
+                .is_ok()
+        );
+    }
+
+    pub(crate) fn observe_release(&self, scope: &crate::metrics::resource_release::ReleaseScope) {
+        self.generation
+            .as_ref()
+            .unwrap()
+            .release_metrics
+            .get_or_init(Default::default)
+            .attach(scope);
+    }
+
+    pub(crate) fn accept_deletion_observation(&self) {
+        self.generation
+            .as_ref()
+            .unwrap()
+            .release_metrics
+            .get_or_init(Default::default)
+            .accept();
+    }
+
     fn into_parts(mut self) -> (Arc<FilesystemGeneration<Adapter>>, Stage) {
         let generation = self
             .generation
@@ -539,6 +575,7 @@ async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     let allocation_reader = sandbox.allocation_reader();
     Ok(AgentFilesystem {
         generation: Some(Arc::new(FilesystemGeneration {
+            release_metrics: std::sync::OnceLock::new(),
             sandbox: tokio::sync::RwLock::new(Some(Arc::new(sandbox))),
             allocation_reader,
             registry: Arc::new(GenerationRegistry::new()),
@@ -590,15 +627,17 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
             });
         }
     };
+    #[cfg(feature = "test-utils")]
+    let scripted_usage = account.scripted_filesystem_usage.clone();
     let meter = create_unbound_meter(config, account);
     let generation = Arc::new(generation);
     if config.filesystem {
-        install_filesystem_usage(
-            &meter,
-            FilesystemUsageSource::new(Arc::new(GenerationUsageReader {
-                reader: generation.allocation_reader.clone(),
-            })),
-        );
+        let source = FilesystemUsageSource::new(Arc::new(GenerationUsageReader {
+            reader: generation.allocation_reader.clone(),
+        }));
+        #[cfg(feature = "test-utils")]
+        let source = scripted_usage.map_or(source, |scripted| scripted.source());
+        install_filesystem_usage(&meter, source);
     }
     Ok(AgentFilesystem {
         generation: Some(generation),
@@ -1235,20 +1274,42 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     observer: Option<tokio::sync::oneshot::Sender<Result<(), DeleteFailure>>>,
 ) {
+    generation
+        .release_metrics
+        .get_or_init(Default::default)
+        .accept();
+    let mut observations = generation
+        .release_metrics
+        .get_or_init(Default::default)
+        .observe_cleanup();
     spawn_module_task(async move {
         generation.registry.wait_for_drain().await;
         let mut sandbox = generation.sandbox.write().await;
         let result = match sandbox.take() {
             Some(adapter) => match Arc::try_unwrap(adapter) {
                 Ok(adapter) => match Adapter::delete_and_verify(adapter).await {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        generation
+                            .release_metrics
+                            .get_or_init(Default::default)
+                            .deleted();
+                        Ok(())
+                    }
                     Err(failure) => {
+                        generation
+                            .release_metrics
+                            .get_or_init(Default::default)
+                            .fail(crate::metrics::resource_release::Failure::FilesystemDelete);
                         let (adapter, source) = failure.into_parts();
                         *sandbox = Some(Arc::new(adapter));
                         Err(source)
                     }
                 },
                 Err(adapter) => {
+                    generation
+                        .release_metrics
+                        .get_or_init(Default::default)
+                        .fail(crate::metrics::resource_release::Failure::ExclusiveOwnership);
                     *sandbox = Some(adapter);
                     Err(FilesystemStorageError::verification(
                         "take exclusive ownership for agent filesystem deletion",
@@ -1259,6 +1320,9 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
             None => Ok(()),
         };
         drop(sandbox);
+        for observation in &mut observations {
+            observation.returned();
+        }
         let result = result.map_err(|source| DeleteFailure {
             source: Arc::new(source),
             retry: Some(Arc::new(move || {

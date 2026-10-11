@@ -32,6 +32,7 @@ use crate::durable_host::p3::{
     observe_function_call_store, run_read_access, wasi_sockets_view,
 };
 use crate::durable_host::tail_work::TailActivity;
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::{
@@ -938,16 +939,35 @@ where
     U: Send + 'static,
 {
     async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        run_tcp_socket_receive::<Ctx, U>(
-            accessor,
-            self.socket,
-            self.demand_rx,
-            self.result_tx,
-            self.observational_owner,
-            self.activity,
+        let scope = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .public_state
+                .worker()
+                .release_scope()
+        });
+        observe_tcp_receive_driver(
+            scope,
+            run_tcp_socket_receive::<Ctx, U>(
+                accessor,
+                self.socket,
+                self.demand_rx,
+                self.result_tx,
+                self.observational_owner,
+                self.activity,
+            ),
         )
         .await
     }
+}
+
+async fn observe_tcp_receive_driver(
+    scope: crate::metrics::resource_release::ReleaseScope,
+    driver: impl Future<Output = wasmtime::Result<()>>,
+) -> wasmtime::Result<()> {
+    let mut exit = crate::metrics::resource_release::HostDriverExit::entered(&scope);
+    let result = driver.await;
+    exit.returned(result.is_err());
+    result
 }
 
 /// Fail the durable `receive` task loudly on a durability-machinery error (an
@@ -1625,5 +1645,69 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             ));
             Ok((stream, future))
         })
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::observe_tcp_receive_driver;
+    use crate::metrics::resource_release::{Cause, tests::TestMetrics};
+    use test_r::test;
+
+    #[test]
+    async fn receive_driver_receipt_observes_return_trap_and_destruction() {
+        for outcome in ["returned", "trapped", "dropped"] {
+            let metrics = TestMetrics::new();
+            let scope = metrics.scope();
+            let (send, receive) = tokio::sync::oneshot::channel();
+            let mut driver = Box::pin(observe_tcp_receive_driver(scope.clone(), async {
+                receive.await.unwrap()
+            }));
+            assert!(futures::poll!(driver.as_mut()).is_pending());
+            let joined = scope.accepted_driver();
+            scope.freeze_cause(Cause::MonthlyMemory);
+            scope.seal();
+            metrics.advance(2500);
+            assert_eq!(metrics.pending("accepted_stop", "host_operation_exit"), 1.0);
+            if outcome == "dropped" {
+                drop(driver);
+            } else {
+                send.send(if outcome == "trapped" {
+                    Err(wasmtime::Error::msg("typed driver trap"))
+                } else {
+                    Ok(())
+                })
+                .unwrap();
+                assert_eq!(driver.await.is_err(), outcome == "trapped");
+            }
+            assert_eq!(
+                metrics.value(
+                    "golem_agent_stop_host_operation_exit_seconds",
+                    &[("operation", "p3_tcp_receive"), ("outcome", outcome)]
+                ),
+                1.0
+            );
+            assert_eq!(metrics.pending("accepted_stop", "end_to_end"), 1.0);
+            joined.complete();
+            metrics.assert_finished("accepted_stop", "released");
+        }
+    }
+
+    #[test]
+    async fn completed_receive_driver_is_inapplicable_to_later_stop() {
+        let metrics = TestMetrics::new();
+        let scope = metrics.scope();
+        observe_tcp_receive_driver(scope.clone(), std::future::ready(Ok(())))
+            .await
+            .unwrap();
+        let joined = scope.accepted_driver();
+        scope.freeze_cause(Cause::Interrupt);
+        scope.seal();
+        joined.complete();
+        assert_eq!(
+            metrics.value("golem_agent_stop_host_operation_exit_seconds", &[]),
+            0.0
+        );
+        metrics.assert_finished("accepted_stop", "released");
     }
 }

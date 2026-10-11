@@ -515,4 +515,3 @@ A crash between the oplog delete and the member removal leaves the member. The n
 finds no oplog for it, requests `delete_all_snapshots` for `(id, F)` first, and then removes the
 member. A crash after the member removal and before the store delete ended leaks the repository;
 no sweep removes it yet.
-

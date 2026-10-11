@@ -2215,9 +2215,13 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     .await
     .expect("owner restart did not fence the nested execution unit");
     restart.await??;
+    active_agent
+        .primary()
+        .join_accepted_stops_for_test()
+        .await?;
     assert!(
         release_nested.send(()).is_err(),
-        "nested tool was still waiting after owner restart establishment"
+        "nested tool was still waiting after joined owner restart drain"
     );
     assert!(
         active_agent

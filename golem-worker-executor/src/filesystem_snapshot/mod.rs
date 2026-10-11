@@ -44,6 +44,7 @@ pub(crate) use memory::InMemorySnapshotStore;
 #[cfg(test)]
 pub(crate) use memory::SpacedTimes;
 use rustic::RusticSnapshotStore;
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) use rustic::run_delay;
 
 /// The filesystem snapshots of one incarnation of an agent.

@@ -195,7 +195,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 ```diagram
 ┌─────────────────────────────────────────────────────────────────────┐
 │ outer loop (one iteration = one resident instance)                  │
-│  create Store + instance ──▶ prepare_instance                       │
+│  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ resume_replay│
 │    ephemeral:      replay typed initialization only, append Restart │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
@@ -223,12 +223,470 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
-The primary Store and every current entity Store are one resident lifecycle unit. Establishing a
-lifecycle event queues it behind earlier establishment, fences the matching owner's entity
-admission and runtime resources, signals the primary Store, drains the fenced entity bodies, then
-completes establishment. The outer loop takes any pending event and waits for that establishment
-before creating another Store. This check is unconditional: a loop that retained its
-concurrent-agent permit must not skip it. Restart and suspend therefore discard the complete unit,
+### Monthly admission, interruption, and recovery
+
+Before extending quota interruption to pending host adapters, follow
+[reuse-first resource-limit delivery](../testing/reference/resource-limit-delivery.md).
+Inherit Worker acceptance, typed signals, invocation-loop cleanup and ordinary reconstruction;
+record independent defects and unverified combinations separately from the bounded delivery claim.
+
+Monthly policy uses the shared account `AtomicResourceEntry` in `services/resource_limits.rs`.
+Registry revisions arrive through the existing refresh path; stale refreshes must not restore
+older policy. Admission in `worker/invocation_loop.rs` checks the latest cached capacity before
+instance creation, replay resumption, and invocation. Reconstruction must pass those checks too;
+a resume or queued invocation cannot bypass an exhausted applicable cap.
+
+During guest execution, `Context::ensure_fuel`, the `FuelManagement` implementation in
+`workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check compute when enabled,
+then monthly memory and the agent's matching storage class. `worker/instance.rs` calls it from the
+existing Wasmtime epoch callback, and `worker/invocation.rs` checks before guest calls. Compute
+and memory exhaustion apply account-wide; durable storage applies only to durable agents and
+ephemeral storage only to ephemeral agents. Durable exhaustion requests suspension and unload
+with `RetryDecision::TryStop`. Ephemeral exhaustion fails the invocation without retry, using
+`EphemeralFuelExhausted` for compute or `EphemeralCannotSuspend` for memory/storage. Production
+hard-limit execution does not borrow local ephemeral overdraft. Enforcement infrastructure
+failure is distinct from exhausted capacity and must not be reported as an ordinary cap hit.
+
+Capacity can return after a UTC month reset, a grant or plan increase above current usage, or
+application of an `allowOverage` revision. Subsequent demand uses the same admission and
+reconstruction path, not a second recovery system. Mode changes reach running agents through
+refresh within five minutes. Excess accrued under the applied `allowOverage` revision remains
+billable until `hardLimit` applies; earlier `hardLimit` usage never becomes billable retrospectively.
+
+Disabled meters omit their monthly accounting, caps, overage, and billing. Filesystem metering
+controls both storage meters but their amounts and usage remain separate. Per-agent memory and
+managed-XFS quota enforcement remain independent; unmanaged storage has no finite per-agent quota.
+
+A pending invocation still holds its allocated linear memory and allocated filesystem storage
+while waiting for host I/O. Those allocations occupy real capacity that other agents cannot reuse
+while it is held. Memory and storage therefore accrue byte-time during permit-held host I/O waits
+even when no Wasm executes, as well as during replay. The memory meter measures actual allocated
+linear-memory bytes, not the configured maximum memory limit. Fuel measures instruction consumption,
+so the parked guest itself burns no fuel.
+
+The concurrent-agent permit defines the billing window. Permit release settles and pauses metering
+before publishing reclaimable `LoadedIdle` or `WarmRunnable` state. This ends the billable window by
+design; it does not mean every cached allocation is physically freed immediately. Released-permit
+durable sleep, reclaimable cache time and unloaded time do not accrue memory or storage byte-time.
+
+`worker/monthly_limits.rs` attaches one monitor to an enabled, permit-held execution window. It checks
+local capacity on a normal 30-second cadence and on applied Registry updates, settling owner-scoped
+byte-time first and reading published fuel reservations without locking the Store. Before each wait,
+it settles that usage and wakes earlier when exact remaining monthly memory byte-nanoseconds divided
+by the primary runtime's current allocated linear-memory bytes predicts exhaustion sooner. The
+horizon rounds up to a nanosecond; zero allocation, exhausted or inapplicable memory caps retain the
+normal cadence, including rejected-stop retries. This owner-rate estimate is not a global account
+prediction or a universal interruption deadline. It neither scans other
+account owners nor changes Registry refresh cadence. All-off windows have no monthly monitor or
+capacity subscription. Window closure invalidates its target and joins the monitor and registered
+stop cleanup. During unload, the filesystem drains before its final allocation read. That allocation
+is frozen while deletion runs; enabled memory and storage meters continue until actual permit
+release. Failed deletion retains the permit and frozen window with the filesystem's explicit repair
+obligation. A successful repair settles through release without reading the deleted filesystem.
+Ordinary startup rollback after a window opens uses the same unload path. This does not cover
+independent startup panic or cancellation: the filesystem and execution-window Drop fallbacks
+have separate physical tasks, and the panic notification does not join them.
+
+Initial idle settlement precedes startup readiness. Monitor, accepted-stop driver and settlement
+errors at either idle boundary survive successful filesystem deletion as `CleanupFailed`; they
+neither request immediate reconstruction nor acquire a replacement permit. The monitor treats a
+closed lifecycle channel or lost send as an infrastructure error, retains that health, and requests
+a cooperative Worker stop. If status work then panics because the actor has stopped, the invocation
+loop retains its resident agent across the borrowed inner-loop failure and runs ordinary unload
+without submitting more actor work. Tests in `tests/api/interruption/lifecycle/health.rs` cover both idle boundaries
+and a pending silent-TCP invocation. Other panic paths still use the outer panic boundary.
+
+Worker stop registration and window closure share a synchronous admission lock. Closure seals
+its accepted drivers and installs a retained successor. Later accepted drivers wait for the old
+permit's physical release, including any retained filesystem repair, before touching the runtime.
+New startup and resident-generation publication join prior drivers outside the instance lock and
+recheck under the acceptance lock order. Loading never clears unfinished work or retained errors.
+Owner retirement closes further stop admission before joining the last drivers.
+
+An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling
+Loading subscribers. The driver cancels and joins the task without acquiring its blocked permit,
+then settles the matching startup tracker and `WorkerLoaded` event before resolving the existing
+stop receipt. Restart and Jump preserve pending work without lifecycle or invocation-finished
+markers and request ordinary reconstruction. Dropping the receipt does not cancel the driver.
+If core initialization stops before a prepared Store exists, the invocation-loop-owned Worker
+stop acknowledges the published interruption under the lifecycle lock. No Store callback remains
+to send that receipt. The real initializer tests in `tests/api/interruption/lifecycle/admission.rs` verify
+cleanup and one receipt, durable Suspend and reconstruction, and an ephemeral typed resource
+error recorded as Recovery before any guest invocation starts.
+
+The monitor submits a proposal to the existing Worker state actor. Worker acceptance revalidates
+the cached owner, fingerprint, startup attempt, resident generation, held permit, exact active
+window, policy revision, period, fuel generation and current exhaustion. Acceptance registers
+retained progress before any signal. Restart/Jump remain replaceable until the retained driver
+or terminal invocation-loop teardown freezes the queue's elected cause under the interrupt guard.
+Teardown registers its terminal demand through the same Worker election. Admission-driven
+`TryStop` uses its actual Suspend timestamp rather than synthesizing an Interrupt. An earlier
+accepted monitor stop wins even if teardown reaches the owner fence before its driver. Both use
+the retained frozen cause; only the driver publishes it. Later accepted proposals join that
+publisher; they cannot publish a provisional kind. The driver fences the exact owner
+with the frozen kind, verifies the physical owner-failure winner, then publishes that kind to
+existing Loading/Running subscribers and the late-subscriber projection. A conflicting independent
+owner failure remains authoritative and fails stop cleanup rather than becoming a quota error.
+The invocation loop remains the sole primary-Store owner. Tests in
+`tests/api/interruption/lifecycle/admission.rs` gate a real Context Worker's loaded Compute
+admission teardown and monitor driver in both fence orders, then verify one pending invocation
+executes after physical unload and reconstruction.
+
+Ordinary nonterminal unload closes tool/entity admission and drains physical ownership without
+electing a synthetic lifecycle failure. The operation owner retains that closed admission separately
+from its first selected Trap, Infrastructure or real Lifecycle cause. A later stop during unloaded
+OOM backoff can therefore elect its exact accepted kind without clearing the old physical fence,
+cleanup or selected invocation outcome. The exact owner-kind guard still rejects real conflicts.
+
+Monthly acceptance rejects further proposals once a terminal stop is claimed, under the existing
+interrupt and admission locks. The same active window can keep accounting during retirement, but
+later ticks or applied updates cannot replace the accepted monthly kind/reason or queue another
+terminal demand. This also preserves a claimed user stop. Generic terminal queuing still permits
+later deletion. `tests/api/interruption/host/p2/tcp/input/repeated_stop.rs` holds a real outcome writer after
+selection, checks tick and changed-resource update rejection, then verifies one terminal, physical
+cleanup, durable continuation and ephemeral archival.
+
+Outcome selection shares the interrupt guard. Success, a typed invocation-deadline failure and
+a lifecycle candidate wait for an unpublished terminal stop accepted before selection; the selected
+failure keeps the typed interrupt and applicable ephemeral monthly error. The primary invocation
+loop passes `InvocationFailureOrigin::InvocationDeadline` from `InvokeResult::Failed.timed_out`
+and `Lifecycle` from `InvokeResult::Interrupted`, including monthly admission's Suspend. A frozen
+explicit Interrupt therefore cannot lose the invocation marker to a later admission Suspend.
+Neither classification depends on error text. Independent guest traps, owner infrastructure failures
+and tail-work failures keep their original classification. Tests in
+`tests/api/interruption/lifecycle/windows.rs` gate the frozen publisher against real monthly admission
+and verify that a consumed Suspend cannot survive joined unload into the next activation. A timeout selected before stop acceptance remains authoritative.
+Real Worker tests in `tests/api/interruption/selection.rs` expire the actual invocation timer while
+silent TCP receive is pending and the accepted stop driver is held before publication. A result
+selected first retains its writer completion through the existing commit receipt and waiter
+notification. A later stop waits for that completion before fencing or signalling, and cannot
+write a competing result. Durable success still uses `Always`; ephemeral success still uses
+`Deferred`, without waiting for the status fold. If the selected writer's own terminal append or
+commit receives `OplogError::Fenced`, it explicitly acknowledges that refusal to its writer barrier
+without publishing a success or failure result. Selection stays authoritative, and ShardLost
+retirement still joins physical cleanup before removing the exact old generation. A missing receipt
+or panic remains a lost-writer error; a latched lost-shard reason never erases cleanup health.
+`tests/api/fenced_outcome.rs` gates both selected success and guest failure through epoch takeover,
+physical release, old-generation removal and higher-epoch regrant. Tests in `tests/api/interruption/selection.rs`
+and `tests/resource_limits/stop_cause.rs` gate publication and
+selection on real Workers, including silent TCP and a blocked concurrent-agent permit.
+
+The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
+cover monthly-memory detection by both the local tick and applied Registry update, cooperative
+socket closure, durable reconstruction and ephemeral resource failure. The P2 TCP input
+`subscribe().block()` tests in `tests/api/interruption/host/p2/tcp/poll.rs` cover memory, prepaid compute and
+mode-matching scripted storage in both modes. They verify physical unload and permit release
+before peer readiness, then repair the original poll Start for durable agents. Scripted allocation
+proves Worker orchestration, not native managed-XFS measurement. These tests do not establish a
+bound for other host waits; preserve the permit-owned billing window.
+
+P2 TCP `start_connect` re-executes natively on reconstruction. A completed connect poll must drive
+the new native connect future before returning its recorded readiness, otherwise synchronous
+`finish_connect` can return `WouldBlock` and diverge. `TcpConnectReplay` in
+`durable_host/sockets/tcp.rs` classifies only socket pollables with an unfinished connect.
+`durable_host/io/poll.rs` revalidates their recorded-ready `poll` or `ready` result without changing
+the oplog. Only the native TCP readiness wait selects the existing typed interrupt signal, after
+completed replay has closed the durable handle. Replay resolution, the recorded terminal and
+file-readiness revalidation stay outside that race. Late subscribers read an already published
+stop from `ExecutionStatus`. Tests in `tests/api/interruption/host/p2/tcp/poll.rs` gate both replay entry points
+before subscription, while waiting and after readiness selection; they retain the original input
+Start across another monthly stop and recovery. Holding the Store at that gate proves the permit
+is still held after signal delivery, before physical unload. The gate controls native readiness
+delivery, not a real network timeout. Failed native reconnect outcomes remain a raw-P2 replay
+limitation; readiness does not guarantee the original successful connection result.
+
+Successful pollable drops clear classification. Native socket deletion requires all pollable
+children to be dropped first, so socket cleanup need not scan unrelated subscriptions. This does
+not revalidate HTTP, UDP or TCP input pollables. Exported P2 `pollable.ready` remains a nonblocking
+live probe, as verified by `tests/api/p2_ready.rs`.
+
+### Blobstore and filesystem guest observation
+
+Live blobstore provider futures in `durable_host/blobstore/{mod,container}.rs` select the composed
+`create_interrupt_signal()`. Provider completion has priority when both helper branches are ready.
+An interruption abandons only the incomplete durable call and propagates the typed trap. Retry
+policy, End persistence, metrics, resource registration and accessor delivery remain outside the
+select. Container creation and its subsequent metadata lookup are separate waits. Buffered value
+consumers, size/drop and materialized object names do not acquire a new backend wait. Dropping a
+provider future does not undo a remote effect before End; existing incomplete-call replay semantics
+still apply.
+
+P2/P3 filesystem descriptor calls select guest observation of each admitted operation. Open selects
+its attributes and open calls separately. Stat interruption escapes as a typed trap before error
+serialization; completed stat history and replay timestamp restoration remain authoritative. Direct
+P2 file read/skip, flush readiness, file-only blocking splice and completed-record file readiness/read
+revalidation use the existing file maps. Live multi-poll retains its existing Worker subscriber.
+Mixed network/unknown streams keep their own paths.
+
+P3 file prefetch, subsequent producer demand and result-future observation use the composed signal.
+An interrupted read traps instead of reporting EOF. Streaming chunk effects and task completion are
+not selected. `FilesystemCall` Drop keeps already-started work and its generation lease under the
+filesystem module until completion. Guest observation can therefore stop while flush or write still
+runs; unload must drain that work before deletion and actual permit release. Known-local synchronous
+syscalls cannot be preempted inside a future poll, and started blocking tasks may delay drain. Cleanup
+failures and unknown writers remain observable, not successful release.
+
+`tests/api/interruption/host/blob_filesystem.rs` verifies representative monthly memory in both agent modes.
+Its blob override observes real provider Pending and stays withheld through physical release. Its
+keyed filesystem gate observes admitted stat waiting before native execution, not a stalled native
+syscall. Durable cases retain and complete the original Start under the same invocation key after a
+grant; ephemeral cases persist the typed monthly failure. The lifecycle test
+`interrupted_guest_observation_retains_started_call_and_drain` holds a started scripted flush and
+proves deletion waits after typed observation interruption. These are separate observation and
+physical-drain witnesses, not a native-XFS stall or universal release bound.
+
+### Non-network frontend stream observation
+
+P3 captured stdout/stderr chunks and result futures in `durable_host/p3/cli.rs` observe the
+composed signal only while awaiting an acknowledgement or task result. A ready acknowledgement
+or result wins first. The emitting task still owns log emission, acknowledgements and completion;
+consumer Drop still queues its buffered remainder. Standard input remains disabled.
+
+`stream_transport.rs` live input demand selects source receive against the same composed signal.
+Interruption traps with `InterruptKind`, not EOF or a stream terminal. Schema wrap/unwrap and the
+native-tool byte frontend pass the signal from their owning context. Pending item publication can
+stop guest observation, but the consumer keeps its already-consumed publication future for existing
+Drop completion. Terminal publication remains mandatory. A saturated primary queue can therefore
+keep retained publication pending after the guest stops. Projection keeps its existing relay
+lifecycle and Store-closure ownership; a typed durable-source interruption aborts the relay without
+publishing an error terminal.
+
+Durable schema and native-tool stdin share `DurableInputProducer::poll_value`. Receive admission
+captures the composed signal after replay admission. Only the first live `reader.next()` selects
+it. Once a source event wins, packed-batch collection, consumer-journal commit and nested mapping
+work finish before delivery. Recorded consumer ordinals and offsets remain authoritative; local
+`DurableInputError` keeps interruption separate from `SessionError`. Drop cancellation and
+attachment fencing retain their existing owners.
+
+Module tests observe actual quiet receive, bounded publication and CLI acknowledgement/result
+Pending. They verify typed interruption, retained consumed output and final buffering, ready-first
+behavior, nonidentity projection, and source-selected journal completion through a later stop.
+Durable journal reload continues under the same session key without an invented terminal.
+`tests/api/interruption/host/frontend_streams.rs` observes a real native-tool stdin reader's first Pending,
+then monthly memory Suspend, joined physical unload and permit/monitor release while stdin stays
+quiet. The original accepted session and invocation key subsequently consume their first packed
+bytes and finish normally after a grant. This is representative durable monthly-memory evidence,
+not an ephemeral frontend matrix, CLI log-persistence stall, arbitrary-stop guarantee or universal
+publication/cleanup release bound.
+
+Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` select the existing
+typed interrupt signal around only the native input future. Successful `finish_connect` and
+`accept` classify the returned input stream; successful native stream drop removes that rep.
+File streams use the separate filesystem observation path above; unknown streams keep their existing behavior. Native stream cancellation,
+resource deletion and invocation-result commit remain outside the select.
+
+These raw TCP calls have **no durable host Start or recorded read/skip result**. At a pending
+stop, the connect poll is already complete and the method remains unfinished. Reconstruction
+reconnects and re-executes input under the retained invocation key, not a repaired stream Start.
+Even completed historical raw input executes again when a fresh invocation reconstructs an
+unloaded Worker. Deterministic peer data is required to reproduce the recorded invocation result;
+this does not provide exactly-once TCP consumption.
+
+`tests/api/interruption/host/p2/tcp/input/mod.rs` covers each export with memory, prepaid compute and matching
+scripted storage in both modes. Its Worker-local test observer reports the real native future's
+first `Poll::Pending` and tracks return versus drop without gating readiness or locking the Store.
+Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
+cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
+completion tests let native input finish, hold the existing selected-result boundary, then accept
+a monthly stop. Commit and notification win before stop publication. They also reconstruct
+completed history and count the repeated native input before fresh work. Other TCP output and
+UDP waits are separate operations, not covered by these input tests.
+
+Raw P2 TCP `output.blocking_splice(&input, 1)` is a distinct export whose native provider first
+checks output capacity, then waits for input and finally writes and flushes output. Successful
+TCP `finish_connect` and `accept` register input and output reps independently; successful stream
+drop removes only that stream's classification. When both reps are registered raw TCP streams,
+the native splice selects the existing composed `create_interrupt_signal()` through
+`interruptible_tcp_input`. Input and output need not share a socket. HTTP batched calls,
+filesystem readiness, unknown outputs, durable settlement and resource deletion stay outside
+this select. Raw read/skip retain their separate signal construction.
+
+`tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket.rs` observe the actual splice
+future's first Pending for same-socket and cross-socket pairs. A positive native `check_write`
+probe runs only when the test observer is installed. Fresh output capacity and a silent source
+support input-demand attribution through provider ordering; the provider-internal input await
+is not instrumented. Both configurations exposed accepted-stop physical-teardown failures.
+Each now has memory, prepaid-compute and matching scripted-storage cases in both agent modes.
+They check socket closure and joined Store/permit/window cleanup before any input byte, durable
+same-key reconnection or ephemeral terminal/probe, and completion-first cached success. The
+cross-socket tests require both sockets to close and later count a byte consumed on A and emitted
+on B. Memory accounting uses a drained seed and isolated target account interval, not a per-worker
+billing key or an exact parked-duration charge. Scripted storage is not native managed-XFS evidence.
+
+`durable_p2_cross_socket_splice_stop_before_subscription` holds a keyed test-only gate immediately
+before the composed constructor. A real monthly-memory stop is accepted, frozen and published
+while the Store, window and permit remain held. Releasing the gate allows the latched signal to
+interrupt, followed by physical cleanup and ordinary same-key reconstruction. The unbiased select
+may skip native polling or poll Pending before dropping; neither order is a ready/stop tie proof.
+This control covers durable monthly memory only. Deadline/entity sources are composed in code,
+but separate guest deadline/entity cancellation tests remain unproved.
+
+Like raw read/skip, splice has no durable host Start or recorded byte result. Completed guest
+history can consume and emit TCP bytes again; only a same-key result-cache lookup stays offline.
+These tests do **not** prove output back-pressure, post-consumption flush cancellation,
+transactional byte effects, accepted/half-dropped socket combinations or external exactly-once.
+
+A P2 HTTP response-body `blocking_read` is different from raw TCP input: it opens a
+`HttpTypesIncomingBodyStreamBlockingRead` child under the batched HTTP request scope. Only its
+live native read selects the typed interrupt. An interrupted native read leaves that child
+incomplete without a `Cancelled`; reconstruction retains the scope and Jump-replaces its
+contents, reissues the HTTP request with the same idempotency-key header and reads the first
+byte again. The native select excludes response-body resumption, retry policy, durable
+completion, stream drop and request-scope finalization. Inline resumption classifies errors where they arise: retry-delay interruptions and typed
+native traps abandon the child with its original error chain. Payload download, request
+reconstruction, resource-table failures and non-interrupt native traps use the child's
+call-owned infrastructure trap, leaving its Start incomplete. A 416 response, a short
+resent prefix or native prefix `LastOperationFailed` instead completes the child with
+recorded `LastOperationFailed` before returning that stream error; completion failure
+propagates. The resent response is prepared and its prefix skipped before either guest
+body or stream is replaced. The inline retry delay, live response-body resend
+`future_resp.ready()`, and matching full-response prefix-skip `new_stream.ready()` listen for
+the typed interrupt. Each ready select prefers native completion on a tie. An interrupted
+prefix skip drops the detached body without replacing the original guest body or stream.
+Retry policy, response classification, prefix read, durable completion and request-scope
+settlement remain outside those ready selects. `tests/api/interruption/host/p2/http/body.rs` observes the second native read's actual Pending
+after a first byte and keeps the first response silent through physical stop.
+`tests/api/interruption/host/p2/http/retry_delay/mod.rs` instead closes the partial first response, observes
+the actual retry sleep's first Pending with the same read child and invocation, and stops before
+any second request. It tests both modes under memory, prepaid compute and matching scripted storage,
+plus a completion-before-stop case where the sleep returns before the second request. A two-slot
+pool permits durable repair. Account-level positive memory updates after the seed are not attributed
+to the target because the seed's sub-unit remainder may flush later; the closed-window zero-delta
+check remains separate. `tests/api/interruption/host/p2/http/resend/mod.rs` ends the partial first response,
+observes the second request and its native resend-ready Pending with two HTTP pool slots, then verifies
+physical stop and socket closure while the second response headers remain withheld. Its
+completion-before-stop control releases the second response while the same native ready future
+is Pending and verifies normal End and Finished with no monthly stop. `tests/api/interruption/host/p2/http/prefix/mod.rs` receives the second
+Range request, sends a matching full 200 response's headers, then withholds its first body
+frame while the actual prefix-skip ready future reports Pending. It checks physical unload
+and socket closure while that frame remains withheld; its completion control releases the frame
+first and observes Returned,
+settled child/scope and Finished. All four suites cover memory, prepaid compute and matching
+scripted storage in both modes; they count physical reissues, not exactly-once remote effects.
+Direct P2 HTTP response-body `blocking_skip` also opens a `WriteRemoteBatched` child under
+that request scope. Its live native wait selects the typed signal with native completion first
+on a tie, abandoning only the skip child on interruption. Replay retains the single scope,
+Jump-replaces the interrupted children and sends a new HTTP request with the same key.
+`tests/api/interruption/host/p2/http/skip.rs` observes the actual skip Pending after a completed first-byte
+read, keeps the second byte gated through physical stop, and verifies completion-first return
+separately. The one-slot pool self-wait is separate GOL-685. Status-code retry resend-ready, background
+resend-ready, nonblocking body reads and upload capacity remain separate boundaries.
+
+The three durable-memory `stop_before_subscription` tests in the resend, prefix and skip suites
+park the real live operation just before its existing Worker-backed typed subscription. One
+`test-utils` latch matches both invocation key and exact operation, reports the open child Start,
+stream rep and permit-held monthly runtime, and leaves the native future unpolled while parked.
+Resend has already sent request 2 but receives no response headers; prefix has received matching full
+200 headers but no second-response body frame; direct skip withholds the first response's
+remaining byte. Each test verifies the open child under the original request scope, the peer
+attempt count and held permit, then accepts and freezes the matching monthly Suspend with the
+owner before releasing the latch. After release the native-first select can poll the real
+future once to `Pending` before it reads the latched stop. The observer may therefore report
+no Pending event, or one matching event ending in `Dropped`; `Returned` would be wrong. A
+selection receipt confirms the actual typed interrupt branch. Physical unload, socket closure
+and permit release occur while the peer still withholds the response headers or body bytes. The
+child has no invented End or Cancelled; the method has no Finished until a new request supplies
+data and durable reconstruction Jump-repairs that child under the same scope and invocation key. These three tests cover **durable monthly memory** with publication
+before subscription. The separate six-cell matrices cover already-subscribed native Pending
+waits in both modes under memory, prepaid compute and matching scripted storage. Completion-first
+controls let native work finish before a stop; none of these cases asserts a simultaneous
+native-ready/stop-ready tie.
+
+P3 UDP `receive` in `durable_host/p3/sockets/udp.rs` selects the same typed signal only
+around the native live receive. `run_read_access` leaves an interrupted
+`P3SocketsTypesUdpSocketReceive` Start incomplete; its call-owned trap context preserves the
+`InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
+bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
+
+`tests/api/interruption/host/p3/udp/mod.rs` covers explicitly bound, unconnected receive in both modes with
+memory, prepaid compute and matching scripted storage. A test-utils-only observer reports the
+real receive future's first Pending and native local address, then distinguishes return from drop.
+The guest binds loopback port zero and never reads that varying port. After physical unload,
+rebinding the observed address proves socket retirement; UDP has no EOF. Reconstruction binds
+again and the test sends one datagram to the newly observed address. The original Start gets one
+End and delivery, and the retained invocation finishes once. Idle eviction then forces completed
+history to replay with the sender gone. The next native receive belongs only to fresh work.
+A completion-first control verifies End and delivery before a monthly stop, then preserves the
+selected invocation result through commit and notification. These tests do not establish
+exactly-once datagram consumption across the receive-before-End crash window. Connected UDP
+reconstruction and incomplete batched sends remain separate, unresolved contracts.
+
+WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
+Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
+selects the existing typed interrupt signal without a Store lock. An interrupted acquisition
+abandons the call for a trap, leaving its Start incomplete; it does not append `Cancelled`.
+Only successful acquisition transfers the permit to the live socket. The subsequent handshake
+has its own interrupt select; neither call completion nor resource-table registration is raced
+with this pool wait. `tests/api/interruption/host/websocket/pool.rs` holds the sole pool slot with a
+completed, loaded-idle Worker whose monthly permit and monitor have been released. A second
+Worker parks on initial connect with no peer connection or receive Start. Six resource/mode
+cases stop and physically unload that target before evicting the holder. Durable reconstruction
+repairs the original connect Start and invocation key after the slot is freed; ephemeral failure
+remains terminal. Peer handshakes and frames are counted as attempts, not external exactly-once
+effects.
+
+The initial `connect_async` handshake begins after a free pool permit is acquired. A passive
+observer in `tests/api/interruption/host/websocket/handshake.rs` reports its first native Pending while an
+in-process TCP peer holds back the Upgrade response. Six resource/mode cells stop the Worker,
+close the half-open socket and return both permits while 101 remains withheld. Durable replay
+repairs the original Connect Start with a new handshake; ephemeral failure is typed and a fresh
+Worker probes the released pool. A completion-first control lets 101 arrive before exhaustion.
+The handshake already selected the typed signal; these tests did not expose a production RED.
+
+Completed durable Connect replay instead restores a `Replay` connection handle without a TCP
+connection. A fresh Receive or Close opens its own Start, then acquires a pool slot before
+reconnecting through the shared accessor helper. Store access ends before reconnect coordination,
+permit acquisition and handshake waits. `tests/api/interruption/host/websocket/reconnect_pool.rs`
+holds the only slot with another loaded-idle Worker and observes the *target's* native acquire
+Pending. Both operations select the composed typed signal. The holder stays loaded until the
+stopped target physically unloads. After holder eviction and capacity grant, each original Start
+gains End then CompletionDelivered, with one new handshake and no historical replay traffic. `tests/api/interruption/host/websocket/reconnect_handshake.rs` instead starts with the pool free
+and withholds the third TCP Upgrade response after the target's actual reconnect `connect_async`
+reports Pending. The typed stop closes that socket and frees the slot before the peer supplies
+101; recovery repairs the same operation Start on a fourth TCP connection. Receive and Close
+have durable memory, prepaid compute and scripted durable-storage cases and completion-first
+controls for each wait. Both post-permit handshakes use the composed interrupt signal.
+Completed-connect replay is not available to ephemeral agents, which cannot resume or invoke a
+reconstructed incarnation. Entity-local cancellation, a native ready/stop tie, timed receive,
+reader/writer locks and send/close transport back-pressure remain unproved by these matrices.
+
+A timed WebSocket receive is another distinct frame read: `live.reader.lock().await` completes
+before `reader.next()` is wrapped by the timeout and raced against the composed typed signal.
+`tests/api/interruption/host/websocket/timed_receive.rs` observes the *native read's* first Pending after a
+valid Upgrade while the peer withholds its frame, matched to the timed Receive Start, invocation
+key and runtime. The guest's 300-second deadline is not driven by the monthly test clock. Six
+resource/mode cases check stop and physical socket/Store/permit/window release with the frame
+still withheld, durable same-key repair of the original timed Start and ephemeral typed failure
+with a fresh Worker probe. A separate one-second timeout-first control returns `None` before
+any monthly exhaustion, then preserves its cached result. The existing frame select already
+interrupted; no production RED or timeout/stop tie is claimed. The reader mutex acquisition
+**precedes** that select, so these tests do not cover lock contention. Scripted storage proves
+Worker orchestration, not native managed-XFS measurement.
+
+A second timed receive on the **same** guest WebSocket can reach the reader mutex while an
+untimed receive holds it in its native frame read. `tests/api/interruption/host/websocket/reader_lock.rs`
+first parks the timed call at a keyed test-only pre-lock gate and observes the untimed
+native frame future's actual Pending while it holds that socket's guard. Matching invocation,
+socket, Start and runtime receipts precede gate release and the timed `reader.lock()` Pending.
+Guest import or Start order alone does not establish lock ownership. Six resource/mode cells
+exercise **stop-only** physical cleanup with both frames withheld. The first
+interruptible read releases its guard on an owner monthly stop, so the missing select around
+the second lock await has no demonstrated normal-Worker RED. A separate control shows the timed
+deadline begins only after lock acquisition. An earlier durable two-read continuation failed
+because replay accessors independently reconnected one saved handle through a one-slot pool.
+The per-handle reconnect gate now serializes reconstruction: queued accessors recheck Live or
+Terminal and do not acquire a second permit. Ordinary interruption/reconstruction tests in
+`tests/websocket.rs` cover this fix. The monthly reader-lock cases remain stop-only and do not
+prove same-key two-read continuation after monthly suspension. Entity-local cancellation and
+the writer mutex are distinct.
+
+### Resident lifecycle unit and identities
+
+The primary Store and every current entity Store are one resident lifecycle unit. The retained
+StopProgress driver freezes the elected lifecycle cause, fences the matching owner's entity
+admission and runtime resources, signals the primary Store and drains the fenced entity bodies.
+The outer loop joins retained stop progress before creating another Store. This check is
+unconditional: a loop that retained its concurrent-agent permit must not skip it. Restart and suspend therefore discard the complete unit,
 and reconstruction recreates entity Stores from the owner's oplog rather than carrying resident
 entity state across generations.
 
@@ -254,8 +712,21 @@ updates; an executor restart or shard move is not a request to resume them. If t
 has already unloaded (for example during OOM backoff), the retiring owner must commit an unclaimed
 terminal interrupt and notify invocation waiters before removal; no Store remains to do it. A
 terminal interrupt already claimed by the invocation loop is not recorded again, and a completed
-or failed invocation is not overwritten. Test:
-`tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart`.
+or failed invocation is not overwritten. A claim retains its exact request, so teardown cannot
+requeue that same cause. An automatic terminal may be selected and committed before teardown
+registers its retained stop. After fencing and typed publication, the driver claims only that exact
+terminal using the successful writer receipt and matching generation, key, failure and writer.
+Acceptance captures the started resident's real start-attempt identity; publication revalidates it
+under the lifecycle lock. Permit-wait and pre-owner-generation stops cannot use an old resident's
+writer, even while the resident-generation number still matches. They retain ordinary startup
+finalization and acknowledgement. A refused write joins cleanup but cannot acknowledge a persisted
+terminal. A distinct terminal following a completed Restart keeps its own queue
+demand while the original publication stays Restart. Normal loop stop or joined owner retirement
+commits the unclaimed status marker once, including an outer-loop concurrent-permit wait with no
+new Store or permit. A Suspend already committed by admission is not appended again. Loop stop
+never claims a terminal merely to discard it. Tests:
+`tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart` and
+`tests/resource_limits.rs::concurrent_agent_limit_restarted_waiter_stops_without_permit`.
 
 `recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
 turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
@@ -680,12 +1151,12 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   retained map: claimed, adopted into a custom subtree, folded into the abandoned tolerance, or
   released at the live invocation end (`release_retained_starts_at_live_invocation_end`).
 - A recovery Jump abandons the attempt it deletes, including any `Start`s retained from it.
-  Incomplete batched-write and remote-transaction retries on the direct and accessor paths use
-  `commit_replay_jumps` (`durable_host/mod.rs`), which appends the Jump entries,
-  registers the deleted regions with the cursor (`register_replay_jump`) and prunes the retained
-  `Start`s inside them, so the re-executed attempt cannot claim the abandoned attempt's history.
-  Ordinary atomic recovery instead commits a full suffix Jump before Store construction and
-  reloads startup metadata; no replay claims exist when that cut is applied.
+  Incomplete batched-write and remote-transaction recovery proposes a retained Worker-owned
+  suffix cut and returns typed Jump instead of editing history in the resident Store. Startup
+  drains old append producers and stream recovery, commits the cut at a fixed horizon and reloads
+  metadata before constructing a fresh Store. Atomic recovery uses the same suffix normalization;
+  no replay claims exist when the cut is applied. The replacement cannot claim deleted history.
+  A cut does not undo external effects or remove their existing retry ambiguity.
 - Positional reads through the shared cursor are attributed per Store (`get_oplog_entry(scope)`,
   `OplogEntry::entity_attribution()`): the primary agent consumes only entries with no entity
   parent, an entity body only entries recorded under its own invocation `Start`. A read that

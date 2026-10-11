@@ -27,7 +27,7 @@ use golem_worker_executor_test_utils::{
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2948,6 +2948,7 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
     let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let (replayed_tx, mut replayed_rx) = mpsc::unbounded_channel();
     let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
 
     let http_server = spawn(
@@ -2957,6 +2958,7 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
                 let is_first = first;
                 first = false;
                 let request_tx = request_tx.clone();
+                let replayed_tx = replayed_tx.clone();
                 let closed_tx = closed_tx.clone();
                 spawn(async move {
                     if is_first {
@@ -2971,6 +2973,7 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
                     } else {
                         let _ = async {
                             let _ = read_request_headers(&mut stream).await?;
+                            let _ = replayed_tx.send(());
                             stream
                                 .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nhi")
                                 .await?;
@@ -2995,6 +2998,25 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
+    let before_invocation = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if oplog
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            {
+                break Ok::<_, anyhow::Error>(
+                    oplog
+                        .last()
+                        .map(|entry| entry.oplog_index)
+                        .unwrap_or(OplogIndex::INITIAL),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
 
     let executor_clone = executor.clone();
     let component_clone = component.clone();
@@ -3013,9 +3035,59 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
         .in_current_span(),
     );
 
-    // Wait until the guest is parked in the pending P3 response wait: the
-    // server has read the request headers but will never respond.
+    // Request arrival alone does not prove that the durable send is still open. Commit the live
+    // oplog until the send Start is visible under one unfinished retained invocation.
     recv_request_event(&mut request_rx).await?;
+    let (send_start, invocation_start) = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let terminal_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) => Some(end.start_index),
+                    PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            let send_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if entry.oplog_index > before_invocation
+                            && start.function_name == "http::client::send" =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let invocation_starts = oplog
+                .iter()
+                .filter(|entry| entry.oplog_index > before_invocation)
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::AgentInvocationStarted(_) => Some(entry.oplog_index),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let invocation_finished = oplog
+                .iter()
+                .filter(|entry| entry.oplog_index > before_invocation)
+                .filter(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+                })
+                .count();
+            if send_starts.len() == 1
+                && !terminal_starts.contains(&send_starts[0])
+                && invocation_starts.len() == 1
+                && invocation_finished == 0
+            {
+                break Ok::<_, anyhow::Error>((send_starts[0], invocation_starts[0]));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
 
     executor.interrupt(&worker_id).await?;
 
@@ -3039,13 +3111,130 @@ async fn interrupt_while_parked_in_p3_http_response_wait(
         recv_close_event(&mut closed_rx).await?,
         "interrupting the worker must abort the in-flight HTTP request connection"
     );
+    let before_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        before_resume.iter().all(|entry| !matches!(
+            &entry.entry,
+            PublicOplogEntry::End(end) if end.start_index == send_start
+        )),
+        "the captured send Start must have no End before resume"
+    );
+    assert!(
+        before_resume.iter().all(|entry| !matches!(
+            &entry.entry,
+            PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == send_start
+        )),
+        "the captured send Start must have no Cancelled terminal before resume"
+    );
+    assert_eq!(
+        before_resume
+            .iter()
+            .filter(|entry| entry.oplog_index > before_invocation)
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(_) => Some(entry.oplog_index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![invocation_start],
+        "the retained invocation identity must not change before resume"
+    );
+    assert_eq!(
+        before_resume
+            .iter()
+            .filter(|entry| entry.oplog_index > before_invocation)
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            })
+            .count(),
+        0,
+        "the retained invocation must remain unfinished before resume"
+    );
 
     // Resuming the worker retries the interrupted invocation live; the server
     // responds this time.
     executor.resume(&worker_id, false).await?;
+    tokio::time::timeout(Duration::from_secs(30), replayed_rx.recv())
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("http server stopped before the retained invocation reconnected")
+        })?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
+
+    let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        after_resume
+            .iter()
+            .filter(|entry| entry.oplog_index > before_invocation)
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(_) => Some(entry.oplog_index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![invocation_start],
+        "resume must continue the original retained invocation before fresh work"
+    );
+    assert_eq!(
+        after_resume
+            .iter()
+            .filter(|entry| entry.oplog_index > before_invocation)
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            })
+            .count(),
+        1,
+        "the retained invocation must record one terminal before fresh work"
+    );
+    let send_starts = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if entry.oplog_index > before_invocation
+                    && start.function_name == "http::client::send" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let ended_starts = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => Some(end.start_index),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let cancelled_starts = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let jump_regions = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Jump(jump) => Some(jump.jump.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        send_starts,
+        vec![send_start],
+        "replay must settle the captured send Start without inventing another identity"
+    );
+    assert!(
+        ended_starts.contains(&send_start),
+        "the retained replay of the captured send Start must carry the End"
+    );
+    assert!(!cancelled_starts.contains(&send_start));
+    assert!(
+        jump_regions
+            .iter()
+            .all(|region| !region.contains(send_start)),
+        "the settled retained send Start must lie outside every recovery Jump"
+    );
 
     let result2 = executor
         .invoke_and_await_agent(

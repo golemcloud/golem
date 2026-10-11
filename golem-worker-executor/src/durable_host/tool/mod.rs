@@ -149,6 +149,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -2390,11 +2391,50 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             format!("golem:tool/guest.invoke({tool_name})")
         }
     };
+    #[cfg(feature = "test-utils")]
+    let diagnostic_scope = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .map(|scope| {
+            (
+                scope.invocation_id().start_index().as_u64(),
+                scope.mode() as u64,
+            )
+        });
+    #[cfg(feature = "test-utils")]
+    if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+        tracing::debug!(
+            entity_start_index,
+            execution_mode,
+            stage = "prepare_guest_call_enter",
+            stdin_present = stdin.is_some(),
+            "EntityStdinGuest.stage"
+        );
+    }
     prepare_guest_call(&mut store, &display_name).await;
+    #[cfg(feature = "test-utils")]
+    if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+        tracing::debug!(
+            entity_start_index,
+            execution_mode,
+            stage = "prepare_guest_call_return_stdin_reader_enter",
+            "EntityStdinGuest.stage"
+        );
+    }
     let stdin = stdin
         .map(|stdin| StreamReader::new(store.as_context_mut(), stdin.into_stream_producer()))
         .transpose()
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    #[cfg(feature = "test-utils")]
+    if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+        tracing::debug!(
+            entity_start_index,
+            execution_mode,
+            stage = "stdin_reader_return",
+            "EntityStdinGuest.stage"
+        );
+    }
     store
         .data_mut()
         .durable_ctx_mut()
@@ -2423,6 +2463,16 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 ))
             })?;
             run_guest_call_settled(&mut store, async move |accessor| {
+                #[cfg(feature = "test-utils")]
+                if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+                    tracing::debug!(
+                        entity_start_index,
+                        execution_mode,
+                        stage = "guest_call_enter",
+                        role = "tool",
+                        "EntityStdinGuest.stage"
+                    );
+                }
                 let result = guest
                     .call_invoke(
                         accessor,
@@ -2435,6 +2485,24 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         principal,
                     )
                     .await?;
+                #[cfg(feature = "test-utils")]
+                if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+                    tracing::debug!(
+                        entity_start_index,
+                        execution_mode,
+                        stage = "guest_call_return",
+                        role = "tool",
+                        guest_succeeded = result.is_ok(),
+                        "EntityStdinGuest.stage"
+                    );
+                    tracing::debug!(
+                        entity_start_index,
+                        execution_mode,
+                        stage = "materialize_enter",
+                        role = "tool",
+                        "EntityStdinGuest.stage"
+                    );
+                }
                 materialize_guest_tool_response(
                     accessor,
                     result,
@@ -2484,6 +2552,16 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 ))
             })?;
             run_guest_call_settled(&mut store, async move |accessor| {
+                #[cfg(feature = "test-utils")]
+                if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+                    tracing::debug!(
+                        entity_start_index,
+                        execution_mode,
+                        stage = "guest_call_enter",
+                        role = "middleware",
+                        "EntityStdinGuest.stage"
+                    );
+                }
                 let result = guest
                     .call_invoke_tool_middleware(
                         accessor,
@@ -2500,7 +2578,28 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         wrapped,
                     )
                     .await;
+                #[cfg(feature = "test-utils")]
+                if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+                    tracing::debug!(
+                        entity_start_index,
+                        execution_mode,
+                        stage = "guest_call_return",
+                        role = "middleware",
+                        call_succeeded = result.is_ok(),
+                        "EntityStdinGuest.stage"
+                    );
+                }
                 revoke.revoke();
+                #[cfg(feature = "test-utils")]
+                if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+                    tracing::debug!(
+                        entity_start_index,
+                        execution_mode,
+                        stage = "materialize_enter",
+                        role = "middleware",
+                        "EntityStdinGuest.stage"
+                    );
+                }
                 materialize_guest_tool_response(
                     accessor,
                     result?,
@@ -2513,6 +2612,16 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             .await
         }
     };
+    #[cfg(feature = "test-utils")]
+    if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+        tracing::debug!(
+            entity_start_index,
+            execution_mode,
+            stage = "settled_return",
+            settlement_succeeded = result.is_ok(),
+            "EntityStdinGuest.stage"
+        );
+    }
     store
         .data_mut()
         .durable_ctx_mut()
@@ -2556,6 +2665,16 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             )
             .as_trap_type::<Ctx>()
             .expect("a failed tool guest call must classify as a trap");
+            if let crate::model::TrapType::Interrupt(kind) = &trap
+                && !replaying_completed
+                && !local_cancellation_selected
+            {
+                let worker = store.data().durable_ctx().public_state.worker();
+                let kind = worker.terminal_teardown_cause(*kind).await;
+                let _ = operation
+                    .select_failure(operation::OwnerFailureWinner::Lifecycle(kind))
+                    .await;
+            }
             let output_failure = guest_trap_output_failure(
                 &operation,
                 trap.clone(),
@@ -4779,6 +4898,61 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
     .await
 }
 
+#[cfg(feature = "test-utils")]
+struct NativeToolStageLog {
+    native_task: usize,
+    stage: &'static str,
+    completed: bool,
+}
+
+#[cfg(feature = "test-utils")]
+impl NativeToolStageLog {
+    fn enter(native_task: usize, stage: &'static str) -> Self {
+        tracing::debug!(native_task, stage, event = "enter", "NativeToolTask.stage");
+        Self {
+            native_task,
+            stage,
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self, ok: bool) {
+        self.completed = true;
+        tracing::debug!(
+            native_task = self.native_task,
+            stage = self.stage,
+            event = "completed",
+            ok,
+            "NativeToolTask.stage"
+        );
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Drop for NativeToolStageLog {
+    fn drop(&mut self) {
+        tracing::debug!(
+            native_task = self.native_task,
+            stage = self.stage,
+            event = "drop",
+            completed = self.completed,
+            "NativeToolTask.stage"
+        );
+    }
+}
+
+fn native_output_runtime_teardown_probe(
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    owner_operations: Weak<operation::OwnerToolOperations>,
+) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
+    Arc::new(move || {
+        runtime_teardown()
+            || owner_operations
+                .upgrade()
+                .is_some_and(|owner| owner.selected_owner_failure().is_some())
+    })
+}
+
 struct NativeToolTask {
     activation: Arc<ToolActivationSnapshot>,
     tool_name: ToolName,
@@ -4796,6 +4970,10 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         self,
         accessor: &Accessor<Ctx, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
+        #[cfg(feature = "test-utils")]
+        let native_task = accessor as *const _ as usize;
+        #[cfg(feature = "test-utils")]
+        let mut run_log = NativeToolStageLog::enter(native_task, "run");
         let Self {
             activation,
             tool_name,
@@ -4815,6 +4993,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             )
         });
         let key = key.ok_or_else(|| wasmtime::Error::msg("native tool has no invocation key"))?;
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(native_task, invocation_key = %key, "NativeToolTask.identity");
         let session = worker
             .native_tool_session(&key)
             .await
@@ -4870,6 +5050,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         } else {
             None
         };
+        #[cfg(feature = "test-utils")]
+        let stdout_stream_id = stdout_handle.as_ref().map(|handle| handle.stream_id);
         let create_output = |handle: Option<DurableStreamHandle>| -> wasmtime::Result<_> {
             let Some((_, streams)) = &session else {
                 return Ok((None, None));
@@ -4881,15 +5063,32 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                 create_output_attachment(accessor, false).map_err(wasmtime::Error::from_anyhow)?;
             let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
-                let runtime_teardown = access.get().stream_runtime_teardown_probe();
+                let runtime_teardown = native_output_runtime_teardown_probe(
+                    access.get().stream_runtime_teardown_probe(),
+                    Arc::downgrade(&access.get().owner_execution.tool_operations()),
+                );
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(
+                    native_task,
+                    stream_id = %handle.stream_id,
+                    role = if Some(handle.stream_id) == stdout_stream_id { "stdout" } else { "stderr" },
+                    teardown_probe = Arc::as_ptr(&runtime_teardown) as *const () as usize,
+                    event = "created",
+                    "NativeToolTask.output"
+                );
+                let interrupt = access.get().create_interrupt_signal();
                 let runtime_source = access
                     .get()
                     .runtime_suspension
                     .as_ref()
                     .map(|runtime| runtime.source());
-                let (sink, stream) =
-                    accounted_byte_output_stream_pair(capacity, runtime_teardown, runtime_source)
-                        .map_err(wasmtime::Error::msg)?;
+                let (sink, stream) = accounted_byte_output_stream_pair(
+                    capacity,
+                    runtime_teardown,
+                    runtime_source,
+                    interrupt,
+                )
+                .map_err(wasmtime::Error::msg)?;
                 let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
                 reader.pipe(&mut access, sink)?;
                 stream
@@ -4923,6 +5122,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
         let execute = async {
+            #[cfg(feature = "test-utils")]
+            let mut execute_log = NativeToolStageLog::enter(native_task, "execute");
             let dispatch = dispatch_tool_attempt(
                 accessor,
                 ToolInvocationAttempt {
@@ -4944,25 +5145,58 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             )
             .await
             .map_err(|error| {
+                #[cfg(feature = "test-utils")]
+                execute_log.complete(false);
                 cleanup_failed_tool_dispatch(accessor, stdin_rep, stdout_rep, stderr_rep, error)
             })?;
             let response = match dispatch {
                 ToolCallDispatch::Rejected { response, stdin } => {
-                    close_stdin(accessor, stdin)?;
-                    reject_output(accessor, stdout)?;
-                    reject_output(accessor, stderr)?;
+                    close_stdin(accessor, stdin).inspect_err(|_| {
+                        #[cfg(feature = "test-utils")]
+                        execute_log.complete(false);
+                    })?;
+                    reject_output(accessor, stdout).inspect_err(|_| {
+                        #[cfg(feature = "test-utils")]
+                        execute_log.complete(false);
+                    })?;
+                    reject_output(accessor, stderr).inspect_err(|_| {
+                        #[cfg(feature = "test-utils")]
+                        execute_log.complete(false);
+                    })?;
                     *response
                 }
                 ToolCallDispatch::Accepted(mut accepted) => {
-                    register_tool_admission(accessor, &mut accepted)?;
+                    register_tool_admission(accessor, &mut accepted).inspect_err(|_| {
+                        #[cfg(feature = "test-utils")]
+                        execute_log.complete(false);
+                    })?;
                     execute_accepted_tool_call(accessor, *accepted, stdout, stderr, None, None)
-                        .await?
+                        .await
+                        .inspect_err(|_| {
+                            #[cfg(feature = "test-utils")]
+                            execute_log.complete(false);
+                        })?
                 }
             };
+            #[cfg(feature = "test-utils")]
+            execute_log.complete(true);
             Ok::<_, anyhow::Error>(response)
         };
         let drain = |drain: Option<(StreamSession, DurableStreamHandle, LiveStreamEndpoint)>| async move {
+            #[cfg(feature = "test-utils")]
+            let mut drain_log = NativeToolStageLog::enter(
+                native_task,
+                match &drain {
+                    Some((_, handle, _)) if Some(handle.stream_id) == stdout_stream_id => {
+                        "stdout_drain"
+                    }
+                    Some(_) => "stderr_drain",
+                    None => "absent_output_drain",
+                },
+            );
             if let Some((streams, handle, endpoint)) = drain {
+                #[cfg(feature = "test-utils")]
+                tracing::debug!(native_task, stream_id = %handle.stream_id, event = "drain_enter", "NativeToolTask.output");
                 streams
                     .drain_registered_output(
                         handle,
@@ -4971,17 +5205,42 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                         SchemaType::u8(),
                     )
                     .await
-                    .map_err(SessionError::into_trap)?;
+                    .map_err(SessionError::into_trap)
+                    .inspect_err(|_| {
+                        #[cfg(feature = "test-utils")]
+                        drain_log.complete(false);
+                    })?;
             }
+            #[cfg(feature = "test-utils")]
+            drain_log.complete(true);
             Ok::<_, anyhow::Error>(())
         };
+        #[cfg(feature = "test-utils")]
+        let mut join_log = NativeToolStageLog::enter(native_task, "join");
         let (response, (), ()) =
             tokio::try_join!(execute, drain(stdout_drain), drain(stderr_drain))
-                .map_err(wasmtime::Error::from_anyhow)?;
+                .map_err(wasmtime::Error::from_anyhow)
+                .inspect_err(|_| {
+                    #[cfg(feature = "test-utils")]
+                    join_log.complete(false);
+                })?;
+        #[cfg(feature = "test-utils")]
+        join_log.complete(true);
+        #[cfg(feature = "test-utils")]
+        let mut admission_log = NativeToolStageLog::enter(native_task, "result_admission");
         let response = admit_tool_response_secret_holds(accessor, response)
             .await
-            .map_err(wasmtime::Error::from_anyhow)?;
+            .map_err(wasmtime::Error::from_anyhow)
+            .inspect_err(|_| {
+                #[cfg(feature = "test-utils")]
+                admission_log.complete(false);
+            })?;
+        #[cfg(feature = "test-utils")]
+        admission_log.complete(true);
         if let Some((prepared, streams)) = &session {
+            #[cfg(feature = "test-utils")]
+            let mut materialize_log =
+                NativeToolStageLog::enter(native_task, "result_materialization");
             let value = ToolInvocationOutput {
                 outcome: response.clone(),
                 stdout: prepared
@@ -5010,7 +5269,11 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     }),
             }
             .into_typed_schema_value()
-            .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+            .map_err(|error| wasmtime::Error::msg(error.to_string()))
+            .inspect_err(|_| {
+                #[cfg(feature = "test-utils")]
+                materialize_log.complete(false);
+            })?;
             streams
                 .materialize_result(
                     value.value().clone(),
@@ -5019,11 +5282,27 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     prepared.attempt.invocation.target_component_revision,
                 )
                 .await
-                .map_err(|error| wasmtime::Error::from_anyhow(error.into_trap()))?;
+                .map_err(|error| wasmtime::Error::from_anyhow(error.into_trap()))
+                .inspect_err(|_| {
+                    #[cfg(feature = "test-utils")]
+                    materialize_log.complete(false);
+                })?;
+            #[cfg(feature = "test-utils")]
+            materialize_log.complete(true);
         }
+        #[cfg(feature = "test-utils")]
+        let mut send_log = NativeToolStageLog::enter(native_task, "result_send");
         result
             .send(response)
-            .map_err(|_| wasmtime::Error::msg("native tool result receiver dropped"))?;
+            .map_err(|_| wasmtime::Error::msg("native tool result receiver dropped"))
+            .inspect_err(|_| {
+                #[cfg(feature = "test-utils")]
+                send_log.complete(false);
+            })?;
+        #[cfg(feature = "test-utils")]
+        send_log.complete(true);
+        #[cfg(feature = "test-utils")]
+        run_log.complete(true);
         Ok(())
     }
 }
@@ -6516,20 +6795,26 @@ mod tests {
         ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, UnderlyingToolEntry,
         WitRegisteredTool, await_native_entity_body, caller_tool_owner,
         classify_tool_discovery_error, cleanup_tool_endpoints, first_output_limit_error,
-        materialize_output_writer, merge_discovered_tools, native_output_handles, option_args,
-        output_limit_error, publish_output_completions, recorded_tool_body_is_skipped,
-        resolve_tool_command, select_native_body_result, terminal_tool_discovery_error,
-        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
-        validate_stream_attachments,
+        materialize_output_writer, merge_discovered_tools, native_output_handles,
+        native_output_runtime_teardown_probe, option_args, output_limit_error,
+        publish_output_completions, recorded_tool_body_is_skipped, resolve_tool_command,
+        select_native_body_result, terminal_tool_discovery_error, validate_declared_tool_error,
+        validate_declared_tool_result, validate_native_tool_output, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
+    use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
+    use crate::durable_host::stream_transport::{
+        LiveStreamEndpoint, accounted_byte_output_stream_pair,
+    };
     use crate::durable_host::tool::attachment::{
         AttachmentMemory, AttachmentRead, ToolAttachmentModeMetadata, attachment_pair,
     };
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
 
     use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
     use crate::services::environment_state::ToolDiscoveryError;
+    use futures::FutureExt;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
@@ -6570,10 +6855,10 @@ mod tests {
         SchemaValue, TypeId, TypedSchemaValue,
     };
     use golem_schema::schema::SchemaValueStream;
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::Poll;
     use test_r::test;
     use test_r::timeout;
@@ -6597,6 +6882,114 @@ mod tests {
             "not an underlying capability",
             "a failed forged lookup must not consume or replace the actual table entry"
         );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn native_output_owner_failure_aborts_without_publishing_end() {
+        let owner = OwnerToolOperations::new();
+        let primary_teardown = Arc::new(|| false);
+        let runtime_teardown =
+            native_output_runtime_teardown_probe(primary_teardown.clone(), Arc::downgrade(&owner));
+        assert!(!runtime_teardown());
+        let (sink, stream) = accounted_byte_output_stream_pair(
+            4,
+            runtime_teardown.clone(),
+            None,
+            Box::pin(std::future::pending()),
+        )
+        .unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+                .await
+        );
+        assert!(!primary_teardown());
+        assert!(runtime_teardown());
+        drop(sink);
+
+        lifecycle.cancelled().await;
+        assert!(lifecycle.is_aborted());
+        assert!(matches!(
+            primary.recv().now_or_never(),
+            None | Some(Err(LiveStreamReceiveError::Closed))
+        ));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn native_output_unfenced_eof_preserves_bytes_and_end() {
+        let owner = OwnerToolOperations::new();
+        let runtime_teardown =
+            native_output_runtime_teardown_probe(Arc::new(|| false), Arc::downgrade(&owner));
+        assert!(!runtime_teardown());
+        let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+        assert!(producer.configure_live());
+        producer.write(vec![17, 255]).await.unwrap();
+        producer.finish().unwrap();
+
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let reader = StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        let (sink, stream) = accounted_byte_output_stream_pair(
+            4,
+            runtime_teardown,
+            None,
+            Box::pin(std::future::pending()),
+        )
+        .unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let mut primary = endpoint.activate();
+        let bytes = store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<Vec<u8>> {
+                accessor.with(|mut store| reader.pipe(&mut store, sink))?;
+                let mut bytes = Vec::new();
+                loop {
+                    let event = primary.recv().await.unwrap();
+                    assert_eq!(event.offset, bytes.len() as u64);
+                    match event.payload {
+                        LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => bytes.push(byte),
+                        LiveStreamEventPayload::End => break,
+                        other => panic!("unexpected native output event: {other:?}"),
+                    }
+                }
+                Ok(bytes)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes, vec![17, 255]);
+        assert!(!lifecycle.is_aborted());
+        assert!(owner.selected_owner_failure().is_none());
+    }
+
+    #[test]
+    fn native_output_teardown_probe_preserves_primary_without_retaining_owner() {
+        let owner = OwnerToolOperations::new();
+        let weak_owner = Arc::downgrade(&owner);
+        let primary_teardown = Arc::new(AtomicBool::new(false));
+        let primary_flag = primary_teardown.clone();
+        let runtime_teardown = native_output_runtime_teardown_probe(
+            Arc::new(move || primary_flag.load(Ordering::Acquire)),
+            weak_owner.clone(),
+        );
+        assert_eq!(Arc::strong_count(&owner), 1);
+        assert!(!runtime_teardown());
+        assert_eq!(Arc::strong_count(&owner), 1);
+
+        drop(owner);
+        assert!(weak_owner.upgrade().is_none());
+        assert!(!runtime_teardown());
+        primary_teardown.store(true, Ordering::Release);
+        assert!(runtime_teardown());
+        assert!(weak_owner.upgrade().is_none());
     }
 
     #[test]

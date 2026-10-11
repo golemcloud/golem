@@ -1149,6 +1149,11 @@ impl AttachmentConsumer {
     }
 
     pub(crate) fn into_stream_producer(self) -> AttachmentStreamProducer {
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            attachment = Arc::as_ptr(&self.attachment) as usize,
+            "AttachmentStreamProducer.construct"
+        );
         AttachmentStreamProducer {
             consumer: Some(self),
             in_flight_charge: None,
@@ -1340,7 +1345,26 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
         drop(self.in_flight_charge.take());
+        #[cfg(feature = "test-utils")]
+        let diagnostic_attachment = self
+            .consumer
+            .as_ref()
+            .map_or(0, |consumer| Arc::as_ptr(&consumer.attachment) as usize);
+        #[cfg(feature = "test-utils")]
+        tracing::debug!(
+            attachment = diagnostic_attachment,
+            finish,
+            already_finished = self.finished,
+            decision = "poll_enter",
+            "AttachmentStreamProducer.poll"
+        );
         if self.finished {
+            #[cfg(feature = "test-utils")]
+            tracing::debug!(
+                attachment = diagnostic_attachment,
+                decision = "already_finished",
+                "AttachmentStreamProducer.poll"
+            );
             return Poll::Ready(Ok(StreamResult::Dropped));
         }
         let attachment = self
@@ -1351,9 +1375,21 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
             .clone();
         let remaining = dst.remaining(store.as_context_mut());
         if finish {
+            #[cfg(feature = "test-utils")]
+            tracing::debug!(
+                attachment = diagnostic_attachment,
+                decision = "finish_requested_cancelled",
+                "AttachmentStreamProducer.poll"
+            );
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
         if remaining == Some(0) {
+            #[cfg(feature = "test-utils")]
+            tracing::debug!(
+                attachment = diagnostic_attachment,
+                decision = "destination_full",
+                "AttachmentStreamProducer.poll"
+            );
             return Poll::Ready(Ok(StreamResult::Completed));
         }
 
@@ -1402,6 +1438,25 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
             }
         };
 
+        #[cfg(feature = "test-utils")]
+        {
+            let (decision, item_bytes, item_succeeded) = match &produced {
+                Produced::Item(item, _) => {
+                    ("item", item.as_ref().map_or(0, Vec::len), item.is_ok())
+                }
+                Produced::End => ("end", 0, false),
+                Produced::Cancelled => ("consumer_cancelled", 0, false),
+                Produced::OwnerFenced => ("owner_fenced", 0, false),
+                Produced::Pending => ("pending", 0, false),
+            };
+            tracing::debug!(
+                attachment = diagnostic_attachment,
+                decision,
+                item_bytes,
+                item_succeeded,
+                "AttachmentStreamProducer.poll"
+            );
+        }
         match produced {
             Produced::Item(item, charge) => {
                 self.in_flight_charge = charge;

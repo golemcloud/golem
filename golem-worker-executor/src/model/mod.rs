@@ -187,6 +187,7 @@ pub enum ExecutionStatus {
     Loading {
         agent_mode: AgentMode,
         timestamp: Timestamp,
+        interrupt_signal: Arc<tokio::sync::broadcast::Sender<InterruptKind>>,
     },
     Running {
         agent_mode: AgentMode,
@@ -206,6 +207,41 @@ pub enum ExecutionStatus {
 }
 
 impl ExecutionStatus {
+    pub(crate) fn loading(agent_mode: AgentMode) -> Self {
+        Self::Loading {
+            agent_mode,
+            timestamp: Timestamp::now_utc(),
+            interrupt_signal: Arc::new(tokio::sync::broadcast::channel(128).0),
+        }
+    }
+
+    pub(crate) fn publish_interrupt(
+        &mut self,
+        kind: InterruptKind,
+        receipt: Arc<tokio::sync::broadcast::Sender<()>>,
+        signal: Option<&Arc<tokio::sync::broadcast::Sender<InterruptKind>>>,
+    ) -> bool {
+        if matches!(self, Self::Interrupting { .. }) {
+            return true;
+        }
+        if let Some(signal) = signal {
+            let _ = signal.send(kind);
+        }
+        match self {
+            Self::Loading { .. } | Self::Running { .. } => {
+                *self = Self::Interrupting {
+                    interrupt_kind: kind,
+                    await_interruption: receipt,
+                    agent_mode: self.agent_mode(),
+                    timestamp: Timestamp::now_utc(),
+                };
+                true
+            }
+            Self::Suspended { .. } => false,
+            Self::Interrupting { .. } => unreachable!(),
+        }
+    }
+
     pub fn is_running(&self) -> bool {
         matches!(self, ExecutionStatus::Running { .. })
     }
@@ -265,8 +301,10 @@ impl ExecutionStatus {
         &self,
     ) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
         match self {
-            ExecutionStatus::Loading { .. } => Box::pin(pending()),
-            ExecutionStatus::Running {
+            ExecutionStatus::Loading {
+                interrupt_signal, ..
+            }
+            | ExecutionStatus::Running {
                 interrupt_signal, ..
             } => {
                 let mut rx = interrupt_signal.subscribe();
@@ -978,6 +1016,42 @@ mod tests {
     use crate::worker::RetryDecision;
     use golem_common::model::component::ComponentId;
     use test_r::test;
+
+    #[test]
+    async fn loading_interrupt_wakes_existing_and_late_subscribers() {
+        let mut status =
+            super::ExecutionStatus::loading(golem_common::model::agent::AgentMode::Durable);
+        let existing = status.create_await_interrupt_signal();
+        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        );
+        let signal = match &status {
+            ExecutionStatus::Loading {
+                interrupt_signal, ..
+            } => interrupt_signal.clone(),
+            _ => unreachable!(),
+        };
+        assert!(status.publish_interrupt(
+            kind,
+            Arc::new(tokio::sync::broadcast::channel(1).0),
+            Some(&signal)
+        ));
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), existing)
+                .await
+                .unwrap(),
+            kind
+        );
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                status.create_await_interrupt_signal()
+            )
+            .await
+            .unwrap(),
+            kind
+        );
+    }
     use tracing::info;
     use uuid::Uuid;
 

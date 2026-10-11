@@ -28,17 +28,19 @@ below for what that leaves behind.
 
 ## Owner lifecycle handoff (`worker/mod.rs`, `worker/invocation_loop.rs`, `services/active_agents/mod.rs`)
 
-The primary Store plus current entity Stores form one resident lifecycle unit. Lifecycle
-establishment queues the event, waits for its predecessor, fences matching entity admission,
-signals the primary, drains fenced entity bodies, then completes. Startup takes a pending event and
-waits for this establishment before constructing a replacement, even when it already holds a
-concurrent-agent permit.
+The primary Store plus current entity Stores form one resident lifecycle unit. Worker acceptance
+registers the stop in retained StopProgress before returning; acceptance is not drainage. Its sole
+driver waits for retained predecessors, uses or freezes the elected cause, then joins any selected
+writer before fencing matching entity admission, publishing the typed signal and draining fenced
+entity bodies.
+Startup processes pending lifecycle events even with a held concurrent-agent permit, joins retained
+stop progress outside acceptance locks and rechecks readiness before replacing the generation.
 
 | Race or loss window | Required outcome | Identity or synchronization that makes it safe |
 |---|---|---|
-| `Restart` while an entity body is running or a completed body is reconstructing | Fence new body admission, stop and drain the old primary/entity unit, then reconstruct the original owner invocation and bodies from the owner oplog; do not append a semantic tool failure or charge another semantic retry | Serialized `InterruptEstablishment`, `ActiveAgent::entity_fence_generation`, owner oplog identity |
-| Restart queued while the owner is unloaded, waiting for a permit, or already retaining its permit | Consume the restart before Store creation; a retained permit is scheduling state, not permission to bypass lifecycle control | Unconditional pending-interrupt check plus establishment wait at the top of the outer loop |
-| Explicit terminal interrupt during entity work | Drain the unit and leave the invocation interrupted until an explicit resume; do not convert it into automatic restart | The terminal interrupt remains authoritative through establishment and reconstruction gating |
+| `Restart` while an entity body is running or a completed body is reconstructing | Fence new body admission, stop and drain the old primary/entity unit, then reconstruct the original owner invocation and bodies from the owner oplog; do not append a semantic tool failure or charge another semantic retry | Retained `StopProgress` driver and joins, exact cached owner, `ActiveAgent::entity_fence_generation`, owner oplog identity |
+| Restart queued while the owner is unloaded, waiting for a permit, or already retaining its permit | Process the restart before Store creation; if an exact blocked-start task was captured, cancel and join it without acquiring its permit. A retained permit cannot bypass lifecycle control | Unconditional pending-interrupt check, retained progress joins and acceptance-lock readiness rechecks before generation publication |
+| Explicit terminal interrupt during entity work | Drain the unit and leave the invocation interrupted until an explicit resume; acceptance alone does not prove drainage or physical permit release | Frozen first terminal cause, retained driver publication and cleanup joins, exact owner/entity generation checks |
 | Old cached owner A retires after replacement B is published under the same `AgentId` | A may finish its own cleanup but cannot remove, fence, reopen, or write lifecycle state for B; B remains usable for a fresh invocation | Concrete cached `Arc<Worker>` identity for removal/fencing; generation-checked entity-admission reopen |
 | Executor shutdown while a retained entity callback or Store task is entered | Fence captured oplog generations first; abandon transient entity execution without semantic finalization; join Store destruction and retained callbacks before closing the captured oplog layers | `InvocationLoops` shutdown token/tracker plus exact-generation `OplogShutdownHandle` |
 | Delayed retry begins with duplicate resident work notifications queued | Coalesce only the finite pre-teardown prefix; preserve one work hint and every replay request; leave post-boundary arrivals queued so genuinely new work can shorten the delay | `receiver.len()` boundary, deferred `WorkAvailable`, retained `ResumeReplay`, authoritative interrupt recheck |

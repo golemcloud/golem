@@ -495,11 +495,26 @@ pub trait InvocationHooks {
     /// Clears invocation-scoped runtime state after the guest call returns or traps.
     async fn on_agent_invocation_finished(&mut self);
 
-    /// Called when a worker invocation fails
+    /// Called when a worker invocation fails independently of its invocation deadline.
     async fn on_invocation_failure(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+    ) -> RetryDecision {
+        self.on_invocation_failure_with_origin(
+            full_function_name,
+            trap_type,
+            crate::worker::InvocationFailureOrigin::Independent,
+        )
+        .await
+    }
+
+    /// Preserves invocation-deadline provenance through Worker outcome selection.
+    async fn on_invocation_failure_with_origin(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+        origin: crate::worker::InvocationFailureOrigin,
     ) -> RetryDecision;
 
     /// Called when an agent invocation succeeds, with the typed result directly.

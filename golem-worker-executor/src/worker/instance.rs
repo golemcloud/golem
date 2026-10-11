@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Worker;
 use super::entity_slot::{EntitySlot, EntitySlotRegistration};
+use super::invocation::fuel_exhaustion_error;
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
+use super::{ObservedPrimaryStore, Worker};
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::oplog::{CommitLevel, Oplog, OplogFence};
-use crate::services::resource_limits::AtomicResourceEntry;
+use crate::services::resource_limits::{
+    AtomicResourceEntry, MonthlyCapacity, ResourceUsageFlusher,
+};
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
@@ -67,11 +70,11 @@ pub(super) fn allocated_linear_memory_bytes<T>(
 }
 
 struct StoreFuelGuard<Ctx: crate::workerctx::FuelManagement + 'static> {
-    store: Option<Store<Ctx>>,
+    store: Option<ObservedPrimaryStore<Store<Ctx>>>,
 }
 
 impl<Ctx: crate::workerctx::FuelManagement + 'static> StoreFuelGuard<Ctx> {
-    fn new(store: Store<Ctx>) -> Self {
+    fn new(store: ObservedPrimaryStore<Store<Ctx>>) -> Self {
         Self { store: Some(store) }
     }
 
@@ -83,7 +86,7 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> StoreFuelGuard<Ctx> {
         }
     }
 
-    fn into_inner(mut self) -> Store<Ctx> {
+    fn into_inner(mut self) -> ObservedPrimaryStore<Store<Ctx>> {
         self.settle();
         self.store.take().unwrap()
     }
@@ -253,7 +256,7 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<ReplayState, WorkerExecutorError> {
-        self.install_replay_generation(deleted_regions, initial_snapshot_skip_end)
+        self.install_replay_cursor(deleted_regions, initial_snapshot_skip_end)
             .await?;
         self.replay().await
     }
@@ -266,14 +269,32 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
+        self.join_previous_generation().await?;
+        self.begin_generation()?;
+        self.install_replay_cursor(deleted_regions, initial_snapshot_skip_end)
+            .await
+    }
+
+    pub(crate) async fn join_previous_generation(&self) -> Result<(), WorkerExecutorError> {
         if let Some(replay) = self.replay.read().await.as_ref() {
             replay.ensure_reconstruction_claims_empty()?;
         }
-        self.tool_operations.join_owner_failure_cleanup().await?;
+        self.tool_operations.join_owner_failure_cleanup().await
+    }
+
+    pub(crate) fn begin_generation(&self) -> Result<(), WorkerExecutorError> {
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
         self.reached_oplog_marker
             .store(OplogIndex::NONE.into(), Ordering::Release);
+        Ok(())
+    }
+
+    async fn install_replay_cursor(
+        &self,
+        deleted_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
+    ) -> Result<(), WorkerExecutorError> {
         let replay = ReplayState::new_for_owner(
             self.owner_id.clone(),
             self.oplog.clone(),
@@ -486,6 +507,20 @@ impl OwnerExecution {
     }
 }
 
+pub(crate) struct StoreFuelReservationPublication {
+    generation: Arc<Mutex<Option<u64>>>,
+    transaction: Arc<Mutex<()>>,
+}
+
+impl StoreFuelReservationPublication {
+    pub(crate) fn update<R>(&self, update: impl FnOnce() -> (R, Option<u64>)) -> R {
+        let _transaction = self.transaction.lock().unwrap();
+        let (result, generation) = update();
+        *self.generation.lock().unwrap() = generation;
+        result
+    }
+}
+
 /// Owner-scoped runtime resources reused by primary and entity Store construction.
 pub struct OwnerRuntimeResources {
     resource_limits: Arc<AtomicResourceEntry>,
@@ -493,6 +528,12 @@ pub struct OwnerRuntimeResources {
     // This weak lifecycle handle lets entity Stores attach during reconstruction or residence
     // without sharing or owning the AgentFilesystem itself.
     filesystem_generation: Mutex<Option<FilesystemGenerationHandle>>,
+    fuel_reservations: Mutex<Vec<Weak<Mutex<Option<u64>>>>>,
+    fuel_transaction: Arc<Mutex<()>>,
+    usage_flushers: Mutex<Vec<Weak<dyn ResourceUsageFlusher>>>,
+    #[cfg(feature = "test-utils")]
+    pub(super) scripted_filesystem_usage:
+        Mutex<Option<crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest>>,
 }
 
 impl OwnerRuntimeResources {
@@ -504,7 +545,20 @@ impl OwnerRuntimeResources {
             resource_limits,
             execution_status,
             filesystem_generation: Mutex::new(None),
+            fuel_reservations: Mutex::new(Vec::new()),
+            fuel_transaction: Arc::new(Mutex::new(())),
+            usage_flushers: Mutex::new(Vec::new()),
+            #[cfg(feature = "test-utils")]
+            scripted_filesystem_usage: Mutex::new(None),
         }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn set_scripted_filesystem_usage_for_test(
+        &self,
+        source: crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest,
+    ) {
+        *self.scripted_filesystem_usage.lock().unwrap() = Some(source);
     }
 
     pub fn resource_limits(&self) -> Arc<AtomicResourceEntry> {
@@ -513,6 +567,81 @@ impl OwnerRuntimeResources {
 
     pub fn execution_status(&self) -> Arc<std::sync::RwLock<ExecutionStatus>> {
         self.execution_status.clone()
+    }
+
+    pub(crate) fn register_store_fuel_reservation(&self) -> StoreFuelReservationPublication {
+        let _transaction = self.fuel_transaction.lock().unwrap();
+        let generation = Arc::new(Mutex::new(None));
+        self.fuel_reservations
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&generation));
+        StoreFuelReservationPublication {
+            generation,
+            transaction: self.fuel_transaction.clone(),
+        }
+    }
+
+    pub(crate) fn register_resource_usage_flusher(&self, flusher: Weak<dyn ResourceUsageFlusher>) {
+        self.usage_flushers.lock().unwrap().push(flusher);
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn live_usage_flusher_count_for_test(&self) -> usize {
+        // A retained primary meter can be registered again when its next permit window opens.
+        let mut live = Vec::new();
+        for flusher in self
+            .usage_flushers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(Weak::upgrade)
+        {
+            if !live.iter().any(|existing| Arc::ptr_eq(existing, &flusher)) {
+                live.push(flusher);
+            }
+        }
+        live.len()
+    }
+
+    pub(crate) fn settle_resource_usage(&self) {
+        let flushers = {
+            let mut registered = self.usage_flushers.lock().unwrap();
+            let flushers: Vec<_> = registered.iter().filter_map(Weak::upgrade).collect();
+            registered.retain(|entry| entry.strong_count() > 0);
+            flushers
+        };
+        for flusher in flushers {
+            flusher.flush_usage();
+        }
+    }
+
+    pub(crate) fn with_monthly_capacity<R>(
+        &self,
+        mode: golem_common::model::agent::AgentMode,
+        read: impl FnOnce(MonthlyCapacity) -> R,
+    ) -> R {
+        let _transaction = self.fuel_transaction.lock().unwrap();
+        let mut reservations = self.fuel_reservations.lock().unwrap();
+        let mut generation = None;
+        let mut unreserved = false;
+        reservations.retain(|reservation| {
+            let Some(reservation) = reservation.upgrade() else {
+                return false;
+            };
+            match *reservation.lock().unwrap() {
+                Some(value) => {
+                    generation = Some(generation.map_or(value, |old: u64| old.min(value)))
+                }
+                None => unreserved = true,
+            }
+            true
+        });
+        self.resource_limits.with_monthly_capacity(
+            mode,
+            if unreserved { None } else { generation },
+            read,
+        )
     }
 
     pub(crate) fn activate_filesystem_generation(&self, generation: FilesystemGenerationHandle) {
@@ -548,6 +677,7 @@ pub struct InstanceHost<Ctx: WorkerCtx> {
     slot: Option<Arc<EntitySlot>>,
     activation: Option<Arc<EntityActivation>>,
     owner_component_metadata: Option<Arc<ComponentMetadata>>,
+    release_scope: Option<crate::metrics::resource_release::ReleaseScope>,
 }
 
 impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
@@ -577,6 +707,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             slot: None,
             activation: None,
             owner_component_metadata: None,
+            release_scope: Some(owner.release_scope()),
         })
     }
 
@@ -607,6 +738,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             slot: Some(slot),
             activation: Some(Arc::new(activation.clone())),
             owner_component_metadata: Some(owner_component_metadata),
+            release_scope: None,
         })
     }
 
@@ -657,10 +789,13 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .await
     }
 
-    pub(crate) fn create_store(&self, context: Ctx) -> Result<Store<Ctx>, WorkerExecutorError> {
+    pub(crate) fn create_store(
+        &self,
+        context: Ctx,
+    ) -> Result<ObservedPrimaryStore<Store<Ctx>>, WorkerExecutorError> {
         let owner = self.owner()?;
         let engine = owner.engine();
-        let mut store = Store::new(&engine, context);
+        let mut store = ObservedPrimaryStore::new(&engine, context, self.release_scope.as_ref());
         let runtime = super::suspension::RuntimeStore::new(self.owner_execution.suspension());
         store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
         store
@@ -706,13 +841,50 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         context: Ctx,
         component: &Component,
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
+        #[cfg(feature = "test-utils")]
+        let diagnostic_scope = context
+            .durable_ctx()
+            .entity_invocation_scope()
+            .map(|scope| {
+                (
+                    scope.invocation_id().start_index().as_u64(),
+                    scope.mode() as u64,
+                )
+            });
         let owner = self.owner()?;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "store_create_enter",
+                "EntityStdinStore.stage"
+            );
+        }
         let mut store = StoreFuelGuard::new(self.create_store(context)?);
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "store_create_return",
+                "EntityStdinStore.stage"
+            );
+        }
 
         let linker = (*owner.linker()).clone();
         let instance_pre = linker
             .instantiate_pre(component)
             .map_err(|error| self.creation_error(error.into()))?;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "instantiate_async_enter",
+                "EntityStdinStore.stage"
+            );
+        }
         let instance = instance_pre
             .instantiate_async(&mut *store)
             .await
@@ -723,6 +895,21 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     self.creation_error(error.into())
                 }
             })?;
+
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "instantiate_async_return",
+                "EntityStdinStore.stage"
+            );
+        }
+        let current_level = store.get_fuel().unwrap_or(0);
+        let agent_mode = store.data().agent_mode();
+        if let Err(error) = store.data_mut().ensure_fuel(current_level) {
+            return Err(fuel_exhaustion_error(agent_mode, error));
+        }
 
         Ok(HostedInstance {
             instance,
@@ -808,6 +995,14 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         self.instantiate_entity_with_scope(None).await
     }
 
+    #[cfg(feature = "test-utils")]
+    pub async fn instantiate_entity_scoped_for_test(
+        &self,
+        scope: &EntityInvocationScope,
+    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
+        self.instantiate_entity_scoped(scope).await
+    }
+
     pub(crate) async fn instantiate_entity_scoped(
         &self,
         scope: &EntityInvocationScope,
@@ -838,8 +1033,33 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 ));
             }
         }
+        #[cfg(feature = "test-utils")]
+        let diagnostic_scope = scope.map(|scope| {
+            (
+                scope.invocation_id().start_index().as_u64(),
+                scope.mode() as u64,
+            )
+        });
         let owner = self.owner()?;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "activate_enter",
+                "EntityStdinStore.stage"
+            );
+        }
         let (component, component_metadata) = self.activate().await?;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "activate_return_charge_enter",
+                "EntityStdinStore.stage"
+            );
+        }
         let component_charge = owner
             .active_agents()
             .acquire_component_charge(
@@ -848,10 +1068,28 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 component_metadata.component_size,
             )
             .await;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "component_charge_return",
+                "EntityStdinStore.stage"
+            );
+        }
         let authority_wallet = match scope {
             Some(scope) => scope.authority_wallet().to_vec(),
             None => owner.get_wallet_cards().await?,
         };
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "create_context_enter",
+                "EntityStdinStore.stage"
+            );
+        }
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
@@ -869,11 +1107,47 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 authority_wallet,
             )
             .await?;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "create_context_return",
+                "EntityStdinStore.stage"
+            );
+        }
         if let Some(scope) = scope {
             context.set_entity_invocation_scope(Some(scope.clone()))?;
         }
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "instantiate_enter",
+                "EntityStdinStore.stage"
+            );
+        }
         let mut hosted = self.instantiate(context, &component).await?;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "instantiate_return_reconcile_enter",
+                "EntityStdinStore.stage"
+            );
+        }
         self.reconcile_linear_memories(&mut hosted).await?;
+        #[cfg(feature = "test-utils")]
+        if let Some((entity_start_index, execution_mode)) = diagnostic_scope {
+            tracing::debug!(
+                entity_start_index,
+                execution_mode,
+                stage = "reconcile_return",
+                "EntityStdinStore.stage"
+            );
+        }
         hosted._component_charge = Some(component_charge);
         Ok(hosted)
     }
@@ -943,7 +1217,7 @@ where
 }
 
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
-    pub(crate) fn into_parts(self) -> (Instance, Store<Ctx>) {
+    pub(crate) fn into_parts(self) -> (Instance, ObservedPrimaryStore<Store<Ctx>>) {
         (self.instance, self.store.into_inner())
     }
 
@@ -1135,18 +1409,31 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
 }
 
 #[cfg(test)]
+mod monthly_tests;
+
+#[cfg(test)]
 mod tests {
-    use super::StoreFuelGuard;
+    use super::{ObservedPrimaryStore, StoreFuelGuard};
+    use crate::metrics::resource_release::{Cause, tests::TestMetrics};
     use crate::workerctx::FuelManagement;
+    use futures::FutureExt;
     use golem_common::model::oplog::AgentError;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use test_r::test;
-    use wasmtime::{Config, Engine, Store};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use test_r::{test, timeout};
+    use wasmtime::component::{Component, Linker};
+    use wasmtime::{AsContextMut, Config, Engine};
 
     struct FuelTestContext {
         borrowed: bool,
         returned_at: Arc<AtomicU64>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for FuelTestContext {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
     }
 
     impl FuelManagement for FuelTestContext {
@@ -1176,12 +1463,15 @@ mod tests {
         config.consume_fuel(true);
         let engine = Engine::new(&config)?;
         let returned_at = Arc::new(AtomicU64::new(0));
-        let mut store = Store::new(
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut store = ObservedPrimaryStore::new(
             &engine,
             FuelTestContext {
                 borrowed: false,
                 returned_at: returned_at.clone(),
+                dropped: dropped.clone(),
             },
+            None,
         );
         store.set_fuel(123)?;
         store
@@ -1192,6 +1482,149 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
+        assert!(dropped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn primary_store_release_observes_core_initialization_trap() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m (func $init unreachable) (start $init))
+                (core instance (instantiate $m)))"#,
+        )?;
+        let metrics = TestMetrics::new();
+        let scope = metrics.scope();
+        let driver = scope.accepted_driver();
+        scope.freeze_cause(Cause::Interrupt);
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
+        let result = async {
+            let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
+                &engine,
+                FuelTestContext {
+                    borrowed: true,
+                    returned_at: returned_at.clone(),
+                    dropped: dropped.clone(),
+                },
+                Some(&scope),
+            ));
+            store.as_context_mut().set_runtime_observer(runtime)?;
+            store.set_fuel(123)?;
+            store.set_epoch_deadline(1);
+            scope.seal();
+            assert_eq!(metrics.pending("accepted_stop", "primary_store_drop"), 1.0);
+            metrics.advance(2000);
+            Linker::new(&engine)
+                .instantiate_pre(&component)?
+                .instantiate_async(&mut *store)
+                .await
+        }
+        .await;
+        assert_eq!(
+            result.unwrap_err().downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::UnreachableCodeReached)
+        );
+        assert!(observer.upgrade().is_none());
+        assert!(dropped.load(Ordering::Acquire));
+        assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_store_drop", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "end_to_end", "released"),
+            0.0
+        );
+        driver.complete();
+        metrics.assert_finished("accepted_stop", "released");
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn primary_store_release_observes_cancelled_core_initialization() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m (func $init (loop br 0)) (start $init))
+                (core instance (instantiate $m)))"#,
+        )?;
+        let metrics = TestMetrics::new();
+        let scope = metrics.scope();
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let entered = Arc::new(AtomicBool::new(false));
+        let entered_callback = entered.clone();
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
+        let mut initializing = Box::pin(async {
+            let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
+                &engine,
+                FuelTestContext {
+                    borrowed: true,
+                    returned_at: returned_at.clone(),
+                    dropped: dropped.clone(),
+                },
+                Some(&scope),
+            ));
+            store.as_context_mut().set_runtime_observer(runtime)?;
+            store.set_fuel(123)?;
+            store.set_epoch_deadline(0);
+            store.epoch_deadline_callback(move |_| {
+                entered_callback.store(true, Ordering::Release);
+                Ok(wasmtime::UpdateDeadline::YieldCustom(
+                    1,
+                    futures::future::pending().boxed(),
+                ))
+            });
+            Linker::new(&engine)
+                .instantiate_pre(&component)?
+                .instantiate_async(&mut *store)
+                .await
+        });
+        assert!(futures::poll!(initializing.as_mut()).is_pending());
+        assert!(entered.load(Ordering::Acquire));
+        let driver = scope.accepted_driver();
+        scope.freeze_cause(Cause::Interrupt);
+        scope.seal();
+        assert_eq!(metrics.pending("accepted_stop", "primary_store_drop"), 1.0);
+        assert!(!dropped.load(Ordering::Acquire));
+        metrics.advance(2000);
+        drop(initializing);
+        assert!(observer.upgrade().is_none());
+        assert!(dropped.load(Ordering::Acquire));
+        assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_store_drop", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "end_to_end", "released"),
+            0.0
+        );
+        driver.complete();
+        metrics.assert_finished("accepted_stop", "released");
         Ok(())
     }
 }

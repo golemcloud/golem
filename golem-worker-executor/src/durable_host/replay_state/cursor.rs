@@ -2869,6 +2869,7 @@ impl ReplayState {
     /// inside them are dropped because they belong to the abandoned attempt the Jump hides, and
     /// surviving sibling history keeps its resolver awaiters. Callers append the Jump entry and
     /// then register its regions here; the cursor may already be live.
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn register_replay_jump(
         &self,
         regions: Vec<OplogRegion>,

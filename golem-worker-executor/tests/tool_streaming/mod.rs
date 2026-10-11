@@ -894,7 +894,7 @@ struct SecretPolicyEvidence {
     leaf_revealed: bool,
 }
 
-fn deployment_state(
+pub(crate) fn deployment_state(
     owner_account_id: AccountId,
     provider_component_id: golem_common::model::component::ComponentId,
     provider_revision: ComponentRevision,
@@ -8702,10 +8702,11 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
     assert_eq!(held_operation.admission, ToolBodyAdmissionMetadata::Running);
     let drain_worker = executor.active_agent(&owned_drain_agent).await.unwrap();
     let restart = tokio::spawn(async move {
-        drain_worker
-            .primary()
+        let worker = drain_worker.primary();
+        worker
             .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
-            .await
+            .await?;
+        worker.join_accepted_stops_for_test().await
     });
     tokio::time::timeout(std::time::Duration::from_secs(30), restart)
         .await
