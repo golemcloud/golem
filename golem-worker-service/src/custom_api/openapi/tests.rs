@@ -2382,6 +2382,26 @@ fn option_of_unstructured_binary_maps_to_raw_200_plus_404() {
             .is_none()
     );
     assert!(op["responses"]["404"].get("content").is_none());
+    assert_redirect_response(&op);
+}
+
+fn assert_redirect_response(op: &Value) {
+    let redirect = &op["responses"]["307"];
+    assert!(redirect.get("content").is_none());
+    assert_eq!(redirect["headers"]["Location"]["required"], json!(true));
+    assert_eq!(
+        redirect["headers"]["Location"]["schema"],
+        json!({ "type": "string" })
+    );
+    assert!(op["responses"]["200"]["headers"].get("Location").is_none());
+}
+
+#[test]
+fn bare_binary_response_has_no_redirect() {
+    let op = get_operation(cm_response(SchemaType::option(SchemaType::binary(
+        BinaryRestrictions::default(),
+    ))));
+    assert!(op["responses"].get("307").is_none());
 }
 
 #[test]
@@ -2401,6 +2421,7 @@ fn result_of_unstructured_text_maps_to_raw_200_plus_json_500() {
         op["responses"]["200"]["headers"]["Content-Language"]["schema"]["enum"],
         json!(["en"])
     );
+    assert_redirect_response(&op);
     assert_eq!(
         op["responses"]["500"]["content"]["application/json"]["schema"]["properties"]["error"]["type"],
         json!("string")
@@ -2419,6 +2440,7 @@ fn result_of_option_of_unstructured_binary_maps_to_raw_200_404_and_json_500() {
         json!({ "type": "string", "format": "binary" })
     );
     assert!(op["responses"]["404"].get("content").is_none());
+    assert_redirect_response(&op);
     assert_eq!(
         op["responses"]["500"]["content"]["application/json"]["schema"]["properties"]["error"]["type"],
         json!("string")
@@ -2436,6 +2458,7 @@ fn result_of_option_of_record_maps_to_json_200_404_and_500() {
     assert!(ok.get("oneOf").is_none());
     assert!(op["responses"]["404"].get("content").is_none());
     assert!(op["responses"]["500"]["content"]["application/json"].is_object());
+    assert!(op["responses"].get("307").is_none());
 }
 
 #[test]

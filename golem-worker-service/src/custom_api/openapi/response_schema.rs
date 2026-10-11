@@ -43,6 +43,8 @@ pub enum ResponseBodyOpenApiSchema {
         content_type: String,
     },
     NoBody,
+    /// Bodyless redirect carrying a required `Location` header.
+    Redirect,
 }
 
 pub struct ResponseHeaderSchema {
@@ -234,11 +236,10 @@ fn classify_single_response(
     Ok(())
 }
 
-/// Describe the 200 response of a successful payload. A canonical unstructured
+/// Describe the responses of a successful payload. A canonical unstructured
 /// text/binary wrapper (`variant { inline, url }`) describes its `inline` body
-/// exactly like a bare `Text` / `Binary` rich scalar; the `url` alternative is
-/// a 307 redirect applied at runtime and is not described here. Any other
-/// payload is a JSON body.
+/// exactly like a bare `Text` / `Binary` rich scalar and its `url` alternative
+/// as a 307 redirect. Any other payload is a 200 JSON body.
 fn insert_payload_response(
     ty: &SchemaType,
     graph: &SchemaGraph,
@@ -249,10 +250,12 @@ fn insert_payload_response(
     match unstructured_kind(graph, ty).map_err(|err| err.to_string())? {
         Some(UnstructuredKind::Binary(restrictions)) => {
             insert_binary_response(restrictions, responses);
+            responses.insert(307, ResponseBodyOpenApiSchema::Redirect);
             return Ok(());
         }
         Some(UnstructuredKind::Text(restrictions)) => {
             insert_text_response(restrictions, responses, headers);
+            responses.insert(307, ResponseBodyOpenApiSchema::Redirect);
             return Ok(());
         }
         None => {}

@@ -413,13 +413,13 @@ fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
             json!(format!("Response {status_code}")),
         );
 
-        match body {
+        match &body {
             ResponseBodyOpenApiSchema::Known {
                 schema,
                 content_type,
             } => {
                 let mut content = Map::new();
-                content.insert(content_type, json!({ "schema": schema }));
+                content.insert(content_type.clone(), json!({ "schema": schema }));
                 response.insert("content".to_string(), Value::Object(content));
             }
             ResponseBodyOpenApiSchema::Unknown => {
@@ -430,11 +430,23 @@ fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
                 );
                 response.insert("content".to_string(), Value::Object(content));
             }
-            ResponseBodyOpenApiSchema::NoBody => {}
+            ResponseBodyOpenApiSchema::NoBody | ResponseBodyOpenApiSchema::Redirect => {}
         }
 
-        if let Some(headers) = &headers_value {
-            response.insert("headers".to_string(), headers.clone());
+        let mut headers = headers_value.clone().unwrap_or_default();
+        if matches!(body, ResponseBodyOpenApiSchema::Redirect) {
+            headers.insert(
+                "Location".to_string(),
+                json!({
+                    "description": "Response header: Location",
+                    "style": "simple",
+                    "required": true,
+                    "schema": { "type": "string" },
+                }),
+            );
+        }
+        if !headers.is_empty() {
+            response.insert("headers".to_string(), Value::Object(headers));
         }
 
         responses.insert(status_code.to_string(), Value::Object(response));
@@ -443,7 +455,7 @@ fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
     Value::Object(responses)
 }
 
-fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Value> {
+fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Map<String, Value>> {
     if model.headers.is_empty() {
         return None;
     }
@@ -459,7 +471,7 @@ fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Value> {
             }),
         );
     }
-    Some(Value::Object(headers))
+    Some(headers)
 }
 
 pub(super) fn build_security(
