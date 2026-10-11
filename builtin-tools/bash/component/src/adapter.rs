@@ -128,7 +128,7 @@ impl PreparedCommand for Invocation {
 /// 130, invalid input 2, a declared error's own status (1 when undeclared), anything else 1.
 /// A custom error's payload is rendered redacted and never debug-printed: it may carry
 /// capabilities.
-fn rpc_failure(
+pub(crate) fn rpc_failure(
     error: golem_rust::schema::wit::wire::ToolRpcError,
     declared: &BTreeMap<String, u8>,
 ) -> (u8, String) {
@@ -185,6 +185,10 @@ pub(crate) fn install(session: &mut Session) -> Result<Vec<String>, String> {
             return Err("duplicate bound tool name".into());
         }
     }
+    // With the built-in `read-file` bound, `cat` takes the content of a text file from it.
+    if let Some(reader) = crate::forward::ReadFileTool::bound(&tools) {
+        session.forward_file_reads(Arc::new(reader));
+    }
     install_catalog(session, Catalog::new(tools)?)
 }
 
@@ -204,6 +208,8 @@ fn install_catalog(session: &mut Session, catalog: Catalog) -> Result<Vec<String
 #[cfg(target_arch = "wasm32")]
 #[path = "transport.rs"]
 mod transport;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use transport::call_in_flight as tool_call_in_flight;
 
 #[cfg(test)]
 mod tests;

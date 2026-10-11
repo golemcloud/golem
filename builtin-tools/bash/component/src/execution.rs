@@ -3,10 +3,12 @@ mod bindings {
     wit_bindgen::generate!({ path: "wit", world: "shell-services", generate_all });
 }
 
+use crate::blocking::{self, ShellTask};
+
 pub fn services() -> bash_shell::ExecutionServices {
     bash_shell::ExecutionServices {
         spawn_local: |future| {
-            golem_rust::agentic::spawn_local(future);
+            golem_rust::agentic::spawn_local(ShellTask::new(future));
         },
         yield_now: || Box::pin(wit_bindgen::yield_async()),
         sleep: |duration| {
@@ -16,4 +18,13 @@ pub fn services() -> bash_shell::ExecutionServices {
             })
         },
     }
+}
+
+/// Runs `future` to its end and blocks the component until then. No task of the script runs in
+/// that time, so a command can wait for a host call as it waits for a read of a file.
+pub(crate) fn block_on<T: 'static>(future: impl Future<Output = T>) -> T {
+    blocking::uninterrupted(
+        || wit_bindgen::block_on(future),
+        golem_rust::agentic::spawn_local,
+    )
 }

@@ -6,6 +6,33 @@ use golem_rust::{
 
 type OutputReader = wit_bindgen::StreamReader<Result<Vec<u8>, streams::ByteStreamFailure>>;
 
+thread_local! {
+    /// How many tool calls of this script have started and not ended.
+    static IN_FLIGHT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts one tool call as in flight until it is dropped: at the end of the call, or when the
+/// shell abandons the call.
+struct InFlight;
+
+impl InFlight {
+    fn start() -> Self {
+        IN_FLIGHT.set(IN_FLIGHT.get() + 1);
+        Self
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        IN_FLIGHT.set(IN_FLIGHT.get() - 1);
+    }
+}
+
+/// Whether a tool call of this script is in flight.
+pub(crate) fn call_in_flight() -> bool {
+    IN_FLIGHT.get() > 0
+}
+
 /// Cancels an accepted tool operation if its caller disappears before the result arrives, for
 /// example when `kill` or the end of a `run` terminates the shell process that started it.
 /// Reader closure never reaches this: a bound tool writes its output only after completion.
@@ -31,6 +58,7 @@ impl Drop for CancelOnDrop {
 }
 
 pub(super) async fn invoke(call: &Invocation, stdin: Option<Vec<u8>>) -> CommandOutput {
+    let _in_flight = InFlight::start();
     let input = match golem_rust::encode_typed_schema_value(&call.input) {
         Ok(input) => input,
         Err(error) => return failure(2, format!("invalid canonical input: {error:?}")),

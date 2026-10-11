@@ -1,0 +1,445 @@
+{
+ "version": "0.4.1",
+ "requires_filesystem": true,
+ "commands": {
+  "nodes": [
+   {
+    "name": "read-file",
+    "aliases": [],
+    "doc": {
+     "summary": "Reads a page from a known text file. Lines are 1-based and `end_line` is inclusive. Omit both bounds to read from the beginning. A call examines at most 64 KiB and 200 lines, so a distant start or oversized line can produce an empty or partial page. When `next_cursor` is present, call again with the same bounds and that cursor. The path must be supplied by the caller; this tool does not discover or list files.",
+     "description": "",
+     "examples": []
+    },
+    "globals": {
+     "options": [],
+     "flags": []
+    },
+    "subcommands": [],
+    "body": {
+     "positionals": {
+      "fixed": [
+       {
+        "name": "path",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        },
+        "value_name": null,
+        "type_": {
+         "kind": "string",
+         "value": {}
+        },
+        "default": null,
+        "required": true,
+        "accepts_stdio": false
+       },
+       {
+        "name": "start-line",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        },
+        "value_name": null,
+        "type_": {
+         "kind": "u64",
+         "value": {}
+        },
+        "default": null,
+        "required": false,
+        "accepts_stdio": false
+       },
+       {
+        "name": "end-line",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        },
+        "value_name": null,
+        "type_": {
+         "kind": "u64",
+         "value": {}
+        },
+        "default": null,
+        "required": false,
+        "accepts_stdio": false
+       },
+       {
+        "name": "cursor",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        },
+        "value_name": null,
+        "type_": {
+         "kind": "ref",
+         "value": {
+          "id": "golem_filesystem_tools.read_file.ReadFileCursor"
+         }
+        },
+        "default": null,
+        "required": false,
+        "accepts_stdio": false
+       }
+      ],
+      "tail": null
+     },
+     "options": [],
+     "flags": [],
+     "constraints": [],
+     "stdin": null,
+     "stdout": null,
+     "stderr": null,
+     "result": {
+      "type_": {
+       "kind": "ref",
+       "value": {
+        "id": "golem_filesystem_tools.read_file.ReadFileResult"
+       }
+      },
+      "doc": {
+       "summary": "",
+       "description": "",
+       "examples": []
+      },
+      "formatters": [
+       {
+        "name": "default",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        }
+       }
+      ],
+      "default_formatter": "default"
+     },
+     "errors": [
+      {
+       "name": "unsafe-path",
+       "doc": {
+        "summary": "The path is empty, contains NUL or a parent component, or does not identify a file.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-range",
+       "doc": {
+        "summary": "A line bound or continuation cursor is invalid.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-options",
+       "doc": {
+        "summary": "A discovery option or bound is invalid.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-pattern",
+       "doc": {
+        "summary": "A grep expression is empty, malformed, or exceeds its compile limits.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-glob",
+       "doc": {
+        "summary": "A path filter is malformed or exceeds its limits.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-cursor",
+       "doc": {
+        "summary": "A continuation does not match the query or no longer identifies valid state.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "empty-old-text",
+       "doc": {
+        "summary": "`old_text` must contain at least one character.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": null
+      },
+      {
+       "name": "stale-edit",
+       "doc": {
+        "summary": "`old_text` was not found, so no edit was made.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "ambiguous-edit",
+       "doc": {
+        "summary": "More than one occurrence matched, so no edit was made.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "not-found",
+       "doc": {
+        "summary": "The caller-supplied path does not exist.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "not-a-file",
+       "doc": {
+        "summary": "The caller-supplied path exists but is not a regular file.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "not-a-directory",
+       "doc": {
+        "summary": "The caller-supplied path exists but is not a directory.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "unsupported-root",
+       "doc": {
+        "summary": "The selected discovery root is neither a regular file nor a directory.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "symlink-path",
+       "doc": {
+        "summary": "A selected root or ancestor is a symbolic link; discovery never follows links.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "binary-file",
+       "doc": {
+        "summary": "The traversed file bytes contain NUL or invalid UTF-8.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "io",
+       "doc": {
+        "summary": "The underlying filesystem operation failed.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      }
+     ],
+     "annotations": {
+      "read_only": true,
+      "destructive": false,
+      "idempotent": true,
+      "open_world": false
+     }
+    }
+   }
+  ]
+ },
+ "schema": {
+  "defs": [
+   {
+    "id": "golem_filesystem_tools.read_file.ReadFileCursor",
+    "name": "ReadFileCursor",
+    "body": {
+     "kind": "record",
+     "value": {
+      "fields": [
+       {
+        "name": "byte_offset",
+        "body": {
+         "kind": "u64",
+         "value": {}
+        }
+       },
+       {
+        "name": "line",
+        "body": {
+         "kind": "u64",
+         "value": {}
+        }
+       }
+      ]
+     }
+    }
+   },
+   {
+    "id": "golem_filesystem_tools.read_file.ReadFileResult",
+    "name": "ReadFileResult",
+    "body": {
+     "kind": "record",
+     "value": {
+      "fields": [
+       {
+        "name": "content",
+        "body": {
+         "kind": "string",
+         "value": {}
+        }
+       },
+       {
+        "name": "start_line",
+        "body": {
+         "kind": "option",
+         "value": {
+          "inner": {
+           "kind": "u64",
+           "value": {}
+          }
+         }
+        }
+       },
+       {
+        "name": "end_line",
+        "body": {
+         "kind": "option",
+         "value": {
+          "inner": {
+           "kind": "u64",
+           "value": {}
+          }
+         }
+        }
+       },
+       {
+        "name": "next_cursor",
+        "body": {
+         "kind": "option",
+         "value": {
+          "inner": {
+           "kind": "ref",
+           "value": {
+            "id": "golem_filesystem_tools.read_file.ReadFileCursor"
+           }
+          }
+         }
+        }
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "root": {
+   "kind": "record",
+   "value": {
+    "fields": []
+   }
+  }
+ }
+}

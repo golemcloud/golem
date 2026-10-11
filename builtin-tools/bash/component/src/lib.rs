@@ -13,8 +13,12 @@ use std::fmt::Write as _;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod adapter;
+#[cfg(any(target_arch = "wasm32", test))]
+mod blocking;
 #[cfg(target_arch = "wasm32")]
 mod execution;
+#[cfg(any(target_arch = "wasm32", test))]
+mod forward;
 
 /// Smallest `$$` given to a new session; lower numbers look like system processes.
 const MIN_SHELL_PID: i32 = 1_000;
