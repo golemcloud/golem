@@ -1044,11 +1044,14 @@ where
         // it exists only for its drop timing.
         let mut _rebuild_io_guard: Option<AbortOnDropIoTask> = None;
         // Set when a terminal error must not be routed through worker-level
-        // retry: a refused rebuild (request body not reconstructable — a retry
+        // or inline retry: a captured non-idempotent request, a refused rebuild
+        // (request body not reconstructable — a retry
         // would replay into the same refusal forever) or a content-changed
         // response-body resume (416 / short full response — deterministic for
         // the same request).
-        let mut retry_exempt = false;
+        let mut retry_exempt = resume_context
+            .as_ref()
+            .is_some_and(|(_, _, is_idempotent)| !*is_idempotent);
         // In-function retry budget of the response-body resume path, shared across all resume
         // attempts of this consume-body scope.
         let mut resume_retry_state = InFunctionRetryState::new();
@@ -1467,8 +1470,9 @@ where
                     // transient ones whose retry budget is exhausted — fall through
                     // and are recorded as the terminal, which is also what a
                     // recorded terminal replays as. A retry-exempt failure (refused
-                    // rebuild, content-changed resume) is never retry-routed: its
-                    // replay would hit the same deterministic failure again.
+                    // rebuild, content-changed resume, or captured non-idempotent
+                    // request) is never retry-routed: repeating it would either
+                    // fail deterministically or risk duplicating an external effect.
                     if let HttpBodyFrame::Error(error_code) = &frame
                         && !retry_exempt
                         && let Some(retry_properties) = retry_properties.clone()

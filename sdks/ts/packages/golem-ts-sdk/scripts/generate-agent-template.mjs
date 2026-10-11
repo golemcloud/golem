@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { templateMatrix } from './template-matrix.mjs';
 
 // ---------------------------------------------------------------------------
@@ -104,4 +104,34 @@ for (const template of templateMatrix) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 
   useForkedWitBindgen(resolve(process.cwd(), template.wrapperDirectory, 'Cargo.toml'));
+
+  // The pinned P3 Node HTTP reader must release its body even while a read is pending.
+  // This owning-layer patch targets wasm-rquickjs v0.4.10 and fails on source drift.
+  const root = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (root.error) throw root.error;
+  if (root.status !== 0) throw new Error('Runtime patching requires the source Git checkout.');
+  const gitRoot = root.stdout.trim();
+  const wrapper = resolve(process.cwd(), template.wrapperDirectory);
+  const patch = spawnSync(
+    'git',
+    [
+      'apply',
+      '--directory',
+      relative(gitRoot, wrapper).split(sep).join('/'),
+      resolve(process.cwd(), 'scripts/patches/wasm-rquickjs-0.4.10-http-cancellation.patch'),
+    ],
+    { cwd: gitRoot, stdio: 'inherit' },
+  );
+  if (patch.error) throw patch.error;
+  if (patch.status !== 0) process.exit(patch.status ?? 1);
+  if (
+    !readFileSync(join(wrapper, 'src/builtin/node_http.js'), 'utf8').includes(
+      'this._pumpPromise = this._pumpBody()',
+    ) ||
+    !readFileSync(join(wrapper, 'src/builtin/node_http_p3.rs'), 'utf8').includes(
+      'struct IncomingBody',
+    )
+  ) {
+    throw new Error('Node HTTP cancellation patch was not applied to the generated runtime.');
+  }
 }

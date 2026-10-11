@@ -1,0 +1,174 @@
+diff --git a/src/builtin/node_http.js b/src/builtin/node_http.js
+index af9dab9..16f9c13 100644
+--- a/src/builtin/node_http.js
++++ b/src/builtin/node_http.js
+@@ -839,7 +839,7 @@ IncomingMessage.prototype._dump = function _dump() {
+ IncomingMessage.prototype._read = function _read(n) {
+     if (!this._consuming) {
+         this._consuming = true;
+-        void this._pumpBody();
++        this._pumpPromise = this._pumpBody();
+     }
+ };
+ 
+@@ -898,7 +898,7 @@ IncomingMessage.prototype._destroy = function _destroy(err, cb) {
+     if (!this.complete && this.req && !this.req.destroyed) {
+         this.req.destroy();
+     }
+-    cb(err);
++    Promise.resolve(this._pumpPromise).then(() => cb(err), cb);
+ };
+ 
+ IncomingMessage.prototype._hasNoBody = function _hasNoBody() {
+@@ -2184,8 +2184,8 @@ export class ClientRequest extends OutgoingMessage {
+         this._abortNativeRequest();
+         if (this._response) {
+             this._response.aborted = true;
+-            this._response.destroyed = true;
+             this._response.emit('aborted');
++            this._response.destroy();
+         }
+         process.nextTick(() => {
+             this.emit('abort');
+@@ -2199,6 +2199,9 @@ export class ClientRequest extends OutgoingMessage {
+         this.destroyed = true;
+ 
+         this._abortNativeRequest();
++        if (this._response && !this._response.destroyed) {
++            this._response.destroy(error);
++        }
+         if (!error && !this._response && !this._transportRejected) {
+             // Request destroyed before receiving a response — emit ECONNRESET
+             // matching Node.js behavior for destroyed pending requests.
+diff --git a/src/builtin/node_http_p3.rs b/src/builtin/node_http_p3.rs
+index f2acc6c..9a91baa 100644
+--- a/src/builtin/node_http_p3.rs
++++ b/src/builtin/node_http_p3.rs
+@@ -28,11 +28,14 @@
+ //! chunk-by-chunk (not read to completion eagerly).
+ 
+ use super::http_body::ResponseBody;
++use futures::future::{AbortHandle, Abortable};
+ use rquickjs::class::Trace;
+ use rquickjs::prelude::List;
+ use rquickjs::{Ctx, Exception, JsLifetime, TypedArray};
++use std::cell::RefCell;
+ use std::future::Future;
+ use std::pin::Pin;
++use std::rc::Rc;
+ #[cfg(feature = "net-write-profiling")]
+ use std::time::Instant;
+ use url::Url;
+@@ -388,11 +391,17 @@ impl NodeHttpClientRequest {
+ #[rquickjs::class(rename_all = "camelCase")]
+ pub struct NodeHttpIncomingResponse {
+     #[qjs(skip_trace)]
+-    body: ResponseBody,
++    body: Rc<RefCell<IncomingBody>>,
+     headers: Vec<Vec<String>>,
+     status: u16,
+ }
+ 
++struct IncomingBody {
++    source: Option<ResponseBody>,
++    active_abort: Option<AbortHandle>,
++    discarded: bool,
++}
++
+ impl Default for NodeHttpIncomingResponse {
+     fn default() -> Self {
+         Self::new()
+@@ -404,7 +413,11 @@ impl NodeHttpIncomingResponse {
+     #[qjs(constructor)]
+     pub fn new() -> Self {
+         NodeHttpIncomingResponse {
+-            body: ResponseBody::empty(),
++            body: Rc::new(RefCell::new(IncomingBody {
++                source: Some(ResponseBody::empty()),
++                active_abort: None,
++                discarded: false,
++            })),
+             headers: Vec::new(),
+             status: 0,
+         }
+@@ -413,7 +426,11 @@ impl NodeHttpIncomingResponse {
+     #[qjs(skip)]
+     pub(crate) fn from_raw_response(raw: RawResponse) -> Self {
+         NodeHttpIncomingResponse {
+-            body: ResponseBody::new(raw.response),
++            body: Rc::new(RefCell::new(IncomingBody {
++                source: Some(ResponseBody::new(raw.response)),
++                active_abort: None,
++                discarded: false,
++            })),
+             headers: raw.headers,
+             status: raw.status,
+         }
+@@ -429,16 +446,62 @@ impl NodeHttpIncomingResponse {
+         self.headers.clone()
+     }
+ 
+-    pub fn discard_body(&mut self) {
+-        // Dropping the response / stream reader / result future discards the body without reading.
+-        self.body.discard();
++    pub fn discard_body(&self) {
++        let (source, abort) = {
++            let mut state = self.body.borrow_mut();
++            state.discarded = true;
++            (state.source.take(), state.active_abort.take())
++        };
++        drop(source);
++        if let Some(abort) = abort {
++            abort.abort();
++        }
+     }
+ 
+     pub async fn read_body_chunk<'js>(
+-        &mut self,
++        &self,
+         ctx: Ctx<'js>,
+     ) -> rquickjs::Result<List<(Option<TypedArray<'js, u8>>, bool)>> {
+-        match self.body.read_chunk().await {
++        let (mut source, registration) = {
++            let mut state = self.body.borrow_mut();
++            if state.discarded {
++                return Ok(List((None, true)));
++            }
++            let source = state.source.take().ok_or_else(|| {
++                Exception::throw_message(&ctx, "Response body read is already pending")
++            })?;
++            let (abort, registration) = AbortHandle::new_pair();
++            state.active_abort = Some(abort);
++            (source, registration)
++        };
++        // The future owns the body so abort drops both the pending read and its WASI resources.
++        let read = async move {
++            let outcome = source.read_chunk().await;
++            (source, outcome)
++        };
++        let outcome = Abortable::new(read, registration).await;
++        let mut state = self.body.borrow_mut();
++        state.active_abort = None;
++        let Ok((source, outcome)) = outcome else {
++            state.discarded = true;
++            return Err(Exception::throw_message(
++                &ctx,
++                "Response body was discarded",
++            ));
++        };
++        if state.discarded {
++            return Err(Exception::throw_message(
++                &ctx,
++                "Response body was discarded",
++            ));
++        }
++        if outcome.is_ok() {
++            state.source = Some(source);
++        } else {
++            state.discarded = true;
++        }
++        drop(state);
++        match outcome {
+             Ok(Some(bytes)) => {
+                 let chunk = TypedArray::new_copy(ctx.clone(), bytes).map_err(|_| {
+                     Exception::throw_message(
