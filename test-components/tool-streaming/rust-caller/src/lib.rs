@@ -4568,7 +4568,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .open("/reconstruction-custom-order.log")
                     .and_then(|mut file| file.write_all(b"C"))
                     .expect("append the first live custom effect after the reconstruction barrier");
-                wait_at_crash_checkpoint("reconstruction-custom-effect").await;
+                wait_at_unscoped_crash_checkpoint("reconstruction-custom-effect").await;
             })
             .await;
         };
@@ -4612,7 +4612,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .open("/reconstruction-custom-order.log")
                     .and_then(|mut file| file.write_all(b"C"))
                     .expect("append the first live custom effect after the reconstruction barrier");
-                wait_at_crash_checkpoint("reconstruction-custom-effect").await;
+                wait_at_unscoped_crash_checkpoint("reconstruction-custom-effect").await;
             })
             .await;
         };

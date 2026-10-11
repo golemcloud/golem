@@ -808,7 +808,8 @@ Three different facts are involved, each with its own owner:
 Tests: `entity_store_liveness_is_scoped_to_its_invocation_mode`,
 `pending_replay_to_live_is_fail_closed_until_finished`,
 `replay_state/tests.rs::switch_to_live_wakes_parked_awaiter_as_incomplete`,
-`tests/tool_streaming.rs::completed_reconstruction_claim_blocks_concurrent_replay_to_live`.
+`replay_state/tests.rs::primary_publication_requires_completed_reconstruction_validation`,
+`tests/tool_streaming/mod.rs::incomplete_custom_durability_waits_for_completed_reconstruction`.
 
 Consequences: a host function must not perform a live effect because "the cursor is at the end";
 it must observe `is_live` from the durable context. A markerless `End` is delivered once the
@@ -1485,7 +1486,7 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   serializes filesystem-capable bodies. Exception: a terminal recorded with
   `body_execution: Skipped` is returned without invoking the export.
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
-  every completed body has validated (`completed_reconstruction_claim_blocks_concurrent_replay_to_live`).
+  every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
 - A body trap fails the owner invocation without inventing entity terminals.
 - Entity and native-tool invocation spans open on the invocation `Start` and close on its
   `End`/`Cancelled` terminal. `set_entity_invocation_scope` restores the recorded invocation
