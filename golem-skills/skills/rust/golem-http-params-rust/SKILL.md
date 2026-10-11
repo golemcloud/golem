@@ -150,12 +150,12 @@ parameter** and that parameter cannot be bound to a path/query/header/mount
 variable. The body is decoded as UTF-8.
 
 ```rust
-use golem_rust::agentic::UnstructuredText;
+use golem_rust::agentic::{AnyLanguage, UnstructuredText};
 use golem_rust::AllowedLanguages;
 
-// Accepting any text/plain content
+// Accepting any text/plain content (`UnstructuredText` = `UnstructuredText<AnyLanguage>`)
 #[endpoint(post = "/notes/{id}")]
-fn add_note(&self, id: String, body: UnstructuredText<String>) -> u64;
+fn add_note(&self, id: String, body: UnstructuredText) -> u64;
 
 // Restricting to specific language codes
 #[derive(AllowedLanguages, Clone, Debug)]
@@ -171,7 +171,7 @@ fn translate(&self, id: String, body: UnstructuredText<Languages>) -> String;
 
 // Returning text/plain
 #[endpoint(get = "/notes/{id}")]
-fn get_note(&self, id: String) -> UnstructuredText<String>;
+fn get_note(&self, id: String) -> UnstructuredText;
 ```
 
 HTTP-level rules:
@@ -191,18 +191,15 @@ HTTP-level rules:
 In the implementation:
 
 ```rust
-fn add_note(&self, _id: String, body: UnstructuredText<String>) -> u64 {
+fn add_note(&self, _id: String, body: UnstructuredText) -> u64 {
     match body {
         UnstructuredText::Url(_) => 0,
-        UnstructuredText::Text { data, .. } => data.len() as u64,
+        UnstructuredText::Text { text, .. } => text.len() as u64,
     }
 }
 
-fn get_note(&self, _id: String) -> UnstructuredText<String> {
-    UnstructuredText::Text {
-        data: "hello".to_string(),
-        language_code: Some("en".to_string()),
-    }
+fn get_note(&self, _id: String) -> UnstructuredText {
+    UnstructuredText::from_inline("hello", AnyLanguage::new("en"))
 }
 ```
 
@@ -220,8 +217,18 @@ the `Content-Language` response header.
 | `Result<T, E>` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
 | `Result<(), E>` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
 | `Result<T, ()>` | 200 OK if `Ok`, 500 if `Err` | JSON `T` or empty |
-| `UnstructuredBinary<M>` | 200 OK | Raw binary with Content-Type |
-| `UnstructuredText<M>` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+| `Result<Option<T>, E>` | 200 OK if `Ok(Some)`, 404 Not Found if `Ok(None)`, 500 if `Err` | JSON `T`, empty, or JSON `E` |
+| `UnstructuredBinary<M>` | 200 OK | Raw binary with Content-Type (default `application/octet-stream`) |
+| `UnstructuredText<L>` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+| `UnstructuredBinary::Url` / `UnstructuredText::Url` | 307 Temporary Redirect | `Location` = the URL |
+
+The value inside `Some` / `Ok` follows the same rules as a top-level value. An `UnstructuredBinary` or `UnstructuredText` nested in `Option<_>`, `Result<_, E>`, or `Result<Option<_>, E>` is sent as the **raw** body (or a redirect), not as JSON:
+
+```rust
+// 200 raw bytes / 404 when missing / 500 with JSON `E`
+#[endpoint(get = "/files/{id}")]
+fn download(&self, id: String) -> Result<Option<UnstructuredBinary<String>>, ErrorResponse>;
+```
 
 ## Data Type to JSON Mapping
 

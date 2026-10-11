@@ -142,7 +142,28 @@ Golem maps method return types to HTTP status codes and response bodies accordin
 | `Result<T, E>` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
 | `Result<(), E>` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
 | `Result<T, ()>` | 200 OK if `Ok`, 500 if `Err` | JSON `T` or empty |
-| `UnstructuredBinary<M>` | 200 OK | Raw binary with Content-Type |
+| `Result<Option<T>, E>` | 200 OK if `Ok(Some)`, 404 Not Found if `Ok(None)`, 500 if `Err` | JSON `T`, empty, or JSON `E` |
+| `UnstructuredBinary<M>` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `UnstructuredText<L>` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+
+The value inside `Some` / `Ok` follows the same rules as a top-level value: an `UnstructuredBinary` or `UnstructuredText` nested in `Option<_>`, `Result<_, E>`, or `Result<Option<_>, E>` is sent as the **raw** body, not as JSON. A guarded raw download (raw bytes / 404 / JSON error 500):
+
+```rust
+#[endpoint(get = "/files/{id}")]
+fn download(&self, id: String) -> Result<Option<UnstructuredBinary<String>>, ErrorResponse>;
+
+// Implementation
+fn download(&self, id: String) -> Result<Option<UnstructuredBinary<String>>, ErrorResponse> {
+    match id.as_str() {
+        "missing" => Ok(None),                                           // 404
+        "pending" => Err(ErrorResponse { error: "pending".to_string() }), // 500, JSON body
+        _ => Ok(Some(UnstructuredBinary::Inline {                        // 200, raw bytes
+            data: vec![1, 2, 3],
+            mime_type: "image/png".to_string(),
+        })),
+    }
+}
+```
 
 ## Complete Example
 
