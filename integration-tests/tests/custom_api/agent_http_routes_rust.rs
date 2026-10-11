@@ -632,7 +632,11 @@ async fn response_binary(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Re
 async fn get_test_agent(agent: &HttpTestContext, path: &str) -> anyhow::Result<reqwest::Response> {
     Ok(agent
         .client
-        .get(agent.base_url.join(&format!("/http-agents/test-agent{path}"))?)
+        .get(
+            agent
+                .base_url
+                .join(&format!("/http-agents/test-agent{path}"))?,
+        )
         .send()
         .await?)
 }
