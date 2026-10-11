@@ -319,7 +319,7 @@ struct ReplayCursor {
     progress: Notify,
     /// Counts the times a `Start` claim began to wait because an active entity body owns the
     /// cursor head. Tests use it to observe that a claim is parked in that state.
-    #[cfg(feature = "test-utils")]
+    #[cfg(test)]
     active_body_waits: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
     primary_publication_gate:

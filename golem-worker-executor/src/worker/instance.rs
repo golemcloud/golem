@@ -126,14 +126,6 @@ pub struct OwnerExecution {
     reached_oplog_marker: AtomicU64,
     #[cfg(feature = "test-utils")]
     monotonic_clock_start_gate: Mutex<Option<Arc<ClockNowGate>>>,
-    #[cfg(feature = "test-utils")]
-    wall_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
-    #[cfg(feature = "test-utils")]
-    skip_wall_clock_now_durability: AtomicBool,
-    /// Pauses an invocation between buffering its `AgentInvocationStarted` and committing it, so
-    /// a test can act while the entry is in the buffer and nothing has queried storage yet.
-    #[cfg(feature = "test-utils")]
-    invocation_started_gate: Mutex<Option<Arc<ClockNowGate>>>,
 }
 
 #[cfg(feature = "test-utils")]
@@ -195,12 +187,6 @@ impl OwnerExecution {
             reached_oplog_marker: AtomicU64::new(OplogIndex::NONE.into()),
             #[cfg(feature = "test-utils")]
             monotonic_clock_start_gate: Mutex::new(None),
-            #[cfg(feature = "test-utils")]
-            wall_clock_now_gate: Mutex::new(None),
-            #[cfg(feature = "test-utils")]
-            skip_wall_clock_now_durability: AtomicBool::new(false),
-            #[cfg(feature = "test-utils")]
-            invocation_started_gate: Mutex::new(None),
         }
     }
 
@@ -300,56 +286,8 @@ impl OwnerExecution {
 
     #[cfg(feature = "test-utils")]
     #[doc(hidden)]
-    pub async fn test_drain_terminal_clamp_then_reconstruction_barrier(
-        &self,
-        start_index: OplogIndex,
-    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send + 'static>>, WorkerExecutorError> {
-        let replay = self.replay().await?;
-        replay
-            .test_drain_terminal_clamp_then_reconstruction_barrier(start_index)
-            .await
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub async fn test_drain_reconstruction_terminal(
-        &self,
-        start_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        self.replay()
-            .await?
-            .test_drain_reconstruction_terminal(start_index)
-            .await
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub async fn test_clamp_after_claim(
-        &self,
-        start_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        self.replay()
-            .await?
-            .test_clamp_after_claim(start_index)
-            .await
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
     pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
         Ok(self.replay().await?.is_live_published())
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub async fn test_wait_for_replay_claim_blocked_on_active_body(
-        &self,
-    ) -> Result<(), WorkerExecutorError> {
-        self.replay()
-            .await?
-            .test_wait_for_claims_blocked_on_active_body(1)
-            .await;
-        Ok(())
     }
 
     #[cfg(feature = "test-utils")]
@@ -407,75 +345,6 @@ impl OwnerExecution {
             }
         }
         Ok(())
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub fn test_gate_next_invocation_started(&self) -> ClockNowGateHandle {
-        let (entered_tx, entered) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(ClockNowGate {
-            entered: Mutex::new(Some(entered_tx)),
-            release: tokio::sync::Semaphore::new(0),
-            abort_as_restart: AtomicBool::new(false),
-        });
-        *self.invocation_started_gate.lock().unwrap() = Some(gate.clone());
-        ClockNowGateHandle { entered, gate }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn test_after_invocation_started_buffered(&self) {
-        let gate = self.invocation_started_gate.lock().unwrap().take();
-        if let Some(gate) = gate {
-            if let Some(entered) = gate.entered.lock().unwrap().take() {
-                let _ = entered.send(());
-            }
-            gate.release
-                .acquire()
-                .await
-                .expect("invocation started gate was closed")
-                .forget();
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub fn test_gate_next_wall_clock_now(&self) -> ClockNowGateHandle {
-        let (entered_tx, entered) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(ClockNowGate {
-            entered: Mutex::new(Some(entered_tx)),
-            release: tokio::sync::Semaphore::new(0),
-            abort_as_restart: AtomicBool::new(false),
-        });
-        *self.wall_clock_now_gate.lock().unwrap() = Some(gate.clone());
-        ClockNowGateHandle { entered, gate }
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub fn test_skip_next_wall_clock_now_durability(&self) {
-        self.skip_wall_clock_now_durability
-            .store(true, Ordering::Release);
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
-        self.skip_wall_clock_now_durability
-            .swap(false, Ordering::AcqRel)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn test_before_wall_clock_now(&self) {
-        let gate = self.wall_clock_now_gate.lock().unwrap().take();
-        if let Some(gate) = gate {
-            if let Some(entered) = gate.entered.lock().unwrap().take() {
-                let _ = entered.send(());
-            }
-            gate.release
-                .acquire()
-                .await
-                .expect("wall-clock now gate was closed")
-                .forget();
-        }
     }
 
     pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogFence> {
