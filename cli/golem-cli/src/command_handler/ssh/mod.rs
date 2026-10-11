@@ -14,10 +14,12 @@
 
 //! `golem ssh`: a local command prompt over an agent's bound bash tool.
 //!
-//! Every submitted line is one scalar `run` call, the same call `tool invoke --agent` makes. The
-//! session remembers only the directory each call ended in and passes it as `--cwd` to the next;
-//! no other shell state crosses calls. Reading the next line happens locally and holds no
-//! invocation open on the agent.
+//! Every submitted line is one `run` call, the same call `tool invoke --agent` makes. It is a
+//! scalar call, or one through the live session when the tool's `run` can be stopped: Ctrl+C
+//! then stops the command, where otherwise it only stops the wait. The session remembers only
+//! the directory each call ended in and passes it as `--cwd` to the next; no other shell state
+//! crosses calls. Reading the next line happens locally and holds no invocation open on the
+//! agent.
 
 mod backdrop;
 mod completion;
@@ -26,6 +28,7 @@ mod editor;
 mod git;
 mod highlight;
 mod history;
+mod live;
 mod look;
 mod progress;
 mod syntax;
@@ -35,9 +38,10 @@ pub(crate) use self::contract::NOT_RUN_EXIT;
 use self::contract::{
     BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LocalCommand,
     Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_invoke_error,
-    decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice, global_args,
-    help_text, input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv,
-    runs_nothing, strip_cursor_reports, time_limit, tools_listing,
+    classify_live_error, decode_live_result, decode_result, decorated, dimmed, ended, exit_code,
+    failed_agent_notice, global_args, help_text, input_mode, interrupted_message, local_command,
+    lookup_command, prompt, run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports,
+    time_limit, tools_listing,
 };
 use self::editor::{PLAIN_CONTINUATION, SshPrompt};
 use self::history::{SessionHistory, history_file};
@@ -90,6 +94,8 @@ struct Session {
     cwd: String,
     /// Whether `run` takes `--timeout`, which then bounds the editor's helper scripts.
     helper_timeout: bool,
+    /// Whether Ctrl+C stops a running command: `run` then goes through the live session.
+    stoppable: bool,
     /// Which agent answered first. One deleted and made again under the same name answers
     /// with another fingerprint.
     fingerprint: Option<Uuid>,
@@ -113,9 +119,21 @@ struct Terminal {
 
 enum Submission {
     Completed(BashResult),
+    /// Ctrl+C stopped the script; this is what it had produced.
+    Stopped(BashResult),
     Failed(CallFailure),
     /// Ctrl+C stopped waiting; this is what the cancel request then did.
     Interrupted(CancelOutcome),
+}
+
+/// Where a command that runs through the live session gets the fingerprint of its agent. The
+/// live result does not carry it; the agent's metadata does.
+#[derive(Clone, Copy)]
+enum LiveFingerprint {
+    /// What the caller has: the prompt read it before the command, or nothing compares it.
+    Known(Option<Uuid>),
+    /// Read from the agent's metadata while the command runs.
+    Unread,
 }
 
 /// How long the editor waits for a helper script before it gives up on it.
@@ -265,6 +283,7 @@ impl SshCommandHandler {
         let mut session = match connected {
             Ok((owner, definition)) => Session {
                 helper_timeout: check_run_contract(&definition, true).is_ok(),
+                stoppable: run_can_be_stopped(&definition),
                 owner,
                 agent: agent.0,
                 tool: tool.as_str().to_string(),
@@ -390,11 +409,20 @@ impl SshCommandHandler {
     /// `-c`: one submission. On success the process output is exactly the script's.
     async fn run_once(&self, session: &Session, script: &str) -> u8 {
         let key = IdempotencyKey::fresh();
-        match self.submit(session, script, &key).await.0 {
-            Submission::Completed(result) => match write_output(&result, false) {
-                Ok(()) => exit_code(Outcome::Ran(result.exit_code)),
-                Err(error) => output_lost(result.exit_code, &error),
-            },
+        // One command: no earlier agent is there to compare its agent with.
+        let fingerprint = LiveFingerprint::Known(None);
+        match self
+            .submit(session, script, &key, fingerprint, None)
+            .await
+            .0
+        {
+            // A stopped script exits with the status the stop gave it.
+            Submission::Completed(result) | Submission::Stopped(result) => {
+                match write_output(&result, false) {
+                    Ok(()) => exit_code(Outcome::Ran(result.exit_code)),
+                    Err(error) => output_lost(result.exit_code, &error),
+                }
+            }
             Submission::Failed(failure) => {
                 self.report_failure(session, &failure, &key);
                 if matches!(failure, CallFailure::Unknown(_)) {
@@ -472,8 +500,11 @@ impl SshCommandHandler {
             let line = prompt(&session.agent, &session.cwd, last_status, |part, text| {
                 paint(colorize, part, text)
             });
+            // The prompt that reads the agent's metadata has its fingerprint for the command.
+            let mut live_fingerprint = LiveFingerprint::Unread;
             let editor = if colorize && input.is_editor() {
-                let (readiness, queue) = self.agent_state(session).await;
+                let (readiness, queue, fingerprint) = self.agent_state(session).await;
+                live_fingerprint = LiveFingerprint::Known(fingerprint);
                 if readiness == Readiness::Ready {
                     session.busy.store(false, Ordering::Relaxed);
                 }
@@ -560,7 +591,7 @@ impl SshCommandHandler {
                 }
                 // Only a person at a terminal asks the session; piped lines all go to the tool.
                 Some(LocalCommand::Help) if at_terminal => {
-                    log_preformatted(help_text(&session.tool, session.timeout));
+                    log_preformatted(help_text(&session.tool, session.timeout, session.stoppable));
                     continue;
                 }
                 Some(LocalCommand::Tools) if at_terminal => {
@@ -572,13 +603,17 @@ impl SshCommandHandler {
 
             let key = IdempotencyKey::fresh();
             let ticker = show_progress.then(|| {
-                Ticker::start(colorize.then_some((palette, loader)), || {
-                    crossterm::terminal::size().map_or(80, |(columns, _)| columns)
-                })
+                Ticker::start(
+                    colorize.then_some((palette, loader)),
+                    session.stoppable,
+                    || crossterm::terminal::size().map_or(80, |(columns, _)| columns),
+                )
             });
             let started = Instant::now();
             let cwd_before = session.cwd.clone();
-            let (mut submission, fingerprint) = self.submit(session, &line, &key).await;
+            let (mut submission, fingerprint) = self
+                .submit(session, &line, &key, live_fingerprint, ticker.as_ref())
+                .await;
             // Erased before anything else is written.
             drop(ticker);
             // Ctrl+C came for a command that had already finished: its result is there to show.
@@ -598,8 +633,9 @@ impl SshCommandHandler {
             }
             last_elapsed = Some(started.elapsed());
             self.note_agent(session, fingerprint);
+            let stopped = matches!(submission, Submission::Stopped(_));
             match submission {
-                Submission::Completed(result) => {
+                Submission::Completed(result) | Submission::Stopped(result) => {
                     session.busy.store(false, Ordering::Relaxed);
                     if let Err(error) = write_output(&result, styled.is_some()) {
                         // Standard output is what failed, so this is said on standard error.
@@ -614,6 +650,11 @@ impl SshCommandHandler {
                     }
                     last_status = result.exit_code;
                     session.cwd = result.cwd;
+                    if stopped && !at_terminal {
+                        // Ctrl+C ends piped input, as it does when it only stops the wait: the
+                        // commands after the stopped one are not run.
+                        return exit_code(Outcome::Interrupted);
+                    }
                 }
                 Submission::Failed(
                     failure @ (CallFailure::Undecodable(_) | CallFailure::Unknown(_)),
@@ -672,11 +713,11 @@ impl SshCommandHandler {
         }
     }
 
-    /// What Golem says the agent is doing and how many commands wait on it. A read of the
-    /// agent's metadata, not a call on the agent.
-    async fn agent_state(&self, session: &Session) -> (Readiness, u64) {
+    /// What Golem says the agent is doing, how many commands wait on it, and its fingerprint.
+    /// A read of the agent's metadata, not a call on the agent.
+    async fn agent_state(&self, session: &Session) -> (Readiness, u64, Option<Uuid>) {
         let Some(agent) = &session.owner.agent_id else {
-            return (Readiness::Unknown, 0);
+            return (Readiness::Unknown, 0, None);
         };
         let lookup = async {
             let clients = self.ctx.golem_clients().await.ok()?;
@@ -690,18 +731,23 @@ impl SshCommandHandler {
             Ok(Some(metadata)) => (
                 readiness(&metadata.status),
                 metadata.pending_invocation_count,
+                Some(metadata.fingerprint.0),
             ),
-            _ => (Readiness::Unknown, 0),
+            _ => (Readiness::Unknown, 0, None),
         }
     }
 
-    /// Submits one script from the remembered directory as a scalar `run` call. With the outcome
-    /// comes the fingerprint of the agent that answered, when one did.
+    /// Submits one script from the remembered directory as a `run` call: a scalar one, or one
+    /// through the live session when the tool can stop a command. With the outcome comes the
+    /// fingerprint of the agent that answered, when one did; `fingerprint` is where a live call
+    /// gets it. `ticker` is the running line, which is told when Ctrl+C has asked for the stop.
     async fn submit(
         &self,
         session: &Session,
         script: &str,
         key: &IdempotencyKey,
+        fingerprint: LiveFingerprint,
+        ticker: Option<&Ticker>,
     ) -> (Submission, Option<Uuid>) {
         let unbuilt = |reason: String| {
             let failure = CallFailure::Rpc(format!("cannot build the call: {reason}"));
@@ -721,6 +767,19 @@ impl SshCommandHandler {
             }
             Err(error) => return unbuilt(error),
         };
+        if session.stoppable {
+            let fingerprint = async {
+                match fingerprint {
+                    LiveFingerprint::Known(fingerprint) => fingerprint,
+                    LiveFingerprint::Unread => self.agent_state(session).await.2,
+                }
+            };
+            // Read next to the call, so the command does not wait for it.
+            return tokio::join!(
+                self.submit_live(session, command_path, input, key, ticker),
+                fingerprint
+            );
+        }
         let tool_handler = self.ctx.tool_handler();
         let call = tool_handler.invoke_tool_scalar(
             &session.owner,
@@ -751,8 +810,77 @@ impl SshCommandHandler {
         }
     }
 
-    /// The result of a call that Golem says has finished, looked up under its key. `None` when
-    /// it cannot be had in time, which leaves the lookup command to the user.
+    /// Runs the call through the live session. The first Ctrl+C asks the tool to stop the script
+    /// and waits for the result; a second one, or no result in time, stops waiting as Ctrl+C
+    /// does for a scalar call.
+    async fn submit_live(
+        &self,
+        session: &Session,
+        command_path: Vec<String>,
+        input: ExternalTypedSchemaValue,
+        key: &IdempotencyKey,
+        ticker: Option<&Ticker>,
+    ) -> Submission {
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (give_up_tx, give_up_rx) = tokio::sync::oneshot::channel::<()>();
+        let call = live::run_live(
+            &self.ctx,
+            &session.owner,
+            &session.tool,
+            command_path,
+            input,
+            key,
+            async {
+                let _ = stop_rx.await;
+            },
+            async {
+                let _ = give_up_rx.await;
+            },
+        );
+        tokio::pin!(call);
+        // First Ctrl+C: ask for the stop. The call goes on to its result.
+        let first = tokio::select! {
+            answer = &mut call => Some(answer),
+            _ = tokio::signal::ctrl_c() => None,
+        };
+        let (answer, stopped) = match first {
+            Some(answer) => (answer, false),
+            None => {
+                let _ = stop_tx.send(());
+                if let Some(ticker) = ticker {
+                    ticker.command_stopping();
+                }
+                let waited = tokio::select! {
+                    answer = &mut call => Some(answer),
+                    _ = tokio::time::sleep(CANCEL_WAIT) => None,
+                    _ = tokio::signal::ctrl_c() => None,
+                };
+                match waited {
+                    Some(answer) => (answer, true),
+                    None => {
+                        let _ = give_up_tx.send(());
+                        let _ = call.await;
+                        // As after a scalar call: a call that was still queued is cancelled.
+                        return Submission::Interrupted(self.cancel(session, key).await);
+                    }
+                }
+            }
+        };
+        match answer {
+            Ok(result) => live_submission(decode_live_result(result), stopped),
+            // A stop can cross the end of the command, and the service then ends the session
+            // without the result. The result is there to look up. Without it, what the session
+            // ended with says nothing about the command.
+            Err(error) if stopped => match self.finished_result(session, key).await {
+                Some(result) => live_submission(Ok(result), true),
+                None => Submission::Failed(CallFailure::Unknown(error.to_string())),
+            },
+            Err(error) => Submission::Failed(classify_live_error(error)),
+        }
+    }
+
+    /// The result of a call that has finished, looked up under its key. `None` when it cannot
+    /// be had in time, which leaves the lookup command to the user.
     async fn finished_result(&self, session: &Session, key: &IdempotencyKey) -> Option<BashResult> {
         let tool_handler = self.ctx.tool_handler();
         let lookup = tool_handler.invoke_tool_scalar(
@@ -1015,6 +1143,16 @@ fn describe_failure(error: anyhow::Error, agent: &str, tool: &str) -> anyhow::Er
         404 => anyhow!("not found: {rendered}"),
         _ if unbound => anyhow!("`{tool}` is not bound to {agent}: {rendered}"),
         _ => error,
+    }
+}
+
+/// What the decoded answer of a live call is to the session. A result that arrives after Ctrl+C
+/// asked for the stop is the stopped command's.
+fn live_submission(decoded: Result<BashResult, CallFailure>, stopped: bool) -> Submission {
+    match decoded {
+        Ok(result) if stopped => Submission::Stopped(result),
+        Ok(result) => Submission::Completed(result),
+        Err(failure) => Submission::Failed(failure),
     }
 }
 
@@ -1302,7 +1440,8 @@ impl Input {
 
 #[cfg(test)]
 mod tests {
-    use super::{Readiness, readiness, within};
+    use super::contract::{BashResult, CallFailure};
+    use super::{Readiness, Submission, live_submission, readiness, within};
     use crate::command::{GolemCliCommand, GolemCliSubcommand};
     use clap::Parser;
     use std::cell::Cell;
@@ -1346,6 +1485,37 @@ mod tests {
             (AgentStatus::Exited, Readiness::Failed),
         ] {
             assert_eq!(readiness(&status), expected, "{status:?}");
+        }
+    }
+
+    fn result(exit_code: u8) -> BashResult {
+        BashResult {
+            stdout: "out".to_string(),
+            stderr: String::new(),
+            exit_code,
+            cwd: "/tmp".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_result_that_arrives_after_ctrl_c_asked_for_the_stop_is_the_stopped_commands() {
+        // Whatever its status: the script may have ended by itself at that moment.
+        for exit_code in [130, 0] {
+            assert!(matches!(
+                live_submission(Ok(result(exit_code)), true),
+                Submission::Stopped(stopped) if stopped == result(exit_code)
+            ));
+        }
+        assert!(matches!(
+            live_submission(Ok(result(130)), false),
+            Submission::Completed(completed) if completed == result(130)
+        ));
+        // A failed call is one with or without the stop.
+        for stopped in [false, true] {
+            assert!(matches!(
+                live_submission(Err(CallFailure::Denied("no".to_string())), stopped),
+                Submission::Failed(CallFailure::Denied(_))
+            ));
         }
     }
 

@@ -18,10 +18,17 @@
 use super::look::shown;
 use super::syntax::{TokenKind, is_complete, scan};
 use crate::context::GlobalEnvironmentSelector;
+use golem_client::invocation_session::SessionTransportError;
 use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
+use golem_common::model::invocation_session_public::{
+    PublicErrorCode, PublicInvocationResult, PublicTypedValue,
+};
 use golem_common::model::tool::{SerializableToolError, SerializableToolRpcError};
-use golem_common::schema::tool::{OptionShape, Tool};
-use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue};
+use golem_common::schema::public_json::{
+    PublicSchemaValueError, PublicStreamReferencePolicy, decode_public_schema_value,
+};
+use golem_common::schema::tool::{CommandBody, OptionShape, Tool};
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use golem_schema::render::json_value::to_json_value;
 use golem_schema::tool::argv::{self, ParsedToolArguments};
 use serde::Deserialize;
@@ -33,7 +40,8 @@ pub const RUN: &str = "run";
 /// The process status when no command ran, following OpenSSH.
 pub const NOT_RUN_EXIT: u8 = 255;
 
-/// The process status after Ctrl+C stopped waiting for a command.
+/// The process status after Ctrl+C stopped waiting for a command, and the status of a script
+/// that Ctrl+C stopped.
 pub const INTERRUPTED_EXIT: u8 = 130;
 
 /// The result of one `run` call. Fields beyond these four are ignored.
@@ -82,14 +90,10 @@ pub enum LocalCommand {
     Tools,
 }
 
-/// Checks that `tool` offers the `run` command `golem ssh` submits to, before anything is
-/// submitted: a `--cwd` string option, a `script` string positional, a `--timeout` integer option
-/// when one will be passed, and a record result with `stdout`, `stderr` and `cwd` strings and an
-/// 8-bit unsigned `exit_code`, as a process status is. Every other input must have a default.
-pub fn check_run_contract(tool: &Tool, with_timeout: bool) -> Result<(), String> {
-    let schema = &tool.schema;
+/// The `run` command of `tool`, when it has one that can be called.
+fn run_command(tool: &Tool) -> Option<&CommandBody> {
     let nodes = &tool.commands.nodes;
-    let run = nodes
+    nodes
         .first()
         .into_iter()
         .flat_map(|root| &root.subcommands)
@@ -100,7 +104,27 @@ pub fn check_run_contract(tool: &Tool, with_timeout: bool) -> Result<(), String>
         })
         .find(|node| node.name == RUN)
         .and_then(|node| node.body.as_ref())
-        .ok_or_else(|| format!("it has no `{RUN}` command"))?;
+}
+
+/// True when `run` declares an input stream that a caller may leave out: the session then runs
+/// commands through the live session and Ctrl+C stops them.
+pub fn run_can_be_stopped(tool: &Tool) -> bool {
+    run_command(tool)
+        .and_then(|run| run.stdin.as_ref())
+        .is_some_and(|stdin| !stdin.required)
+}
+
+/// Checks that `tool` offers the `run` command `golem ssh` submits to, before anything is
+/// submitted: a `--cwd` string option, a `script` string positional, a `--timeout` integer option
+/// when one will be passed, and a record result with `stdout`, `stderr` and `cwd` strings and an
+/// 8-bit unsigned `exit_code`, as a process status is. Every other input must have a default, and
+/// an input stream must be one a caller may leave out.
+pub fn check_run_contract(tool: &Tool, with_timeout: bool) -> Result<(), String> {
+    let schema = &tool.schema;
+    let run = run_command(tool).ok_or_else(|| format!("it has no `{RUN}` command"))?;
+    if run.stdin.as_ref().is_some_and(|stdin| stdin.required) {
+        return Err(format!("`{RUN}` needs an input stream"));
+    }
     let scalar_option = |long: &str| {
         run.options
             .iter()
@@ -206,10 +230,7 @@ pub fn decode_result(result: Option<NativeToolResult>) -> Result<BashResult, Cal
             result: Some(value),
         })) => {
             let typed = value.as_inner();
-            let json = to_json_value(typed.graph(), &typed.graph().root, typed.value())
-                .map_err(|error| CallFailure::Undecodable(error.to_string()))?;
-            serde_json::from_value(json)
-                .map_err(|error| CallFailure::Undecodable(format!("not a `{RUN}` result: {error}")))
+            run_result(typed.graph(), typed.value())
         }
         Some(NativeToolResult::Success(NativeToolSuccess { result: None })) => Err(
             CallFailure::Undecodable("the call succeeded without a result".to_string()),
@@ -255,6 +276,85 @@ pub fn decode_result(result: Option<NativeToolResult>) -> Result<BashResult, Cal
             "the response carried no result".to_string(),
         )),
     }
+}
+
+/// Decodes the result of a `run` call made through the live session into what a scalar call
+/// gives.
+pub fn decode_live_result(result: PublicInvocationResult) -> Result<BashResult, CallFailure> {
+    match result {
+        PublicInvocationResult::ToolSuccess {
+            result: Some(value),
+        } => {
+            let typed =
+                typed(value).map_err(|error| CallFailure::Undecodable(error.to_string()))?;
+            run_result(typed.graph(), typed.value())
+        }
+        PublicInvocationResult::ToolSuccess { result: None } => Err(CallFailure::Undecodable(
+            "the call succeeded without a result".to_string(),
+        )),
+        PublicInvocationResult::ToolFailure {
+            code,
+            message,
+            custom_error,
+        } => {
+            let message = message.unwrap_or_default();
+            // The codes and what follows them are those of the scalar call's errors.
+            Err(match code.as_str() {
+                "custom-error" => CallFailure::Named {
+                    detail: match custom_error.map(typed) {
+                        Some(Ok(payload)) => error_detail(&payload),
+                        Some(Err(error)) => error.to_string(),
+                        None => String::new(),
+                    },
+                    name: message,
+                },
+                "denied" => CallFailure::Denied(message),
+                "protocol-error" => CallFailure::Rpc(format!("protocol error: {message}")),
+                "not-found" => CallFailure::Rpc(format!("not found: {message}")),
+                "remote-internal-error" => CallFailure::Rpc(format!("internal error: {message}")),
+                "resource-exhausted" => CallFailure::Rpc(format!("resource exhausted: {message}")),
+                "invalid-tool-name" => CallFailure::Rpc(format!("invalid tool name: {message}")),
+                "invalid-command-path" => {
+                    CallFailure::Rpc(format!("invalid command path: {message}"))
+                }
+                "invalid-input" => CallFailure::Rpc(format!("invalid input: {message}")),
+                "constraint-violation" => {
+                    CallFailure::Rpc(format!("constraint violation: {message}"))
+                }
+                "invalid-result" => CallFailure::Rpc(format!("invalid result: {message}")),
+                // `cancelled` has no message, and a code from a newer server names itself.
+                _ => CallFailure::Rpc(code),
+            })
+        }
+        PublicInvocationResult::None | PublicInvocationResult::Value { .. } => Err(
+            CallFailure::Undecodable("the response carried no result".to_string()),
+        ),
+    }
+}
+
+/// Reads the `run` result out of the value a call returned.
+fn run_result(graph: &SchemaGraph, value: &SchemaValue) -> Result<BashResult, CallFailure> {
+    let json = to_json_value(graph, &graph.root, value)
+        .map_err(|error| CallFailure::Undecodable(error.to_string()))?;
+    serde_json::from_value(json)
+        .map_err(|error| CallFailure::Undecodable(format!("not a `{RUN}` result: {error}")))
+}
+
+/// A value of the live session as a scalar call carries it. What `run` returns holds no streams.
+fn typed(value: PublicTypedValue) -> Result<TypedSchemaValue, PublicSchemaValueError> {
+    let decoded = decode_public_schema_value(
+        &value.graph,
+        &value.graph.root,
+        &value.value,
+        PublicStreamReferencePolicy::None,
+        |_, _| {
+            Err(PublicSchemaValueError::new(
+                PublicErrorCode::UnsupportedValue,
+                "stream references are not allowed in this value",
+            ))
+        },
+    )?;
+    Ok(TypedSchemaValue::new(value.graph, decoded))
 }
 
 /// A declared error's payload as text: the string itself, a record's `reason`, or its JSON.
@@ -506,6 +606,26 @@ pub fn classify_invoke_error(status: Option<u16>, message: String) -> CallFailur
     }
 }
 
+/// Reads a live call that ended without a result. A rejection is the server's answer to the
+/// call, read as the HTTP status of the same refusal is for a scalar call. Anything else leaves
+/// the outcome unknown.
+pub fn classify_live_error(error: SessionTransportError) -> CallFailure {
+    match error {
+        SessionTransportError::Rejected { code, message } => {
+            let status = match code {
+                PublicErrorCode::Unauthorized => 403,
+                // The server's own failure. It does not say whether the call started.
+                PublicErrorCode::InternalError
+                | PublicErrorCode::InvocationFailed
+                | PublicErrorCode::ProducerError => 500,
+                _ => 400,
+            };
+            classify_invoke_error(Some(status), message)
+        }
+        error => CallFailure::Unknown(error.to_string()),
+    }
+}
+
 /// The status a session ends with. Output that could not be written is this process failing,
 /// so then it is never 0.
 pub fn ended(status: u8, lost_output: bool) -> u8 {
@@ -627,8 +747,8 @@ pub fn banner(agent: &str, tool: &str) -> String {
     )
 }
 
-/// What `help` prints.
-pub fn help_text(tool: &str, timeout: Option<u32>) -> String {
+/// What `help` prints. `stoppable` is whether Ctrl+C stops a running command of this tool.
+pub fn help_text(tool: &str, timeout: Option<u32>, stoppable: bool) -> String {
     // The limits are the built-in bash tool's own; another binding has whatever it has.
     let builtin = tool == "bash";
     let limit = match timeout {
@@ -643,6 +763,11 @@ pub fn help_text(tool: &str, timeout: Option<u32>) -> String {
     } else {
         "Output appears when the command finishes."
     };
+    let ctrl_c = if stoppable {
+        "stop it; again, stop waiting"
+    } else {
+        "stop waiting for it"
+    };
     let tool = shown(tool);
     format!(
         "How this session works
@@ -656,7 +781,7 @@ Keys
   Enter       run the command; an open quote or here-document continues on a new line
   Tab         complete a command name or a path on the agent
   Up, Ctrl+R  recall and search earlier commands, kept per agent across sessions
-  Ctrl+C      clear the line; while a command runs, stop waiting for it
+  Ctrl+C      clear the line; while a command runs, {ctrl_c}
   Ctrl+D      leave
 
 Session commands
@@ -704,16 +829,22 @@ mod tests {
     use super::{
         BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode,
         LocalCommand, NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract,
-        classify_cancel, classify_invoke_error, decode_result, decorated, dimmed, ended, exit_code,
-        failed_agent_notice, global_args, help_text, input_mode, interrupted_message,
-        local_command, lookup_command, prompt, run_argv, runs_nothing, strip_cursor_reports,
-        time_limit, tools_listing,
+        classify_cancel, classify_invoke_error, classify_live_error, decode_live_result,
+        decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice, global_args,
+        help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
+        run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports, time_limit,
+        tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
+    use golem_client::invocation_session::SessionTransportError;
     use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
+    use golem_common::model::invocation_session_public::{
+        PublicErrorCode, PublicInvocationResult, PublicTypedValue,
+    };
     use golem_common::model::tool::{
         SerializableCustomToolError, SerializableToolError, SerializableToolRpcError,
     };
+    use golem_common::schema::public_json::encode_public_schema_value;
     use golem_common::schema::tool::Tool;
     use golem_common::schema::{
         NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
@@ -854,6 +985,33 @@ mod tests {
             .unwrap()
             .push(extra);
         rejected(definition, false, "user");
+    }
+
+    /// The effective definition of the bash 0.3.0 release, as `describe_tool` returns it: `run`
+    /// declares an input stream that a caller may leave out.
+    fn with_input_stream() -> Value {
+        serde_json::from_str(include_str!("bash-0.3.0.json")).unwrap()
+    }
+
+    fn can_be_stopped(definition: Value) -> bool {
+        run_can_be_stopped(&serde_json::from_value(definition).unwrap())
+    }
+
+    #[test]
+    fn a_run_with_an_input_stream_that_may_be_left_out_can_be_stopped() {
+        assert!(!can_be_stopped(pinned()));
+        assert!(can_be_stopped(with_input_stream()));
+        // With the stream or without it, the release is one a session can use.
+        assert_eq!(check(with_input_stream(), false), Ok(()));
+        assert_eq!(check(with_input_stream(), true), Ok(()));
+    }
+
+    #[test]
+    fn a_run_that_needs_an_input_stream_is_rejected() {
+        let mut definition = with_input_stream();
+        run_body(&mut definition)["stdin"]["required"] = json!(true);
+        assert!(!can_be_stopped(definition.clone()));
+        rejected(definition, false, "`run` needs an input stream");
     }
 
     fn record(fields: Vec<(&str, SchemaType, SchemaValue)>) -> TypedSchemaValue {
@@ -1115,6 +1273,57 @@ mod tests {
         }
     }
 
+    fn rejection(code: PublicErrorCode) -> CallFailure {
+        classify_live_error(SessionTransportError::Rejected {
+            code,
+            message: "no".to_string(),
+        })
+    }
+
+    #[test]
+    fn a_rejected_live_call_is_a_definite_failure_as_a_refused_request_is() {
+        // The live form of a 403.
+        assert_eq!(
+            rejection(PublicErrorCode::Unauthorized),
+            CallFailure::Denied("no".to_string())
+        );
+        // The live forms of the other refusals.
+        for code in [
+            PublicErrorCode::AuthenticationFailed,
+            PublicErrorCode::NotFound,
+            PublicErrorCode::ValidationError,
+            PublicErrorCode::ResourceExhausted,
+            PublicErrorCode::RoutingMiss,
+        ] {
+            assert_eq!(
+                rejection(code),
+                CallFailure::Rpc("no".to_string()),
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_live_call_that_failed_on_the_server_or_on_the_way_leaves_the_outcome_unknown() {
+        // The server's own failure, as a 5xx is one.
+        for code in [
+            PublicErrorCode::InternalError,
+            PublicErrorCode::InvocationFailed,
+            PublicErrorCode::ProducerError,
+        ] {
+            assert_eq!(
+                rejection(code),
+                CallFailure::Unknown("no".to_string()),
+                "{code:?}"
+            );
+        }
+        // No answer at all.
+        assert_eq!(
+            classify_live_error(SessionTransportError::Closed),
+            CallFailure::Unknown("invocation session connection closed".to_string())
+        );
+    }
+
     #[test]
     fn the_editor_needs_both_stdin_and_stdout_on_a_terminal() {
         assert_eq!(input_mode(true, true, false), InputMode::Editor);
@@ -1277,6 +1486,136 @@ mod tests {
         }
     }
 
+    /// A typed value as a live session carries it.
+    fn public(value: TypedSchemaValue) -> PublicTypedValue {
+        let (graph, value) = value.into_parts();
+        let value = encode_public_schema_value(&graph, &graph.root, &value, |_, _| {
+            unreachable!("these values hold no streams")
+        })
+        .unwrap();
+        PublicTypedValue { graph, value }
+    }
+
+    fn live_success(value: TypedSchemaValue) -> PublicInvocationResult {
+        PublicInvocationResult::ToolSuccess {
+            result: Some(public(value)),
+        }
+    }
+
+    fn live_failure(code: &str, message: Option<&str>) -> PublicInvocationResult {
+        PublicInvocationResult::ToolFailure {
+            code: code.to_string(),
+            message: message.map(str::to_string),
+            custom_error: None,
+        }
+    }
+
+    #[test]
+    fn a_live_run_result_decodes_as_a_scalar_one_does() {
+        assert_eq!(
+            decode_live_result(live_success(bash_result("/tmp", 130))),
+            Ok(BashResult {
+                stdout: "out".to_string(),
+                stderr: "err".to_string(),
+                exit_code: 130,
+                cwd: "/tmp".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_live_success_without_a_result_is_undecodable() {
+        assert_eq!(
+            decode_live_result(PublicInvocationResult::ToolSuccess { result: None }),
+            Err(CallFailure::Undecodable(
+                "the call succeeded without a result".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_live_result_of_another_shape_is_undecodable() {
+        let other = record(vec![("cwd", SchemaType::u32(), SchemaValue::U32(1))]);
+        let Err(CallFailure::Undecodable(reason)) = decode_live_result(live_success(other)) else {
+            panic!("a record that is not a `run` result was decoded");
+        };
+        assert!(reason.starts_with("not a `run` result"), "{reason}");
+    }
+
+    #[test]
+    fn a_live_answer_that_is_no_tool_result_is_undecodable() {
+        assert_eq!(
+            decode_live_result(PublicInvocationResult::None),
+            Err(CallFailure::Undecodable(
+                "the response carried no result".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_live_declared_tool_error_keeps_its_name_and_reason() {
+        let payload = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::string()),
+            SchemaValue::String("/gone: no such directory".to_string()),
+        );
+        assert_eq!(
+            decode_live_result(PublicInvocationResult::ToolFailure {
+                code: "custom-error".to_string(),
+                message: Some("invalid-cwd".to_string()),
+                custom_error: Some(public(payload)),
+            }),
+            Err(CallFailure::Named {
+                name: "invalid-cwd".to_string(),
+                detail: "/gone: no such directory".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_live_denial_stays_a_denial() {
+        assert_eq!(
+            decode_live_result(live_failure("denied", Some("filesystem access denied"))),
+            Err(CallFailure::Denied("filesystem access denied".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_live_failure_is_worded_as_the_scalar_one() {
+        for (code, words) in [
+            ("protocol-error", "protocol error"),
+            ("not-found", "not found"),
+            ("remote-internal-error", "internal error"),
+            ("resource-exhausted", "resource exhausted"),
+            ("invalid-tool-name", "invalid tool name"),
+            ("invalid-command-path", "invalid command path"),
+            ("invalid-input", "invalid input"),
+            ("constraint-violation", "constraint violation"),
+            ("invalid-result", "invalid result"),
+        ] {
+            assert_eq!(
+                decode_live_result(live_failure(code, Some("why"))),
+                Err(CallFailure::Rpc(format!("{words}: why"))),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_live_cancelled_call_is_a_failed_call() {
+        assert_eq!(
+            decode_live_result(live_failure("cancelled", None)),
+            Err(CallFailure::Rpc("cancelled".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_live_failure_with_an_unknown_code_is_named_by_the_code() {
+        assert_eq!(
+            decode_live_result(live_failure("something-new", Some("why"))),
+            Err(CallFailure::Rpc("something-new".to_string()))
+        );
+    }
+
     #[test]
     fn help_and_tools_alone_are_local() {
         assert_eq!(local_command("help"), Some(LocalCommand::Help));
@@ -1370,8 +1709,33 @@ mod tests {
     }
 
     #[test]
+    fn help_says_what_ctrl_c_does_to_a_running_command() {
+        // A tool that cannot stop a command: the session stops waiting for it.
+        let waiting = help_text("bash", None, false);
+        assert!(
+            waiting.contains(
+                "  Ctrl+C      clear the line; while a command runs, stop waiting for it\n"
+            ),
+            "{waiting}"
+        );
+        // A tool that can: the first Ctrl+C stops the command.
+        let stopping = help_text("bash", None, true);
+        assert!(
+            stopping.contains(
+                "  Ctrl+C      clear the line; while a command runs, stop it; again, stop waiting\n"
+            ),
+            "{stopping}"
+        );
+        // Nothing else in the text depends on it.
+        assert_eq!(
+            waiting.replace("stop waiting for it", ""),
+            stopping.replace("stop it; again, stop waiting", "")
+        );
+    }
+
+    #[test]
     fn help_explains_the_session_and_its_limits() {
-        let text = help_text("bash", None);
+        let text = help_text("bash", None, false);
         for expected in [
             "fresh shell on the agent, through its `bash` tool",
             "Only the directory carries over",
@@ -1387,7 +1751,7 @@ mod tests {
                 "{expected:?} is missing from:\n{text}"
             );
         }
-        assert!(help_text("sh", Some(45)).contains("stops a command after 45 seconds"));
+        assert!(help_text("sh", Some(45), false).contains("stops a command after 45 seconds"));
         assert!(!text.ends_with('\n'));
         assert!(
             text.contains("exit [N]    leave, with status N or else the last command's"),
@@ -1395,7 +1759,7 @@ mod tests {
         );
 
         // The limits are the built-in bash tool's; another binding has its own.
-        let other = help_text("sh", None);
+        let other = help_text("sh", None, false);
         assert!(
             !other.contains("600 seconds") && !other.contains("2 MiB"),
             "{other}"
@@ -1404,7 +1768,7 @@ mod tests {
             other.contains("`--timeout` sets how long a command may run"),
             "{other}"
         );
-        assert!(help_text("s\x1b[2Jh", None).contains("its `s^[[2Jh` tool"));
+        assert!(help_text("s\x1b[2Jh", None, false).contains("its `s^[[2Jh` tool"));
     }
 
     #[test]

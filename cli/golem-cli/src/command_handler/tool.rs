@@ -408,16 +408,7 @@ impl ToolCommandHandler {
         );
         let live = args.stdin.is_some() || args.stdout || args.stderr;
         if live {
-            let public_target = match (&owner.agent_id, owner.component_id) {
-                (Some(agent_id), None) => PublicNativeToolTarget::Agent {
-                    component_id: agent_id.component_id.0,
-                    agent_id: agent_id.agent_id.clone(),
-                },
-                (None, Some(component_id)) => PublicNativeToolTarget::Component {
-                    component_id: component_id.0,
-                },
-                _ => unreachable!("native tool target was resolved above"),
-            };
+            let public_target = public_target(&owner);
             let input = public_typed_value(input)?;
             let initial = InvocationSessionStateSnapshot {
                 delivered_output_cursors: Default::default(),
@@ -894,7 +885,23 @@ fn tool_input_or_empty(
         })
 }
 
-fn public_typed_value(input: Option<ExternalTypedSchemaValue>) -> anyhow::Result<PublicTypedValue> {
+/// The owner as a live session names the target of a tool call.
+pub(crate) fn public_target(owner: &ToolOwner) -> PublicNativeToolTarget {
+    match (&owner.agent_id, owner.component_id) {
+        (Some(agent_id), None) => PublicNativeToolTarget::Agent {
+            component_id: agent_id.component_id.0,
+            agent_id: agent_id.agent_id.clone(),
+        },
+        (None, Some(component_id)) => PublicNativeToolTarget::Component {
+            component_id: component_id.0,
+        },
+        _ => unreachable!("a tool owner is one agent or one component"),
+    }
+}
+
+pub(crate) fn public_typed_value(
+    input: Option<ExternalTypedSchemaValue>,
+) -> anyhow::Result<PublicTypedValue> {
     let (schema, value) = tool_input_or_empty(input).into_parts();
     let value = golem_common::schema::public_json::encode_public_schema_value(
         &schema,
