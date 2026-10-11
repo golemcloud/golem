@@ -1243,13 +1243,32 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_sn
                 .await?;
             assert_eq!(result.into_typed::<u64>()?, expected);
         }
-        let snapshots = executor
+        let last_finished = executor
             .get_oplog(&worker_id, OplogIndex::INITIAL)
             .await?
             .iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
-            .map(|entry| entry.oplog_index)
-            .collect::<Vec<_>>();
+            .rev()
+            .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .expect("the second increment has completed")
+            .oplog_index;
+        // Automatic snapshot creation follows publication of the invocation result.
+        let snapshots = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let snapshots = executor
+                    .get_oplog(&worker_id, OplogIndex::INITIAL)
+                    .await?
+                    .iter()
+                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                    .map(|entry| entry.oplog_index)
+                    .collect::<Vec<_>>();
+                if snapshots.last().is_some_and(|index| *index > last_finished) {
+                    break Ok::<_, anyhow::Error>(snapshots);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the second increment should commit its automatic snapshot")?;
         let [.., older, newest] = snapshots[..] else {
             panic!(
                 "{mode} probe should have an older loadable snapshot before the failing latest snapshot"
