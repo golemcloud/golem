@@ -8,7 +8,9 @@ use brush_core::{
     openfiles::{OpenFile, OpenFiles},
 };
 
-use crate::commands::{CommandDescriptor, CommandInvoker, FileReader, InvocationCommands};
+use crate::commands::{
+    CommandDescriptor, CommandInvoker, FileReader, FileWriter, InvocationCommands,
+};
 
 mod baseline;
 mod stateless;
@@ -264,6 +266,13 @@ impl Session {
     pub fn forward_file_reads(&mut self, reader: Arc<dyn FileReader>) {
         let mut commands = (*self.commands).clone();
         commands.forward_file_reads(reader);
+        self.commands = Arc::new(commands);
+    }
+
+    /// Lets local commands give the content of a regular file to `writer`.
+    pub fn forward_file_writes(&mut self, writer: Arc<dyn FileWriter>) {
+        let mut commands = (*self.commands).clone();
+        commands.forward_file_writes(writer);
         self.commands = Arc::new(commands);
     }
 
@@ -986,211 +995,7 @@ mod end_of_run_tests {
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]
-mod forwarded_read_tests {
-    use std::{
-        path::{Path, PathBuf},
-        sync::{Arc, Mutex},
-    };
-
-    use super::Session;
-    use crate::commands::FileReader;
-
-    /// What the file reader of a test answers.
-    #[derive(Clone, Copy)]
-    enum Answer {
-        /// The content of the file in upper case, so that a test can tell it from a local read.
-        UpperCase,
-        /// Nothing: the command must read the file itself.
-        Nothing,
-        /// One byte less than the file has.
-        TooShort,
-    }
-
-    struct Reader {
-        answer: Answer,
-        asked: Mutex<Vec<(PathBuf, u64)>>,
-    }
-
-    impl FileReader for Reader {
-        fn read(&self, path: &Path, len: u64) -> Option<Vec<u8>> {
-            self.asked.lock().unwrap().push((path.to_owned(), len));
-            let content = std::fs::read(path).ok()?;
-            match self.answer {
-                Answer::UpperCase => Some(content.to_ascii_uppercase()),
-                Answer::Nothing => None,
-                Answer::TooShort => Some(content[..content.len() - 1].to_vec()),
-            }
-        }
-    }
-
-    /// Runs `script` in a fresh session with a file reader that gives `answer`. Returns the
-    /// status, stdout, stderr and each read the reader was asked for.
-    fn run(script: &str, answer: Answer) -> (u8, String, String, Vec<(PathBuf, u64)>) {
-        let reader = Arc::new(Reader {
-            answer,
-            asked: Mutex::default(),
-        });
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let result = runtime.block_on(tokio::task::LocalSet::new().run_until(async {
-            let mut session =
-                Session::new_with_execution_services(crate::ExecutionServices::default())
-                    .await
-                    .unwrap();
-            session.forward_file_reads(reader.clone());
-            session.run(script).await
-        }));
-        let asked = reader.asked.lock().unwrap().clone();
-        (
-            result.exit_code,
-            String::from_utf8(result.stdout).unwrap(),
-            String::from_utf8(result.stderr).unwrap(),
-            asked,
-        )
-    }
-
-    /// A new directory for one test, with the file `f` of two lines.
-    fn directory(name: &str) -> PathBuf {
-        let directory = Path::new("/tmp/bash-forwarded-read").join(name);
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join("f"), "one\ntwo\n").unwrap();
-        directory
-    }
-
-    #[test]
-    fn cat_prints_what_the_file_reader_returns_for_a_regular_file() {
-        let directory = directory("regular");
-        let (status, stdout, stderr, asked) =
-            run(&format!("cat {}/f", directory.display()), Answer::UpperCase);
-        assert_eq!(
-            (status, stdout.as_str(), stderr.as_str()),
-            (0, "ONE\nTWO\n", "")
-        );
-        assert_eq!(asked, [(directory.join("f"), 8)]);
-    }
-
-    #[test]
-    fn cat_formats_what_the_file_reader_returns() {
-        let directory = directory("format");
-        let (status, stdout, _, asked) = run(
-            &format!("cd {}; cat -n f; cat -A f", directory.display()),
-            Answer::UpperCase,
-        );
-        assert_eq!(
-            (status, stdout.as_str()),
-            (0, "     1\tONE\n     2\tTWO\nONE$\nTWO$\n")
-        );
-        assert_eq!(asked.len(), 2);
-    }
-
-    #[test]
-    fn cat_asks_the_file_reader_with_the_absolute_path_of_a_relative_operand() {
-        let directory = directory("relative");
-        let (_, stdout, _, asked) = run(
-            &format!("cd {}; cat f", directory.display()),
-            Answer::UpperCase,
-        );
-        assert_eq!(stdout, "ONE\nTWO\n");
-        assert_eq!(asked, [(directory.join("f"), 8)]);
-    }
-
-    #[test]
-    fn cat_keeps_its_message_for_a_missing_operand_between_forwarded_ones() {
-        let directory = directory("missing");
-        let (status, stdout, stderr, asked) = run(
-            &format!("cd {}; cat f missing f", directory.display()),
-            Answer::UpperCase,
-        );
-        assert_eq!(
-            (status, stdout.as_str(), stderr.as_str()),
-            (
-                1,
-                "ONE\nTWO\nONE\nTWO\n",
-                "cat: missing: No such file or directory\n"
-            )
-        );
-        assert_eq!(asked.len(), 2);
-    }
-
-    #[test]
-    fn cat_reads_the_file_itself_when_the_file_reader_returns_nothing() {
-        let directory = directory("nothing");
-        let (status, stdout, stderr, asked) =
-            run(&format!("cat {}/f", directory.display()), Answer::Nothing);
-        assert_eq!(
-            (status, stdout.as_str(), stderr.as_str()),
-            (0, "one\ntwo\n", "")
-        );
-        assert_eq!(asked.len(), 1);
-    }
-
-    #[test]
-    fn cat_reads_the_file_itself_when_the_file_reader_returns_another_length() {
-        let directory = directory("length");
-        let (status, stdout, stderr, asked) =
-            run(&format!("cat {}/f", directory.display()), Answer::TooShort);
-        assert_eq!(
-            (status, stdout.as_str(), stderr.as_str()),
-            (0, "one\ntwo\n", "")
-        );
-        assert_eq!(asked.len(), 1);
-    }
-
-    /// Standard input under each of its names, a named descriptor, the null device, an empty
-    /// file and a directory are not regular files with content.
-    #[test]
-    fn cat_does_not_ask_the_file_reader_for_what_is_not_a_regular_file_with_content() {
-        let directory = directory("other");
-        std::fs::write(directory.join("empty"), "").unwrap();
-        let (status, stdout, stderr, asked) = run(
-            &format!(
-                "cd {}; cat < f; cat - < f; cat /dev/stdin < f; cat /dev/fd/3 3< f; \
-                 cat /dev/null; cat empty; cat .",
-                directory.display()
-            ),
-            Answer::UpperCase,
-        );
-        assert_eq!(asked, []);
-        assert_eq!(stdout, "one\ntwo\n".repeat(4));
-        assert_eq!((status, stderr.as_str()), (1, "cat: .: Is a directory\n"));
-    }
-
-    #[test]
-    fn cat_does_not_ask_the_file_reader_when_its_input_is_its_output() {
-        let directory = directory("same");
-        let (status, stdout, stderr, asked) = run(
-            &format!("cd {}; cat f >> f", directory.display()),
-            Answer::UpperCase,
-        );
-        assert_eq!(asked, []);
-        assert_eq!(
-            (status, stdout.as_str(), stderr.as_str()),
-            (1, "", "cat: f: input file is output file\n")
-        );
-        assert_eq!(
-            std::fs::read_to_string(directory.join("f")).unwrap(),
-            "one\ntwo\n"
-        );
-    }
-
-    /// A read through the file reader is not a wait: the stage ends before its reader exits.
-    #[test]
-    fn cat_with_a_file_reader_ends_before_a_reader_that_exits_early() {
-        let directory = directory("early");
-        let (_, stdout, _, asked) = run(
-            &format!(
-                "set -o pipefail; cat {}/f | head -n 0; echo \"${{PIPESTATUS[*]}}\"",
-                directory.display()
-            ),
-            Answer::UpperCase,
-        );
-        assert_eq!(stdout, "0 0\n");
-        assert_eq!(asked.len(), 1);
-    }
-}
+mod forwarded_tests;
 
 #[cfg(all(test, target_arch = "wasm32"))]
 mod tests {

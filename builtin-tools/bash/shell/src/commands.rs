@@ -46,10 +46,23 @@ pub trait FileReader: Send + Sync {
     fn read(&self, path: &Path, len: u64) -> Option<Vec<u8>>;
 }
 
+/// Writes a regular file for a local command that gives the content to a bound tool.
+///
+/// A call returns only when it has its answer. No other part of the script runs in that time, as
+/// for a write that the command makes itself.
+pub trait FileWriter: Send + Sync {
+    /// The most bytes that [`FileWriter::write`] takes for one file.
+    fn max_len(&self) -> usize;
+    /// Makes `content` the content of the regular file at the absolute `path`. Returns `false`
+    /// when the command must write the file itself; the file can then have any content.
+    fn write(&self, path: &Path, content: &[u8]) -> bool;
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct InvocationCommands {
     entries: HashMap<String, (CommandDescriptor, Arc<dyn CommandInvoker>)>,
     file_reader: Option<Arc<dyn FileReader>>,
+    file_writer: Option<Arc<dyn FileWriter>>,
 }
 impl InvocationCommands {
     pub fn contains(&self, name: &str) -> bool {
@@ -68,6 +81,16 @@ impl InvocationCommands {
     }
     pub fn forward_file_reads(&mut self, reader: Arc<dyn FileReader>) {
         self.file_reader = Some(reader);
+    }
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(dead_code, reason = "only the wasm32 commands forward a write")
+    )]
+    pub fn file_writer(&self) -> Option<Arc<dyn FileWriter>> {
+        self.file_writer.clone()
+    }
+    pub fn forward_file_writes(&mut self, writer: Arc<dyn FileWriter>) {
+        self.file_writer = Some(writer);
     }
 }
 

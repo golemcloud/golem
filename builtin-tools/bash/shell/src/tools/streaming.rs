@@ -1865,6 +1865,151 @@ pub(crate) fn sleep<SE: ShellExtensions>(
     })
 }
 
+/// Runs `before_wait` each time `future` is not ready, before the task gives way to another part
+/// of the script.
+async fn before_each_wait<T>(future: impl Future<Output = T>, mut before_wait: impl FnMut()) -> T {
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|context| {
+        let poll = future.as_mut().poll(context);
+        if poll.is_pending() {
+            before_wait();
+        }
+        poll
+    })
+    .await
+}
+
+/// The files of one `tee` whose content goes to the file writer of the call.
+///
+/// The file writer takes a file only as a whole. So `tee` holds the bytes of such a file until
+/// its input ends, and then it gives them to the file writer. Another part of the script can run
+/// only while `tee` waits, and a file must then have the bytes that `tee` has taken. So `tee`
+/// writes what it holds before each wait, and it writes that file itself from then on.
+struct HeldFiles {
+    writer: Option<Arc<dyn crate::commands::FileWriter>>,
+    files: Mutex<Vec<HeldFile>>,
+}
+
+struct HeldFile {
+    path: PathBuf,
+    file: Arc<std::fs::File>,
+    /// The bytes that `tee` has taken for the file and not written.
+    bytes: Vec<u8>,
+    /// Whether `tee` still holds the bytes of the file for the file writer.
+    held: bool,
+    /// The error of a write before a wait. The next step for the file reports it.
+    error: Option<io::Error>,
+}
+
+impl HeldFile {
+    /// Writes the held bytes to the file and lets `tee` write the file itself from now on.
+    fn write_out(&mut self) -> io::Result<()> {
+        self.held = false;
+        io::Write::write_all(&mut &*self.file, &std::mem::take(&mut self.bytes))
+    }
+}
+
+impl HeldFiles {
+    fn new(writer: Option<Arc<dyn crate::commands::FileWriter>>) -> Self {
+        Self {
+            writer,
+            files: Mutex::default(),
+        }
+    }
+
+    fn files(&self) -> std::sync::MutexGuard<'_, Vec<HeldFile>> {
+        self.files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Holds the content of `file`, which `tee` has opened at `path` and emptied, when the call
+    /// has a file writer and `file` is a regular file. Returns the number of the held file.
+    fn hold(&self, path: &Path, file: &Arc<std::fs::File>) -> Option<usize> {
+        self.writer.as_ref()?;
+        if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+            return None;
+        }
+        let mut files = self.files();
+        files.push(HeldFile {
+            path: path.to_owned(),
+            file: file.clone(),
+            bytes: Vec::new(),
+            held: true,
+            error: None,
+        });
+        Some(files.len() - 1)
+    }
+
+    /// Takes `bytes` for the held file `number`. Returns `false` when `tee` must write them to
+    /// the file itself: it writes the file itself already, or the file writer does not take a
+    /// file of this size.
+    fn push(&self, number: usize, bytes: &[u8]) -> io::Result<bool> {
+        let limit = self.writer.as_ref().map_or(0, |writer| writer.max_len());
+        let mut files = self.files();
+        let file = &mut files[number];
+        if let Some(error) = file.error.take() {
+            return Err(error);
+        }
+        if file.held && file.bytes.len() + bytes.len() > limit {
+            file.write_out()?;
+        }
+        if file.held {
+            file.bytes.extend_from_slice(bytes);
+        }
+        Ok(file.held)
+    }
+
+    /// Writes what `tee` holds to each file, before another part of the script can run.
+    fn write_out(&self) {
+        for file in self.files().iter_mut() {
+            if file.held && !file.bytes.is_empty() {
+                file.error = file.write_out().err();
+            }
+        }
+    }
+
+    /// Gives the content of the held file `number` to the file writer at the end of the input.
+    /// When the file writer does not leave the file with that content, `tee` writes the file.
+    fn finish(&self, number: usize) -> io::Result<()> {
+        let (path, file, bytes) = {
+            let mut files = self.files();
+            let file = &mut files[number];
+            if let Some(error) = file.error.take() {
+                return Err(error);
+            }
+            if !std::mem::take(&mut file.held) || file.bytes.is_empty() {
+                return Ok(());
+            }
+            (
+                file.path.clone(),
+                file.file.clone(),
+                std::mem::take(&mut file.bytes),
+            )
+        };
+        let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if self
+            .writer
+            .as_ref()
+            .is_some_and(|writer| writer.write(&path, &bytes))
+            && file.metadata()?.len() == length
+        {
+            return Ok(());
+        }
+        // `tee` has written nothing to the file, so its descriptor is at the start of the file.
+        file.set_len(0)?;
+        io::Write::write_all(&mut &*file, &bytes)
+    }
+}
+
+/// One output of `tee`: its standard output, or one of its operands.
+struct TeeOutput {
+    name: String,
+    stream: OpenFile,
+    /// The number of the file in [`HeldFiles`], when its content goes to the file writer.
+    held: Option<usize>,
+}
+
 fn tee_impl<SE: ShellExtensions>(
     context: ExecutionContext<'_, SE>,
     args: Vec<CommandArg>,
@@ -1884,9 +2029,13 @@ fn tee_impl<SE: ShellExtensions>(
             .or(matches
                 .get_flag("ignore-pipe-errors")
                 .then_some("warn-nopipe"));
-        let mut destinations = vec![("standard output".to_string(), context.stdout(), true)];
+        let mut outputs = vec![TeeOutput {
+            name: "standard output".to_string(),
+            stream: context.stdout(),
+            held: None,
+        }];
         if mode.is_some() || pipe_ignored() {
-            destinations[0].1.set_broken_pipe_cancellation(false);
+            outputs[0].stream.set_broken_pipe_cancellation(false);
         }
         let mut failed = false;
         let mut stderr = context.stderr();
@@ -1895,10 +2044,23 @@ fn tee_impl<SE: ShellExtensions>(
             // diagnostic destination. This applies only to this command-owned handle.
             stderr.set_broken_pipe_cancellation(false);
         }
+        // The file writer replaces the content of a file, so it cannot add to a file.
+        let held = HeldFiles::new(if matches.get_flag("append") {
+            None
+        } else {
+            context
+                .params
+                .context::<crate::commands::InvocationCommands>()
+                .and_then(|commands| commands.file_writer())
+        });
         if let Some(paths) = matches.get_many::<OsString>("file") {
             for path in paths {
                 if let Some(stream) = standard_stream(&context, &path.to_string_lossy()) {
-                    destinations.push((path.to_string_lossy().into_owned(), stream, false));
+                    outputs.push(TeeOutput {
+                        name: path.to_string_lossy().into_owned(),
+                        stream,
+                        held: None,
+                    });
                     continue;
                 }
                 let absolute = context.shell.absolute_path(Path::new(path));
@@ -1907,13 +2069,16 @@ fn tee_impl<SE: ShellExtensions>(
                     .create(true)
                     .append(matches.get_flag("append"))
                     .truncate(!matches.get_flag("append"))
-                    .open(absolute)
+                    .open(&absolute)
                 {
-                    Ok(file) => destinations.push((
-                        path.to_string_lossy().into_owned(),
-                        OpenFile::from(file),
-                        false,
-                    )),
+                    Ok(file) => {
+                        let file = Arc::new(file);
+                        outputs.push(TeeOutput {
+                            name: path.to_string_lossy().into_owned(),
+                            held: held.hold(&absolute, &file),
+                            stream: OpenFile::File(file),
+                        });
+                    }
                     Err(error) => {
                         failed = true;
                         stderr
@@ -1932,51 +2097,68 @@ fn tee_impl<SE: ShellExtensions>(
             }
         }
         let mut source = input(&context);
-        let mut chunk = vec![0; 16 * 1024];
-        loop {
-            let count = source.async_io().read(&mut chunk).await?;
-            if count == 0 {
-                break;
-            }
-            let mut index = 0;
-            while index < destinations.len() {
-                let (name, stream, _stdout) = &mut destinations[index];
-                match stream.async_io().write_all(&chunk[..count]).await {
-                    Ok(()) => index += 1,
-                    Err(error) => {
-                        let pipe = error.kind() == io::ErrorKind::BrokenPipe;
-                        if pipe && mode.is_none() && !pipe_ignored() {
-                            return Err(error.into());
-                        }
-                        let ignored = pipe
-                            && (matches!(mode, Some("warn-nopipe" | "exit-nopipe"))
-                                || (mode.is_none() && pipe_ignored()));
-                        if !ignored {
-                            failed = true;
-                            let message = if pipe {
-                                format!("tee: '{name}': Broken pipe\n")
-                            } else {
-                                format!("tee: {name}: {}\n", super::io_message(&error))
-                            };
-                            if let Err(error) =
-                                stderr.async_io().write_all(message.as_bytes()).await
-                                && error.kind() != io::ErrorKind::BrokenPipe
-                            {
+        let copy = async {
+            let mut chunk = vec![0; 16 * 1024];
+            // The last round has no bytes: it ends each held file.
+            loop {
+                let count = source.async_io().read(&mut chunk).await?;
+                let mut index = 0;
+                while index < outputs.len() {
+                    let output = &mut outputs[index];
+                    let bytes = &chunk[..count];
+                    let written = match (output.held, count) {
+                        (Some(number), 0) => held.finish(number),
+                        (None, 0) => Ok(()),
+                        (number, _) => match number.map(|number| held.push(number, bytes)) {
+                            Some(Ok(true)) => Ok(()),
+                            Some(Err(error)) => Err(error),
+                            Some(Ok(false)) | None => {
+                                output.stream.async_io().write_all(bytes).await
+                            }
+                        },
+                    };
+                    match written {
+                        Ok(()) => index += 1,
+                        Err(error) => {
+                            let pipe = error.kind() == io::ErrorKind::BrokenPipe;
+                            if pipe && mode.is_none() && !pipe_ignored() {
                                 return Err(error.into());
                             }
-                            if matches!(mode, Some("exit" | "exit-nopipe")) {
-                                return Ok(ExecutionResult::new(1));
+                            let ignored = pipe
+                                && (matches!(mode, Some("warn-nopipe" | "exit-nopipe"))
+                                    || (mode.is_none() && pipe_ignored()));
+                            if !ignored {
+                                failed = true;
+                                let name = &output.name;
+                                let message = if pipe {
+                                    format!("tee: '{name}': Broken pipe\n")
+                                } else {
+                                    format!("tee: {name}: {}\n", super::io_message(&error))
+                                };
+                                if let Err(error) =
+                                    stderr.async_io().write_all(message.as_bytes()).await
+                                    && error.kind() != io::ErrorKind::BrokenPipe
+                                {
+                                    return Err(error.into());
+                                }
+                                if matches!(mode, Some("exit" | "exit-nopipe")) {
+                                    return Ok(ExecutionResult::new(1));
+                                }
                             }
+                            outputs.remove(index);
                         }
-                        destinations.remove(index);
                     }
                 }
+                if count == 0 || outputs.is_empty() {
+                    break;
+                }
             }
-            if destinations.is_empty() {
-                break;
-            }
-        }
-        Ok(ExecutionResult::new(u8::from(failed)))
+            Ok(ExecutionResult::new(u8::from(failed)))
+        };
+        let result = before_each_wait(copy, || held.write_out()).await;
+        // An early end leaves each file with the bytes that `tee` has taken.
+        held.write_out();
+        result
     })
 }
 
