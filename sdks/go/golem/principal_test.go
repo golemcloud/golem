@@ -92,8 +92,8 @@ func TestPrincipalsReachTheAgent(t *testing.T) {
 		if err := decodeParams(params(types.MakeSchemaValueNodeStringValue("p")), e.idFields, idVal, creator); err != nil {
 			t.Fatal(err)
 		}
-		inst := &instance{def: e, agentID: `P("p")`, principal: creator}
-		inst.state = e.newState(idVal, inst.agentID, creator)
+		inst := &instance{def: e, principal: creator}
+		inst.state = e.newState(idVal, creator)
 
 		out, err := e.methods["charge"].invoke(inst, AgentPrincipal{AgentID: AgentID{AgentID: "Caller()"}}, params(types.MakeSchemaValueNodeS64Value(5)))
 		if err != nil {

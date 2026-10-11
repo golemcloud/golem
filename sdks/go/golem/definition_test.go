@@ -70,7 +70,10 @@ func TestPublicAccessors(t *testing.T) {
 	if len(md.endpoints) != 1 {
 		t.Errorf("HTTP opt: endpoints = %d, want 1", len(md.endpoints))
 	}
-	if got := (&Context[int]{agentID: "aid"}).AgentID(); got != "aid" {
+	prev := selfAgentID
+	selfAgentID = func() string { return "aid" }
+	t.Cleanup(func() { selfAgentID = prev })
+	if got := (&Context[int]{}).AgentID(); got != "aid" {
 		t.Errorf("Context.AgentID = %q", got)
 	}
 }

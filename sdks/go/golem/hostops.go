@@ -40,3 +40,6 @@ type agentPages interface {
 	next() (page []apiHost.AgentMetadata, more bool, err error)
 	close()
 }
+
+// agentIDEnvVar is how the executor tells the guest which agent instance it is.
+const agentIDEnvVar = "GOLEM_AGENT_ID"

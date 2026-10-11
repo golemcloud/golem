@@ -52,12 +52,12 @@ type agentEntry struct {
 	configs  []configDecl   // declared config keys + secrets
 	idType   reflect.Type
 	idFields []engine.Field
-	newState func(idVal reflect.Value, agentID string, principal Principal) any
+	newState func(idVal reflect.Value, principal Principal) any
 	// zeroState returns a fresh zero state for a snapshot restore to load into:
 	// a restore does not run the constructor.
 	zeroState func() any
 	// restore is the optional [AgentImpl.OnRestore] hook, run after the load.
-	restore func(state any, idVal reflect.Value, agentID string, principal Principal) error
+	restore func(state any, idVal reflect.Value, principal Principal) error
 	methods map[string]*methodEntry
 	order   []string
 	// router is set when the entry is an HTTP router rather than an ordinary
@@ -71,9 +71,8 @@ type agentEntry struct {
 // many agent types, but a worker is initialized as exactly one of them — so the
 // live state is held here rather than on the (shared, immutable) type entry.
 type instance struct {
-	def     *agentEntry
-	state   any
-	agentID string
+	def   *agentEntry
+	state any
 	// principal is the one the agent was initialized with.
 	principal Principal
 	// config is the agent's materialized config (its Cfg value), cached for the
@@ -123,7 +122,7 @@ func DefineAgent[Id any](spec Spec) *AgentDefinition[Id, NoConfig] {
 // still use the plain [Implement].
 //
 //	type ShopConfig struct{ Greeting string }
-//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopConfig](golem.Spec{Name: "Shop"})
+//	var Shop = golem.DefineConfiguredAgent[ShopID, ShopConfig](golem.Spec{Name: "Shop"})
 func DefineConfiguredAgent[Id any, Cfg any](spec Spec) *AgentDefinition[Id, Cfg] {
 	return defineAgentInto[Id, Cfg](defs, spec)
 }
@@ -218,7 +217,7 @@ func newMethodDef[Id any, In any, Out any](name string, opts []MethodOpt) Method
 // never see it.
 //
 //	type state struct{ count int64 }
-//	var counter = counteragent.Agent.Implement(func(counteragent.CounterId) *state { return &state{} })
+//	var counter = counteragent.Agent.Implement(func(counteragent.CounterID) *state { return &state{} })
 //	func init() {
 //	    counter.Handle(counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
 //	        ctx.State.count += in.By
@@ -266,26 +265,26 @@ func (i *AgentImpl[Id, S, Cfg]) Handle[In any, Out any](
 	return Registered{}
 }
 
-// Registered is the result of [Handle]; it carries no data. It lets a Handle call
-// sit in a package-level `var _ = golem.Handle(…)` as an alternative to calling it
-// inside func init().
+// Registered is the result of [AgentImpl.Handle]; it carries no data. It lets a
+// Handle call sit in a package-level `var _ = impl.Handle(…)` as an alternative to
+// calling it inside func init().
 type Registered struct{}
 
-func simpleNewState[Id any, S any](init func(Id) *S) func(reflect.Value, string, Principal) any {
+func simpleNewState[Id any, S any](init func(Id) *S) func(reflect.Value, Principal) any {
 	if init == nil {
 		return nil
 	}
-	return func(idVal reflect.Value, _ string, _ Principal) any { return init(idVal.Interface().(Id)) }
+	return func(idVal reflect.Value, _ Principal) any { return init(idVal.Interface().(Id)) }
 }
 
-func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cfg]) *S) func(reflect.Value, string, Principal) any {
+func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cfg]) *S) func(reflect.Value, Principal) any {
 	if init == nil {
 		return nil
 	}
 	// No host call here: the constructor reads config lazily via ctx.Config(),
 	// keeping get-config-value out of this always-linked path.
-	return func(idVal reflect.Value, agentID string, principal Principal) any {
-		return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID, principal: principal})
+	return func(idVal reflect.Value, principal Principal) any {
+		return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), principal: principal})
 	}
 }
 
@@ -295,7 +294,7 @@ func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cf
 func implementInto[Id any, S any, Cfg any](
 	d *definitions,
 	def *AgentDefinition[Id, Cfg],
-	newState func(reflect.Value, string, Principal) any,
+	newState func(reflect.Value, Principal) any,
 	initNil bool,
 ) *AgentImpl[Id, S, Cfg] {
 	e := d.agents[def.name]
@@ -334,8 +333,8 @@ func (i *AgentImpl[Id, S, Cfg]) OnRestore(fn func(ic *InitContext[Id, S, Cfg], s
 	case i.e.restore != nil:
 		i.d.RecordErr(i.e.name, "", "OnRestore already registered")
 	default:
-		i.e.restore = func(state any, idVal reflect.Value, agentID string, principal Principal) error {
-			ic := &InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID, principal: principal}
+		i.e.restore = func(state any, idVal reflect.Value, principal Principal) error {
+			ic := &InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), principal: principal}
 			return fn(ic, state.(*S))
 		}
 	}
@@ -352,7 +351,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	h func(*Context[S], In) Out,
 ) {
 	if m.name == "" {
-		d.RecordErr(e.name, "", "DefineMethod requires a non-empty method name")
+		d.RecordErr(e.name, "", "Method requires a non-empty method name")
 		return
 	}
 	if h == nil {
@@ -414,7 +413,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		}
 
 		stage = stageHandler
-		ctx := &Context[S]{State: inst.state.(*S), agentID: inst.agentID, principal: inst.principal}
+		ctx := &Context[S]{State: inst.state.(*S), principal: inst.principal}
 		result := h(ctx, inVal.Interface().(In))
 		if me.outCodec == nil {
 			return nil, nil
@@ -440,7 +439,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 // Go methods with full compile-time checking and no reflection:
 //
 //	func (s *CartState) AddItem(in AddItemIn) int64 { ... }
-//	golem.Implement(Cart, CartAdd, golem.Adapt((*CartState).AddItem))
+//	cart.Handle(CartAdd, golem.Adapt((*CartState).AddItem))
 //
 // Methods signal failure by panicking, like any handler. Go has no overloading,
 // so there is one adapter per method shape: `0` = no input, `Unit` = no output.

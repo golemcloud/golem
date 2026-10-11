@@ -170,6 +170,9 @@ type rState struct {
 // the OnRestore hook; the constructor, whose effects are already in the
 // history the snapshot replaces, does not run.
 func TestRestoreSkipsTheConstructor(t *testing.T) {
+	prev := selfAgentID
+	selfAgentID = func() string { return `R("ada")` }
+	t.Cleanup(func() { selfAgentID = prev })
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
 		constructed := 0
@@ -194,7 +197,7 @@ func TestRestoreSkipsTheConstructor(t *testing.T) {
 		}
 		e := d.agents["R"]
 		idVal := reflect.ValueOf(restoreID{Name: "ada"})
-		got, err := restoreState(e, idVal, `R("ada")`, snapPrincipal, state)
+		got, err := restoreState(e, idVal, snapPrincipal, state)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +223,7 @@ func TestRestoreHookErrorFailsTheRestore(t *testing.T) {
 		})
 		snap, _ := saveState(&rState{}, snapPrincipal)
 		_, state, _ := splitSnapshot(snap)
-		_, err := restoreState(d.agents["R"], reflect.ValueOf(restoreID{}), "R()", snapPrincipal, state)
+		_, err := restoreState(d.agents["R"], reflect.ValueOf(restoreID{}), snapPrincipal, state)
 		if err == nil || !strings.Contains(err.Error(), "dependency gone") {
 			t.Fatalf("err = %v", err)
 		}

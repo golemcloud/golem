@@ -162,7 +162,7 @@ func defineRouterInto[Cfg any](d *definitions, spec RouterSpec) *HTTPRouter[Cfg]
 		snapshot:  SnapshotDisabled,
 		idType:    reflect.TypeFor[routerID](),
 		methods:   map[string]*methodEntry{},
-		newState:  func(reflect.Value, string, Principal) any { return &routerState{} },
+		newState:  func(reflect.Value, Principal) any { return &routerState{} },
 		zeroState: func() any { return &routerState{} },
 		router:    &routerEntry{staticFiles: spec.StaticFiles, fileHeaders: spec.FileResponseHeaders},
 	}

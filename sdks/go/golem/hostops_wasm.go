@@ -19,10 +19,23 @@ package golem
 import (
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	environment "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_cli_0_3_0_environment"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 var hostOps agentHost = witHost{}
+
+// selfAgentID reads the agent's id through the durable host environment on
+// each call: replay sees the id the call saw when it ran, and a copy made by a
+// fork sees its own. os.Getenv would return the value captured at start-up.
+var selfAgentID = func() string {
+	for _, kv := range environment.GetEnvironment() {
+		if kv.F0 == agentIDEnvVar {
+			return kv.F1
+		}
+	}
+	return ""
+}
 
 type witHost struct{}
 

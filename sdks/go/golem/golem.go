@@ -19,13 +19,13 @@
 // cycles. The definition is state-free and is what other agents import:
 //
 //	// package counteragent — the definition (no state)
-//	type CounterId struct{ Name string } // constructor params; also the type-level identity
+//	type CounterID struct{ Name string } // constructor params; also the type-level identity
 //	type AddIn struct{ By int64 }
 //
-//	var Agent = golem.DefineAgent[CounterId](golem.Spec{Name: "CounterAgent"})
+//	var Agent = golem.DefineAgent[CounterID](golem.Spec{Name: "CounterAgent"})
 //	var (
-//	    Add   = golem.DefineMethod[CounterId, AddIn, int64]("add")
-//	    Value = golem.DefineMethod[CounterId, golem.Unit, int64]("value")
+//	    Add   = Agent.Method[AddIn, int64]("add")
+//	    Value = Agent.Method[golem.Unit, int64]("value")
 //	)
 //
 // The implementation lives in its own package and owns the private state:
@@ -33,14 +33,14 @@
 //	// package counteragentimpl — the behaviour (state is unexported)
 //	type state struct{ count int64 }
 //
-//	var counter = golem.Implement(counteragent.Agent, func(counteragent.CounterId) *state { return &state{} })
+//	var counter = counteragent.Agent.Implement(func(counteragent.CounterID) *state { return &state{} })
 //
 //	func init() {
-//	    golem.Handle(counter, counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
+//	    counter.Handle(counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
 //	        ctx.State.count += in.By
 //	        return ctx.State.count
 //	    })
-//	    golem.Handle(counter, counteragent.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+//	    counter.Handle(counteragent.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 //	        return ctx.State.count
 //	    })
 //	}
@@ -48,7 +48,7 @@
 // Another agent calls it through the definition — [AgentDefinition.Get] returns a
 // client, and the method descriptor carries the call:
 //
-//	client := counteragent.Agent.Get(counteragent.CounterId{Name: "c1"})
+//	client := counteragent.Agent.Get(counteragent.CounterID{Name: "c1"})
 //	n, err := counteragent.Add.Call(client, counteragent.AddIn{By: 5})
 //
 // Method descriptors are package-level values so the same value drives the
@@ -189,12 +189,12 @@ type AgentDependency interface{ dependencyName() string }
 // private state, as returned by the agent's init function.
 type Context[S any] struct {
 	State     *S
-	agentID   string
 	principal Principal
 }
 
-// AgentID returns the raw agent id the running instance was initialized with.
-func (c *Context[S]) AgentID() string { return c.agentID }
+// AgentID returns the raw id of the running agent. It is read from the host on
+// each call, so a copy made by [ForkSelf] sees its own id.
+func (c *Context[S]) AgentID() string { return selfAgentID() }
 
 // Principal returns the principal the agent was initialized with. The
 // principal of the current invocation is a [Principal] field of the method's
@@ -209,7 +209,6 @@ func (c *Context[S]) Principal() Principal { return c.principal }
 // and never see this type.
 type InitContext[Id any, S any, Cfg any] struct {
 	id        Id
-	agentID   string
 	principal Principal
 }
 
@@ -219,8 +218,8 @@ func (c *InitContext[Id, S, Cfg]) Principal() Principal { return c.principal }
 // ID returns the constructor parameters the agent instance was created with.
 func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }
 
-// AgentID returns the raw agent id the instance is being initialized with.
-func (c *InitContext[Id, S, Cfg]) AgentID() string { return c.agentID }
+// AgentID returns the raw id of the agent being initialized, read from the host.
+func (c *InitContext[Id, S, Cfg]) AgentID() string { return selfAgentID() }
 
 // AgentDefinition is the state-free handle returned by [DefineAgent] /
 // [DefineConfiguredAgent]. Id is the constructor parameter type, which doubles as
@@ -295,7 +294,7 @@ func PromptHint(s string) MethodOpt {
 // declare a [Mount] on its [Spec]). Grouping the endpoints in a single option
 // keeps each route's bindings together:
 //
-//	golem.DefineMethod[CounterID, AddIn, int64]("add",
+//	Agent.Method[AddIn, int64]("add",
 //	    golem.HTTP(golem.POST("/add?by={by}"), golem.GET("/add/{by}")))
 func HTTP(endpoints ...Endpoint) MethodOpt {
 	return func(o *methodOpts) { o.endpoints = append(o.endpoints, endpoints...) }
@@ -351,8 +350,8 @@ type readOnlyConfig struct {
 // that, passing more than one policy, or setting ReadOnly more than once is a
 // definition error reported at discovery.
 //
-//	golem.DefineMethod[ShopId, golem.Unit, Catalog]("catalog", golem.ReadOnly())
-//	golem.DefineMethod[ShopId, golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
+//	Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly())
+//	Agent.Method[golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
 func ReadOnly(cache ...CachePolicy) MethodOpt {
 	return func(o *methodOpts) {
 		o.readOnlyCount++

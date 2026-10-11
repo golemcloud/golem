@@ -13,22 +13,12 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::app::{TestContext, cmd, flag};
+use crate::app::{TestContext, cmd, flag, go_component_dir};
 use golem_cli::{fs, versions};
 use indoc::formatdoc;
-use std::path::PathBuf;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(Tracing);
-
-/// The Go component directory `golem new` created: the one holding go.mod.
-fn go_component_dir(ctx: &TestContext) -> PathBuf {
-    std::fs::read_dir(ctx.cwd_path())
-        .unwrap()
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .find(|path| path.join("go.mod").exists())
-        .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
-}
 
 /// A Go agent reads the principal of each invocation from its input struct and
 /// its own, the one it was initialized with, from the context: the CLI's for an

@@ -117,13 +117,13 @@ func splitSnapshot(snap host.Snapshot) (Principal, host.Snapshot, error) {
 // replaces, and must not happen again. The state starts from its zero value,
 // the snapshot is loaded into it, and the [AgentImpl.OnRestore] hook, if any,
 // rebuilds what the snapshot does not carry.
-func restoreState(e *agentEntry, idVal reflect.Value, agentID string, principal Principal, snap host.Snapshot) (any, error) {
+func restoreState(e *agentEntry, idVal reflect.Value, principal Principal, snap host.Snapshot) (any, error) {
 	state := e.zeroState()
 	if err := loadState(state, snap); err != nil {
 		return nil, err
 	}
 	if e.restore != nil {
-		if err := e.restore(state, idVal, agentID, principal); err != nil {
+		if err := e.restore(state, idVal, principal); err != nil {
 			return nil, fmt.Errorf("restoring %s: %w", e.name, err)
 		}
 	}

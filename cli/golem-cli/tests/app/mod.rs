@@ -1878,3 +1878,12 @@ fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
     fs::write_str(path, updated_manifest)?;
     Ok(())
 }
+
+/// The Go component directory `golem new` created: the one holding go.mod.
+fn go_component_dir(ctx: &TestContext) -> std::path::PathBuf {
+    std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .find(|path| path.join("go.mod").exists())
+        .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
+}

@@ -17,7 +17,6 @@ package golem
 import (
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
@@ -29,9 +28,6 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
-
-// agentIDEnvVar is how the executor tells the guest which agent instance it is.
-const agentIDEnvVar = "GOLEM_AGENT_ID"
 
 // Stages a dispatch can panic in, so a recovered panic can be attributed to the
 // agent's code or to the SDK itself.
@@ -119,7 +115,7 @@ func initializeAgent(agentType string, input types.SchemaValueTree, principal Pr
 	if inst == nil {
 		return res
 	}
-	inst.state = inst.def.newState(idVal, inst.agentID, principal)
+	inst.state = inst.def.newState(idVal, principal)
 	return res
 }
 
@@ -130,7 +126,7 @@ func restoreAgent(agentType string, input types.SchemaValueTree, principal Princ
 	if inst == nil {
 		return agentErrorToGo(res.Err())
 	}
-	state, err := restoreState(inst.def, idVal, inst.agentID, principal, snap)
+	state, err := restoreState(inst.def, idVal, principal, snap)
 	if err != nil {
 		active = nil
 		return err
@@ -167,7 +163,7 @@ func beginAgent(agentType string, input types.SchemaValueTree, principal Princip
 	if err := decodeParams(input, e.idFields, idVal, principal); err != nil {
 		return fail(common.MakeAgentErrorInvalidInput(err.Error()))
 	}
-	inst := &instance{def: e, agentID: os.Getenv(agentIDEnvVar), principal: principal}
+	inst := &instance{def: e, principal: principal}
 	active = inst
 	return inst, idVal, witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 }
@@ -250,7 +246,7 @@ func init() {
 		if active != nil {
 			return witTypes.Err[witTypes.Unit]("agent already initialized")
 		}
-		agentID := os.Getenv(agentIDEnvVar)
+		agentID := selfAgentID()
 		if agentID == "" {
 			return witTypes.Err[witTypes.Unit](agentIDEnvVar + " is not set")
 		}

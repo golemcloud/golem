@@ -16,9 +16,15 @@
 
 package golem
 
+import "os"
+
 // Off the wasm target there is no host; binding the generated calls here would
 // drag their //go:wasmimport declarations into a native link that has no bodies
 // for them. Tests install a fake.
 var hostOps agentHost = noHost{}
+
+// selfAgentID off the wasm target reads the process environment; tests may
+// replace it.
+var selfAgentID = func() string { return os.Getenv(agentIDEnvVar) }
 
 type noHost struct{ agentHost }
