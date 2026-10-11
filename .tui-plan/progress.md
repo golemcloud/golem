@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-10-11: Oplog Master/Details Explorer
+
+- Replaced the ad-hoc Entries-only split with one shared Ops master/details
+  explorer for both Grouped journal and exact Entries representations.
+- Added readable grouped details with durable Agent identity, typed group
+  anchor, kinds, and every constituent exact payload. Exact Entries show the
+  same identity fields plus syntax-colored JSON without losing their per-Agent
+  oplog index.
+- Gave list and details independent focus, stable list-window anchoring,
+  keyboard and mouse scrolling, trailing-right scrollbars, click selection,
+  draggable right/bottom placement, resize controls, and a list-only compact
+  fallback.
+- Added separate production preview fixtures for Journal and exact Entries,
+  focused interaction tests, and full wide/medium/narrow/short/1×1 coverage.
+
+Ready for combined terminal visual review with the input, Overview, and Ops
+hierarchy checkpoints. The next active slice makes investigation handoffs
+visible on the owning pages.
+
 ## 2026-10-11: Unified Ops Page Hierarchy
 
 - Made each Ops page title identify only its destination or route. View,
@@ -15,9 +34,7 @@
 - Added focused coverage for the shared control grammar and retained the full
   production-rendered wide, medium, narrow, short, and 1×1 size matrix.
 
-Ready for visual review together with the next Oplog checkpoint. Oplog's shell
-now follows the hierarchy, but its list/details investigation model is the next
-active slice.
+Ready for visual review together with the Oplog checkpoint.
 
 ## 2026-10-11: Lightweight Ops Overview Cockpit
 

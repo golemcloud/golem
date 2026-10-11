@@ -230,6 +230,16 @@ Agent telemetry explicit. Oplog separates Grouped from exact Entries. Stream
 is an exact-Agent live session. Fake telemetry belongs only to visibly labelled
 preview/test providers and must never appear as live production data.
 
+Oplog uses the shared Ops master/details layout in both representations.
+Grouped rows are readable journal units and their detail contains durable
+identity, typed grouping metadata, and the syntax-colored payload of each exact
+entry. Entries rows retain the per-Agent oplog index and show one exact payload.
+List and details own independent focus, scrolling, mouse hit regions, and
+trailing-right scrollbars. Selection movement reveals without recentering an
+already visible row; direct row clicks preserve the current viewport anchor.
+When minimum split geometry is unavailable, Oplog collapses to the focused
+list rather than inventing a compact representation.
+
 Shared resources have one entity identity. Dev may link to an Ops destination,
 but must not invent a duplicate Dev-specific resource explorer.
 

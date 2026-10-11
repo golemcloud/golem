@@ -52,7 +52,7 @@ use crate::tui::nested_cli::{
     CommandExit, NestedCliEvent, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
 use crate::tui::ops::activity::{
-    self, ActivityAgent, ActivityAgentRequest, ActivityLoadPosition, ActivityOrder,
+    self, ActivityAgent, ActivityAgentRequest, ActivityFocus, ActivityLoadPosition, ActivityOrder,
     ActivityRefreshPayload, ActivityRepresentation, ActivityState,
 };
 use crate::tui::ops::deployments::{self, DeploymentChangeKind, DeploymentsState, RECENT_LIMIT};
@@ -1030,15 +1030,39 @@ impl TuiApp {
             }
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
-                    && self.ops.active() == OpsDestination::Oplog =>
+                    && self.ops.active() == OpsDestination::Oplog
+                    && self.activity_list_focused() =>
             {
                 self.move_activity_selection(false)
             }
             KeyCode::Down
                 if self.active_workspace == Workspace::Ops
-                    && self.ops.active() == OpsDestination::Oplog =>
+                    && self.ops.active() == OpsDestination::Oplog
+                    && self.activity_list_focused() =>
             {
                 self.move_activity_selection(true)
+            }
+            KeyCode::PageUp if self.activity_list_focused() => {
+                self.move_activity_selection_by(10, false)
+            }
+            KeyCode::PageDown if self.activity_list_focused() => {
+                self.move_activity_selection_by(10, true)
+            }
+            KeyCode::Home if self.activity_list_focused() => self.select_first_activity(),
+            KeyCode::End if self.activity_list_focused() => self.select_last_activity(),
+            KeyCode::Up if self.activity_details_focused() => self.scroll_activity_details_up(1),
+            KeyCode::Down if self.activity_details_focused() => {
+                self.scroll_activity_details_down(1)
+            }
+            KeyCode::PageUp if self.activity_details_focused() => {
+                self.scroll_activity_details_up(10)
+            }
+            KeyCode::PageDown if self.activity_details_focused() => {
+                self.scroll_activity_details_down(10)
+            }
+            KeyCode::Home if self.activity_details_focused() => self.activity.details_scroll = 0,
+            KeyCode::End if self.activity_details_focused() => {
+                self.scroll_activity_details_bottom()
             }
             KeyCode::Left
                 if self.active_workspace == Workspace::Ops
@@ -1130,6 +1154,9 @@ impl TuiApp {
             }
             KeyCode::Esc if self.agent_details_focused() => {
                 self.agents.focus = AgentOverviewFocus::List
+            }
+            KeyCode::Esc if self.activity_details_focused() => {
+                self.activity.focus = ActivityFocus::List
             }
             KeyCode::Esc
                 if self.active_workspace == Workspace::Ops
@@ -1645,6 +1672,7 @@ impl TuiApp {
             }
             KeyCode::Up => self.move_activity_selection(false),
             KeyCode::Down => self.move_activity_selection(true),
+            KeyCode::Tab | KeyCode::BackTab => self.cycle_ops_pane_focus(),
             KeyCode::Left => {
                 self.set_activity_representation(self.activity.representation.previous(), event_tx)
             }
@@ -1937,6 +1965,18 @@ impl TuiApp {
                 }
             }
             ScrollbarTarget::OpsList => {
+                if self.ops_activity_focused() {
+                    let count = self.activity_visible_len();
+                    if count == 0 {
+                        return;
+                    }
+                    self.activity.focus = ActivityFocus::List;
+                    self.activity.selected =
+                        scrollbar_value_from_pointer(area, y, count.saturating_sub(1));
+                    self.activity.details_scroll = 0;
+                    self.activity.reveal_selection(count);
+                    return;
+                }
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Deployments
                 {
@@ -1972,6 +2012,16 @@ impl TuiApp {
                 self.agents.reveal_selection(count);
             }
             ScrollbarTarget::OpsDetails | ScrollbarTarget::OpsDocument => {
+                if target == ScrollbarTarget::OpsDetails && self.ops_activity_focused() {
+                    self.activity.focus = ActivityFocus::Details;
+                    let max = self
+                        .activity
+                        .details_content_height
+                        .get()
+                        .saturating_sub(self.activity.details_viewport_height.get());
+                    self.activity.details_scroll = scrollbar_value_from_pointer(area, y, max);
+                    return;
+                }
                 if target == ScrollbarTarget::OpsDocument
                     && self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Deployments
@@ -2053,6 +2103,18 @@ impl TuiApp {
                 } else {
                     self.scroll_agent_details_down(amount);
                 }
+            }
+            Some(RegionKind::OpsDetails) if self.ops_activity_focused() => {
+                self.activity.focus = ActivityFocus::Details;
+                if up {
+                    self.scroll_activity_details_up(amount);
+                } else {
+                    self.scroll_activity_details_down(amount);
+                }
+            }
+            Some(RegionKind::OpsList) if self.ops_activity_focused() => {
+                self.activity.focus = ActivityFocus::List;
+                self.move_activity_selection_by(amount, !up);
             }
             Some(RegionKind::OpsList) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::List;
@@ -2141,6 +2203,14 @@ impl TuiApp {
             } else {
                 self.scroll_agent_details_down(amount);
             }
+        } else if self.activity_details_focused() {
+            if up {
+                self.scroll_activity_details_up(amount);
+            } else {
+                self.scroll_activity_details_down(amount);
+            }
+        } else if self.activity_list_focused() {
+            self.move_activity_selection_by(amount, !up);
         } else if self.active_workspace == Workspace::Ops
             && self.ops.active() == OpsDestination::Stream
         {
@@ -2225,6 +2295,10 @@ impl TuiApp {
                 self.agents.focus = AgentOverviewFocus::List;
                 self.select_agent_at_row(y);
             }
+            Some(RegionKind::OpsList) if self.ops_activity_focused() => {
+                self.activity.focus = ActivityFocus::List;
+                self.select_activity_at_row(y);
+            }
             Some(RegionKind::OpsList)
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Deployments =>
@@ -2233,6 +2307,9 @@ impl TuiApp {
             }
             Some(RegionKind::OpsDetails) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::Details
+            }
+            Some(RegionKind::OpsDetails) if self.ops_activity_focused() => {
+                self.activity.focus = ActivityFocus::Details
             }
             Some(RegionKind::OverviewItem(index))
                 if self.active_workspace == Workspace::Ops
@@ -2324,7 +2401,9 @@ impl TuiApp {
                 );
             }
             DragTarget::OpsDetails => {
-                let area = snapshot.workspace_body;
+                let area = self
+                    .ops_details_layout_area()
+                    .unwrap_or(snapshot.workspace_body);
                 let ratio = layout::ops_details_ratio_from_pointer(
                     area,
                     self.layout.ops_details_placement,
@@ -2394,6 +2473,25 @@ impl TuiApp {
         self.agents.selected = selected;
         self.agents.table.selected = self.agents.selected;
         self.agents.details_scroll = 0;
+    }
+
+    fn select_activity_at_row(&mut self, y: u16) {
+        let Some(area) = self.geometry.region(RegionKind::OpsList) else {
+            return;
+        };
+        let data_y = area.y.saturating_add(area.height.min(1));
+        if y < data_y {
+            return;
+        }
+        let index = self
+            .activity
+            .list_first_visible
+            .get()
+            .saturating_add(y.saturating_sub(data_y) as usize);
+        if index < self.activity_visible_len() {
+            self.activity.selected = index;
+            self.activity.details_scroll = 0;
+        }
     }
 
     fn select_deployment_at_row(&mut self, y: u16) {
@@ -2954,7 +3052,11 @@ impl TuiApp {
                 self.make_focused_dev_view_primary()
             }
             KeyCode::Char('d') if self.active_workspace == Workspace::Ops => {
-                self.toggle_agent_details()
+                match self.ops.active() {
+                    OpsDestination::Agents => self.toggle_agent_details(),
+                    OpsDestination::Oplog => self.toggle_activity_details(),
+                    _ => {}
+                }
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                 let cells = if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -3068,11 +3170,12 @@ impl TuiApp {
     }
 
     fn move_layout_divider(&mut self, direction: KeyCode, cells: u16) {
-        let Some(area) = self.geometry.workspace_body() else {
+        let Some(workspace_area) = self.geometry.workspace_body() else {
             return;
         };
         match self.active_workspace {
-            Workspace::Ops if self.agent_details_open() => {
+            Workspace::Ops if self.agent_details_open() || self.activity_details_open() => {
+                let area = self.ops_details_layout_area().unwrap_or(workspace_area);
                 let placement = self.layout.ops_details_placement;
                 let delta = physical_ratio_delta(area, placement, direction, cells);
                 if delta != 0 {
@@ -3082,6 +3185,7 @@ impl TuiApp {
                 }
             }
             Workspace::Dev => {
+                let area = workspace_area;
                 let placement = self.layout.dev_placement;
                 let visible = self.layout.visible_dev_views(self.dev_primary);
                 if visible.len() < 2 {
@@ -3491,6 +3595,8 @@ impl TuiApp {
                 } else {
                     self.restore_activity_selection(selected);
                 }
+                self.activity.details_scroll = 0;
+                self.activity.reveal_selection(self.activity_visible_len());
                 self.activity.error = None;
             }
             Err(error) => self.activity.error = Some(agent_refresh_error(error, logs)),
@@ -3505,6 +3611,8 @@ impl TuiApp {
         self.activity.query = query.clone();
         self.activity.applied_query.text = query;
         self.activity.selected = 0;
+        self.activity.list_first_visible.set(0);
+        self.activity.details_scroll = 0;
         self.ops.clear_oplog_focus();
         self.refresh_activity(event_tx);
     }
@@ -3559,21 +3667,41 @@ impl TuiApp {
         }
         let representation = self.activity.representation;
         let order = self.activity.order;
+        let details_visible = self.activity.details_visible;
         let generation = self.activity.generation.saturating_add(1);
         let mut activity = ActivityState::default();
         activity.generation = generation;
         activity.representation = representation;
         activity.order = order;
+        activity.details_visible = details_visible;
         self.activity = activity;
     }
 
     fn move_activity_selection(&mut self, down: bool) {
+        self.move_activity_selection_by(1, down);
+    }
+
+    fn move_activity_selection_by(&mut self, amount: usize, down: bool) {
         let last = self.activity_visible_len().saturating_sub(1);
         self.activity.selected = if down {
-            self.activity.selected.saturating_add(1).min(last)
+            self.activity.selected.saturating_add(amount).min(last)
         } else {
-            self.activity.selected.saturating_sub(1)
+            self.activity.selected.saturating_sub(amount)
         };
+        self.activity.details_scroll = 0;
+        self.activity.reveal_selection(self.activity_visible_len());
+    }
+
+    fn select_first_activity(&mut self) {
+        self.activity.selected = 0;
+        self.activity.details_scroll = 0;
+        self.activity.list_first_visible.set(0);
+    }
+
+    fn select_last_activity(&mut self) {
+        self.activity.selected = self.activity_visible_len().saturating_sub(1);
+        self.activity.details_scroll = 0;
+        self.activity.reveal_selection(self.activity_visible_len());
     }
 
     fn set_activity_representation(
@@ -3584,6 +3712,8 @@ impl TuiApp {
         let selected = self.activity_selection_key();
         self.activity.representation = representation;
         self.restore_activity_selection(selected);
+        self.activity.details_scroll = 0;
+        self.activity.reveal_selection(self.activity_visible_len());
         self.activity.error = None;
     }
 
@@ -3681,6 +3811,30 @@ impl TuiApp {
                 }),
         };
         self.activity.selected = position.unwrap_or(0);
+    }
+
+    fn toggle_activity_details(&mut self) {
+        self.activity.details_visible = !self.activity.details_visible;
+        if !self.activity.details_visible {
+            self.activity.focus = ActivityFocus::List;
+        }
+    }
+
+    fn scroll_activity_details_up(&mut self, amount: usize) {
+        self.activity.details_scroll = self.activity.details_scroll.saturating_sub(amount);
+    }
+
+    fn scroll_activity_details_down(&mut self, amount: usize) {
+        self.activity.details_scroll = self.activity.details_scroll.saturating_add(amount);
+        self.activity.clamp_details_scroll();
+    }
+
+    fn scroll_activity_details_bottom(&mut self) {
+        self.activity.details_scroll = self
+            .activity
+            .details_content_height
+            .get()
+            .saturating_sub(self.activity.details_viewport_height.get());
     }
 
     fn refresh_resources(&mut self, event_tx: Option<&TuiEventSender>, force: bool) {
@@ -4649,12 +4803,57 @@ impl TuiApp {
             && matches!(self.ops.current_route(), OpsRoute::Agent(_))
     }
 
+    fn ops_activity_focused(&self) -> bool {
+        self.active_workspace == Workspace::Ops && self.ops.active() == OpsDestination::Oplog
+    }
+
+    fn ops_details_requested(&self) -> bool {
+        (self.ops_agents_focused() && self.agents.detail_visible)
+            || (self.ops_activity_focused() && self.activity.details_visible)
+    }
+
     fn agent_details_open(&self) -> bool {
         self.agents_focused()
             && self.agents.detail_visible
             && self.agent_details_layout_area().is_none_or(|area| {
                 layout::ops_details_visible(area, true, self.layout.ops_details_placement)
             })
+    }
+
+    fn activity_details_open(&self) -> bool {
+        self.ops_activity_focused()
+            && self.activity.details_visible
+            && self.geometry.region(RegionKind::OpsDetails).is_some()
+    }
+
+    fn ops_details_layout_area(&self) -> Option<Rect> {
+        let list = self.geometry.region(RegionKind::OpsList)?;
+        let details = self.geometry.region(RegionKind::OpsDetails)?;
+        let left = list.x.min(details.x);
+        let top = list.y.min(details.y);
+        let right = list
+            .x
+            .saturating_add(list.width)
+            .max(details.x.saturating_add(details.width));
+        let bottom = list
+            .y
+            .saturating_add(list.height)
+            .max(details.y.saturating_add(details.height));
+        Some(Rect::new(
+            left,
+            top,
+            right.saturating_sub(left),
+            bottom.saturating_sub(top),
+        ))
+    }
+
+    fn activity_list_focused(&self) -> bool {
+        self.ops_activity_focused()
+            && (!self.activity_details_open() || self.activity.focus == ActivityFocus::List)
+    }
+
+    fn activity_details_focused(&self) -> bool {
+        self.activity_details_open() && self.activity.focus == ActivityFocus::Details
     }
 
     fn agent_details_layout_area(&self) -> Option<Rect> {
@@ -4683,6 +4882,15 @@ impl TuiApp {
                     AgentOverviewFocus::Details => AgentOverviewFocus::List,
                 };
                 if self.agents.focus == AgentOverviewFocus::Details {
+                    self.mode.replace(InteractionMode::Normal);
+                }
+            }
+            OpsDestination::Oplog if self.activity_details_open() => {
+                self.activity.focus = match self.activity.focus {
+                    ActivityFocus::List => ActivityFocus::Details,
+                    ActivityFocus::Details => ActivityFocus::List,
+                };
+                if self.activity.focus == ActivityFocus::Details {
                     self.mode.replace(InteractionMode::Normal);
                 }
             }
@@ -6279,7 +6487,7 @@ impl TuiApp {
             context_picker_rows: context_picker_layout_rows(&self.context_switcher),
             context_picker_selected: self.context_switcher.selected,
             context_picker_prefix_height: context_picker_prefix_height(&self.context_switcher),
-            agent_details_visible: self.ops_agents_focused() && self.agents.detail_visible,
+            ops_details_visible: self.ops_details_requested(),
             dev_session_status_widths: footer_session_status_widths(self, cols),
             layout: self.layout.clone(),
         });
@@ -9594,7 +9802,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         context_picker_rows,
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
-        agent_details_visible: app.ops_agents_focused() && app.agents.detail_visible,
+        ops_details_visible: app.ops_details_requested(),
         dev_session_status_widths: footer_session_status_widths(app, frame.area().width),
         layout: app.layout.clone(),
     });
@@ -10438,15 +10646,16 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let chrome = PaneChrome { area };
     chrome.render_header(frame, area, "Oplog", PaneFocus::Active, &theme());
     let outer_body = chrome.body_area(area);
-    let content_area = chrome.content_area(outer_body);
-    let [controls, query_bar, body] = Layout::default()
+    let [controls_row, query_row, body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(1),
         ])
-        .areas(content_area);
+        .areas(outer_body);
+    let controls = chrome.content_area(controls_row);
+    let query_bar = chrome.content_area(query_row);
     let representation = app.activity.representation;
     let representation_choices = [
         ControlChoice {
@@ -10587,14 +10796,14 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
 
     if let Some(error) = &app.activity.error {
-        render_metrics_notice(frame, body, NoticeKind::Warning, error);
+        render_metrics_notice(frame, chrome.content_area(body), NoticeKind::Warning, error);
         chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     if app.activity.loading && app.activity.entries.is_empty() {
         render_metrics_notice(
             frame,
-            body,
+            chrome.content_area(body),
             NoticeKind::Info,
             "Loading durable Agent activity…",
         );
@@ -10604,7 +10813,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     if app.activity.entries.is_empty() {
         render_metrics_notice(
             frame,
-            body,
+            chrome.content_area(body),
             NoticeKind::Empty,
             "No oplog entries in this scope",
         );
@@ -10647,129 +10856,398 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .line(&theme()),
         );
     }
-    frame.render_widget(Paragraph::new(notice_lines).style(surface_style()), notices);
+    frame.render_widget(
+        Paragraph::new(notice_lines).style(surface_style()),
+        chrome.content_area(notices),
+    );
 
-    if representation == ActivityRepresentation::Entries {
-        let panes = if content.width >= 80 {
-            Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-                .split(content)
-                .to_vec()
-        } else {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-                .split(content)
-                .to_vec()
-        };
-        render_activity_entries(frame, panes[0], app, true);
-        render_activity_detail(frame, panes[1], app);
-    } else {
-        render_activity_entries(frame, content, app, false);
-    }
+    render_activity_explorer(frame, content, app, chrome);
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
-fn render_activity_entries(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, journal: bool) {
-    let visible = area.height.max(1) as usize;
-    if !journal {
-        let groups = activity::grouped_entries(&app.activity.entries);
-        let start = app
-            .activity
-            .selected
-            .saturating_sub(visible.saturating_sub(1) / 2)
-            .min(groups.len().saturating_sub(visible));
-        let lines = groups
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(visible)
-            .map(|(index, group)| {
+fn render_activity_explorer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, chrome: PaneChrome) {
+    let (list_pane, divider, details_pane) = layout::ops_pane_regions(
+        area,
+        app.activity.details_visible,
+        app.layout.ops_details_placement,
+        app.layout.ops_details_ratio,
+    );
+    app.geometry.remove_region(RegionKind::OpsDetails);
+    app.geometry.remove_region(RegionKind::OpsDetailsSplit);
+    app.geometry.add_region(RegionKind::OpsList, list_pane);
+    if let Some(details_pane) = details_pane {
+        app.geometry
+            .add_region(RegionKind::OpsDetails, details_pane);
+    }
+    if let Some(divider) = divider {
+        app.geometry
+            .add_region(RegionKind::OpsDetailsSplit, divider);
+    }
+
+    let [list_header, list_body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(list_pane);
+    let list_title = match app.activity.representation {
+        ActivityRepresentation::Grouped => "Journal",
+        ActivityRepresentation::Entries => "Entries",
+    };
+    chrome.render_header(
+        frame,
+        list_pane,
+        list_title,
+        if details_pane.is_none() || app.activity.focus == ActivityFocus::List {
+            PaneFocus::Active
+        } else {
+            PaneFocus::Idle
+        },
+        &theme(),
+    );
+    let labels = activity_list_labels(app);
+    PaneHeaderStatus {
+        label: &format!("{} visible", labels.len()),
+        tone: PaneStatusTone::Idle,
+    }
+    .render(frame, list_header, &theme());
+    let list_region = chrome.region(list_body, labels.len());
+    app.activity
+        .list_viewport_height
+        .set(list_region.content_area.height);
+    app.activity.reveal_selection(labels.len());
+    let start = app.activity.list_first_visible.get();
+    let lines = labels
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(list_region.content_area.height as usize)
+        .map(|(index, label)| {
+            activity_selection_line(
+                label,
+                index,
+                index == app.activity.selected,
+                list_region.content_area.width,
+            )
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines).style(surface_style()),
+        list_region.content_area,
+    );
+    if let Some(slot) = list_region.scrollbar {
+        let mut state = ScrollbarState::new(labels.len())
+            .position(app.activity.selected.min(labels.len().saturating_sub(1)))
+            .viewport_content_length(list_region.content_area.height as usize);
+        render_scrollbar(frame, slot, &mut state, &theme());
+        app.geometry
+            .add_region(RegionKind::Scrollbar(ScrollbarTarget::OpsList), slot.area);
+    }
+    chrome.render_body_boundary(frame, list_body, &theme());
+
+    if let Some(details_pane) = details_pane {
+        let [details_header, details_body] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .areas(details_pane);
+        let details_title = match app.activity.representation {
+            ActivityRepresentation::Grouped => "Group details",
+            ActivityRepresentation::Entries => "Entry details",
+        };
+        chrome.render_header(
+            frame,
+            details_pane,
+            details_title,
+            if app.activity.focus == ActivityFocus::Details {
+                PaneFocus::Active
+            } else {
+                PaneFocus::Idle
+            },
+            &theme(),
+        );
+        let mut detail_lines =
+            build_activity_detail_lines(app, chrome.content_area(details_body).width);
+        let mut detail_region = chrome.region(details_body, detail_lines.len());
+        if detail_region.scrollbar.is_some() {
+            detail_lines = build_activity_detail_lines(app, detail_region.content_area.width);
+            detail_region = chrome.region(details_body, detail_lines.len());
+        }
+        app.activity.details_content_height.set(detail_lines.len());
+        app.activity
+            .details_viewport_height
+            .set(detail_region.content_area.height as usize);
+        ScrollableDocument {
+            lines: &detail_lines,
+            offset: app.activity.details_scroll,
+        }
+        .render(frame, detail_region, &theme());
+        if let Some(slot) = detail_region.scrollbar {
+            app.geometry.add_region(
+                RegionKind::Scrollbar(ScrollbarTarget::OpsDetails),
+                slot.area,
+            );
+        }
+        chrome.render_body_boundary(frame, details_body, &theme());
+        debug_assert_eq!(
+            details_header,
+            Rect {
+                height: details_pane.height.min(1),
+                ..details_pane
+            }
+        );
+    }
+    if let Some(divider) = divider {
+        chrome.render_dividers(frame, &[divider], &theme());
+    }
+}
+
+fn activity_list_labels(app: &TuiApp) -> Vec<String> {
+    match app.activity.representation {
+        ActivityRepresentation::Grouped => activity::grouped_entries(&app.activity.entries)
+            .into_iter()
+            .map(|group| {
                 let identity = if app.activity.agents.len() > 1 {
                     format!("{}/{}", group.component, group.agent_id)
                 } else {
-                    group.agent_id.clone()
+                    group.agent_id
                 };
                 let anchor = group
                     .group
                     .as_ref()
-                    .and_then(|group| group.start_index())
+                    .and_then(OplogEntryGroupKey::start_index)
                     .map(|index| format!("group #{index}"))
                     .unwrap_or_else(|| format!("entry #{}", group.first_index));
-                let kinds = group.kinds.join(" → ");
                 let count = if group.entry_count > 1 {
                     format!(" · {} entries", group.entry_count)
                 } else {
                     String::new()
                 };
-                metric_selection_line(
-                    format!(
-                        "{}  {}  {} · {}{}",
-                        group.timestamp, identity, anchor, kinds, count
-                    ),
-                    index == app.activity.selected,
-                    area.width,
+                format!(
+                    "{}  {}  {} · {}{}",
+                    group.timestamp,
+                    identity,
+                    anchor,
+                    group.kinds.join(" → "),
+                    count
                 )
             })
-            .collect::<Vec<_>>();
-        frame.render_widget(Paragraph::new(lines).style(surface_style()), area);
-        return;
+            .collect(),
+        ActivityRepresentation::Entries => app
+            .activity
+            .entries
+            .iter()
+            .map(|entry| {
+                let identity = if app.activity.agents.len() > 1 {
+                    format!("{}/{}", entry.component, entry.agent_id)
+                } else {
+                    entry.agent_id.clone()
+                };
+                format!(
+                    "#{:05}  {}  {}  {}",
+                    entry.presentation.index,
+                    identity,
+                    entry.presentation.timestamp,
+                    entry.presentation.kind
+                )
+            })
+            .collect(),
     }
-    let start = app
-        .activity
-        .selected
-        .saturating_sub(visible.saturating_sub(1) / 2)
-        .min(app.activity.entries.len().saturating_sub(visible));
-    let lines = app
-        .activity
-        .entries
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(visible)
-        .map(|(index, entry)| {
-            let timestamp = entry.presentation.timestamp;
-            let identity = if app.activity.agents.len() > 1 {
-                format!("{}/{}", entry.component, entry.agent_id)
-            } else {
-                entry.agent_id.clone()
-            };
-            let label = format!(
-                "#{:05}  {}  {}  {}",
-                entry.presentation.index, identity, timestamp, entry.presentation.kind
-            );
-            metric_selection_line(label, index == app.activity.selected, area.width)
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), area);
 }
 
-fn render_activity_detail(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let Some(entry) = app.activity.entries.get(app.activity.selected) else {
-        return;
+fn activity_selection_line(label: &str, index: usize, selected: bool, width: u16) -> Line<'static> {
+    let visual = theme();
+    let background = match (selected, index % 2) {
+        (true, 0) => visual.table_selected_even_background,
+        (true, _) => visual.table_selected_odd_background,
+        (false, 0) => visual.table_even_background,
+        (false, _) => visual.table_odd_background,
     };
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    PaneHeader {
-        title: &format!(
-            "{} · #{} · {}",
-            entry.agent_id, entry.presentation.index, entry.presentation.kind
+    let marker_width = width.min(2) as usize;
+    let label_width = width as usize - marker_width;
+    Line::from(vec![
+        Span::styled(
+            fit(if selected { "▌" } else { "" }, marker_width),
+            Style::default()
+                .fg(if selected {
+                    visual.accent
+                } else {
+                    visual.text_muted
+                })
+                .bg(background),
         ),
-        focus: PaneFocus::Idle,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
+        Span::styled(
+            fit(label, label_width),
+            Style::default()
+                .fg(if selected {
+                    visual.table_selection_text
+                } else {
+                    visual.text
+                })
+                .bg(background),
+        ),
+    ])
+}
+
+fn build_activity_detail_lines(app: &TuiApp, width: u16) -> Vec<Line<'static>> {
+    match app.activity.representation {
+        ActivityRepresentation::Grouped => {
+            let groups = activity::grouped_entries(&app.activity.entries);
+            let Some(group) = groups.get(app.activity.selected) else {
+                return activity_empty_detail_lines();
+            };
+            let entries = app
+                .activity
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.component == group.component
+                        && entry.agent_id == group.agent_id
+                        && match &group.group {
+                            Some(key) => entry.presentation.group.as_ref() == Some(key),
+                            None => entry.presentation.index == group.first_index,
+                        }
+                })
+                .collect::<Vec<_>>();
+            let mut lines = vec![
+                SectionHeading {
+                    title: "Journal group",
+                    detail: Some(&format!("{} exact entries", entries.len())),
+                }
+                .line(&theme()),
+                Line::default(),
+            ];
+            push_activity_identity_lines(&mut lines, &group.component, &group.agent_id, width);
+            let anchor = match &group.group {
+                Some(OplogEntryGroupKey::OplogIndex(index)) => format!("oplog #{index}"),
+                Some(OplogEntryGroupKey::Span(span)) => format!("span {span}"),
+                None => format!("entry #{}", group.first_index),
+            };
+            for (label, value) in [
+                ("Anchor", anchor),
+                ("Timestamp", group.timestamp.clone()),
+                ("Kinds", group.kinds.join(" → ")),
+            ] {
+                lines.push(
+                    FieldRow {
+                        label,
+                        value: &value,
+                        label_width: 10,
+                    }
+                    .line(&theme()),
+                );
+            }
+            for entry in entries {
+                push_activity_entry_lines(&mut lines, entry, width);
+            }
+            lines
+        }
+        ActivityRepresentation::Entries => {
+            let Some(entry) = app.activity.entries.get(app.activity.selected) else {
+                return activity_empty_detail_lines();
+            };
+            let mut lines = vec![
+                SectionHeading {
+                    title: "Exact oplog entry",
+                    detail: Some(&format!("#{}", entry.presentation.index)),
+                }
+                .line(&theme()),
+                Line::default(),
+            ];
+            push_activity_identity_lines(&mut lines, &entry.component, &entry.agent_id, width);
+            lines.push(
+                FieldRow {
+                    label: "Kind",
+                    value: &entry.presentation.kind,
+                    label_width: 10,
+                }
+                .line(&theme()),
+            );
+            lines.push(
+                FieldRow {
+                    label: "Timestamp",
+                    value: &entry.presentation.timestamp.to_string(),
+                    label_width: 10,
+                }
+                .line(&theme()),
+            );
+            lines.push(Line::default());
+            lines.push(
+                SectionHeading {
+                    title: "Payload",
+                    detail: None,
+                }
+                .line(&theme()),
+            );
+            lines.extend(
+                JsonDocument {
+                    value: &entry.presentation.detail,
+                }
+                .lines(width, &theme()),
+            );
+            lines
+        }
     }
-    .render(frame, header, &theme());
-    let detail = serde_json::to_string_pretty(&entry.presentation.detail)
-        .unwrap_or_else(|_| "null".to_string());
-    frame.render_widget(
-        Paragraph::new(detail)
-            .style(surface_style())
-            .wrap(Wrap { trim: false }),
-        body,
+}
+
+fn activity_empty_detail_lines() -> Vec<Line<'static>> {
+    vec![
+        Notice {
+            kind: NoticeKind::Empty,
+            message: "Select an oplog row to inspect it",
+        }
+        .line(&theme()),
+    ]
+}
+
+fn push_activity_identity_lines(
+    lines: &mut Vec<Line<'static>>,
+    component: &str,
+    agent_id: &str,
+    width: u16,
+) {
+    lines.push(
+        FieldRow {
+            label: "Component",
+            value: component,
+            label_width: 10,
+        }
+        .line(&theme()),
+    );
+    let value_width = width.saturating_sub(12) as usize;
+    let formatted = format_agent_id_for_terminal(agent_id, false, Some(value_width.max(1)));
+    for (index, line) in formatted.lines().enumerate() {
+        let mut spans = vec![
+            Span::styled(
+                if index == 0 {
+                    fit("AgentID", 10)
+                } else {
+                    " ".repeat(10)
+                },
+                Style::default().fg(theme().text_muted),
+            ),
+            Span::raw("  "),
+        ];
+        spans.extend(agent_id_line_spans(line));
+        lines.push(Line::from(spans));
+    }
+}
+
+fn push_activity_entry_lines(
+    lines: &mut Vec<Line<'static>>,
+    entry: &activity::ActivityEntry,
+    width: u16,
+) {
+    lines.push(Line::default());
+    lines.push(
+        SectionHeading {
+            title: &format!("#{} {}", entry.presentation.index, entry.presentation.kind),
+            detail: Some(&entry.presentation.timestamp.to_string()),
+        }
+        .line(&theme()),
+    );
+    lines.extend(
+        JsonDocument {
+            value: &entry.presentation.detail,
+        }
+        .lines(width, &theme()),
     );
 }
 
@@ -13621,7 +14099,7 @@ fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         context_picker_rows: context_picker_layout_rows(&app.context_switcher),
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
-        agent_details_visible: app.agents.detail_visible,
+        ops_details_visible: false,
         dev_session_status_widths: [0, 0],
         layout: app.layout.clone(),
     };
@@ -13922,7 +14400,14 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             "left / right",
             "Grouped or exact Entries",
         );
-        push_raw_help(&mut lines, width, "up / down", "Select an oplog entry");
+        push_raw_help(
+            &mut lines,
+            width,
+            "tab / shift+tab",
+            "Focus journal or details",
+        );
+        push_raw_help(&mut lines, width, "up / down", "Select or scroll details");
+        push_raw_help(&mut lines, width, "pageup / pagedown", "Move by page");
         push_raw_help(
             &mut lines,
             width,
@@ -13934,6 +14419,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         push_raw_help(&mut lines, width, "ctrl+g", "Stop the active search");
         push_raw_help(&mut lines, width, "ctrl+o", "Toggle newest / oldest order");
         push_raw_help(&mut lines, width, "ctrl+r", "Restart the bounded query");
+        push_raw_help(&mut lines, width, "ctrl+x l", "Resize or hide details");
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
     } else if app.ops.active() == OpsDestination::Stream {
         push_action_section_for_app(
@@ -20548,6 +21034,98 @@ mod tests {
     }
 
     #[test]
+    fn oplog_master_details_share_focus_scrolling_and_pointer_ownership() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.representation = ActivityRepresentation::Entries;
+        app.activity.entries = sample_activity_entries(40);
+
+        let frame = render_app_text_at(&app, 120, 20);
+        assert!(frame.contains("Entries"), "{frame}");
+        assert!(frame.contains("Entry details"), "{frame}");
+        assert!(app.geometry.region(RegionKind::OpsDetailsSplit).is_some());
+
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.activity.focus, ActivityFocus::Details);
+        app.handle_key(key(KeyCode::PageDown));
+        assert!(app.activity.details_scroll > 0);
+
+        let details = snapshot_region(&app, RegionKind::OpsDetails);
+        let before_wheel = app.activity.details_scroll;
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::ScrollDown,
+                details.x.saturating_add(2),
+                details.y.saturating_add(2),
+            ),
+            None,
+        );
+        assert!(app.activity.details_scroll >= before_wheel);
+
+        let scrollbar = snapshot_region(&app, RegionKind::Scrollbar(ScrollbarTarget::OpsDetails));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+        assert_eq!(app.activity.focus, ActivityFocus::Details);
+        assert!(app.activity.details_scroll > 0);
+    }
+
+    #[test]
+    fn oplog_row_click_preserves_the_visible_window() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.representation = ActivityRepresentation::Entries;
+        app.activity.entries = sample_activity_entries(40);
+        render_app_text_at(&app, 120, 18);
+        app.move_activity_selection_by(15, true);
+        render_app_text_at(&app, 120, 18);
+        let first = app.activity.list_first_visible.get();
+        assert!(first > 0);
+        let list = snapshot_region(&app, RegionKind::OpsList);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                list.x.saturating_add(3),
+                list.y.saturating_add(2),
+            ),
+            None,
+        );
+        render_app_text_at(&app, 120, 18);
+
+        assert_eq!(app.activity.selected, first + 1);
+        assert_eq!(app.activity.list_first_visible.get(), first);
+        assert_eq!(app.activity.focus, ActivityFocus::List);
+    }
+
+    #[test]
+    fn oplog_details_collapse_and_layout_controls_follow_shared_ops_rules() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.entries = sample_activity_entries(3);
+
+        let narrow = render_app_text_at(&app, 55, 22);
+        assert!(narrow.contains("Journal"), "{narrow}");
+        assert!(app.geometry.region(RegionKind::OpsDetails).is_none());
+        assert!(app.geometry.region(RegionKind::OpsDetailsSplit).is_none());
+
+        render_app_text_at(&app, 120, 30);
+        let old_ratio = app.layout.ops_details_ratio;
+        app.mode.replace(InteractionMode::Layout);
+        app.handle_key(key(KeyCode::Right));
+        assert!(app.layout.ops_details_ratio > old_ratio);
+        app.handle_key(key(KeyCode::Char('d')));
+        assert!(!app.activity.details_visible);
+        render_app_text_at(&app, 120, 30);
+        assert!(app.geometry.region(RegionKind::OpsDetails).is_none());
+    }
+
+    #[test]
     fn oplog_plain_text_edits_a_draft_and_enter_applies_it() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
@@ -23017,6 +23595,29 @@ environments:
                 raw: serde_json::json!({"name":"order-1"}),
             },
         ]
+    }
+
+    fn sample_activity_entries(count: usize) -> Vec<activity::ActivityEntry> {
+        (0..count)
+            .map(|offset| {
+                let index = offset as u64 + 1;
+                activity::ActivityEntry {
+                    component: "cart".to_string(),
+                    agent_id: format!("CartAgent(\"cart-{offset:02}\")"),
+                    presentation: crate::model::agent::oplog::OplogEntryPresentation {
+                        index,
+                        timestamp: golem_common::model::Timestamp::from(index),
+                        kind: "ImportedFunctionInvoked".to_string(),
+                        group: Some(OplogEntryGroupKey::OplogIndex(index)),
+                        detail: serde_json::json!({
+                            "index": index,
+                            "arguments": (0..40).collect::<Vec<_>>(),
+                            "result": { "ok": true }
+                        }),
+                    },
+                }
+            })
+            .collect()
     }
 
     struct TuiTestDriver {

@@ -92,7 +92,8 @@ active.
 | `ops-overview` | automated render check; visual review pending | `UX-025` |
 | `ops-agents` | automated render check; visual review pending | `UX-025` |
 | `ops-agent-detail` | automated render check; visual review pending | `UX-025` |
-| `ops-oplog` | automated render check; visual review pending | `UX-025` |
+| `ops-oplog` | automated render check; visual review pending | `UX-026` |
+| `ops-oplog-entries` | automated render check; visual review pending | `UX-026` |
 | `ops-stream` | automated render check; visual review pending | `UX-025` |
 | `ops-metrics-dashboard` | automated render check; visual review pending | `UX-025` |
 | `ops-metrics-explore` | automated render check; visual review pending | `UX-025` |
@@ -690,9 +691,10 @@ renderers are no longer live contracts.
   are consistent; scope transfers are discoverable without Commands; Oplog
   supports readable and forensic navigation; mouse behavior matches keyboard
   ownership; Metrics receives a final terminal-density review.
-- Outcome: explicit input ownership, the lightweight Overview cockpit, and the
-  shared Ops page hierarchy are implemented and their focused checks are
-  green. Page titles now carry identity only; segmented controls, transient
-  status, continuous spines, and adaptive nested panes have shared owners.
-  Handoffs, the Oplog master/details rebuild, pointer parity, and final Metrics
-  review remain tracked in `tasks.md`.
+- Outcome: explicit input ownership, the lightweight Overview cockpit, the
+  shared Ops page hierarchy, and the Oplog master/details explorer are
+  implemented and their focused checks are green. Page titles now carry
+  identity only; segmented controls, transient status, continuous spines, and
+  adaptive nested panes have shared owners. Grouped journal and exact Entries
+  have separate production preview cases. Handoffs, remaining pointer parity,
+  and final Metrics review remain tracked in `tasks.md`.

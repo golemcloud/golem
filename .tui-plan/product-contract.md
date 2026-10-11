@@ -106,6 +106,12 @@ Agents. The Overview never presents loaded Agent rows as a total Agent count.
 - Exact text/time search auto-chains bounded requests with concurrency four,
   visible per-Agent index progress, Stop/Resume, and retained continuations.
 - A query fills one bounded result batch, then pauses until Load More.
+- Grouped and Entries both use a master/details explorer. The Grouped detail
+  preserves the typed durable relationship and exposes every constituent exact
+  payload; the Entries detail exposes one exact public oplog entry.
+- Journal selection and detail reading have independent focus and scroll state.
+  The shared Ops split can be resized, placed right or bottom, or hidden; when
+  the terminal cannot fit both panes, the list remains usable by itself.
 
 ## Stream
 

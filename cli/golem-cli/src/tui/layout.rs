@@ -181,6 +181,12 @@ impl UiGeometry {
         }
     }
 
+    pub(super) fn remove_region(&self, kind: RegionKind) {
+        if let Some(snapshot) = self.snapshot.borrow_mut().as_mut() {
+            snapshot.regions.retain(|region| region.kind != kind);
+        }
+    }
+
     pub(super) fn snapshot(&self) -> Option<LayoutSnapshot> {
         self.snapshot.borrow().clone()
     }
@@ -266,7 +272,7 @@ pub(super) struct LayoutInput {
     pub(super) context_picker_rows: Vec<Option<usize>>,
     pub(super) context_picker_selected: usize,
     pub(super) context_picker_prefix_height: usize,
-    pub(super) agent_details_visible: bool,
+    pub(super) ops_details_visible: bool,
     pub(super) dev_session_status_widths: [u16; 2],
     pub(super) layout: TuiLayoutState,
 }
@@ -471,7 +477,7 @@ pub(super) fn dev_split_regions(area: Rect, input: &LayoutInput) -> Option<(Rect
 fn add_ops_regions(area: Rect, input: &LayoutInput, regions: &mut Vec<Region>) {
     let (list, divider, details) = ops_pane_regions(
         area,
-        input.agent_details_visible,
+        input.ops_details_visible,
         input.layout.ops_details_placement,
         input.layout.ops_details_ratio,
     );
@@ -883,7 +889,7 @@ mod tests {
             context_picker_rows: Vec::new(),
             context_picker_selected: 0,
             context_picker_prefix_height: 2,
-            agent_details_visible: true,
+            ops_details_visible: true,
             dev_session_status_widths: [0, 0],
             layout: TuiLayoutState::default(),
         }

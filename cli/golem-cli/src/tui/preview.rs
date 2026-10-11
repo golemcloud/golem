@@ -57,7 +57,8 @@ const CASES: &[PreviewCase] = &[
     PreviewCase::new("ops-overview", "Ops / overview", 120, 30),
     PreviewCase::new("ops-agents", "Ops / agents overview", 120, 30),
     PreviewCase::new("ops-agent-detail", "Ops / Agent details", 120, 30),
-    PreviewCase::new("ops-oplog", "Ops / Oplog", 140, 32),
+    PreviewCase::new("ops-oplog", "Ops / Oplog journal", 140, 32),
+    PreviewCase::new("ops-oplog-entries", "Ops / Oplog entries", 140, 32),
     PreviewCase::new("ops-stream", "Ops / Stream", 120, 30),
     PreviewCase::new("ops-metrics-dashboard", "Ops / Metrics dashboard", 140, 36),
     PreviewCase::new("ops-metrics-explore", "Ops / Metrics Explore", 140, 34),
@@ -585,6 +586,7 @@ mod tests {
         for (case_id, expected) in [
             ("ops-agent-detail", "Agent type metadata"),
             ("ops-oplog", "ExportedFunctionInvoked"),
+            ("ops-oplog-entries", "Exact oplog entry"),
             ("ops-stream", "payment authorization started"),
             ("ops-metrics-dashboard", "Invocation rate"),
             ("ops-metrics-explore", "golem.agent.invocations"),

@@ -37,6 +37,7 @@ pub(in crate::tui) fn render_preview_buffer(
             | "ops-agents"
             | "ops-agent-detail"
             | "ops-oplog"
+            | "ops-oplog-entries"
             | "ops-stream"
             | "ops-metrics-dashboard"
             | "ops-metrics-explore"
@@ -81,7 +82,7 @@ fn preview_app(case_id: &str) -> TuiApp {
     ops.select(match case_id {
         "ops-overview" => OpsDestination::Overview,
         "ops-agents" | "ops-agent-detail" => OpsDestination::Agents,
-        "ops-oplog" => OpsDestination::Oplog,
+        "ops-oplog" | "ops-oplog-entries" => OpsDestination::Oplog,
         "ops-stream" => OpsDestination::Stream,
         "ops-metrics-dashboard" | "ops-metrics-explore" => OpsDestination::Metrics,
         "ops-deployments" => OpsDestination::Deployments,
@@ -229,6 +230,11 @@ fn preview_app(case_id: &str) -> TuiApp {
     match case_id {
         "ops-agent-detail" => populate_agent_detail(&mut app),
         "ops-oplog" => populate_oplog(&mut app),
+        "ops-oplog-entries" => {
+            populate_oplog(&mut app);
+            app.activity.representation = ActivityRepresentation::Entries;
+            app.activity.selected = 1;
+        }
         "ops-stream" => populate_stream(&mut app),
         "ops-metrics-dashboard" => populate_metrics_dashboard(&mut app),
         "ops-metrics-explore" => populate_metrics_explore(&mut app),

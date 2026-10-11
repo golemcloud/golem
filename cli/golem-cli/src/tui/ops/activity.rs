@@ -20,6 +20,7 @@ use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::OplogCursor;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -54,6 +55,12 @@ impl ActivityRepresentation {
 pub(in crate::tui) enum ActivityOrder {
     Newest,
     Oldest,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum ActivityFocus {
+    List,
+    Details,
 }
 
 impl ActivityOrder {
@@ -156,6 +163,13 @@ pub(in crate::tui) struct ActivityState {
     pub(in crate::tui) progress: Vec<ActivityAgentProgress>,
     pub(in crate::tui) failures: Vec<ActivityFailure>,
     pub(in crate::tui) selected: usize,
+    pub(in crate::tui) details_visible: bool,
+    pub(in crate::tui) focus: ActivityFocus,
+    pub(in crate::tui) details_scroll: usize,
+    pub(in crate::tui) details_content_height: Cell<usize>,
+    pub(in crate::tui) details_viewport_height: Cell<usize>,
+    pub(in crate::tui) list_first_visible: Cell<usize>,
+    pub(in crate::tui) list_viewport_height: Cell<u16>,
     pub(in crate::tui) pending_focus: Option<(ActivityAgent, u64)>,
     pub(in crate::tui) paused: bool,
     pub(in crate::tui) stopped: bool,
@@ -178,11 +192,44 @@ impl Default for ActivityState {
             progress: Vec::new(),
             failures: Vec::new(),
             selected: 0,
+            details_visible: true,
+            focus: ActivityFocus::List,
+            details_scroll: 0,
+            details_content_height: Cell::new(0),
+            details_viewport_height: Cell::new(0),
+            list_first_visible: Cell::new(0),
+            list_viewport_height: Cell::new(0),
             pending_focus: None,
             paused: false,
             stopped: false,
             error: None,
         }
+    }
+}
+
+impl ActivityState {
+    pub(in crate::tui) fn reveal_selection(&self, count: usize) {
+        if count == 0 {
+            self.list_first_visible.set(0);
+            return;
+        }
+        let capacity = self.list_viewport_height.get().max(1) as usize;
+        let mut first = self.list_first_visible.get().min(count.saturating_sub(1));
+        if self.selected < first {
+            first = self.selected;
+        } else if self.selected >= first.saturating_add(capacity) {
+            first = self.selected.saturating_add(1).saturating_sub(capacity);
+        }
+        self.list_first_visible
+            .set(first.min(count.saturating_sub(capacity)));
+    }
+
+    pub(in crate::tui) fn clamp_details_scroll(&mut self) {
+        let max = self
+            .details_content_height
+            .get()
+            .saturating_sub(self.details_viewport_height.get());
+        self.details_scroll = self.details_scroll.min(max);
     }
 }
 
