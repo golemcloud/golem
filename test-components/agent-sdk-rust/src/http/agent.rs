@@ -84,6 +84,17 @@ pub trait HttpAgent {
     #[description("Returns binary data as an unstructured binary response")]
     fn binary_response(&self) -> UnstructuredBinary<String>;
 
+    #[endpoint(get = "/resp/optional-binary/{found}")]
+    #[description("Returns raw binary data when found, otherwise no content")]
+    fn optional_binary_response(&self, found: bool) -> Option<UnstructuredBinary<String>>;
+
+    #[endpoint(get = "/resp/guarded-binary/{state}")]
+    #[description("Returns raw binary data when ready, no content when missing, or a JSON error")]
+    fn guarded_binary_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredBinary<String>>, ResultErrResponse>;
+
     // PATCH method endpoints
     #[endpoint(patch = "/resource/{id}")]
     #[description("Updates a resource using PATCH method with provided update data")]
@@ -207,6 +218,29 @@ impl HttpAgent for HttpAgentImpl {
         UnstructuredBinary::Inline {
             data: vec![1, 2, 3, 4],
             mime_type: "application/octet-stream".to_string(),
+        }
+    }
+
+    fn optional_binary_response(&self, found: bool) -> Option<UnstructuredBinary<String>> {
+        found.then(|| UnstructuredBinary::Inline {
+            data: vec![5, 6, 7],
+            mime_type: "image/png".to_string(),
+        })
+    }
+
+    fn guarded_binary_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredBinary<String>>, ResultErrResponse> {
+        match state.as_str() {
+            "ready" => Ok(Some(UnstructuredBinary::Inline {
+                data: vec![8, 9],
+                mime_type: "image/png".to_string(),
+            })),
+            "missing" => Ok(None),
+            _ => Err(ResultErrResponse {
+                error: "pending".to_string(),
+            }),
         }
     }
 

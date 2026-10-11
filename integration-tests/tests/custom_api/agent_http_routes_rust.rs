@@ -629,6 +629,82 @@ async fn response_binary(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Re
     Ok(())
 }
 
+async fn get_test_agent(agent: &HttpTestContext, path: &str) -> anyhow::Result<reqwest::Response> {
+    Ok(agent
+        .client
+        .get(agent.base_url.join(&format!("/http-agents/test-agent{path}"))?)
+        .send()
+        .await?)
+}
+
+async fn assert_raw_png(response: reqwest::Response, expected: &[u8]) -> anyhow::Result<()> {
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()?;
+    assert_eq!(content_type, "image/png");
+    assert_eq!(&response.bytes().await?[..], expected);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_optional_binary_found(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/optional-binary/true").await?;
+    assert_raw_png(response, &[5, 6, 7]).await
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_optional_binary_not_found(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/optional-binary/false").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(response.bytes().await?.is_empty());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_binary_ready(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-binary/ready").await?;
+    assert_raw_png(response, &[8, 9]).await
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_binary_missing(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-binary/missing").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(response.bytes().await?.is_empty());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_binary_pending(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-binary/pending").await?;
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_json_content_type(&response);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!({ "error": "pending" }));
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn negative_missing_path_var(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {

@@ -27,11 +27,29 @@ import golem.runtime.annotations.{
 }
 import golem.runtime.http.DurableStreamSlotSource
 import golem.runtime.{AsyncImplementationMethod, MethodInvocation, OutputMetadata}
-import golem.schema.{AgentStream, SchemaGraph, SchemaTypeBody}
+import golem.schema.wire.{
+  ConcreteCodec,
+  SchemaWire,
+  WitBinaryValuePayload,
+  WitResultValuePayload,
+  WitSchemaValueNode,
+  WitSchemaValueTree
+}
+import golem.schema.{
+  AgentStream,
+  SchemaGraph,
+  SchemaType,
+  SchemaTypeBody,
+  SchemaValue,
+  UnstructuredBinary,
+  UnstructuredText,
+  Unstructured
+}
 import zio.blocks.schema.Schema
 import zio.test._
 
-import scala.concurrent.Future
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.*
 
 private[macros] object AgentMetadataMacroTypes {
 
@@ -95,6 +113,34 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     class Id(owner: ConcreteOnly, streams: StreamEnvelope)
     def roundTrip(value: ConcreteOnly): Future[ConcreteOnly]
     def consume(value: StreamEnvelope): Unit
+  }
+
+  @agentDefinition()
+  trait RawBodyAgent {
+    class Id()
+    def text(input: UnstructuredText[String]): Future[UnstructuredText["en" | "de"]]
+    def image(input: UnstructuredBinary["image/png" | "image/jpeg"]): Future[UnstructuredBinary[String]]
+    def maybeImage(id: String): Future[Option[UnstructuredBinary[String]]]
+    def imageOrError(id: String): Future[Either[String, UnstructuredBinary[String]]]
+    def maybeImageOrError(id: String): Future[Either[String, Option[UnstructuredBinary[String]]]]
+  }
+
+  final class RawBodyAgentImpl() extends RawBodyAgent {
+    private def lookup(id: String): Either[String, Option[UnstructuredBinary[String]]] = id match {
+      case "png"     => Right(Some(UnstructuredBinary.fromInline(Array[Byte](1, 2, 3), "image/png")))
+      case "missing" => Right(None)
+      case other     => Left(s"invalid id $other")
+    }
+    override def text(input: UnstructuredText[String]): Future[UnstructuredText["en" | "de"]] =
+      Future.successful(UnstructuredText.fromInline("hallo", "de"))
+    override def image(input: UnstructuredBinary["image/png" | "image/jpeg"]): Future[UnstructuredBinary[String]] =
+      Future.successful(UnstructuredBinary.fromUrl("https://example.com/image.png"))
+    override def maybeImage(id: String): Future[Option[UnstructuredBinary[String]]] =
+      Future.successful(lookup(id).toOption.flatten)
+    override def imageOrError(id: String): Future[Either[String, UnstructuredBinary[String]]] =
+      Future.successful(lookup(id).flatMap(_.toRight("not found")))
+    override def maybeImageOrError(id: String): Future[Either[String, Option[UnstructuredBinary[String]]]] =
+      Future.successful(lookup(id))
   }
 
   @agentDefinition(mount = "/streams")
@@ -163,6 +209,20 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     override def rpcCallTrigger(payload: String): Unit    = ()
   })
   private val durableStreamMetadata = AgentMacros.agentMetadata[DurableStreamAgent]
+  private val rawBodyMetadata       = AgentMacros.agentMetadata[RawBodyAgent]
+
+  private def rawBodyOutput(name: String): SchemaType =
+    rawBodyMetadata.methods.find(_.name == name).get.output.asInstanceOf[OutputMetadata.Single].graph.root
+
+  private def invokeRawBody(method: String, id: String): WitSchemaValueTree = {
+    val implType = AgentImplementationMacro.wireImplementationTypeFromClass[RawBodyAgent, RawBodyAgentImpl]
+    val input    = ConcreteCodec.record(Vector("id" -> ConcreteCodec.string.asInstanceOf[ConcreteCodec[Any]]))
+    val invoked  = implType.methods
+      .find(_.name == method)
+      .get
+      .invoke(new RawBodyAgentImpl, input.encodeValue(Vector(id)), golem.Principal.Anonymous)
+    Await.result(invoked, 5.seconds).get
+  }
 
   /**
    * The effective root body of a graph, dereferencing a top-level named ref.
@@ -208,6 +268,72 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
         assertTrue(
           rootBody(method.input.userSupplied.head.graph) == expected,
           rootBody(method.output.asInstanceOf[OutputMetadata.Single].graph) == expected
+        )
+      },
+      test("unstructured parameters and outputs use the role-marked variants") {
+        val text  = rawBodyMetadata.methods.find(_.name == "text").get
+        val image = rawBodyMetadata.methods.find(_.name == "image").get
+        assertTrue(
+          text.input.userSupplied.head.graph.root == Unstructured.textType(None),
+          rawBodyOutput("text") == Unstructured.textType(Some(List("en", "de"))),
+          image.input.userSupplied.head.graph.root == Unstructured.binaryType(Some(List("image/png", "image/jpeg"))),
+          rawBodyOutput("image") == Unstructured.binaryType(None)
+        )
+      },
+      test("Option and Either wrap unstructured binary outputs as option/result") {
+        val binary = Unstructured.binaryType(None)
+        assertTrue(
+          rawBodyOutput("maybeImage") == golem.schema.t.option(binary),
+          rawBodyOutput("imageOrError") == golem.schema.t.result(Some(binary), Some(golem.schema.t.string)),
+          rawBodyOutput("maybeImageOrError") ==
+            golem.schema.t.result(Some(golem.schema.t.option(binary)), Some(golem.schema.t.string))
+        )
+      },
+      test("compiler-emitted wire metadata for unstructured types equals dynamic metadata encoding") {
+        assertTrue(
+          AgentDefinitionMacro.generateWire[RawBodyAgent] == golem.runtime.WireAgentMetadata.fromModel(rawBodyMetadata)
+        )
+      },
+      test("wire client and implementation derive unstructured codecs") {
+        val client   = AgentClientMacro.wireType[RawBodyAgent]
+        val implType = AgentImplementationMacro.wireImplementationTypeFromClass[RawBodyAgent, RawBodyAgentImpl]
+        assertTrue(
+          client.methods.map(_.name).sorted ==
+            List("image", "imageOrError", "maybeImage", "maybeImageOrError", "text"),
+          implType.methods.map(_.name).sorted ==
+            List("image", "imageOrError", "maybeImage", "maybeImageOrError", "text")
+        )
+      },
+      test("implementation encodes Either[E, Option[UnstructuredBinary]] as result<option<variant>, E>") {
+        val found = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "png"))
+        val none  = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "missing"))
+        val err   = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "bad"))
+        val raw   = invokeRawBody("maybeImageOrError", "png")
+        assertTrue(
+          found == SchemaValue.ResultValue(
+            golem.schema.SchemaResult.Ok(
+              Some(
+                SchemaValue.OptionValue(
+                  Some(
+                    SchemaValue.VariantValue(0, Some(SchemaValue.BinaryValue(Vector[Byte](1, 2, 3), Some("image/png"))))
+                  )
+                )
+              )
+            )
+          ),
+          none == SchemaValue.ResultValue(golem.schema.SchemaResult.Ok(Some(SchemaValue.OptionValue(None)))),
+          err == SchemaValue.ResultValue(
+            golem.schema.SchemaResult.Err(Some(SchemaValue.StringValue("invalid id bad")))
+          ),
+          raw.valueNodes.contains(
+            WitSchemaValueNode.BinaryValue(WitBinaryValuePayload(Vector[Byte](1, 2, 3), Some("image/png")))
+          ),
+          raw.valueNodes(raw.root).isInstanceOf[WitSchemaValueNode.ResultValue],
+          !raw
+            .valueNodes(raw.root)
+            .asInstanceOf[WitSchemaValueNode.ResultValue]
+            .payload
+            .isInstanceOf[WitResultValuePayload.ErrValue]
         )
       },
       test("Agent metadata captures trait-level mode annotation") {

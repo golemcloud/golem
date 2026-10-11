@@ -14,6 +14,8 @@
 //!
 //! The status-code / content-type policy lives here (not in `SchemaType`):
 //! `unit` → 204, `option<T>` → 200 + 404, `result<ok, err>` → 200 / 500,
+//! `result<option<T>, err>` → 200 / 404 / 500 (the payload of `option` and
+//! `result` is described like a top-level output),
 //! `Text` → `text/plain` + `Content-Language`, `Binary` → selected media type,
 //! everything else → `application/json`. Schema bodies are rendered from the
 //! schema model via [`render_output_schema`]; CORS / webhook / OpenAPI-spec / OIDC
@@ -172,7 +174,8 @@ pub fn get_route_response_schema(
     })
 }
 
-/// Apply the response protocol policy to a single typed output.
+/// Apply the response protocol policy to a single typed output. Mirrors the
+/// runtime mapping in `response_mapping.rs`.
 fn classify_single_response(
     ty: &SchemaType,
     graph: &SchemaGraph,
@@ -180,46 +183,28 @@ fn classify_single_response(
     responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
     headers: &mut IndexMap<String, ResponseHeaderSchema>,
 ) -> Result<(), String> {
-    // A canonical unstructured text/binary output (`variant { inline, url }`)
-    // describes its `inline` 200 body exactly like a bare `Text` / `Binary`
-    // rich scalar; the `url` alternative is a 307 redirect applied at runtime
-    // (see `response_mapping.rs`) and is not described here.
-    match unstructured_kind(graph, ty).map_err(|err| err.to_string())? {
-        Some(UnstructuredKind::Binary(restrictions)) => {
-            insert_binary_response(restrictions, responses);
-            return Ok(());
-        }
-        Some(UnstructuredKind::Text(restrictions)) => {
-            insert_text_response(restrictions, responses, headers);
-            return Ok(());
-        }
-        None => {}
+    if unstructured_kind(graph, ty)
+        .map_err(|err| err.to_string())?
+        .is_some()
+    {
+        return insert_payload_response(ty, graph, components, responses, headers);
     }
 
     match resolve_top_ref(graph, ty) {
         SchemaType::Option { inner, .. } => {
-            let schema = render_output_schema(graph, inner, components)?;
-            responses.insert(
-                200,
-                ResponseBodyOpenApiSchema::Known {
-                    schema,
-                    content_type: "application/json".to_string(),
-                },
-            );
+            insert_payload_response(inner, graph, components, responses, headers)?;
             responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
         }
         SchemaType::Result { spec, .. } => {
             match &spec.ok {
-                Some(ok) => {
-                    let schema = render_output_schema(graph, ok, components)?;
-                    responses.insert(
-                        200,
-                        ResponseBodyOpenApiSchema::Known {
-                            schema,
-                            content_type: "application/json".to_string(),
-                        },
-                    );
-                }
+                Some(ok) => match resolve_top_ref(graph, ok) {
+                    // `result<option<T>, E>`: `ok(none)` is a 404.
+                    SchemaType::Option { inner, .. } => {
+                        insert_payload_response(inner, graph, components, responses, headers)?;
+                        responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
+                    }
+                    _ => insert_payload_response(ok, graph, components, responses, headers)?,
+                },
                 None => {
                     // `result<(), E>` with a unit ok: success carries no
                     // payload, so 204 No Content must have no body.
@@ -244,6 +229,36 @@ fn classify_single_response(
                 }
             }
         }
+        _ => insert_payload_response(ty, graph, components, responses, headers)?,
+    }
+    Ok(())
+}
+
+/// Describe the 200 response of a successful payload. A canonical unstructured
+/// text/binary wrapper (`variant { inline, url }`) describes its `inline` body
+/// exactly like a bare `Text` / `Binary` rich scalar; the `url` alternative is
+/// a 307 redirect applied at runtime and is not described here. Any other
+/// payload is a JSON body.
+fn insert_payload_response(
+    ty: &SchemaType,
+    graph: &SchemaGraph,
+    components: &mut Map<String, Value>,
+    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
+    headers: &mut IndexMap<String, ResponseHeaderSchema>,
+) -> Result<(), String> {
+    match unstructured_kind(graph, ty).map_err(|err| err.to_string())? {
+        Some(UnstructuredKind::Binary(restrictions)) => {
+            insert_binary_response(restrictions, responses);
+            return Ok(());
+        }
+        Some(UnstructuredKind::Text(restrictions)) => {
+            insert_text_response(restrictions, responses, headers);
+            return Ok(());
+        }
+        None => {}
+    }
+
+    match resolve_top_ref(graph, ty) {
         SchemaType::Binary { restrictions, .. } => {
             insert_binary_response(restrictions, responses);
         }

@@ -33,6 +33,16 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
     def id(t: TypeRepr): String = t.dealias.typeSymbol.fullName.replace("$.", ".").stripSuffix("$") +
       (if (t.typeArgs.isEmpty) "" else t.typeArgs.map(id).mkString("<", ",", ">"))
 
+    def allowList(ty: TypeRepr, what: String): Option[List[String]] =
+      ty.typeArgs match {
+        case List(arg) =>
+          AllowedStringsMacro.literalValues(using q)(arg) match {
+            case Right(values) => values
+            case Left(error)   => report.errorAndAbort(s"Invalid $what: $error")
+          }
+        case _ => report.errorAndAbort(s"Invalid $what: expected one type argument in ${ty.show}")
+      }
+
     def body(tpe: TypeRepr): SchemaType = {
       val ty = tpe.dealias
       if (ty.typeSymbol.fullName == "golem.schema.GuestSecretHandle")
@@ -54,6 +64,10 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         ty.show == "golem.host.QuotaApi.QuotaToken"
       )
         return SchemaType(SchemaTypeBody.QuotaTokenType(QuotaTokenSpec()))
+      if (ty.typeSymbol.fullName == "golem.schema.UnstructuredText")
+        return Unstructured.textType(allowList(ty, "UnstructuredText language type"))
+      if (ty.typeSymbol.fullName == "golem.schema.UnstructuredBinary")
+        return Unstructured.binaryType(allowList(ty, "UnstructuredBinary MIME type"))
       ty.asType match {
         case '[Unit]                               => t.tuple(Nil)
         case '[Boolean]                            => t.bool
