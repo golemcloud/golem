@@ -7,7 +7,9 @@
 //!
 //! A rename puts a new file in the place of the old one, and the file editor changes the old
 //! file. A script can see that difference only through another name of the file or through a
-//! descriptor that it has open on the file, so such a file is left to the rename.
+//! descriptor that is open on the file, so such a file is left to the rename. On a host file
+//! system that ignores the case of names, one more difference stays: a rename gives the file
+//! the name as the command writes it, and the file editor keeps the name that the file has.
 use std::cell::RefCell;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};

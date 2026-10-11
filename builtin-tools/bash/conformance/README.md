@@ -41,14 +41,15 @@ file tool. When the tool is bound, the command does this part of its work throug
 | `tee` | gives the content of a regular file to a file writer | `write-file` |
 | `sed -i` | gives the change of a regular file to a file editor | `edit-file` |
 
-The example has a stand-in for each of these tools (`--file-tools`). `forward` runs each case
-whose script names one of these commands two times, without the stand-ins and with them, and
-fails when status, stdout or stderr differ. The stand-ins answer as the tools do: all bytes of a text file or nothing, and nothing
-for a path with `..`, for content above 1 MiB and for content that is not UTF-8 text. `forward`
-needs no golden. It also fails when a stand-in did no work in the cases that name its command,
-because such a run compares nothing for that command. A case whose own output changes from run to
-run is reported as `UNSTABLE` and does not fail the run. `--tier all` takes the sweep-tier cases
-too.
+The example has a stand-in for each of these tools (`--file-tools`). `forward` runs each case whose
+script names one of these commands two times, without the stand-ins and with them, and fails when
+status, stdout or stderr differ. The stand-ins answer as the tools do: all bytes of a text file or
+nothing, and nothing for a path with `..`, for content above 1 MiB and for content that is not
+UTF-8 text. `forward` needs no golden. It also fails when a stand-in did no work in the cases that
+name its command, because such a run compares nothing for that command. A case whose own output
+changes from run to run is reported as `UNSTABLE` and does not fail the run. A case that gives no
+outcome without the stand-ins is reported as `SKIP` and does not fail the run. `--tier all` takes
+the sweep-tier cases too.
 
 `record` runs the oracle **twice** per case by default, each run in its own fresh container, and
 refuses to write a golden the two runs disagree on -- printing which case and which field (status,

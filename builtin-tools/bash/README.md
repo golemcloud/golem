@@ -223,6 +223,8 @@ flowchart TD
     the command, and so does a file above 1 MiB.
   - When a call fails or is refused, the command does the work itself. After such a failure
     that tool is not used for the rest of the call, and one line in the agent's log says so.
+    The error of `read-file` for a file that is not text is about that file only, and the
+    tool stays in use.
   - The script stands still during a call, as it does while a command works on a file itself:
     no other pipeline stage, job or timer of the call runs. So `cat small | head -n 0` keeps
     its status. For the same reason a tool is not asked while another bound tool call of the
@@ -233,24 +235,55 @@ flowchart TD
   - A tool that is bound under one of these names with other commands, arguments or result is
     not used.
 
-  `cat` opens the file itself first. It also reads the file itself when the file is empty, has
-  a NUL byte or invalid UTF-8, or needs more than 64 calls. Standard input, a named descriptor,
-  `/dev/null` and a directory never go to the tool.
+  `cat` opens the file itself first. It also reads the file itself when the file is empty or
+  has a NUL byte or invalid UTF-8, and when the first page shows that the file needs more than
+  64 calls. Standard input, a named descriptor, `/dev/null` and a directory never go to the
+  tool. `cat` writes the bytes of the tool only while it does not wait. Another part of the
+  script can change the file while `cat` waits for the reader of its output, so after such a
+  wait `cat` reads the rest from the file itself. The host can give a file to a reader in
+  blocks, so before the wait `cat` reads from the file the part that it has written. It is
+  then at the same place in the file as a `cat` that reads the file itself. The pages that
+  `cat` did not write were read for nothing.
 
   `tee` opens the file itself, which makes or empties it. It holds the bytes for the file and
   gives them to the tool when its input ends. The tool takes a file only as a whole, so `tee`
-  writes the file itself when it adds to the file (`-a`), and when it must wait before its
-  input ends, for more input or for the reader of its output. It then writes what it holds
-  before it waits, so another part of the script never sees a file that has fewer bytes than
-  `tee` has taken. A standard stream and `/dev/null` never go to the tool.
+  writes the file itself in these cases:
+
+  - It adds to the file (`-a`).
+  - It must wait while it holds bytes for the file: for more input, or for the reader of its
+    output. It writes those bytes before it waits, so another part of the script never sees a
+    file that has fewer bytes than `tee` has taken.
+  - It writes to another regular file while it holds bytes: its standard output, another
+    operand, or a message on its standard error. That file can be the held file, open a second
+    time (`2>> file`), and such a write must come after the held bytes. So `tee` writes them
+    to their file first.
+  - At the end of its input, the path does not name the file that `tee` opened, or that file
+    is not empty. Another part of the script can do that while `tee` waits with no bytes.
+    `tee` writes the first byte to its file and looks for it at the path, because a host does
+    not give each file an identity of its own.
+
+  A file that gets no bytes needs no call. A standard stream and `/dev/null` never go to the
+  tool. One difference stays: a write error for bytes that `tee` holds comes when `tee` writes
+  them, which is before its next wait or at the end of its input.
 
   `sed` makes the new content itself. Its last step puts that content in the place of the old
-  content, and with the tool that step is one call: it replaces the text between the first and
-  the last difference. The tool changes the file that is there, where `sed -i` puts a new file
-  in its place. A script can see that difference only through another name of the file or
-  through a descriptor that it has open on the file. So `sed` replaces the file itself when the
-  file is a symbolic link, has a second name or is open in the script, and when `-i` has a
-  suffix for a copy. A file that has a NUL byte or no content also stays with `sed`.
+  content, and with the tool that step is one call. The call replaces the text between the
+  first and the last difference. When that text is empty, is in the file more than one time,
+  or is slow for the tool to find, whole lines around it go with it, and at the end the whole
+  content does.
+
+  The tool changes the file that is there, where `sed -i` puts a new file in its place. A
+  script can see that difference only through another name of the file or through a descriptor
+  that is open on the file. So `sed` replaces the file itself in these cases:
+
+  - `-i` has a suffix for a copy.
+  - The file is a symbolic link. With `--follow-symlinks`, the tool gets the file that the
+    link names.
+  - The file has a second name, or the script or `sed` itself has it open (a `w` or `R` file).
+  - The file has a NUL byte or no content.
+
+  One difference stays on a host file system that ignores the case of names: `sed -i` gives
+  the file the name as the command writes it, and the tool keeps the name that the file has.
 
 ## Commands
 

@@ -266,11 +266,37 @@ calls `tool-rpc.invoke-and-await`, and it blocks the component until the tool ha
   bytes so far. `tee` and `sed` look at the size of the file after the call. If a check fails,
   the command does the work itself: `cat` reads the file that it has opened, `tee` empties the
   file and writes it, and `sed` makes its rename.
+- `read-file` gives the bytes that the file had when `cat` opened it. A `cat` that reads the
+  file itself reads it piece by piece, and another process of the call can change the file
+  while `cat` waits for the reader of its output. So `cat` writes the bytes of the tool only
+  while it does not wait. After a wait it goes on from the file itself (`cat_impl` in
+  `shell/src/tools/streaming.rs`). The executor gives a file to a component in blocks of
+  64 KiB, so a `cat` that reads the file itself has, at a wait, the rest of a block from
+  before the wait. Before `cat` gives way for the first time, it therefore reads from the file
+  the part that it has taken (`read_past`). The stream of the host is then in the state that
+  it has for a `cat` without the tool. This holds for a host whose blocks are a whole number
+  of the 16 KiB pieces that `cat` reads, as those of the executor are, and for a host with no
+  blocks.
 - `write-file` takes a file only as a whole, and `tee` takes its input piece by piece. Another
   process of the call can run only while `tee` waits. So `tee` holds the bytes for a file while
   it does not wait, and it writes them to the file itself before each wait
   (`before_each_wait` in `shell/src/tools/streaming.rs`). From then on it writes that file
   itself. A file thus never has fewer bytes than `tee` has taken when another process looks.
+  A write error of held bytes is reported at the next step for that file.
+- `tee` can have a held file open a second time: as its standard output, as another operand,
+  or as its standard error (`2>> file`). A write through that descriptor must come after the
+  bytes that `tee` holds for the file. So before `tee` writes to a regular file that it does
+  not hold, and before it writes a message to a standard error that is a regular file, it
+  writes the held bytes to their files (`HeldFiles::write_out`), and it writes those files
+  itself from then on.
+- `write-file` makes the content of the file at a path, and `tee` writes at the start of the
+  file that it has opened. The two are the same only while the path names that file and the
+  file is empty. `HeldFiles::finish` checks both before the call. If not, `tee` writes through
+  its descriptor, as it does with no tool. The device and the inode do not tell if the path
+  names the file: the executor makes the inode number of a file from its modification time
+  and its size, so two empty files can have the same one. `finish` therefore writes the first
+  byte through the descriptor and looks at the size of the file at the path, before and
+  after.
 - `sed -i` is code of the `sed` fork. It writes the new content to a copy in the same directory
   and renames the copy over the file. The build wraps the `rename` of libc, and
   `shell/src/tools/in_place.rs` answers it while such a run has a file editor: the editor
@@ -278,7 +304,9 @@ calls `tool-rpc.invoke-and-await`, and it blocks the component until the tool ha
   one, and the editor changes the old file. A process can see that difference only through
   another name of the file or through a descriptor on it. So the rename is made for a symbolic
   link, for a file with a second name, and for a file on which a descriptor from before the run
-  is open. The wrappers of `open` and `close` keep the list of open descriptors for that.
+  is open. The wrappers of `open`, `openat` and `close` keep the set of open descriptors for
+  that. The files of the `w` and `R` commands of the script are in that set, because the `Sed`
+  command compiles the script and keeps the result before the fork runs it.
 
 ### Replay safety
 
