@@ -60,6 +60,12 @@ private[macros] object AgentMetadataMacroTypes {
 
     implicit val schema: Schema[EchoResult] = Schema.derived
   }
+
+  final case class Attachment[M](file: UnstructuredBinary[M])
+  final case class Gallery(png: Attachment["image/png"], jpeg: Attachment["image/jpeg"])
+  object Gallery {
+    implicit val schema: Schema[Gallery] = Schema.derived
+  }
 }
 
 /**
@@ -143,6 +149,19 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
       Future.successful(lookup(id))
   }
 
+  @agentDefinition()
+  trait MimeAllowListAgent {
+    class Id()
+    def pair(png: UnstructuredBinary["image/png"], jpeg: UnstructuredBinary["image/jpeg"]): Future[Unit]
+    def gallery(input: Gallery): Future[Gallery]
+  }
+
+  final class MimeAllowListAgentImpl() extends MimeAllowListAgent {
+    override def pair(png: UnstructuredBinary["image/png"], jpeg: UnstructuredBinary["image/jpeg"]): Future[Unit] =
+      Future.unit
+    override def gallery(input: Gallery): Future[Gallery] = Future.successful(input)
+  }
+
   @agentDefinition(mount = "/streams")
   trait DurableStreamAgent {
     class Id()
@@ -210,6 +229,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
   })
   private val durableStreamMetadata = AgentMacros.agentMetadata[DurableStreamAgent]
   private val rawBodyMetadata       = AgentMacros.agentMetadata[RawBodyAgent]
+  private val mimeAllowListMetadata = AgentMacros.agentMetadata[MimeAllowListAgent]
 
   private def rawBodyOutput(name: String): SchemaType =
     rawBodyMetadata.methods.find(_.name == name).get.output.asInstanceOf[OutputMetadata.Single].graph.root
@@ -303,6 +323,44 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           implType.methods.map(_.name).sorted ==
             List("image", "imageOrError", "maybeImage", "maybeImageOrError", "text")
         )
+      },
+      test("distinct MIME allow-lists in one agent keep their own restrictions") {
+        val compiled     = AgentDefinitionMacro.generateWire[MimeAllowListAgent]
+        val attachmentId = (mime: String) => s"golem.runtime.macros.AgentMetadataMacroTypes.Attachment<\"$mime\">"
+        val attachment   = (mime: String) =>
+          golem.schema.t.record(List(golem.schema.t.field("file", Unstructured.binaryType(Some(List(mime))))))
+        def pairRoots(metadata: golem.runtime.MethodMetadata)   = metadata.input.userSupplied.map(_.graph.root)
+        def galleryDefs(metadata: golem.runtime.MethodMetadata) =
+          List("image/png", "image/jpeg").map(mime =>
+            metadata.input.userSupplied.head.graph.defs.get(attachmentId(mime)).map(_.body)
+          )
+        val expectedPair                 = List("image/png", "image/jpeg").map(mime => Unstructured.binaryType(Some(List(mime))))
+        val expectedGallery              = List("image/png", "image/jpeg").map(mime => Some(attachment(mime)))
+        def method(name: String)         = mimeAllowListMetadata.methods.find(_.name == name).get
+        def compiledMethod(name: String) = compiled.reflectedMethod(compiled.methods.find(_.name == name).get)
+        assertTrue(
+          pairRoots(method("pair")) == expectedPair,
+          galleryDefs(method("gallery")) == expectedGallery,
+          pairRoots(compiledMethod("pair")) == expectedPair,
+          galleryDefs(compiledMethod("gallery")) == expectedGallery,
+          compiled == golem.runtime.WireAgentMetadata.fromModel(mimeAllowListMetadata)
+        )
+      },
+      test("implementation decodes and encodes distinct MIME allow-lists in one value") {
+        val implType =
+          AgentImplementationMacro.wireImplementationTypeFromClass[MimeAllowListAgent, MimeAllowListAgentImpl]
+        val gallery = Gallery(
+          Attachment(UnstructuredBinary.fromInline(Array[Byte](1), "image/png")),
+          Attachment(UnstructuredBinary.fromInline(Array[Byte](2), "image/jpeg"))
+        )
+        val input =
+          ConcreteCodec.record(Vector("input" -> ConcreteCodec.derived[Gallery].asInstanceOf[ConcreteCodec[Any]]))
+        val invoked = implType.methods
+          .find(_.name == "gallery")
+          .get
+          .invoke(new MimeAllowListAgentImpl, input.encodeValue(Vector(gallery)), golem.Principal.Anonymous)
+        val output = Await.result(invoked, 5.seconds).get
+        assertTrue(ConcreteCodec.derived[Gallery].decode(output) == gallery)
       },
       test("implementation encodes Either[E, Option[UnstructuredBinary]] as result<option<variant>, E>") {
         val found = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "png"))

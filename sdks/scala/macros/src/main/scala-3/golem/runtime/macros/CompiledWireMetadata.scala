@@ -29,9 +29,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
   import q.reflect.*
 
   def graph(tpe: TypeRepr): SchemaGraph = {
-    val builder                 = new SchemaBuilder
-    def id(t: TypeRepr): String = t.dealias.typeSymbol.fullName.replace("$.", ".").stripSuffix("$") +
-      (if (t.typeArgs.isEmpty) "" else t.typeArgs.map(id).mkString("<", ",", ">"))
+    val builder = new SchemaBuilder
 
     def allowList(ty: TypeRepr, what: String): Option[List[String]] =
       ty.typeArgs match {
@@ -107,7 +105,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
           else {
             val sym = ty.typeSymbol
             builder.register(
-              id(ty),
+              StableTypeId.of(using q)(tpe),
               () => {
                 if (sym.flags.is(Flags.Case) || sym.flags.is(Flags.Module))
                   t.record(sym.caseFields.map(f => t.field(f.name, body(ty.memberType(f)))))

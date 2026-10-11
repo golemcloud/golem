@@ -23,12 +23,6 @@ private[wire] object ConcreteCodecMacro {
   def derive[A: Type](using Quotes): Expr[ConcreteCodec[A]] = {
     import quotes.reflect.*
 
-    def id(tpe: TypeRepr): String = {
-      val t = tpe.dealias
-      t.typeSymbol.fullName.replace("$.", ".").stripSuffix("$") +
-        (if (t.typeArgs.isEmpty) "" else t.typeArgs.map(id).mkString("<", ",", ">"))
-    }
-
     // Matched by class symbol: quoted type patterns cannot bind a union-typed
     // allow-list argument, and must not match the `Url` / `Inline` subclasses.
     val unstructuredText   = Symbol.requiredClass("golem.schema.UnstructuredText")
@@ -36,7 +30,7 @@ private[wire] object ConcreteCodecMacro {
 
     def build[T: Type](registry: Expr[ConcreteCodecs], active: Set[String]): Expr[ConcreteCodec[T]] = {
       val tpe = TypeRepr.of[T].dealias
-      val key = id(tpe)
+      val key = golem.schema.StableTypeId.of(TypeRepr.of[T])
       if (active(key)) return '{ $registry.ref[T](${ Expr(key) }) }
       val next = active + key
 
