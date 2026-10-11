@@ -197,16 +197,26 @@ fn finish(invocation: &Invocation, stdout: &[u8], stderr: &[u8], status: u8) -> 
             Some(path) => std::fs::write(path, status.to_string()),
             None => Ok(()),
         })
-        .and_then(|()| match &invocation.file_tools_file {
-            #[cfg(all(target_arch = "wasm32", feature = "test-support"))]
-            Some(path) => std::fs::write(path, probe_tools::file_tool_report()),
-            _ => Ok(()),
-        });
+        .and_then(|()| write_file_tool_report(invocation.file_tools_file.as_deref()));
     if let Err(error) = written {
         eprintln!("cooperative: {error}");
         std::process::exit(1);
     }
     std::process::exit(i32::from(status));
+}
+
+/// Writes to the file at `path` how many times each stand-in for a file tool did work.
+#[cfg(all(target_arch = "wasm32", feature = "test-support"))]
+fn write_file_tool_report(path: Option<&str>) -> std::io::Result<()> {
+    path.map_or(Ok(()), |path| {
+        std::fs::write(path, probe_tools::file_tool_report())
+    })
+}
+
+/// Only a WASM build with the stand-ins has a report to write.
+#[cfg(not(all(target_arch = "wasm32", feature = "test-support")))]
+fn write_file_tool_report(_path: Option<&str>) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// On wasm the driver is the component's async `wasi:cli/run@0.3.0` export, which `wasmtime run
