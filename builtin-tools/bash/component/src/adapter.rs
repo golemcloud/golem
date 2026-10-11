@@ -185,10 +185,8 @@ pub(crate) fn install(session: &mut Session) -> Result<Vec<String>, String> {
             return Err("duplicate bound tool name".into());
         }
     }
-    // With the built-in `read-file` bound, `cat` takes the content of a text file from it.
-    if let Some(reader) = crate::forward::ReadFileTool::bound(&tools) {
-        session.forward_file_reads(Arc::new(reader));
-    }
+    // A local command gives part of its work to a built-in file tool that is bound.
+    crate::forward::install(session, &tools);
     install_catalog(session, Catalog::new(tools)?)
 }
 
