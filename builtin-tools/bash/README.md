@@ -200,6 +200,21 @@ flowchart TD
   output draining and terminal waiting run together; independent local stages can progress. Each
   attachment is limited to 16 MiB, the host's `max_tool_attachment_bytes`. The call's own output and substitutions are bounded too; see
   [Limits](#limits).
+- A local command can take work from a bound tool. With the built-in `read-file` tool bound,
+  `cat` takes the content of each regular file from it, with one `read-file` call for each page
+  (200 lines or 64 KiB). `cat` formats and writes those bytes as it always does, so a script sees
+  the same output, messages and status with the tool and without it. `cat` opens the file itself
+  first, and it reads the file itself when the tool does not give each byte of it: an empty
+  file, a file with a NUL byte or invalid UTF-8, a file above 1 MiB or one that needs more than
+  64 calls, a path with `..`, and a call that fails or is refused. After such a failure the tool
+  is not used for the rest of the call, and one line in the agent's log says so. Standard input,
+  a named descriptor, `/dev/null` and a directory never go to the tool. The script stands still
+  during the read, as it does while `cat` reads a file itself: no other pipeline stage, job or
+  timer of the call runs, so `cat small | head -n 0` keeps its status. For the same reason the
+  tool is not asked while another bound tool call of the script is in flight. Each page that the
+  tool returns is recorded in the agent's oplog, and a replay makes each of these calls again.
+  A tool that is bound under the name `read-file` with other commands, arguments or result is
+  not used.
 
 ## Commands
 
@@ -334,7 +349,7 @@ with bash's message (``bash: -c: line 2: syntax error near unexpected token `the
 | Commands | Source |
 |---|---|
 | `b2sum base32 base64 basename basenc cksum comm cp csplit date dd dirname du env expand expr factor fmt fold join link ln ls md5sum mkdir mktemp mv nl numfmt od paste readlink realpath rm rmdir sha1sum sha256sum sha512sum shuf sort split touch truncate tsort unexpand unlink uname nproc` | uutils Coreutils fork, run to completion on the command's input |
-| `cat cut head printf sleep tail tee tr uniq wc` | Coreutils fork, with drivers that stream one record at a time |
+| `cat cut head printf sleep tail tee tr uniq wc` | Coreutils fork, with drivers that stream one record at a time; `cat` takes the content of a text file from a bound `read-file` (see [Implementation](#implementation)) |
 | `sed` | uutils sed fork with a record-at-a-time engine; `-i` and `-s` run on whole files |
 | `grep` | GNU grep 3.12 options and BRE/ERE dialect, over `regex` and `fancy-regex` (`-P`, back-references) |
 | `jq` | jaq with jq's CLI options and a jq-compatible fork of `jaq-json` |

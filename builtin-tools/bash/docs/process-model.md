@@ -239,6 +239,29 @@ sequenceDiagram
   T-->>G: operation settles as cancelled
 ```
 
+### Bash tool: reads that `cat` takes from `read-file`
+
+`component/src/forward.rs` gives the shell a file reader when the built-in `read-file` tool is
+bound. `cat` opens a file itself and then asks the reader for its content. The reader calls
+`tool-rpc.invoke-and-await` for each page, and it blocks the component until the tool has answered
+(`execution::block_on`).
+
+- For a script, a read of a file is one step: no other process of the call runs in it. A read
+  that waited for the tool in the usual way would be a wait, in which the next stage of a
+  pipeline runs. A reader that exits at once would then end `cat` with SIGPIPE, where a `cat`
+  that reads the file itself ends with status 0. The blocking wait keeps the read one step.
+- The guest runtime gives a blocking wait each task that was spawned and has not been polled
+  yet, and the wait would run that task to its end. `component/src/blocking.rs` therefore wraps
+  each task of the shell. While a blocking wait runs, a wrapped task that is polled goes back
+  without a poll, and it is spawned again after the wait, in the same order.
+- The reader is not used while another sibling call of the script is in flight. The body of that
+  call can wait for the script, to hand over its output for example. The body of `read-file`
+  waits for that body, because Golem runs one filesystem-capable body of an owner at a time. A
+  script that stands still would then wait forever.
+- The read gives each byte of the file or nothing. The number of bytes must be the size that
+  `cat` saw when it opened the file, and each cursor must be at the end of the bytes so far. If
+  not, `cat` reads the file that it has opened.
+
 ### Replay safety
 
 Recovery re-executes the bash body from the start. Every input that determines a number, an order
@@ -246,7 +269,7 @@ or a result is either in the call's input or recorded by Golem:
 
 - the random `shell_pid`;
 - timers, including the 1-second grace;
-- sibling calls and their cancellation;
+- sibling calls and their cancellation, which include each page that `cat` took from `read-file`;
 - the completion order the guest observed.
 
 A recovered run therefore allocates the same numbers and produces byte-identical output. This is
