@@ -161,6 +161,7 @@ private[golem] object Derivation {
     r match {
       case TypeRepr.Ref(id)              => stableId(id)
       case TypeRepr.Applied(tycon, args) => renderRepr(tycon) + "<" + args.map(renderRepr).mkString(",") + ">"
+      case TypeRepr.Union(members)       => members.map(renderRepr).mkString(" | ")
       case other                         => TypeIdPrinter.render(other)
     }
 

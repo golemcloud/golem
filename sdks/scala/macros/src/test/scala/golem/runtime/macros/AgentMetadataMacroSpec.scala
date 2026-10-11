@@ -66,6 +66,21 @@ private[macros] object AgentMetadataMacroTypes {
   object Gallery {
     implicit val schema: Schema[Gallery] = Schema.derived
   }
+
+  object A { type Language = "en" }
+  object B { type Language = "de" }
+  type AOrFrench = A.Language | "fr"
+  type BOrFrench = B.Language | "fr"
+  final case class Caption[L](text: UnstructuredText[L])
+  final case class Bilingual(
+    first: Caption[A.Language | "fr"],
+    second: Caption[B.Language | "fr"],
+    nestedFirst: Caption[AOrFrench | "it"],
+    nestedSecond: Caption[BOrFrench | "it"]
+  )
+  object Bilingual {
+    implicit val schema: Schema[Bilingual] = Schema.derived
+  }
 }
 
 /**
@@ -162,6 +177,21 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     override def gallery(input: Gallery): Future[Gallery] = Future.successful(input)
   }
 
+  @agentDefinition()
+  trait LanguageAllowListAgent {
+    class Id()
+    def pair(first: UnstructuredText[A.Language | "fr"], second: UnstructuredText[B.Language | "fr"]): Future[Unit]
+    def bilingual(input: Bilingual): Future[Bilingual]
+  }
+
+  final class LanguageAllowListAgentImpl() extends LanguageAllowListAgent {
+    override def pair(
+      first: UnstructuredText[A.Language | "fr"],
+      second: UnstructuredText[B.Language | "fr"]
+    ): Future[Unit]                                             = Future.unit
+    override def bilingual(input: Bilingual): Future[Bilingual] = Future.successful(input)
+  }
+
   @agentDefinition(mount = "/streams")
   trait DurableStreamAgent {
     class Id()
@@ -230,6 +260,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
   private val durableStreamMetadata = AgentMacros.agentMetadata[DurableStreamAgent]
   private val rawBodyMetadata       = AgentMacros.agentMetadata[RawBodyAgent]
   private val mimeAllowListMetadata = AgentMacros.agentMetadata[MimeAllowListAgent]
+  private val languageMetadata      = AgentMacros.agentMetadata[LanguageAllowListAgent]
 
   private def rawBodyOutput(name: String): SchemaType =
     rawBodyMetadata.methods.find(_.name == name).get.output.asInstanceOf[OutputMetadata.Single].graph.root
@@ -361,6 +392,51 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           .invoke(new MimeAllowListAgentImpl, input.encodeValue(Vector(gallery)), golem.Principal.Anonymous)
         val output = Await.result(invoked, 5.seconds).get
         assertTrue(ConcreteCodec.derived[Gallery].decode(output) == gallery)
+      },
+      test("same-named literal aliases from different owners keep their own restrictions") {
+        val compiled = AgentDefinitionMacro.generateWire[LanguageAllowListAgent]
+        val prefix   = "golem.runtime.macros.AgentMetadataMacroTypes."
+        val caption  = (langs: List[String]) =>
+          golem.schema.t.record(List(golem.schema.t.field("text", Unstructured.textType(Some(langs)))))
+        val expectedDefs = List(
+          s"${prefix}Caption<${prefix}A.Language | \"fr\">" -> caption(List("en", "fr")),
+          s"${prefix}Caption<${prefix}B.Language | \"fr\">" -> caption(List("de", "fr")),
+          s"${prefix}Caption<${prefix}AOrFrench | \"it\">"  -> caption(List("en", "fr", "it")),
+          s"${prefix}Caption<${prefix}BOrFrench | \"it\">"  -> caption(List("de", "fr", "it"))
+        ).map { case (id, body) => id -> Some(body) }
+        def pairRoots(metadata: golem.runtime.MethodMetadata)     = metadata.input.userSupplied.map(_.graph.root)
+        def bilingualDefs(metadata: golem.runtime.MethodMetadata) =
+          expectedDefs.map { case (id, _) => id -> metadata.input.userSupplied.head.graph.defs.get(id).map(_.body) }
+        val expectedPair                 = List(List("en", "fr"), List("de", "fr")).map(l => Unstructured.textType(Some(l)))
+        def method(name: String)         = languageMetadata.methods.find(_.name == name).get
+        def compiledMethod(name: String) = compiled.reflectedMethod(compiled.methods.find(_.name == name).get)
+        assertTrue(
+          pairRoots(method("pair")) == expectedPair,
+          bilingualDefs(method("bilingual")) == expectedDefs,
+          pairRoots(compiledMethod("pair")) == expectedPair,
+          bilingualDefs(compiledMethod("bilingual")) == expectedDefs,
+          compiled == golem.runtime.WireAgentMetadata.fromModel(languageMetadata)
+        )
+      },
+      test("implementation decodes and encodes same-named literal aliases from different owners") {
+        val implType =
+          AgentImplementationMacro.wireImplementationTypeFromClass[LanguageAllowListAgent, LanguageAllowListAgentImpl]
+        val bilingual = Bilingual(
+          Caption(UnstructuredText.fromInline("hello", "en")),
+          Caption(UnstructuredText.fromInline("hallo", "de")),
+          Caption(UnstructuredText.fromInline("ciao", "it")),
+          Caption(UnstructuredText.fromInline("salut", "fr"))
+        )
+        val codec   = ConcreteCodec.derived[Bilingual]
+        val input   = ConcreteCodec.record(Vector("input" -> codec.asInstanceOf[ConcreteCodec[Any]]))
+        val invoked = scala.util.Try(
+          implType.methods
+            .find(_.name == "bilingual")
+            .get
+            .invoke(new LanguageAllowListAgentImpl, input.encodeValue(Vector(bilingual)), golem.Principal.Anonymous)
+        )
+        val output = invoked.flatMap(f => scala.util.Try(Await.result(f, 5.seconds).get))
+        assertTrue(output.map(codec.decode).toOption.contains(bilingual))
       },
       test("implementation encodes Either[E, Option[UnstructuredBinary]] as result<option<variant>, E>") {
         val found = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "png"))

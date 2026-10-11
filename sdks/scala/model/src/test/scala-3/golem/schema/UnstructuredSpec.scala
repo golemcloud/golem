@@ -46,6 +46,22 @@ object UnstructuredSpec extends ZIOSpecDefault {
   final case class PngJpeg(png: Attachment["image/png"], jpeg: Attachment["image/jpeg"])
   final case class LooseGallery(png: Attachment[String], jpeg: Attachment[String])
 
+  object A { type Language = "en" }
+  object B { type Language = "de" }
+  type AOrFrench = A.Language | "fr"
+  type BOrFrench = B.Language | "fr"
+  type ALanguage = A.Language
+  final case class Bilingual(
+    first: Caption[A.Language | "fr"],
+    second: Caption[B.Language | "fr"],
+    nestedFirst: Caption[AOrFrench | "it"],
+    nestedSecond: Caption[BOrFrench | "it"],
+    aliasFirst: Caption[AOrFrench],
+    aliasSecond: Caption[BOrFrench],
+    chained: Caption[ALanguage | "fr"]
+  )
+  object Bilingual { implicit val schema: Schema[Bilingual] = Schema.derived }
+
   private val urlType = SchemaType(SchemaTypeBody.UrlType(UrlRestrictions.empty))
 
   private def expectedText(languages: Option[List[String]]): SchemaType =
@@ -98,6 +114,7 @@ object UnstructuredSpec extends ZIOSpecDefault {
   private given textCodec: ConcreteCodec[UnstructuredText[Lang]]                               = ConcreteCodec.derived
   private given binaryCodec: ConcreteCodec[UnstructuredBinary[Image]]                          = ConcreteCodec.derived
   private given galleryCodec: ConcreteCodec[Gallery]                                           = ConcreteCodec.derived
+  private given bilingualCodec: ConcreteCodec[Bilingual]                                       = ConcreteCodec.derived
   private given nestedCodec: ConcreteCodec[Either[String, Option[UnstructuredBinary[String]]]] =
     ConcreteCodec.derived
 
@@ -353,6 +370,62 @@ object UnstructuredSpec extends ZIOSpecDefault {
         Try(galleryCodec.encode(jpegAsPng)).isFailure,
         Try(IntoSchema[Gallery].toValue(jpegAsPng)).isFailure,
         Try(ConcreteCodec.derived[PngJpeg].decode(loose.value)).isFailure
+      ) && wireAgrees(value)
+    },
+    test("same-named literal aliases from different owners keep their own allow-lists") {
+      type Pair = (UnstructuredText[A.Language | "fr"], UnstructuredText[B.Language | "fr"])
+      val codec        = ConcreteCodec.derived[Pair]
+      val unrestricted = ConcreteCodec.derived[(UnstructuredText[String], UnstructuredText[String])]
+      val value: Pair  = (UnstructuredText.fromInline("hello", "en"), UnstructuredText.fromInline("hallo", "de"))
+      val englishTwice =
+        unrestricted.encode((UnstructuredText.fromInline("hello", "en"), UnstructuredText.fromInline("hi", "en")))
+      val encoded = Try(codec.encode(value))
+      assertTrue(
+        encoded
+          .map(e => SchemaWire.schemaGraphFromWit(e.graph))
+          .toOption
+          .contains(graphOf(t.tuple(List(expectedText(Some(List("en", "fr"))), expectedText(Some(List("de", "fr"))))))),
+        encoded.map(e => codec.decode(e.value)).toOption.contains(value),
+        Try(codec.decode(englishTwice.value)).isFailure,
+        Try(
+          codec.encode(
+            value.copy(_2 = forged[UnstructuredText[B.Language | "fr"]](UnstructuredText.fromInline("hi", "en")))
+          )
+        ).isFailure
+      )
+    },
+    test("generic containers over same-named literal aliases are distinct named types") {
+      val value = Bilingual(
+        Caption(UnstructuredText.fromInline("hello", "en")),
+        Caption(UnstructuredText.fromInline("hallo", "de")),
+        Caption(UnstructuredText.fromInline("ciao", "it")),
+        Caption(UnstructuredText.fromInline("hallo", "de")),
+        Caption(UnstructuredText.fromInline("salut", "fr")),
+        Caption(UnstructuredText.fromInline("hallo", "de")),
+        Caption(UnstructuredText.fromInline("hello", "en"))
+      )
+      val prefix       = "golem.schema.UnstructuredSpec."
+      val text         = (langs: List[String]) => t.record(List(t.field("text", expectedText(Some(langs)))))
+      val expectedDefs = Map(
+        s"${prefix}Caption<${prefix}A.Language | \"fr\">" -> text(List("en", "fr")),
+        s"${prefix}Caption<${prefix}B.Language | \"fr\">" -> text(List("de", "fr")),
+        s"${prefix}Caption<${prefix}AOrFrench | \"it\">"  -> text(List("en", "fr", "it")),
+        s"${prefix}Caption<${prefix}BOrFrench | \"it\">"  -> text(List("de", "fr", "it")),
+        s"${prefix}Caption<${prefix}AOrFrench>"           -> text(List("en", "fr")),
+        s"${prefix}Caption<${prefix}BOrFrench>"           -> text(List("de", "fr")),
+        s"${prefix}Caption<${prefix}ALanguage | \"fr\">"  -> text(List("en", "fr"))
+      ).view.mapValues(Some(_)).toMap
+      val concrete                   = Try(bilingualCodec.encode(value)).map(e => SchemaWire.schemaGraphFromWit(e.graph))
+      val runtime                    = Try(IntoSchema[Bilingual].graph)
+      def bodies(graph: SchemaGraph) = expectedDefs.keys.toList.map(id => id -> graph.defs.get(id).map(_.body)).toMap
+      val englishAsGerman            =
+        value.copy(second = forged[Caption[B.Language | "fr"]](Caption(UnstructuredText.fromInline("hello", "en"))))
+      assertTrue(
+        runtime.map(bodies).toOption.contains(expectedDefs),
+        concrete.map(bodies).toOption.contains(expectedDefs),
+        concrete.toOption == runtime.toOption,
+        Try(bilingualCodec.encode(englishAsGerman)).isFailure,
+        Try(IntoSchema[Bilingual].toValue(englishAsGerman)).isFailure
       ) && wireAgrees(value)
     },
     test("only String or string literal types are accepted as allow-lists") {

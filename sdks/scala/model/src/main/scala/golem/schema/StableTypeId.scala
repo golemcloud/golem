@@ -27,9 +27,16 @@ import scala.quoted.*
  * `UnstructuredBinary["image/png"]` and `UnstructuredBinary["image/jpeg"]`)
  * never share a codec or a schema definition. The rendering is the one the
  * runtime derivation produces from zio-blocks type ids: class aliases are
- * expanded, aliases of literal or union types keep their alias path, string
- * literals are quoted and escaped, and union members are flattened and joined
- * with `" | "` in declaration order.
+ * expanded, aliases of literal or union types keep their fully qualified alias
+ * path, string literals are quoted and escaped, and union members are flattened
+ * and joined with `" | "` in declaration order.
+ *
+ * Every union member is rendered with the same rule as a type argument. An
+ * alias member therefore keeps its owner: in package `p`, `A.Language | "fr"`
+ * and `B.Language | "fr"` render as `p.A.Language | "fr"` and
+ * `p.B.Language | "fr"`, so two same-named aliases of different literals never
+ * share an id. An alias of a union that contains another alias renders as the
+ * outer alias path; the union is not expanded.
  */
 private[golem] object StableTypeId {
 
@@ -64,17 +71,12 @@ private[golem] object StableTypeId {
       case other               => List(other)
     }
 
-    def unionMember(t: TypeRepr): String = t match {
-      case ConstantType(constant) => literal(constant)
-      case other                  => other.typeSymbol.name
-    }
-
     def render(t: TypeRepr): String = t match {
       case ref: TypeRef if ref.typeSymbol.isAliasType && isLiteralLike(ref.dealias) => path(ref.typeSymbol)
       case _                                                                        =>
         t.dealias match {
           case ConstantType(constant) => literal(constant)
-          case union: OrType          => unionMembers(union).map(unionMember).mkString(" | ")
+          case union: OrType          => unionMembers(union).map(render).mkString(" | ")
           case other                  =>
             val args = other.typeArgs
             path(other.typeSymbol) + (if (args.isEmpty) "" else args.map(render).mkString("<", ",", ">"))
