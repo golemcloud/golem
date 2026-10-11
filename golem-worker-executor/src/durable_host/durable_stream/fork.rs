@@ -635,7 +635,11 @@ mod tests {
         };
         let record = |ordinal, value| {
             StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                format_version: 1,
+                reobserves: None,
+                format_version:
+                    golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                observation:
+                    golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                 session_key: StreamRegistrationInvocation::Local(
                     key.session_key.idempotency_key.clone(),
                 ),
@@ -1967,7 +1971,9 @@ mod tests {
             index
                 .apply_consumer_journal_record(
                     &StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        reobserves: None,
+                        format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         session_key: session_reference,
                         reader_id: LocalStreamReaderId {
                             introducing_oplog_index: OplogIndex::from_u64(1),
@@ -1988,7 +1994,9 @@ mod tests {
         index
             .apply_consumer_journal_record(
                 &StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    reobserves: None,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                     session_key: StreamRegistrationInvocation::Local(local.idempotency_key.clone()),
                     reader_id: LocalStreamReaderId {
                         introducing_oplog_index: OplogIndex::from_u64(1),

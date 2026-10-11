@@ -7341,7 +7341,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         mappings.push(binding);
                     }
                 }
-                StreamSessionRecord::ConsumerItemValue(record) => {
+                StreamSessionRecord::ConsumerItemValue(record) if record.reobserves.is_none() => {
                     for mapping in &record.recursive_mappings {
                         if !mappings.contains(mapping) {
                             mappings.push(mapping.clone());
@@ -15448,7 +15448,7 @@ pub(crate) fn stream_session_record_reference(
         StreamSessionRecord::InvocationResult(record) => {
             (&record.session_key, &record.stream_mappings)
         }
-        StreamSessionRecord::ConsumerItemValue(record) => {
+        StreamSessionRecord::ConsumerItemValue(record) if record.reobserves.is_none() => {
             (&record.session_key, &record.recursive_mappings)
         }
         _ => return None,

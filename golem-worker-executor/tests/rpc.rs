@@ -63,6 +63,8 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+mod websocket_crash_probe;
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
@@ -9182,6 +9184,37 @@ async fn streaming_rpc_identity_survives_atomic_rollback(
         };
         let first = requests(&before)?;
         assert_eq!(first.len(), 1);
+        let observations = |entries: &[PublicOplogEntryWithIndex]| {
+            entries
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::StreamSession(session) => {
+                        let record = StreamSessionRecord::from_value(session.record.value())
+                            .expect("valid stream session record");
+                        match &record {
+                            StreamSessionRecord::ConsumerItemValue(item)
+                                if matches!(item.observation, golem_common::model::durable_stream::StreamConsumerObservation::Guest { .. }) =>
+                            {
+                                Some((entry.oplog_index, record))
+                            }
+                            StreamSessionRecord::ConsumerTerminal(terminal)
+                                if matches!(terminal.observation, golem_common::model::durable_stream::StreamConsumerObservation::Guest { .. }) =>
+                            {
+                                Some((entry.oplog_index, record))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let original_observations = observations(&before);
+        assert_eq!(original_observations.len(), 2, "one item and its terminal");
+        let StreamSessionRecord::ConsumerItemValue(item) = &original_observations[0].1 else {
+            panic!("the first read must consume the item");
+        };
+        assert_eq!(decode_input_value(&item.value)?, SchemaValue::U64(1));
         let _ = executor.simulated_crash(&caller).await;
         executor.complete_promise(&gate, Vec::new()).await?;
         invocation.await??;
@@ -9192,6 +9225,16 @@ async fn streaming_rpc_identity_survives_atomic_rollback(
                 .iter()
                 .any(|entry| matches!(&entry.entry, PublicOplogEntry::Jump(_)))
         );
+        let replayed_observations = observations(&after);
+        assert_eq!(replayed_observations.len(), 4);
+        for (index, original) in &original_observations {
+            let replacements = replayed_observations
+                .iter()
+                .filter(|(_, record)| record.reobserves() == Some(*index))
+                .collect::<Vec<_>>();
+            assert_eq!(replacements.len(), 1, "one replacement guest boundary");
+            assert!(replacements[0].1.matches_reobserved(original));
+        }
         let attempts = requests(&after)?;
         let second = attempts.last().expect("missing retried RPC Start");
         assert_ne!(
@@ -9234,6 +9277,11 @@ async fn streaming_rpc_identity_survives_atomic_rollback(
         executor
             .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
             .await?;
+        assert_eq!(
+            observations(&executor.get_oplog(&caller, OplogIndex::INITIAL).await?),
+            replayed_observations,
+            "restart must replay the replacement boundaries without advancing consumption again"
+        );
         assert_eq!(
             executor
                 .invoke_and_await_agent(&component, &target_id, "scalar_value", data_value!())

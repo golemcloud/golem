@@ -147,6 +147,8 @@ pub enum ReplayAdmissionStage {
     BeforeDeferredStart,
     /// After the deferred call owns its `Start`, before resolution or live execution.
     AfterDeferredStart,
+    /// After a live host-internal End, before its owning host continuation resumes.
+    AfterHostInternalTerminal,
     /// Before committing the Jump that abandons an incomplete batched attempt.
     BeforeBatchedJump,
     /// After that Jump is committed and registered, before continuing the scope.
