@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { collectLicenseAssets } from "./compliance-policy.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -16,7 +17,10 @@ function normalizedNotice(file) {
     .readFileSync(file, "utf8")
     .replaceAll("\r\n", "\n")
     .split("\n");
-  return `${lines.map((line) => line.trimEnd()).join("\n").trimEnd()}\n`;
+  return `${lines
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd()}\n`;
 }
 
 function packageName(packagePath, manifest) {
@@ -85,10 +89,7 @@ function fallbackLicenseAssets(item) {
     return [
       {
         name: "diff3.js.LICENSE",
-        content: stripLineCommentNotice(
-          path.join(item.root, "diff3.js"),
-          22,
-        ),
+        content: stripLineCommentNotice(path.join(item.root, "diff3.js"), 22),
       },
       {
         name: "onp.js.LICENSE",
@@ -144,7 +145,9 @@ const packages = Object.entries(lock.packages)
     };
   })
   .sort((left, right) =>
-    `${left.name}@${left.version}`.localeCompare(`${right.name}@${right.version}`),
+    `${left.name}@${left.version}`.localeCompare(
+      `${right.name}@${right.version}`,
+    ),
   );
 
 const spdx = `${JSON.stringify(
@@ -158,16 +161,33 @@ const spdx = `${JSON.stringify(
       created: "2026-10-02T00:00:00Z",
       creators: ["Tool: golem-builtin-git-compliance"],
     },
-    packages: packages.map((item, index) => ({
-      name: item.name,
-      SPDXID: `SPDXRef-Package-${index + 1}`,
-      versionInfo: item.version,
-      downloadLocation: item.source,
-      filesAnalyzed: false,
-      licenseConcluded: "NOASSERTION",
-      licenseDeclared: item.license,
-      copyrightText: "NOASSERTION",
-    })),
+    packages: packages
+      .map((item, index) => ({
+        name: item.name,
+        SPDXID: `SPDXRef-Package-${index + 1}`,
+        versionInfo: item.version,
+        downloadLocation: item.source,
+        filesAnalyzed: false,
+        licenseConcluded: "NOASSERTION",
+        licenseDeclared: item.license,
+        copyrightText: "NOASSERTION",
+      }))
+      .concat({
+        name: provenance.xdiff.name,
+        SPDXID: "SPDXRef-Package-Xdiff",
+        versionInfo: provenance.xdiff.version,
+        downloadLocation: provenance.xdiff.sourceArchive,
+        filesAnalyzed: false,
+        licenseConcluded: "NOASSERTION",
+        licenseDeclared: provenance.xdiff.license,
+        copyrightText: "See xdiff source headers in the license bundle",
+        checksums: [
+          {
+            algorithm: "SHA256",
+            checksumValue: provenance.xdiff.sourceArchiveSha256,
+          },
+        ],
+      }),
   },
   null,
   2,
@@ -192,7 +212,9 @@ const generated = new Map([
   ],
   [
     "git/GOLEM-TS-SDK-LICENSE",
-    normalizedNotice(path.join(root, "../../sdks/ts/packages/golem-ts-sdk/LICENSE")),
+    normalizedNotice(
+      path.join(root, "../../sdks/ts/packages/golem-ts-sdk/LICENSE"),
+    ),
   ],
   [
     "git/DEPENDENCY-NOTICES.md",
@@ -206,9 +228,62 @@ const generated = new Map([
   ["git/sbom.spdx.json", spdx],
   [
     "SOURCE.md",
-    `# Git tool source and notices\n\nThe Git object and worktree implementation is provided by pinned upstream packages. Golem-owned wrappers expose the supported local command surface and integrate it with the component filesystem.\n\n${sourceLines.join("\n")}\n\nThe Git and upstream package names are used descriptively. No upstream logos are used, no endorsement is implied, and the respective trademarks belong to their owners. Production publication requires legal and release-owner approval.\n`,
+    `# Git tool source and notices\n\nThe Git object and worktree implementation is provided by pinned upstream packages. Golem-owned wrappers expose local and HTTP(S) workflows and integrate them with the component filesystem. The isomorphic-git source changes are preserved in the source repository's checksum-pinned transfer patch.\n\n${sourceLines.join("\n")}\n\n- ${provenance.xdiff.name} ${provenance.xdiff.version}: ${provenance.xdiff.sourceTag}\n  - Source archive: ${provenance.xdiff.sourceArchive}\n  - Source SHA-256: \`${provenance.xdiff.sourceArchiveSha256}\`\n  - License: ${provenance.xdiff.license}\n  - Preferred source, original notices, build glue and rebuilding instructions: \`git/xdiff/\` in the license bundle.\n\nThe Git and upstream package names are used descriptively. No upstream logos are used, no endorsement is implied, and the respective trademarks belong to their owners. Production publication requires legal and release-owner approval, including review of the xdiff library's LGPL distribution obligations.\n`,
   ],
 ]);
+
+const archive = path.join(root, "golem-temp/xdiff/git-source.tar.xz");
+const sourceDigest = crypto
+  .createHash("sha256")
+  .update(fs.readFileSync(archive))
+  .digest("hex");
+if (sourceDigest !== provenance.xdiff.sourceArchiveSha256)
+  throw new Error("xdiff preferred-source checksum mismatch");
+function sourceArchive(args) {
+  const result = spawnSync("tar", args, { encoding: "utf8" });
+  if (result.error || result.status !== 0)
+    throw (
+      result.error ??
+      new Error(result.stderr || "xdiff source extraction failed")
+    );
+  return result.stdout;
+}
+const prefix = `git-${provenance.xdiff.version}/`;
+const preferredSources = sourceArchive(["-tJf", archive])
+  .split("\n")
+  .filter((file) => file.startsWith(`${prefix}xdiff/`) && /\.[ch]$/.test(file));
+if (preferredSources.length !== 15)
+  throw new Error(
+    "xdiff preferred-source file set differs from the pinned archive",
+  );
+for (const file of preferredSources)
+  generated.set(
+    `git/xdiff/source/${path.basename(file)}`,
+    sourceArchive(["-xJOf", archive, file]),
+  );
+for (const file of ["LGPL-2.1", "COPYING"])
+  generated.set(
+    `git/xdiff/${file}`,
+    sourceArchive(["-xJOf", archive, `${prefix}${file}`]),
+  );
+for (const file of ["git-compat-util.h", "normalized-diff.c"])
+  generated.set(
+    `git/xdiff/source/${file}`,
+    fs.readFileSync(path.join(root, "xdiff", file), "utf8"),
+  );
+generated.set(
+  "git/xdiff/build-xdiff.mjs",
+  fs.readFileSync(path.join(root, "scripts/build-xdiff.mjs"), "utf8"),
+);
+generated.set(
+  "git/xdiff/provenance.json",
+  `${JSON.stringify(provenance.xdiff, null, 2)}\n`,
+);
+generated.set("git/xdiff/GOLEM-GLUE-APACHE-2.0", canonicalApacheLicense());
+generated.set(
+  "git/xdiff/README.md",
+  `# Git xdiff source and rebuilding\n\nThis bundle preserves the preferred C source of the Git ${provenance.xdiff.version} xdiff library, including each original copyright/license header, the LGPL-2.1 license and its referenced GPL text. The histogram implementation includes its full EDL-1.0 notice in source/xhistogram.c. Golem's compatibility header and normalized-diff.c are Apache-2.0 licensed. Upstream xdiff source is unmodified; these two glue files supply an import-free bounded allocator and normalized output callback.\n\nThe component executes transpiled JavaScript, not a second WASM module or native Git subprocess. build-xdiff.mjs and provenance.json preserve the exact toolchain and transformation.\n\nTo rebuild or replace this library in the tool, obtain the golem source commit recorded in the release provenance, install WASI SDK 25 (clang 19.1.5-wasi-sdk), set WASI_SDK_PATH to its directory, and run npm ci --ignore-scripts in builtin-tools/git. Run npm run build:git-library, then the focused cargo make build-git-tool task from the repository root. The latter bundles the regenerated library and rebuilds the component through its Golem manifest. Generated output lives in golem-temp/xdiff and is not committed.\n\nFor a modified xdiff library, modify the checksum-verified extracted C source and/or the two glue files, adapt build-xdiff.mjs to use that modified source, and update the expected generatedJavaScriptSha256 after inspecting the result. The source archive, compiler and generated-output checks are reproducibility checks, not a prohibition on replacing the library. Rebuild the tool as above to relink it. Preserve modified source and its applicable notices alongside any redistributed component.\n`,
+);
 
 for (const item of packages) {
   const assets = collectLicenseAssets(item, fallbackLicenseAssets);
@@ -227,7 +302,9 @@ generated.set(
       (item) =>
         `| ${item.name.replaceAll("|", "\\|")} | ${item.version} | ${item.license} | ${item.source} | ${item.licenseAssets.map((asset) => `\`${asset}\``).join("<br>")} |`,
     )
-    .join("\n")}\n`,
+    .join(
+      "\n",
+    )}\n| ${provenance.xdiff.name} | ${provenance.xdiff.version} | ${provenance.xdiff.license} | ${provenance.xdiff.sourceArchive} | \`xdiff/\` (preferred source, license texts, notices and rebuild instructions) |\n`,
 );
 
 let stale = false;
@@ -235,7 +312,9 @@ for (const [relative, content] of generated) {
   const target = path.join(outputRoot, relative);
   if (check) {
     if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== content) {
-      console.error(`stale compliance artifact: ${path.relative(root, target)}`);
+      console.error(
+        `stale compliance artifact: ${path.relative(root, target)}`,
+      );
       stale = true;
     }
   } else {
@@ -250,5 +329,7 @@ else {
     .createHash("sha256")
     .update([...generated.values()].join("\0"))
     .digest("hex");
-  console.log(`${check ? "verified" : "generated"} compliance bundle ${digest}`);
+  console.log(
+    `${check ? "verified" : "generated"} compliance bundle ${digest}`,
+  );
 }

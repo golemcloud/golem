@@ -39,17 +39,36 @@ container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `b
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
-`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.7` supports local
-`init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
-workflows. It exposes no remote commands. The runtime provides WASI HTTP, and a separate integration
-probe verifies that explicitly injecting `isomorphic-git/http/web` uses durable WASI HTTP calls
-without executing socket calls. Any future network command must use that adapter path.
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
+`init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
+plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
+The published `git@0.1.7` release remains local-only until a new immutable artifact is published.
+All network commands inject the component's WASI HTTP adapter; they do not use sockets.
 
-The initial Git release intentionally does not support remotes, merge/rebase, stash, reset/clean,
-hooks, signing, submodules, linked worktrees, force operations, revision-expression syntax, or
-pathspec magic. Checkout of paths after `--` is destructive and restores from the index. Branch
-checkout rejects local changes it would overwrite. Diff output and computation have explicit
-limits and fail instead of returning a truncated patch.
+Remote configuration includes separate fetch/push URLs and refspecs, branch upstreams,
+`remote.pushDefault`, `push.default`, and applicable pull/fetch/merge settings. Credentials use an
+invocation-scoped opaque `authentication` secret with `{origin, username?, password?, bearer?,
+headers?}`; `origin` is the HTTP(S) origin authorized to receive those credentials. They are not
+stored in repository config. Redirects to another origin do not forward credentials. SSH,
+`git://`, subprocess credential helpers, interactive prompts, editors, hooks, signing, submodules,
+linked worktrees, stash, reset/clean, revision-expression syntax, and pathspec magic are unsupported.
+
+Clone/fetch support configured refspecs, branch selection, shallow history, tags and pruning.
+Objects are validated and persisted before refs are published, and fetch writes `FETCH_HEAD`.
+Push supports multiple refs, renamed destinations, deletion, tags, explicit force, single-ref
+force-with-lease, and actual server-advertised atomic pushes. A lease uses its explicit expected OID
+or the existing mapped tracking ref; it never fetches to refresh that expectation. A server may
+accept a push before its response is lost: that error is ambiguous and must be reconciled with
+remote state, not blindly retried. No exactly-once guarantee is made for an external Git server.
+
+Pull resolves the upstream, fetches, and selects the explicit/configured ff, merge, or rebase
+strategy. Conflicted merges can be resolved with `add` and `commit` or `merge --continue`, or
+aborted with `merge --abort`. Linear rebase persists actual commit replay and supports
+`--continue`, `--skip`, and `--abort`. Rename-sensitive integration, multiple merge bases, octopus
+merges and replay of merge commits fail explicitly before index/worktree changes. Nonconflicting
+dirty changes are preserved; overlapping changes are rejected rather than overwritten.
+Checkout of paths after `--` restores from the index. Branch checkout rejects local changes it
+would overwrite. Diff output and computation have explicit limits and fail instead of truncating.
 
 Executable-file modes cannot currently be persisted across separate TypeScript runtime instances.
 Git operations fail closed when a `100755` entry is observable rather than silently changing it.

@@ -1,0 +1,1176 @@
+diff --git a/src/api/fetch.js b/src/api/fetch.js
+index da869cf..39e7945 100644
+--- a/src/api/fetch.js
++++ b/src/api/fetch.js
+@@ -15,6 +15,10 @@ import { join } from '../utils/join.js'
+  * @property {string | null} fetchHeadDescription - a textual description of the branch that was fetched
+  * @property {Object<string, string>} [headers] - The HTTP response headers returned by the git server
+  * @property {string[]} [pruned] - A list of branches that were pruned, if you provided the `prune` parameter
++ * @property {Array<[string, string]>} advertisedRefs - Advertised remote reference names and object IDs
++ * @property {Array<[string, string]>} symrefs - Advertised symbolic references and their targets
++ * @property {string[]} shallows - New shallow boundaries returned by the server
++ * @property {string[]} unshallows - Shallow boundaries removed by the server
+  *
+  */
+ 
+@@ -43,6 +47,8 @@ import { join } from '../utils/join.js'
+  * @param {string[]} [args.exclude = []] - A list of branches or tags. Instructs the remote server not to send us any commits reachable from these refs.
+  * @param {boolean} [args.prune = false] - Delete local remote-tracking branches that are not present on the remote
+  * @param {boolean} [args.pruneTags = false] - Prune local tags that don’t exist on the remote, and force-update those tags that differ
++ * @param {boolean} [args.objectsOnly = false] - Download and validate objects without updating references or shallow metadata
++ * @param {string[]} [args.wantRefs] - Explicit remote references or object IDs to request
+  * @param {string} [args.corsProxy] - Optional [CORS proxy](https://www.npmjs.com/%40isomorphic-git/cors-proxy). Overrides value in repo config.
+  * @param {Object<string, string>} [args.headers] - Additional headers to include in HTTP requests, similar to git's `extraHeader` config
+  * @param {object} [args.cache] - a [cache](cache.md) object
+@@ -89,6 +95,8 @@ export async function fetch({
+   headers = {},
+   prune = false,
+   pruneTags = false,
++  objectsOnly = false,
++  wantRefs,
+   cache = {},
+ }) {
+   try {
+@@ -122,6 +130,8 @@ export async function fetch({
+       headers,
+       prune,
+       pruneTags,
++      objectsOnly,
++      wantRefs,
+     })
+   } catch (err) {
+     err.caller = 'git.fetch'
+diff --git a/src/api/listServerRefs.js b/src/api/listServerRefs.js
+index 57728ee..a6f29df 100644
+--- a/src/api/listServerRefs.js
++++ b/src/api/listServerRefs.js
+@@ -55,6 +55,7 @@ import { writeListRefsRequest } from '../wire/writeListRefsRequest.js'
+  * @param {string} [args.prefix] - Only list refs that start with this prefix
+  * @param {boolean} [args.symrefs = false] - Include symbolic ref targets
+  * @param {boolean} [args.peelTags = false] - Include annotated tag peeled targets
++ * @param {boolean} [args.unborn = false] - Include an unborn HEAD when the server advertises support
+  *
+  * @returns {Promise<ServerRef[]>} Resolves successfully with an array of ServerRef objects
+  * @see ServerRef
+@@ -115,6 +116,7 @@ export async function listServerRefs({
+   prefix,
+   symrefs,
+   peelTags,
++  unborn = false,
+ }) {
+   try {
+     assertParameter('http', http)
+@@ -137,7 +139,14 @@ export async function listServerRefs({
+     }
+ 
+     // Protocol Version 2
+-    const body = await writeListRefsRequest({ prefix, symrefs, peelTags })
++    const body = await writeListRefsRequest({
++      prefix,
++      symrefs,
++      peelTags,
++      unborn:
++        unborn &&
++        String(remote.capabilities2['ls-refs']).split(' ').includes('unborn'),
++    })
+ 
+     const res = await GitRemoteHTTP.connect({
+       http,
+diff --git a/src/api/pushRefs.js b/src/api/pushRefs.js
+new file mode 100644
+index 0000000..62fcad1
+--- /dev/null
++++ b/src/api/pushRefs.js
+@@ -0,0 +1,127 @@
++import { _isDescendent } from '../commands/isDescendent.js'
++import { _pack } from '../commands/pack.js'
++import { GitRemoteHTTP } from '../managers/GitRemoteHTTP.js'
++import { GitShallowManager } from '../managers/GitShallowManager.js'
++import { FileSystem } from '../models/FileSystem.js'
++import { GitAnnotatedTag } from '../models/GitAnnotatedTag.js'
++import { GitCommit } from '../models/GitCommit.js'
++import { GitPktLine } from '../models/GitPktLine.js'
++import { GitTree } from '../models/GitTree.js'
++import { _readObject } from '../storage/readObject.js'
++import { parseReceivePackResponse } from '../wire/parseReceivePackResponse.js'
++import { writeReceivePackRequest } from '../wire/writeReceivePackRequest.js'
++
++/**
++ * Send all ref updates in one receive-pack exchange. Reference selection and
++ * lease checks use the advertisement whose old OIDs are sent to the server.
++ * No local references or configuration are changed by this operation.
++ * @param {object} args
++ * @param {FsClient} args.fs
++ * @param {HttpClient} args.http
++ * @param {string} args.gitdir
++ * @param {string} args.url
++ * @param {(refs: Map<string, string>) => Promise<Array<{ref: string, oid: string, force: boolean}>>} args.plan
++ * @param {(ref: string, oldoid: string) => Promise<void>} [args.onPrePush]
++ * @param {boolean} [args.atomic]
++ * @param {object} [args.cache]
++ */
++export async function pushRefs({ fs, http, gitdir, url, plan, onPrePush, atomic = false, cache = {} }) {
++  fs = new FileSystem(fs)
++  const zero = '0000000000000000000000000000000000000000'
++  const headers = {}
++  const remote = await GitRemoteHTTP.discover({ http, url, headers, service: 'git-receive-pack', protocolVersion: 1 })
++  if (!remote.capabilities.has('report-status')) throw new Error('Remote does not support receive-pack report-status')
++  if (atomic && !remote.capabilities.has('atomic')) throw new Error('Remote does not support atomic push')
++  for (const oid of remote.refs.values()) {
++    if (!/^[0-9a-f]{40}$/.test(oid)) throw new Error('Invalid receive-pack object ID')
++  }
++  const updates = await plan(remote.refs)
++  const results = []
++  const triplets = []
++  const destinations = new Set()
++  async function peel(oid) {
++    let object = await _readObject({ fs, cache, gitdir, oid })
++    while (object.type === 'tag') {
++      oid = GitAnnotatedTag.from(object.object).headers().object
++      object = await _readObject({ fs, cache, gitdir, oid })
++    }
++    return { oid, type: object.type }
++  }
++  for (const update of updates) {
++    if (destinations.has(update.ref)) throw new Error(`Duplicate push destination: ${update.ref}`)
++    destinations.add(update.ref)
++    const oldoid = remote.refs.get(update.ref) || zero
++    let error
++    try {
++      if (update.oid === zero && oldoid === zero) throw new Error('Remote reference does not exist')
++      if (onPrePush && update.oid !== oldoid) await onPrePush(update.ref, oldoid)
++      if (update.oid === zero && !remote.capabilities.has('delete-refs')) throw new Error('Remote does not support deleting references')
++      if (update.oid !== zero && update.ref.startsWith('refs/heads/')) {
++        const object = await _readObject({ fs, cache, gitdir, oid: update.oid })
++        if (object.type !== 'commit') throw new Error('Branch must point to a commit')
++      }
++      if (oldoid !== zero && update.oid !== zero && oldoid !== update.oid && !update.force) {
++        if (update.ref.startsWith('refs/tags/')) throw new Error('Tag already exists')
++        if (!update.ref.startsWith('refs/tags/')) {
++          let fastForward = false
++          try {
++            const next = await peel(update.oid)
++            const previous = await peel(oldoid)
++            fastForward = next.type === 'commit' && previous.type === 'commit' &&
++              (next.oid === previous.oid || await _isDescendent({ fs, cache, gitdir, oid: next.oid, ancestor: previous.oid, depth: -1 }))
++          } catch (cause) {
++            if (cause.code !== 'NotFoundError') throw cause
++          }
++          if (!fastForward) throw new Error('Non-fast-forward push rejected; fetch first')
++        }
++      }
++    } catch (cause) {
++      error = cause.message
++    }
++    const result = { ref: update.ref, oid: update.oid, oldoid, ok: !error, error, upToDate: oldoid === update.oid }
++    results.push(result)
++    if (!error && !result.upToDate) triplets.push({ fullRef: update.ref, oid: update.oid, oldoid })
++  }
++  if (atomic && results.some(result => !result.ok)) {
++    for (const result of results) if (result.ok && !result.upToDate) {
++      result.ok = false
++      result.error = 'Atomic push failed preflight'
++    }
++    return results
++  }
++  if (!triplets.length) return results
++  const shallows = await GitShallowManager.read({ fs, gitdir })
++  const objects = new Set()
++  const finish = new Set(remote.refs.values())
++  const queue = triplets.filter(triplet => triplet.oid !== zero).map(triplet => triplet.oid)
++  while (queue.length) {
++    const oid = queue.pop()
++    if (objects.has(oid) || finish.has(oid)) continue
++    const { type, object } = await _readObject({ fs, cache, gitdir, oid })
++    objects.add(oid)
++    if (type === 'commit') {
++      const commit = GitCommit.from(object).headers()
++      queue.push(commit.tree)
++      if (!shallows.has(oid)) queue.push(...commit.parent)
++    } else if (type === 'tree') {
++      for (const entry of GitTree.from(object)) if (entry.type !== 'commit') queue.push(entry.oid)
++    } else if (type === 'tag') queue.push(GitAnnotatedTag.from(object).headers().object)
++  }
++  const capabilities = ['report-status', ...(atomic ? ['atomic'] : [])]
++  const command = await writeReceivePackRequest({ capabilities, triplets })
++  const pack = triplets.some(triplet => triplet.oid !== zero) ? await _pack({ fs, cache, gitdir, oids: [...objects] }) : []
++  const response = await GitRemoteHTTP.connect({ http, url, headers, auth: remote.auth, service: 'git-receive-pack', body: [
++    ...[...shallows].map(oid => GitPktLine.encode(`shallow ${oid}\n`)),
++    ...command, ...pack,
++  ] })
++  const status = await parseReceivePackResponse(response.body)
++  for (const ref of Object.keys(status.refs)) if (!destinations.has(ref)) throw new Error('Receive-pack reported an unrequested reference')
++  for (const result of results) {
++    if (!result.ok || result.upToDate) continue
++    const accepted = status.refs[result.ref]
++    if (status.ok && !accepted) throw new Error(`Receive-pack omitted status for ${result.ref}`)
++    result.ok = status.ok && accepted.ok
++    result.error = status.error || accepted?.error || undefined
++  }
++  return results
++}
+diff --git a/src/commands/fetch.js b/src/commands/fetch.js
+index 75cc381..dae6ad1 100644
+--- a/src/commands/fetch.js
++++ b/src/commands/fetch.js
+@@ -20,6 +20,7 @@ import { filterCapabilities } from '../utils/filterCapabilities.js'
+ import { forAwait } from '../utils/forAwait.js'
+ import { join } from '../utils/join.js'
+ import { pkg } from '../utils/pkg.js'
++import { shasum } from '../utils/shasum.js'
+ import { splitLines } from '../utils/splitLines.js'
+ import { parseUploadPackResponse } from '../wire/parseUploadPackResponse.js'
+ import { writeUploadPackRequest } from '../wire/writeUploadPackRequest.js'
+@@ -32,6 +33,10 @@ import { writeUploadPackRequest } from '../wire/writeUploadPackRequest.js'
+  * @property {string | null} fetchHeadDescription - a textual description of the branch that was fetched
+  * @property {Object<string, string>} [headers] - The HTTP response headers returned by the git server
+  * @property {string[]} [pruned] - A list of branches that were pruned, if you provided the `prune` parameter
++ * @property {Array<[string, string]>} advertisedRefs - Advertised remote reference names and object IDs
++ * @property {Array<[string, string]>} symrefs - Advertised symbolic references and their targets
++ * @property {string[]} shallows - New shallow boundaries returned by the server
++ * @property {string[]} unshallows - Shallow boundaries removed by the server
+  *
+  */
+ 
+@@ -60,6 +65,8 @@ import { writeUploadPackRequest } from '../wire/writeUploadPackRequest.js'
+  * @param {Object<string, string>} [args.headers]
+  * @param {boolean} [args.prune]
+  * @param {boolean} [args.pruneTags]
++ * @param {boolean} [args.objectsOnly = false]
++ * @param {string[]} [args.wantRefs]
+  *
+  * @returns {Promise<FetchResult>}
+  * @see FetchResult
+@@ -88,6 +95,8 @@ export async function _fetch({
+   headers = {},
+   prune = false,
+   pruneTags = false,
++  objectsOnly = false,
++  wantRefs,
+ }) {
+   const ref = _ref || (await _currentBranch({ fs, gitdir, test: true }))
+   const config = await GitConfigManager.get({ fs, gitdir })
+@@ -102,6 +111,7 @@ export async function _fetch({
+   // Figure out what remote ref to use.
+   const remoteRef =
+     _remoteRef ||
++    (wantRefs && wantRefs[0]) ||
+     (ref && (await config.get(`branch.${ref}.merge`))) ||
+     _ref ||
+     'HEAD'
+@@ -124,12 +134,18 @@ export async function _fetch({
+   })
+   const auth = remoteHTTP.auth // hack to get new credentials from CredentialManager API
+   const remoteRefs = remoteHTTP.refs
++  const advertisedRefs = [...remoteRefs]
++  const symrefs = [...remoteHTTP.symrefs]
+   // For the special case of an empty repository with no refs, return null.
+-  if (remoteRefs.size === 0) {
++  if (remoteRefs.size === 0 || (wantRefs && wantRefs.length === 0)) {
+     return {
+-      defaultBranch: null,
++      defaultBranch: remoteHTTP.symrefs.get('HEAD') || null,
+       fetchHead: null,
+       fetchHeadDescription: null,
++      advertisedRefs,
++      symrefs,
++      shallows: [],
++      unshallows: [],
+     }
+   }
+   // Check that the remote supports the requested features
+@@ -180,7 +196,15 @@ export async function _fetch({
+   )
+   if (relative) capabilities.push('deepen-relative')
+   // Start figuring out which oids from the remote we want to request
+-  const wants = singleBranch ? [oid] : remoteRefs.values()
++  const wants = wantRefs
++    ? wantRefs.map(
++        ref =>
++          GitRefManager.resolveAgainstMap({ ref, map: new Map(advertisedRefs) })
++            .oid
++      )
++    : singleBranch
++      ? [oid]
++      : remoteRefs.values()
+   // Come up with a reasonable list of oids to tell the remote we already have
+   // (preferably oids that are close ancestors of the branch heads we're fetching)
+   const haveRefs = singleBranch
+@@ -225,89 +249,93 @@ export async function _fetch({
+     body: [packbuffer],
+     headers,
+   })
+-  const response = await parseUploadPackResponse(raw.body)
++  const response = await parseUploadPackResponse(raw.body, {
++    sideBand: capabilities.includes('side-band-64k'),
++  })
+   if (raw.headers) {
+     response.headers = raw.headers
+   }
+-  // Apply all the 'shallow' and 'unshallow' commands
+-  for (const oid of response.shallows) {
+-    if (!oids.has(oid)) {
+-      // this is in a try/catch mostly because my old test fixtures are missing objects
+-      try {
+-        // server says it's shallow, but do we have the parents?
+-        const { object } = await readObject({ fs, cache, gitdir, oid })
+-        const commit = new GitCommit(object)
+-        const hasParents = await Promise.all(
+-          commit
+-            .headers()
+-            .parent.map(oid => hasObject({ fs, cache, gitdir, oid }))
+-        )
+-        const haveAllParents =
+-          hasParents.length === 0 || hasParents.every(has => has)
+-        if (!haveAllParents) {
++  const publish = async () => {
++    // Apply all the 'shallow' and 'unshallow' commands
++    for (const oid of response.shallows) {
++      if (!oids.has(oid)) {
++        // this is in a try/catch mostly because my old test fixtures are missing objects
++        try {
++          // server says it's shallow, but do we have the parents?
++          const { object } = await readObject({ fs, cache, gitdir, oid })
++          const commit = new GitCommit(object)
++          const hasParents = await Promise.all(
++            commit
++              .headers()
++              .parent.map(oid => hasObject({ fs, cache, gitdir, oid }))
++          )
++          const haveAllParents =
++            hasParents.length === 0 || hasParents.every(has => has)
++          if (!haveAllParents) {
++            oids.add(oid)
++          }
++        } catch (err) {
+           oids.add(oid)
+         }
+-      } catch (err) {
+-        oids.add(oid)
+       }
+     }
+-  }
+-  for (const oid of response.unshallows) {
+-    oids.delete(oid)
+-  }
+-  await GitShallowManager.write({ fs, gitdir, oids })
+-  // Update local remote refs
+-  if (singleBranch) {
+-    const refs = new Map([[fullref, oid]])
+-    // But wait, maybe it was a symref, like 'HEAD'!
+-    // We need to save all the refs in the symref chain (sigh).
+-    const symrefs = new Map()
+-    let bail = 10
+-    let key = fullref
+-    while (bail--) {
+-      const value = remoteHTTP.symrefs.get(key)
+-      if (value === undefined) break
+-      symrefs.set(key, value)
+-      key = value
++    for (const oid of response.unshallows) {
++      oids.delete(oid)
+     }
+-    // final value must not be a symref but a real ref
+-    const realRef = remoteRefs.get(key)
+-    // There may be no ref at all if we've fetched a specific commit hash
+-    if (realRef) {
+-      refs.set(key, realRef)
+-    }
+-    const { pruned } = await GitRefManager.updateRemoteRefs({
+-      fs,
+-      gitdir,
+-      remote,
+-      refs,
+-      symrefs,
+-      tags,
+-      prune,
+-    })
+-    if (prune) {
+-      response.pruned = pruned
+-    }
+-  } else {
+-    const { pruned } = await GitRefManager.updateRemoteRefs({
+-      fs,
+-      gitdir,
+-      remote,
+-      refs: remoteRefs,
+-      symrefs: remoteHTTP.symrefs,
+-      tags,
+-      prune,
+-      pruneTags,
+-    })
+-    if (prune) {
+-      response.pruned = pruned
++    await GitShallowManager.write({ fs, gitdir, oids })
++    // Update local remote refs
++    if (singleBranch) {
++      const refs = new Map([[fullref, oid]])
++      // But wait, maybe it was a symref, like 'HEAD'!
++      // We need to save all the refs in the symref chain (sigh).
++      const symrefs = new Map()
++      let bail = 10
++      let key = fullref
++      while (bail--) {
++        const value = remoteHTTP.symrefs.get(key)
++        if (value === undefined) break
++        symrefs.set(key, value)
++        key = value
++      }
++      // final value must not be a symref but a real ref
++      const realRef = remoteRefs.get(key)
++      // There may be no ref at all if we've fetched a specific commit hash
++      if (realRef) {
++        refs.set(key, realRef)
++      }
++      const { pruned } = await GitRefManager.updateRemoteRefs({
++        fs,
++        gitdir,
++        remote,
++        refs,
++        symrefs,
++        tags,
++        prune,
++      })
++      if (prune) {
++        response.pruned = pruned
++      }
++    } else {
++      const { pruned } = await GitRefManager.updateRemoteRefs({
++        fs,
++        gitdir,
++        remote,
++        refs: remoteRefs,
++        symrefs: remoteHTTP.symrefs,
++        tags,
++        prune,
++        pruneTags,
++      })
++      if (prune) {
++        response.pruned = pruned
++      }
+     }
+   }
+   // We need this value later for the `clone` command.
+   response.HEAD = remoteHTTP.symrefs.get('HEAD')
+   // AWS CodeCommit doesn't list HEAD as a symref, but we can reverse engineer it
+   // Find the SHA of the branch called HEAD
+-  if (response.HEAD === undefined) {
++  if (response.HEAD === undefined && remoteRefs.has('HEAD')) {
+     const { oid } = GitRefManager.resolveAgainstMap({
+       ref: 'HEAD',
+       map: remoteRefs,
+@@ -327,9 +355,10 @@ export async function _fetch({
+     description: `${noun} '${abbreviateRef(fullref)}' of ${url}`,
+   }
+ 
++  let progressTask
+   if (onProgress || onMessage) {
+     const lines = splitLines(response.progress)
+-    forAwait(lines, async line => {
++    progressTask = forAwait(lines, async line => {
+       if (onMessage) await onMessage(line)
+       if (onProgress) {
+         const matches = line.match(/([^:]*).*\((\d+?)\/(\d+?)\)/)
+@@ -344,36 +373,47 @@ export async function _fetch({
+     })
+   }
+   const packfile = Buffer.from(await collect(response.packfile))
++  await progressTask
+   if (raw.body.error) throw raw.body.error
++  if (
++    packfile.length < 32 ||
++    packfile.slice(0, 4).toString('ascii') !== 'PACK'
++  ) {
++    throw new Error('Missing or truncated Git pack')
++  }
+   const packfileSha = packfile.slice(-20).toString('hex')
++  if ((await shasum(packfile.slice(0, -20))) !== packfileSha) {
++    throw new Error('Git pack checksum mismatch')
++  }
+   const res = {
+     defaultBranch: response.HEAD,
+     fetchHead: response.FETCH_HEAD.oid,
+     fetchHeadDescription: response.FETCH_HEAD.description,
++    advertisedRefs,
++    symrefs,
++    shallows: response.shallows,
++    unshallows: response.unshallows,
+   }
+   if (response.headers) {
+     res.headers = response.headers
+   }
+-  if (prune) {
+-    res.pruned = response.pruned
+-  }
+-  // This is a quick fix for the empty .git/objects/pack/pack-.pack file error,
+-  // which due to the way `git-list-pack` works causes the program to hang when it tries to read it.
+-  // TODO: Longer term, we should actually:
+-  // a) NOT concatenate the entire packfile into memory (line 78),
+-  // b) compute the SHA of the stream except for the last 20 bytes, using the same library used in push.js, and
+-  // c) compare the computed SHA with the last 20 bytes of the stream before saving to disk, and throwing a "packfile got corrupted during download" error if the SHA doesn't match.
++  const getExternalRefDelta = oid => readObject({ fs, cache, gitdir, oid })
++  const idx = await GitPackIndex.fromPack({
++    pack: packfile,
++    getExternalRefDelta,
++    onProgress,
++  })
++  const index = await idx.toBuffer()
+   if (packfileSha !== '' && !emptyPackfile(packfile)) {
+     res.packfile = `objects/pack/pack-${packfileSha}.pack`
+     const fullpath = join(gitdir, res.packfile)
+-    await fs.write(fullpath, packfile)
+-    const getExternalRefDelta = oid => readObject({ fs, cache, gitdir, oid })
+-    const idx = await GitPackIndex.fromPack({
+-      pack: packfile,
+-      getExternalRefDelta,
+-      onProgress,
+-    })
+-    await fs.write(fullpath.replace(/\.pack$/, '.idx'), await idx.toBuffer())
++    const indexpath = fullpath.replace(/\.pack$/, '.idx')
++    await fs.write(`${fullpath}.lock`, packfile)
++    await fs.write(`${indexpath}.lock`, index)
++    await fs.rename(`${fullpath}.lock`, fullpath)
++    await fs.rename(`${indexpath}.lock`, indexpath)
+   }
++  if (!objectsOnly) await publish()
++  if (prune) res.pruned = response.pruned
+   return res
+ }
+diff --git a/src/index.js b/src/index.js
+index 3d48642..d983072 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -45,6 +45,7 @@ import { merge } from './api/merge.js'
+ import { packObjects } from './api/packObjects.js'
+ import { pull } from './api/pull.js'
+ import { push } from './api/push.js'
++import { pushRefs } from './api/pushRefs.js'
+ import { readBlob } from './api/readBlob.js'
+ import { readCommit } from './api/readCommit.js'
+ import { readNote } from './api/readNote.js'
+@@ -71,6 +72,7 @@ import { writeRef } from './api/writeRef.js'
+ import { writeTag } from './api/writeTag.js'
+ import { writeTree } from './api/writeTree.js'
+ import * as Errors from './errors/index.js'
++import { mergeFile } from './utils/mergeFile.js'
+ 
+ // named exports
+ export {
+@@ -118,9 +120,11 @@ export {
+   listTags,
+   log,
+   merge,
++  mergeFile,
+   packObjects,
+   pull,
+   push,
++  pushRefs,
+   readBlob,
+   readCommit,
+   readNote,
+@@ -146,6 +150,7 @@ export {
+   writeTree,
+   stash,
+ }
++export { shasum } from './utils/shasum.js'
+ 
+ // default export
+ export default {
+@@ -193,9 +198,11 @@ export default {
+   listTags,
+   log,
+   merge,
++  mergeFile,
+   packObjects,
+   pull,
+   push,
++  pushRefs,
+   readBlob,
+   readCommit,
+   readNote,
+diff --git a/src/models/FileSystem.js b/src/models/FileSystem.js
+index 6c82903..93ecf35 100644
+--- a/src/models/FileSystem.js
++++ b/src/models/FileSystem.js
+@@ -25,6 +25,7 @@ function isPromiseFs(fs) {
+ const commands = [
+   'readFile',
+   'writeFile',
++  'rename',
+   'mkdir',
+   'rmdir',
+   'unlink',
+@@ -155,6 +156,10 @@ export class FileSystem {
+     }
+   }
+ 
++  async rename(source, destination) {
++    await this._rename(source, destination)
++  }
++
+   /**
+    * Make a directory (or series of nested directories) without throwing an error if it already exists.
+    *
+diff --git a/src/models/GitPackIndex.js b/src/models/GitPackIndex.js
+index b4fb218..9665b4e 100644
+--- a/src/models/GitPackIndex.js
++++ b/src/models/GitPackIndex.js
+@@ -24,7 +24,10 @@ function decodeVarInt(reader) {
+   // Now that all the bytes are in big-endian order,
+   // alternate shifting the bits left by 7 and OR-ing the next byte.
+   // And... do a weird increment-by-one thing that I don't quite understand.
+-  return bytes.reduce((a, b) => ((a + 1) << 7) | b, -1)
++  const result = bytes.reduce((a, b) => (a + 1) * 128 + b, -1)
++  if (!Number.isSafeInteger(result))
++    throw new InternalError('Invalid Git pack delta offset')
++  return result
+ }
+ 
+ // I'm pretty much copying this one from the git C source code,
+@@ -35,7 +38,9 @@ function otherVarIntDecode(reader, startWith) {
+   let byte = null
+   do {
+     byte = reader.readUInt8()
+-    result |= (byte & 0b01111111) << shift
++    result += (byte & 0b01111111) * 2 ** shift
++    if (!Number.isSafeInteger(result) || shift > 49)
++      throw new InternalError('Invalid Git pack object size')
+     shift += 7
+   } while (byte & 0b10000000)
+   return result
+@@ -168,42 +173,48 @@ export class GitPackIndex {
+       hashes,
+       offsets,
+       getExternalRefDelta,
++      objectOffsets: new Set(offsetArray),
+     })
+ 
+     // Resolve deltas and compute the oids
+     lastPercent = null
+     let count = 0
+     const objectsByDepth = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+-    for (let offset in offsetToObject) {
+-      offset = Number(offset)
+-      const percent = Math.floor((count * 100) / totalObjectCount)
+-      if (percent !== lastPercent) {
+-        if (onProgress) {
+-          await onProgress({
+-            phase: 'Resolving deltas',
+-            loaded: count,
+-            total: totalObjectCount,
+-          })
++    const unresolved = new Set(Object.keys(offsetToObject).map(Number))
++    let lastError
++    while (unresolved.size > 0) {
++      const before = unresolved.size
++      for (const offset of [...unresolved]) {
++        const percent = Math.floor((count * 100) / totalObjectCount)
++        if (percent !== lastPercent) {
++          if (onProgress) {
++            await onProgress({
++              phase: 'Resolving deltas',
++              loaded: count,
++              total: totalObjectCount,
++            })
++          }
+         }
+-      }
+-      count++
+-      lastPercent = percent
++        lastPercent = percent
+ 
+-      const o = offsetToObject[offset]
+-      if (o.oid) continue
+-      try {
+-        p.readDepth = 0
+-        p.externalReadDepth = 0
+-        const { type, object } = await p.readSlice({ start: offset })
+-        objectsByDepth[p.readDepth] += 1
+-        const oid = await shasum(GitObject.wrap({ type, object }))
+-        o.oid = oid
+-        hashes.push(oid)
+-        offsets.set(oid, offset)
+-        crcs[oid] = o.crc
+-      } catch (err) {
+-        continue
++        const o = offsetToObject[offset]
++        try {
++          p.readDepth = 0
++          p.externalReadDepth = 0
++          const { type, object } = await p.readSlice({ start: offset })
++          objectsByDepth[p.readDepth] += 1
++          const oid = await shasum(GitObject.wrap({ type, object }))
++          o.oid = oid
++          hashes.push(oid)
++          offsets.set(oid, offset)
++          crcs[oid] = o.crc
++          unresolved.delete(offset)
++          count++
++        } catch (err) {
++          lastError = err
++        }
+       }
++      if (unresolved.size === before) throw lastError
+     }
+ 
+     hashes.sort()
+@@ -277,6 +288,11 @@ export class GitPackIndex {
+   }
+ 
+   async readSlice({ start }) {
++    if (this.objectOffsets && !this.objectOffsets.has(start)) {
++      throw new InternalError(
++        'Git pack delta does not point to an object boundary'
++      )
++    }
+     if (this.offsetCache[start]) {
+       return Object.assign({}, this.offsetCache[start])
+     }
+@@ -320,6 +336,8 @@ export class GitPackIndex {
+     if (type === 'ofs_delta') {
+       const offset = decodeVarInt(reader)
+       const baseOffset = start - offset
++      if (offset <= 0 || baseOffset < 12)
++        throw new InternalError('Invalid Git pack delta offset')
+       ;({ object: base, type } = await this.readSlice({ start: baseOffset }))
+     }
+     if (type === 'ref_delta') {
+diff --git a/src/models/GitPktLine.js b/src/models/GitPktLine.js
+index 6b12171..797d109 100644
+--- a/src/models/GitPktLine.js
++++ b/src/models/GitPktLine.js
+@@ -73,17 +73,37 @@ export class GitPktLine {
+     return Buffer.concat([Buffer.from(hexlength, 'utf8'), line])
+   }
+ 
+-  static streamReader(stream) {
++  static streamReader(stream, { rawPack = false, allowDelimiters = true } = {}) {
+     const reader = new StreamReader(stream)
+     return async function read() {
+       try {
+-        let length = await reader.read(4)
+-        if (length == null) return true
+-        length = parseInt(length.toString('utf8'), 16)
++        const prefix = await reader.read(4)
++        if (prefix == null || prefix.length === 0) return true
++        if (prefix.length !== 4) throw new Error('Truncated Git packet header')
++        if (rawPack && prefix.toString('ascii') === 'PACK') {
++          const chunks = [prefix]
++          for (;;) {
++            const chunk = await reader.chunk()
++            if (!chunk || chunk.length === 0) break
++            chunks.push(chunk)
++          }
++          return { pack: Buffer.concat(chunks) }
++        }
++        if (!/^[0-9a-fA-F]{4}$/.test(prefix.toString('ascii'))) {
++          throw new Error('Invalid Git packet length')
++        }
++        const length = parseInt(prefix.toString('ascii'), 16)
+         if (length === 0) return null
++        if (!allowDelimiters && (length === 1 || length === 2))
++          throw new Error('Unexpected Git protocol-v2 delimiter')
+         if (length === 1) return null // delim packets
++        if (length === 2) return true
++        if (length < 4 || length > 65520)
++          throw new Error('Invalid Git packet length')
+         const buffer = await reader.read(length - 4)
+-        if (buffer == null) return true
++        if (buffer == null || buffer.length !== length - 4) {
++          throw new Error('Truncated Git packet payload')
++        }
+         return buffer
+       } catch (err) {
+         stream.error = err
+diff --git a/src/models/GitSideBand.js b/src/models/GitSideBand.js
+index 2c96527..23058cf 100644
+--- a/src/models/GitSideBand.js
++++ b/src/models/GitSideBand.js
+@@ -24,8 +24,8 @@ import { FIFO } from '../utils/FIFO.js'
+ import { GitPktLine } from './GitPktLine.js'
+ 
+ export class GitSideBand {
+-  static demux(input) {
+-    const read = GitPktLine.streamReader(input)
++  static demux(input, { sideBand = true } = {}) {
++    const read = GitPktLine.streamReader(input, { rawPack: !sideBand })
+     // And now for the ridiculous side-band or side-band-64k protocol
+     const packetlines = new FIFO()
+     const packfile = new FIFO()
+@@ -42,6 +42,13 @@ export class GitSideBand {
+         input.error ? packfile.destroy(input.error) : packfile.end()
+         return
+       }
++      if (line.pack) {
++        packfile.write(line.pack)
++        packetlines.end()
++        progress.end()
++        packfile.end()
++        return
++      }
+       // Examine first byte to determine which output "stream" to use
+       switch (line[0]) {
+         case 1: {
+@@ -70,9 +77,14 @@ export class GitSideBand {
+       }
+       // Careful not to blow up the stack.
+       // I think Promises in a tail-call position should be OK.
+-      nextBit()
++      return nextBit()
+     }
+-    nextBit()
++    nextBit().catch(error => {
++      input.error = error
++      packetlines.destroy(error)
++      progress.end()
++      packfile.destroy(error)
++    })
+     return {
+       packetlines,
+       packfile,
+diff --git a/src/models/index.js b/src/models/index.js
+index 200ad2f..21ae236 100644
+--- a/src/models/index.js
++++ b/src/models/index.js
+@@ -1 +1,2 @@
+ export { FileSystem } from './FileSystem.js'
++export { GitIndex } from './GitIndex.js'
+diff --git a/src/utils/FIFO.js b/src/utils/FIFO.js
+index 4a151f1..b9ea974 100644
+--- a/src/utils/FIFO.js
++++ b/src/utils/FIFO.js
+@@ -31,6 +31,7 @@ export class FIFO {
+   }
+ 
+   async next() {
++    if (this.error) throw this.error
+     if (this._queue.length > 0) {
+       return { value: this._queue.shift() }
+     }
+@@ -42,8 +43,10 @@ export class FIFO {
+         'You cannot call read until the previous call to read has returned!'
+       )
+     }
+-    return new Promise(resolve => {
++    const result = await new Promise(resolve => {
+       this._waiting = resolve
+     })
++    if (this.error) throw this.error
++    return result
+   }
+ }
+diff --git a/src/utils/applyDelta.js b/src/utils/applyDelta.js
+index 62c791d..edc7acc 100644
+--- a/src/utils/applyDelta.js
++++ b/src/utils/applyDelta.js
+@@ -20,7 +20,7 @@ export function applyDelta(delta, source) {
+ 
+   const firstOp = readOp(reader, source)
+   // Speed optimization - return raw buffer if it's just single simple copy
+-  if (firstOp.byteLength === targetSize) {
++  if (firstOp.byteLength === targetSize && reader.eof()) {
+     target = firstOp
+   } else {
+     // Build the result from the delta ops instead of pre-allocating `targetSize`.
+@@ -53,7 +53,10 @@ function readVarIntLE(reader) {
+   let byte = null
+   do {
+     byte = reader.readUInt8()
+-    result |= (byte & 0b01111111) << shift
++    result += (byte & 0b01111111) * 2 ** shift
++    if (!Number.isSafeInteger(result) || shift > 49) {
++      throw new InternalError('Invalid Git delta size')
++    }
+     shift += 7
+   } while (byte & 0b10000000)
+   return result
+@@ -64,7 +67,7 @@ function readCompactLE(reader, flags, size) {
+   let shift = 0
+   while (size--) {
+     if (flags & 0b00000001) {
+-      result |= reader.readUInt8() << shift
++      result += reader.readUInt8() * 2 ** shift
+     }
+     flags >>= 1
+     shift += 8
+@@ -84,9 +87,16 @@ function readOp(reader, source) {
+     let size = readCompactLE(reader, (byte & SIZE) >> 4, 3)
+     // Yup. They really did this optimization.
+     if (size === 0) size = 0x10000
++    if (offset + size > source.length) {
++      throw new InternalError('Git delta copy exceeds source')
++    }
+     return source.slice(offset, offset + size)
+   } else {
+     // insert
+-    return reader.slice(byte)
++    if (byte === 0) throw new InternalError('Invalid Git delta opcode')
++    const result = reader.slice(byte)
++    if (result.length !== byte)
++      throw new InternalError('Truncated Git delta insertion')
++    return result
+   }
+ }
+diff --git a/src/utils/git-list-pack.js b/src/utils/git-list-pack.js
+index 4f29a3b..158cadd 100644
+--- a/src/utils/git-list-pack.js
++++ b/src/utils/git-list-pack.js
+@@ -16,14 +16,14 @@ export async function listpack(stream, onData) {
+ 
+   let version = await reader.read(4)
+   version = version.readUInt32BE(0)
+-  if (version !== 2) {
++  if (version !== 2 && version !== 3) {
+     throw new InternalError(`Invalid packfile version: ${version}`)
+   }
+ 
+   let numObjects = await reader.read(4)
+   numObjects = numObjects.readUInt32BE(0)
+-  // If (for some godforsaken reason) this is an empty packfile, abort now.
+-  if (numObjects < 1) return
++  const expectedObjects = numObjects
++  let parsedObjects = 0
+ 
+   while (!reader.eof() && numObjects--) {
+     const offset = reader.tell()
+@@ -56,15 +56,35 @@ export async function listpack(stream, onData) {
+           reference,
+           ofs,
+         })
++        parsedObjects++
+       }
+     }
+   }
++  if (parsedObjects !== expectedObjects)
++    throw new InternalError('Truncated Git pack objects')
++  const trailer = await reader.read(20)
++  if (
++    !trailer ||
++    trailer.length !== 20 ||
++    (await reader.byte()) !== undefined
++  ) {
++    throw new InternalError('Invalid Git pack trailer boundary')
++  }
++}
++
++async function readByte(reader) {
++  const byte = await reader.byte()
++  if (byte === undefined)
++    throw new InternalError('Truncated Git pack object header')
++  return byte
+ }
+ 
+ async function parseHeader(reader) {
+   // Object type is encoded in bits 654
+-  let byte = await reader.byte()
++  let byte = await readByte(reader)
+   const type = (byte >> 4) & 0b111
++  if (![1, 2, 3, 4, 6, 7].includes(type))
++    throw new InternalError('Invalid Git pack object type')
+   // The length encoding get complicated.
+   // Last four bits of length is encoded in bits 3210
+   let length = byte & 0b1111
+@@ -73,8 +93,11 @@ async function parseHeader(reader) {
+   if (byte & 0b10000000) {
+     let shift = 4
+     do {
+-      byte = await reader.byte()
+-      length |= (byte & 0b01111111) << shift
++      byte = await readByte(reader)
++      length += (byte & 0b01111111) * 2 ** shift
++      if (!Number.isSafeInteger(length) || shift > 49) {
++        throw new InternalError('Invalid Git pack object size')
++      }
+       shift += 7
+     } while (byte & 0b10000000)
+   }
+@@ -86,7 +109,7 @@ async function parseHeader(reader) {
+     ofs = 0
+     const bytes = []
+     do {
+-      byte = await reader.byte()
++      byte = await readByte(reader)
+       ofs |= (byte & 0b01111111) << shift
+       shift += 7
+       bytes.push(byte)
+@@ -95,6 +118,8 @@ async function parseHeader(reader) {
+   }
+   if (type === 7) {
+     const buf = await reader.read(20)
++    if (!buf || buf.length !== 20)
++      throw new InternalError('Truncated Git pack delta reference')
+     reference = buf
+   }
+   return { type, length, ofs, reference }
+diff --git a/src/utils/mergeFile.js b/src/utils/mergeFile.js
+index d8fb696..33c59e2 100644
+--- a/src/utils/mergeFile.js
++++ b/src/utils/mergeFile.js
+@@ -31,9 +31,11 @@ export function mergeFile({ branches, contents }) {
+       cleanMerge = false
+       mergedText += `${'<'.repeat(markerSize)} ${ourName}\n`
+       mergedText += item.conflict.a.join('')
++      if (!mergedText.endsWith('\n')) mergedText += '\n'
+ 
+       mergedText += `${'='.repeat(markerSize)}\n`
+       mergedText += item.conflict.b.join('')
++      if (!mergedText.endsWith('\n')) mergedText += '\n'
+       mergedText += `${'>'.repeat(markerSize)} ${theirName}\n`
+     }
+   }
+diff --git a/src/wire/parseListRefsResponse.js b/src/wire/parseListRefsResponse.js
+index 1523c24..5e6ce6f 100644
+--- a/src/wire/parseListRefsResponse.js
++++ b/src/wire/parseListRefsResponse.js
+@@ -34,5 +34,6 @@ export async function parseListRefsResponse(stream) {
+     refs.push(r)
+   }
+ 
++  if (stream.error) throw stream.error
+   return refs
+ }
+diff --git a/src/wire/parseReceivePackResponse.js b/src/wire/parseReceivePackResponse.js
+index 0d7d4db..4f0c28d 100644
+--- a/src/wire/parseReceivePackResponse.js
++++ b/src/wire/parseReceivePackResponse.js
+@@ -6,36 +6,38 @@ import { GitPktLine } from '../models/GitPktLine.js'
+ export async function parseReceivePackResponse(packfile) {
+   /** @type PushResult */
+   const result = {}
+-  let response = ''
+-  const read = GitPktLine.streamReader(packfile)
++  const lines = []
++  const read = GitPktLine.streamReader(packfile, { allowDelimiters: false })
+   let line = await read()
+-  while (line !== true) {
+-    if (line !== null) response += line.toString('utf8') + '\n'
++  while (line !== true && line !== null) {
++    const record = line.toString('utf8').replace(/\n$/, '')
++    if (record.includes('\n') || record.includes('\0')) throw new Error('Invalid receive-pack status record')
++    lines.push(record)
+     line = await read()
+   }
+-
+-  const lines = response.toString('utf8').split('\n')
++  if (packfile.error) throw packfile.error
++  if (line !== null) throw new Error('Missing receive-pack report-status flush')
++  const end = await read()
++  if (packfile.error) throw packfile.error
++  if (end !== true) throw new Error('Unexpected data after receive-pack report-status flush')
+   // We're expecting "unpack {unpack-result}"
+   line = lines.shift()
+-  if (!line.startsWith('unpack ')) {
++  if (!line || !/^unpack .+$/.test(line)) {
+     throw new ParseError('unpack ok" or "unpack [error message]', line)
+   }
+   result.ok = line === 'unpack ok'
+   if (!result.ok) {
+     result.error = line.slice('unpack '.length)
+   }
+-  result.refs = {}
++  result.refs = Object.create(null)
+   for (const line of lines) {
+-    if (line.trim() === '') continue
+-    const status = line.slice(0, 2)
+-    const refAndMessage = line.slice(3)
+-    let space = refAndMessage.indexOf(' ')
+-    if (space === -1) space = refAndMessage.length
+-    const ref = refAndMessage.slice(0, space)
+-    const error = refAndMessage.slice(space + 1)
++    const match = /^(ok ([^\s\0]+)|ng ([^\s\0]+) (.+))$/.exec(line)
++    if (!match) throw new Error('Invalid receive-pack reference status')
++    const ref = match[2] || match[3]
++    if (Object.prototype.hasOwnProperty.call(result.refs, ref)) throw new Error('Duplicate receive-pack reference status')
+     result.refs[ref] = {
+-      ok: status === 'ok',
+-      error,
++      ok: !!match[2],
++      error: match[4] || '',
+     }
+   }
+   return result
+diff --git a/src/wire/parseUploadPackResponse.js b/src/wire/parseUploadPackResponse.js
+index 50c06fd..30e25e5 100644
+--- a/src/wire/parseUploadPackResponse.js
++++ b/src/wire/parseUploadPackResponse.js
+@@ -2,8 +2,13 @@ import { InvalidOidError } from '../errors/InvalidOidError.js'
+ import { GitSideBand } from '../models/GitSideBand.js'
+ import { forAwait } from '../utils/forAwait.js'
+ 
+-export async function parseUploadPackResponse(stream) {
+-  const { packetlines, packfile, progress } = GitSideBand.demux(stream)
++export async function parseUploadPackResponse(
++  stream,
++  { sideBand = true } = {}
++) {
++  const { packetlines, packfile, progress } = GitSideBand.demux(stream, {
++    sideBand,
++  })
+   const shallows = []
+   const unshallows = []
+   const acks = []
+@@ -15,13 +20,13 @@ export async function parseUploadPackResponse(stream) {
+       const line = data.toString('utf8').trim()
+       if (line.startsWith('shallow')) {
+         const oid = line.slice(-41).trim()
+-        if (oid.length !== 40) {
++        if (!/^[0-9a-f]{40}$/.test(oid)) {
+           reject(new InvalidOidError(oid))
+         }
+         shallows.push(oid)
+       } else if (line.startsWith('unshallow')) {
+         const oid = line.slice(-41).trim()
+-        if (oid.length !== 40) {
++        if (!/^[0-9a-f]{40}$/.test(oid)) {
+           reject(new InvalidOidError(oid))
+         }
+         unshallows.push(oid)
+@@ -41,12 +46,12 @@ export async function parseUploadPackResponse(stream) {
+           ? reject(stream.error)
+           : resolve({ shallows, unshallows, acks, nak, packfile, progress })
+       }
+-    }).finally(() => {
++    }).then(() => {
+       if (!done) {
+         stream.error
+           ? reject(stream.error)
+           : resolve({ shallows, unshallows, acks, nak, packfile, progress })
+       }
+-    })
++    }, reject)
+   })
+ }
+diff --git a/src/wire/writeListRefsRequest.js b/src/wire/writeListRefsRequest.js
+index 0cfb5f5..c3a65d0 100644
+--- a/src/wire/writeListRefsRequest.js
++++ b/src/wire/writeListRefsRequest.js
+@@ -6,20 +6,27 @@ import { pkg } from '../utils/pkg.js'
+  * @param {string} [args.prefix] - Only list refs that start with this prefix
+  * @param {boolean} [args.symrefs = false] - Include symbolic ref targets
+  * @param {boolean} [args.peelTags = false] - Include peeled tags values
++ * @param {boolean} [args.unborn = false] - Include unborn symbolic references
+  * @returns {Uint8Array[]}
+  */
+-export async function writeListRefsRequest({ prefix, symrefs, peelTags }) {
++export async function writeListRefsRequest({
++  prefix,
++  symrefs,
++  peelTags,
++  unborn,
++}) {
+   const packstream = []
+   // command
+   packstream.push(GitPktLine.encode('command=ls-refs\n'))
+   // capability-list
+   packstream.push(GitPktLine.encode(`agent=${pkg.agent}\n`))
+   // [command-args]
+-  if (peelTags || symrefs || prefix) {
++  if (peelTags || symrefs || prefix || unborn) {
+     packstream.push(GitPktLine.delim())
+   }
+   if (peelTags) packstream.push(GitPktLine.encode('peel'))
+   if (symrefs) packstream.push(GitPktLine.encode('symrefs'))
++  if (unborn) packstream.push(GitPktLine.encode('unborn'))
+   if (prefix) packstream.push(GitPktLine.encode(`ref-prefix ${prefix}`))
+   packstream.push(GitPktLine.flush())
+   return packstream

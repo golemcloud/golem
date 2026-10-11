@@ -14,11 +14,19 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import * as git from "isomorphic-git";
+import { abortMerge, continueMerge, mergeCommand } from "../src/integration.ts";
+import {
+  abortRebase,
+  continueRebase,
+  rebaseCommand,
+  skipRebase,
+} from "../src/rebase.ts";
 import {
   MAX_DIFF_BYTES,
   assertRefSupportedModes,
   branchCommand,
   checkoutCommand,
+  conflictEntries,
   commitMessage,
   createCommit,
   diff,
@@ -96,7 +104,7 @@ test("local config is narrow and commit keeps author and committer separate", as
   await assert.rejects(localConfig(repo, "user.name", undefined), /not set/);
   await assert.rejects(
     localConfig(repo, "core.editor", "false"),
-    /only user.name and user.email/,
+    /unsupported repository-local configuration key/,
   );
   assert.equal(
     await localConfig(repo, "user.name", "Committer #1; O'Brien"),
@@ -157,10 +165,7 @@ test("local config rejects lossy values without modifying the file", async (t) =
     );
     assert.deepEqual(await fs.promises.readFile(configPath), before);
   }
-  assert.equal(
-    await git.getConfig({ fs, dir, path: "core.bare" }),
-    false,
-  );
+  assert.equal(await git.getConfig({ fs, dir, path: "core.bare" }), false);
 });
 
 test("log formatting supports full and oneline output", () => {
@@ -900,8 +905,14 @@ for (const packed of [false, true]) {
       await readFile(path.join(dir, ".git", "HEAD"), "utf8"),
       "ref: refs/heads/unborn\n",
     );
-    assert.deepEqual(await readFile(path.join(dir, ".git", "index")), beforeIndex);
-    assert.equal(await readFile(path.join(dir, "tracked.txt"), "utf8"), "unchanged\n");
+    assert.deepEqual(
+      await readFile(path.join(dir, ".git", "index")),
+      beforeIndex,
+    );
+    assert.equal(
+      await readFile(path.join(dir, "tracked.txt"), "utf8"),
+      "unchanged\n",
+    );
   });
 }
 
@@ -991,7 +1002,9 @@ test("late checkout failure restores the complete original worktree", async (t) 
   const originalSymlink = fs.promises.symlink;
   fs.promises.symlink = async (target, filepath, type) => {
     if (target === "new" && filepath === path.join(dir, "link")) {
-      const error = new Error("injected symlink failure") as NodeJS.ErrnoException;
+      const error = new Error(
+        "injected symlink failure",
+      ) as NodeJS.ErrnoException;
       error.code = "EIO";
       throw error;
     }
@@ -1051,20 +1064,13 @@ test("checkout validates target blobs before preserving local state", async (t) 
   });
   await checkoutCommand(repo, undefined, false, "main", []);
   await rm(
-    path.join(
-      dir,
-      ".git/objects",
-      targetBlob.slice(0, 2),
-      targetBlob.slice(2),
-    ),
+    path.join(dir, ".git/objects", targetBlob.slice(0, 2), targetBlob.slice(2)),
   );
   await writeFile(path.join(dir, "local.txt"), "index\n");
   await stage(repo, ["local.txt"], false, false);
   await writeFile(path.join(dir, "local.txt"), "worktree\n");
 
-  await assert.rejects(
-    checkoutCommand(repo, "failed", false, "target", []),
-  );
+  await assert.rejects(checkoutCommand(repo, "failed", false, "target", []));
   assert.equal(await git.currentBranch({ fs, dir, fullname: false }), "main");
   assert.equal((await git.listBranches({ fs, dir })).includes("failed"), false);
   assert.deepEqual(await statusEntries(repo, ["local.txt"]), [
@@ -1170,7 +1176,10 @@ test("checkout preserves permissible changes, rejects overwrites, cleans failed 
 
   const detached = await checkoutCommand(repo, undefined, true, base, []);
   assert.match(detached.summary, /HEAD is now at/);
-  assert.equal(await git.currentBranch({ fs, dir, fullname: false }), undefined);
+  assert.equal(
+    await git.currentBranch({ fs, dir, fullname: false }),
+    undefined,
+  );
   assert.equal(await git.resolveRef({ fs, dir, ref: "HEAD" }), base);
 });
 
@@ -1253,7 +1262,10 @@ test("add handles explicit paths, ignored descendants, -A, and -u", async (t) =>
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await fs.promises.mkdir(path.join(dir, "src"));
-  await writeFile(path.join(dir, ".gitignore"), "src/ignored.txt\nignored-dir/\n");
+  await writeFile(
+    path.join(dir, ".gitignore"),
+    "src/ignored.txt\nignored-dir/\n",
+  );
   await writeFile(path.join(dir, "src/tracked.txt"), "before\n");
   await writeFile(path.join(dir, "src/ignored.txt"), "ignored\n");
   await fs.promises.mkdir(path.join(dir, "ignored-dir"));
@@ -1467,4 +1479,279 @@ test("diff quotes paths that contain record-separator characters", async (t) => 
   assert.match(result.patch, /^--- "a\/line\\nbreak\.txt"$/m);
   assert.match(result.patch, /^\+\+\+ "b\/line\\nbreak\.txt"$/m);
   assert.equal(result.paths[0], filepath);
+});
+
+test("merge conflicts keep complete index, survive repository reopening, and commit both parents", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let repo = await repository([dir]);
+  await writeFile(path.join(dir, "text"), "base\n");
+  await stage(repo, ["text"], false, false);
+  await createCommit(repo, ["base"], undefined, false);
+  await branchCommand(repo, false, "topic", undefined);
+  await writeFile(path.join(dir, "text"), "ours\n");
+  await stage(repo, ["text"], false, false);
+  const ours = await createCommit(repo, ["ours"], undefined, false);
+  await checkoutCommand(repo, undefined, false, "topic", []);
+  await writeFile(path.join(dir, "text"), "theirs\n");
+  await writeFile(path.join(dir, "incoming"), "nonconflicting addition\n");
+  await stage(repo, [], true, false);
+  const theirs = await createCommit(repo, ["theirs"], undefined, false);
+  await checkoutCommand(repo, undefined, false, "main", []);
+  await assert.rejects(mergeCommand(repo, "topic"), /merge conflicts/);
+  repo = await repository([dir]);
+  assert.equal(await git.resolveRef({ fs, ...repo, ref: "HEAD" }), ours);
+  assert.deepEqual(
+    (await statusEntries(repo, [])).map((e) => [e.path, e.code]),
+    [
+      ["incoming", "A "],
+      ["text", "UU"],
+    ],
+  );
+  assert.deepEqual(
+    [...(await conflictEntries(repo)).get("text")!.keys()],
+    [1, 2, 3],
+  );
+  assert.equal(
+    (await diff(repo, [], [], true, false, 3)).patch.includes(
+      "* Unmerged path text",
+    ),
+    true,
+  );
+  assert.match(
+    (await diff(repo, [], [], false, false, 3)).patch,
+    /<<<<<<< HEAD/,
+  );
+  await assert.rejects(continueMerge(repo), /unmerged|conflict/i);
+  await writeFile(path.join(dir, "text"), "resolved\n");
+  await stage(repo, ["text"], false, false);
+  const oid = await createCommit(repo, ["resolution"], undefined, false);
+  const commit = await git.readCommit({ fs, ...repo, oid });
+  assert.deepEqual(commit.commit.parent, [ours, theirs]);
+  assert.equal(
+    await readFile(path.join(dir, "incoming"), "utf8"),
+    "nonconflicting addition\n",
+  );
+  assert.deepEqual(await statusEntries(repo, []), []);
+  await assert.rejects(readFile(path.join(dir, ".git/MERGE_HEAD")), {
+    code: "ENOENT",
+  });
+});
+
+test("merge abort preserves unrelated dirty files and restores affected paths and index", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const repo = await repository([dir]);
+  await writeFile(path.join(dir, "text"), "base\n");
+  await writeFile(path.join(dir, "unchanged"), "clean\n");
+  await stage(repo, [], true, false);
+  await createCommit(repo, ["base"], undefined, false);
+  await branchCommand(repo, false, "topic", undefined);
+  await writeFile(path.join(dir, "text"), "ours\n");
+  await stage(repo, ["text"], false, false);
+  const ours = await createCommit(repo, ["ours"], undefined, false);
+  await checkoutCommand(repo, undefined, false, "topic", []);
+  await writeFile(path.join(dir, "text"), "theirs\n");
+  await writeFile(path.join(dir, "incoming"), "incoming\n");
+  await stage(repo, [], true, false);
+  await createCommit(repo, ["theirs"], undefined, false);
+  await checkoutCommand(repo, undefined, false, "main", []);
+  await writeFile(path.join(dir, "unchanged"), "dirty local\n");
+  const originalIndex = await readFile(path.join(dir, ".git/index"));
+  await assert.rejects(mergeCommand(repo, "topic"), /merge conflicts/);
+  await writeFile(path.join(dir, "incoming"), "new dirty edit\n");
+  await assert.rejects(abortMerge(repo), /prevent merge abort/);
+  await writeFile(path.join(dir, "incoming"), "incoming\n");
+  await abortMerge(await repository([dir]));
+  assert.equal(await git.resolveRef({ fs, ...repo, ref: "HEAD" }), ours);
+  assert.equal(await readFile(path.join(dir, "text"), "utf8"), "ours\n");
+  assert.equal(
+    await readFile(path.join(dir, "unchanged"), "utf8"),
+    "dirty local\n",
+  );
+  assert.deepEqual(await readFile(path.join(dir, ".git/index")), originalIndex);
+  await assert.rejects(readFile(path.join(dir, "incoming")), {
+    code: "ENOENT",
+  });
+});
+
+test("interrupted merge publication recovers the exact prepared tree and commit before another command", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const repo = await repository([dir]);
+  await writeFile(path.join(dir, "file"), "base\n");
+  await stage(repo, [], true, false);
+  const ours = await createCommit(repo, ["base"], undefined, false);
+  await branchCommand(repo, false, "topic", undefined);
+  await checkoutCommand(repo, undefined, false, "topic", []);
+  await writeFile(path.join(dir, "file"), "incoming\n");
+  await stage(repo, [], true, false);
+  const theirs = await createCommit(repo, ["incoming"], undefined, false);
+  await checkoutCommand(repo, undefined, false, "main", []);
+  const rename = fs.promises.rename;
+  let interrupt = true;
+  const fault = t.mock.method(fs.promises, "rename", async (from, to) => {
+    if (interrupt && String(to) === path.join(repo.gitdir, "index")) {
+      interrupt = false;
+      throw new Error("interrupted index publication");
+    }
+    return rename(from, to);
+  });
+  await assert.rejects(
+    mergeCommand(repo, "topic", { noFf: true }),
+    /interrupted index publication/,
+  );
+  fault.mock.restore();
+  assert.equal(await git.resolveRef({ fs, ...repo, ref: "HEAD" }), ours);
+  const reopened = await repository([dir]);
+  const oid = await git.resolveRef({ fs, ...reopened, ref: "HEAD" });
+  assert.deepEqual(
+    (await git.readCommit({ fs, ...reopened, oid })).commit.parent,
+    [ours, theirs],
+  );
+  assert.equal(await readFile(path.join(dir, "file"), "utf8"), "incoming\n");
+  assert.deepEqual(await statusEntries(reopened, []), []);
+  await repository([dir]);
+  assert.equal(await git.resolveRef({ fs, ...repo, ref: "HEAD" }), oid);
+});
+
+test("rebase survives interrupted index publication, preserves original authors and reattaches the branch", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const repo = await repository([dir]);
+  await writeFile(path.join(dir, "base"), "base\n");
+  await stage(repo, [], true, false);
+  await createCommit(repo, ["base"], undefined, false);
+  await branchCommand(repo, false, "upstream", undefined);
+  await writeFile(path.join(dir, "local"), "local\n");
+  await stage(repo, [], true, false);
+  const original = await createCommit(
+    repo,
+    ["local"],
+    "Original <original@example.org>",
+    false,
+  );
+  const author = (await git.readCommit({ fs, ...repo, oid: original })).commit
+    .author;
+  await checkoutCommand(repo, undefined, false, "upstream", []);
+  await writeFile(path.join(dir, "remote"), "remote\n");
+  await stage(repo, [], true, false);
+  const onto = await createCommit(repo, ["remote"], undefined, false);
+  await checkoutCommand(repo, undefined, false, "main", []);
+  await writeFile(path.join(dir, "untracked"), "keep\n");
+  const rename = fs.promises.rename;
+  const fault = t.mock.method(fs.promises, "rename", async (from, to) => {
+    if (String(to) === path.join(repo.gitdir, "index"))
+      throw new Error("interrupted rebase publication");
+    return rename(from, to);
+  });
+  await assert.rejects(
+    rebaseCommand(repo, "upstream"),
+    /interrupted rebase publication/,
+  );
+  fault.mock.restore();
+  assert.equal(await git.resolveRef({ fs, ...repo, ref: "main" }), original);
+  const journalPath = path.join(repo.gitdir, "golem-rebase-state");
+  const validJournal = await readFile(journalPath, "utf8");
+  const indexBefore = await readFile(path.join(repo.gitdir, "index"));
+  const headBefore = await readFile(path.join(repo.gitdir, "HEAD"));
+  const files = () =>
+    Promise.all(
+      ["base", "local", "remote", "untracked"].map((file) =>
+        readFile(path.join(dir, file)).catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        }),
+      ),
+    );
+  const filesBefore = await files();
+  for (const [field, value] of [
+    ["index", "AAAA"],
+    ["index", 42],
+    ["after", "1".repeat(40)],
+    ["snapshot", 42],
+    ["snapshot", []],
+    ["snapshot", { mode: 0o100644 }],
+  ] as const) {
+    const corrupted = JSON.parse(validJournal);
+    if (field === "snapshot")
+      corrupted.action.changes.find(
+        (change: { write: boolean; after: { bytes?: string } }) =>
+          change.write && change.after.bytes !== undefined,
+      ).after = value;
+    else corrupted.action[field] = value;
+    await writeFile(journalPath, JSON.stringify(corrupted));
+    await assert.rejects(repository([dir]));
+    assert.deepEqual(
+      await readFile(path.join(repo.gitdir, "index")),
+      indexBefore,
+    );
+    assert.deepEqual(
+      await readFile(path.join(repo.gitdir, "HEAD")),
+      headBefore,
+    );
+    assert.equal(await git.resolveRef({ fs, ...repo, ref: "main" }), original);
+    assert.deepEqual(await files(), filesBefore);
+  }
+  await writeFile(journalPath, validJournal);
+  await continueRebase(await repository([dir]));
+  const oid = await git.resolveRef({ fs, ...repo, ref: "HEAD" });
+  const commit = (await git.readCommit({ fs, ...repo, oid })).commit;
+  assert.deepEqual(commit.parent, [onto]);
+  assert.deepEqual(commit.author, author);
+  assert.equal(await git.currentBranch({ fs, ...repo }), "main");
+  assert.equal(await readFile(path.join(dir, "local"), "utf8"), "local\n");
+  assert.equal(await readFile(path.join(dir, "remote"), "utf8"), "remote\n");
+  assert.equal(await readFile(path.join(dir, "untracked"), "utf8"), "keep\n");
+});
+
+test("stopped rebase supports resolution, skip and abort across separate repository calls", async (t) => {
+  for (const action of ["continue", "skip", "abort"] as const) {
+    const dir = await fixture();
+    t.after(() => rm(dir, { recursive: true, force: true }));
+    const repo = await repository([dir]);
+    await writeFile(path.join(dir, "file"), "base\n");
+    await stage(repo, [], true, false);
+    await createCommit(repo, ["base"], undefined, false);
+    await branchCommand(repo, false, "upstream", undefined);
+    await writeFile(path.join(dir, "file"), "local\n");
+    await stage(repo, [], true, false);
+    const original = await createCommit(
+      repo,
+      ["local"],
+      "Author <author@example.org>",
+      false,
+    );
+    await checkoutCommand(repo, undefined, false, "upstream", []);
+    await writeFile(path.join(dir, "file"), "remote\n");
+    await stage(repo, [], true, false);
+    const onto = await createCommit(repo, ["remote"], undefined, false);
+    await checkoutCommand(repo, undefined, false, "main", []);
+    await assert.rejects(rebaseCommand(repo, "upstream"), /rebase conflicts/);
+    assert.equal(await git.resolveRef({ fs, ...repo, ref: "main" }), original);
+    assert.equal((await conflictEntries(await repository([dir]))).size, 1);
+    if (action === "continue") {
+      await writeFile(path.join(dir, "file"), "resolved\n");
+      await stage(await repository([dir]), ["file"], false, false);
+      await continueRebase(await repository([dir]));
+      const oid = await git.resolveRef({ fs, ...repo, ref: "HEAD" });
+      const commit = (await git.readCommit({ fs, ...repo, oid })).commit;
+      assert.deepEqual(commit.parent, [onto]);
+      assert.equal(commit.author.name, "Author");
+      assert.equal(commit.message, "local\n");
+    } else if (action === "skip") {
+      await skipRebase(await repository([dir]));
+      assert.equal(await git.resolveRef({ fs, ...repo, ref: "HEAD" }), onto);
+      assert.equal(await readFile(path.join(dir, "file"), "utf8"), "remote\n");
+    } else {
+      await abortRebase(await repository([dir]));
+      assert.equal(
+        await git.resolveRef({ fs, ...repo, ref: "HEAD" }),
+        original,
+      );
+      assert.equal(await readFile(path.join(dir, "file"), "utf8"), "local\n");
+    }
+    assert.equal(await git.currentBranch({ fs, ...repo }), "main");
+    assert.deepEqual(await statusEntries(await repository([dir]), []), []);
+  }
 });

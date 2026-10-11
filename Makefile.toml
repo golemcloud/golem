@@ -847,7 +847,7 @@ cargo-test-r run --package integration-tests --test memory-billing -- --nocaptur
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs all CLI integration tests"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -936,8 +936,8 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-core]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'core' shard (untagged tests, i.e. app::app)"
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
+description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -1847,6 +1847,17 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.prepare-git-differential-tests]
+description = "Builds the pinned native Git reference and patched Git library for differential tests"
+script_runner = "@duckscript"
+script = '''
+cd builtin-tools/git
+exec --fail-on-error node scripts/prepare-native-tests.mjs
+exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
+exec --fail-on-error npm run build:git-library
+cd ../..
+'''
+
 [tasks.build-git-tool]
 dependencies = ["wit"]
 description = "Builds the built-in Git tool component"
@@ -1861,6 +1872,7 @@ exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/git
 exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
+exec --fail-on-error npm run build:git-library
 exec --fail-on-error npm run verify:release
 exec --fail-on-error npm test
 exec --fail-on-error npm run typecheck
