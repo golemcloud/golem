@@ -538,34 +538,42 @@ jobs:
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
 
+      # core only generates Scala source; bridge_gen_rust compiles only Rust bridges.
       - name: Setup Java
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
       - name: Setup SBT
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
         uses: sbt/setup-sbt@v1
 
       # Warm the coursier cache for the bridge shard's Scala deps.
       - name: Cache scala dependencies
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
         uses: coursier/cache-action@v8
 
       - name: Setup MoonBit
+        if: matrix.group.shard != 'bridge_gen_rust'
         uses: hustcer/setup-moonbit@v1
         with:
           version: ${{ env.MOONBIT_INSTALL_VERSION }}
           core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
 
       - name: Install MoonBit SDK tools dependencies
+        if: matrix.group.shard != 'bridge_gen_rust'
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
       - name: Install Golem MoonBit wit-bindgen
+        if: matrix.group.shard != 'bridge_gen_rust'
         run: ./scripts/install-wit-bindgen.sh
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Generate MoonBit WIT bindings
+        if: matrix.group.shard != 'bridge_gen_rust'
         run: ./scripts/regen-bindings.sh
         working-directory: sdks/moonbit/golem_sdk
 
@@ -573,19 +581,23 @@ jobs:
         run: cargo make wit
 
       - name: Restore Scala guest runtime WASMs (built by build-golem-scala)
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
         uses: actions/download-artifact@v8
         with:
           name: agent-guest-wasm
           path: tmp/sdk-artifacts
       - name: Extract Scala guest runtime WASMs
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
         run: tar -xzf tmp/sdk-artifacts/agent-guest-wasm.tar.gz
 
       - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
         uses: actions/download-artifact@v8
         with:
           name: scala-sdk-ivy-local
           path: tmp/sdk-artifacts
       - name: Extract Scala SDK ivy local repo
+        if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust'
         run: |
           mkdir -p ~/.ivy2
           tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
