@@ -360,6 +360,28 @@ mod write {
         assert_eq!(content(&directory.join("b")), "HI\n");
     }
 
+    /// Input from a here-string and from a file arrives with no wait, as input from a writer
+    /// that has ended does.
+    #[test]
+    fn tee_gives_input_that_is_ready_to_the_file_writer() {
+        let directory = directory("ready");
+        let outcome = run(
+            &format!("cd {}; tee a <<< here; tee b < f", directory.display()),
+            Answer::UpperCase,
+        );
+        assert_eq!(
+            (outcome.status, outcome.stdout.as_str()),
+            (0, "here\none\ntwo\n")
+        );
+        assert_eq!(
+            outcome.asked,
+            [
+                (directory.join("a"), "here\n".to_owned()),
+                (directory.join("b"), "one\ntwo\n".to_owned())
+            ]
+        );
+    }
+
     #[test]
     fn tee_replaces_the_content_of_a_file_that_exists() {
         let directory = directory("replace");
