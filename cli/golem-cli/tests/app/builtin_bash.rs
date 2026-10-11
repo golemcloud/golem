@@ -1304,6 +1304,232 @@ async fn bound_bash_routes_a_siblings_stderr() {
     );
 }
 
+// The owner whose shell has no `read-file` tool: `cat` reads each file itself.
+const PLAIN_OWNER: &str = r#"BashOnlyOwner("isolated")"#;
+
+// Start an isolated server with two owners: one with `read-file` bound next to bash and the
+// sibling, and one with bash only.
+async fn context_with_read_file() -> TestContext {
+    let mut ctx = TestContext::new();
+    write_component(&ctx);
+    write_manifest(
+        &ctx,
+        indoc! {r#"
+            tools:
+              bash:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: bash
+                  version: "0.2.1"
+              read-file:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: read-file
+                  version: "0.4.1"
+              fixture: {}
+            agents:
+              BashOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+                  read-file:
+                    filesystemAccess: allowed
+                  fixture:
+                    filesystemAccess: allowed
+              BashOnlyOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+            environments:
+              local:
+                server: local
+                componentPresets: release
+        "#},
+    );
+    ctx.start_server().await;
+    deploy(&ctx).await;
+    create_owners(&ctx, &[OWNER, PLAIN_OWNER]).await;
+    ctx
+}
+
+// The path of each `read-file` call in the oplog of `owner`, in order. Each call must have
+// blocked the script, which its call mode records.
+async fn read_file_calls(ctx: &TestContext, owner: &str) -> Vec<String> {
+    let oplog = ctx
+        .cli([cmd::AGENT, "oplog", owner, flag::FORMAT, "json"])
+        .await;
+    assert!(oplog.success_or_dump());
+    let text = |entry: &Value, pointer: &str| {
+        entry
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    oplog
+        .stdout_json::<Value>()
+        .into_iter()
+        .filter(|entry| {
+            text(entry, "/entry/type").as_deref() == Some("Start")
+                && text(entry, "/entry/functionName").as_deref() == Some("golem::entity::invoke")
+                && text(entry, "/attribution/invocation/entity/name").as_deref()
+                    == Some("read-file")
+        })
+        .map(|entry| {
+            assert_eq!(
+                text(&entry, "/attribution/invocation/callMode").as_deref(),
+                Some("synchronous"),
+                "{entry:#}"
+            );
+            text(&entry, "/entry/request/value/value/fields/0/value")
+                .unwrap_or_else(|| panic!("a read-file call without a path: {entry:#}"))
+        })
+        .collect()
+}
+
+// The `read-file` calls that the owner with the tool made after the first `seen` ones, which
+// are counted as seen from now on.
+async fn new_read_file_calls(ctx: &TestContext, seen: &mut usize) -> Vec<String> {
+    let calls = read_file_calls(ctx, OWNER).await;
+    let new = calls[*seen..].to_vec();
+    *seen = calls.len();
+    new
+}
+
+// Runs `script` on the owner with `read-file` and on the owner without it. A script must not
+// see where `cat` gets the content of a file, so the two results must be equal.
+async fn on_both_owners(ctx: &TestContext, cwd: &str, script: &str) -> BashResult {
+    let with_tool = invoke(ctx, OWNER, cwd, script).await;
+    let without_tool = invoke(ctx, PLAIN_OWNER, cwd, script).await;
+    assert_eq!(with_tool.stdout, without_tool.stdout, "{script}");
+    assert_eq!(with_tool.stderr, without_tool.stderr, "{script}");
+    assert_eq!(with_tool.exit_code, without_tool.exit_code, "{script}");
+    assert_eq!(with_tool.cwd, without_tool.cwd, "{script}");
+    with_tool
+}
+
+// With `read-file` bound, `cat` takes the content of a text file from the tool. The pinned bash
+// artifact was built from a source in which `cat` did not do that, so the test cannot pass with it.
+#[test]
+#[timeout("20 minutes")]
+#[ignore = "needs a bash artifact in which cat takes file content from read-file"]
+async fn bound_bash_cat_reads_text_files_through_read_file() {
+    let ctx = context_with_read_file().await;
+    let (address, mut arrived, stop, server) = checkpoint_server().await;
+    let directory = "/tmp/builtin-bash/forward";
+    let made = on_both_owners(&ctx, "", &format!("mkdir -p {directory}; cd {directory}")).await;
+    assert_result(&made, "", "", 0);
+    let path = |file: &str| format!("{directory}/{file}");
+    let mut seen = 0;
+
+    // `read-file` returns at most 200 lines for each call, so 1,000 lines take five calls.
+    let lines = on_both_owners(
+        &ctx,
+        directory,
+        "seq 1 1000 | sed 's/^/line /' > lines; cat lines | cksum",
+    )
+    .await;
+    assert_eq!(
+        (lines.stderr.as_str(), lines.exit_code),
+        ("", 0),
+        "{lines:?}"
+    );
+    assert_eq!(
+        new_read_file_calls(&ctx, &mut seen).await,
+        vec![path("lines"); 5]
+    );
+
+    // Pages that end in the middle of a line, of a character and of a CR LF pair, a file with
+    // no final newline and one with a byte order mark: the pages are the bytes of the file.
+    let edges = indoc! {r#"
+        printf '%70000s\n' '' | tr ' ' x > long
+        printf '%65535s' '' | tr ' ' a > wide; printf 'é\n' >> wide
+        printf '%65535s' '' | tr ' ' a > crlf; printf '\r\nb\r\n' >> crlf
+        printf 'a\nb' > tail
+        printf '\357\273\277a\n' > bom
+        for file in long wide crlf tail bom; do cat $file | cksum; done
+    "#};
+    let edges = on_both_owners(&ctx, directory, edges).await;
+    assert_eq!(
+        (edges.stderr.as_str(), edges.exit_code),
+        ("", 0),
+        "{edges:?}"
+    );
+    let mut read = new_read_file_calls(&ctx, &mut seen).await;
+    read.dedup();
+    assert_eq!(read, ["long", "wide", "crlf", "tail", "bom"].map(path));
+
+    // `read-file` refuses a file with a NUL byte, and `cat` then reads it itself. A missing
+    // file never reaches the tool. After both, the tool is still used.
+    let refused = indoc! {r#"
+        printf 'a\0b\n' > binary
+        cat binary | od -An -c
+        cat missing; echo "status=$?"
+        cat lines missing lines | wc -l; echo "status=${PIPESTATUS[0]}"
+    "#};
+    let refused = on_both_owners(&ctx, directory, refused).await;
+    assert_result(
+        &refused,
+        "   a  \\0   b  \\n\nstatus=1\n2000\nstatus=1\n",
+        "cat: missing: No such file or directory\ncat: missing: No such file or directory\n",
+        0,
+    );
+    let mut expected = vec![path("binary")];
+    expected.extend(vec![path("lines"); 10]);
+    assert_eq!(new_read_file_calls(&ctx, &mut seen).await, expected);
+
+    // A read through the tool is not a wait: `cat` ends before a reader that exits at once, as
+    // it does when it reads the file itself.
+    let early = on_both_owners(
+        &ctx,
+        directory,
+        "printf 'a\\nb\\n' > small; set -o pipefail; cat small | head -n 0; echo \"${PIPESTATUS[*]}\"",
+    )
+    .await;
+    assert_result(&early, "0 0\n", "", 0);
+    assert_eq!(new_read_file_calls(&ctx, &mut seen).await, [path("small")]);
+
+    // A replay runs each read through the tool again and gives the owner the same files.
+    simulate_crash(&ctx).await;
+    let replayed = invoke(&ctx, OWNER, directory, "cat lines | cksum").await;
+    assert_result(&replayed, &lines.stdout, "", 0);
+    assert_eq!(
+        new_read_file_calls(&ctx, &mut seen).await,
+        vec![path("lines"); 5]
+    );
+
+    // A job that has not started does not run during the read. This one ends only after `cat`.
+    let job = on_both_owners(
+        &ctx,
+        directory,
+        "rm -f go; ( until [ -e go ]; do :; done; echo job ) & cat small; touch go; wait",
+    )
+    .await;
+    assert_result(&job, "a\nb\njob\n", "", 0);
+    assert_eq!(new_read_file_calls(&ctx, &mut seen).await, [path("small")]);
+
+    // While a sibling call is in flight, `cat` reads the file itself. A read through the tool
+    // would wait for the sibling, and the sibling is held until the script has passed `cat`.
+    let held = formatdoc! {r#"
+        fixture checkpoint "$PWD/held" {address} >/dev/null &
+        until [ "$(curl -s http://{address}/arrivals)" = 1 ]; do sleep 0.01; done
+        cat small
+        curl -s http://{address}/checkpoint
+        wait
+    "#};
+    let (held, ()) = tokio::join!(invoke(&ctx, OWNER, directory, &held), async {
+        let sibling = next_arrival(&mut arrived).await;
+        let after_cat = next_arrival(&mut arrived).await;
+        sibling.release.send(()).unwrap();
+        after_cat.release.send(()).unwrap();
+    });
+    assert_result(&held, "a\nb\n", "", 0);
+    assert!(new_read_file_calls(&ctx, &mut seen).await.is_empty());
+
+    assert!(read_file_calls(&ctx, PLAIN_OWNER).await.is_empty());
+    let _ = stop.send(());
+    server.await.unwrap();
+}
+
 // Quarantined: after `simulate-crash`, an owner parked on a background job's pending sibling call
 // is sometimes never reconstructed, so the recovered call's request never arrives (3 of 7 runs,
 // locally and in CI). Nothing in the bash tool runs in that window; it looks like the executor's

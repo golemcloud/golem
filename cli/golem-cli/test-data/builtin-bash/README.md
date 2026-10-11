@@ -34,6 +34,16 @@ and that a later crash replays completed invocations without another request. It
 (`#[ignore]`): since #3992, replaying the owner after that crash sometimes fails with `Unexpected oplog
 entry during replay`, so the in-flight request is never re-sent.
 
+`app::builtin_bash::bound_bash_cat_reads_text_files_through_read_file` binds the built-in
+`read-file` tool to one owner. It runs each script on that owner and on an owner without the tool,
+and the two results must be equal. In the oplog it checks which files `cat` took from the tool:
+1,000 lines in five calls, and files whose pages end inside a line, inside a character and inside
+a CR LF pair. It also checks that a file with a NUL byte and a missing file give GNU's output, that
+`cat` ends before a reader that exits at once, that a replay passes the reads, that a job that has
+not started does not run during a read, and that `cat` reads the file itself while a sibling call
+is in flight. It is ignored (`#[ignore]`) while the pinned `bash` artifact is one in which `cat`
+does not take file content from `read-file`.
+
 `app::builtin_bash::bound_bash_background_jobs_signal_and_cancel_siblings` covers the process
 model in Golem. It checks that each call gets a new `$$`, and that `kill` and the end of a run
 cancel a background job's pending sibling call, whose `after` effect is never written, and that
