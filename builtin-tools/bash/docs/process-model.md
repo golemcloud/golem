@@ -239,28 +239,46 @@ sequenceDiagram
   T-->>G: operation settles as cancelled
 ```
 
-### Bash tool: reads that `cat` takes from `read-file`
+### Bash tool: work that a local command gives to a file tool
 
-`component/src/forward.rs` gives the shell a file reader when the built-in `read-file` tool is
-bound. `cat` opens a file itself and then asks the reader for its content. The reader calls
-`tool-rpc.invoke-and-await` for each page, and it blocks the component until the tool has answered
+`component/src/forward.rs` gives the shell a file reader, a file writer and a file editor when
+the built-in `read-file`, `write-file` and `edit-file` tools are bound. `cat` asks the reader for
+the content of a file that it has opened, `tee` gives the writer the content of a file when its
+input ends, and `sed -i` gives the editor the old and the new content of a file. Each of them
+calls `tool-rpc.invoke-and-await`, and it blocks the component until the tool has answered
 (`execution::block_on`).
 
-- For a script, a read of a file is one step: no other process of the call runs in it. A read
-  that waited for the tool in the usual way would be a wait, in which the next stage of a
-  pipeline runs. A reader that exits at once would then end `cat` with SIGPIPE, where a `cat`
-  that reads the file itself ends with status 0. The blocking wait keeps the read one step.
+- For a script, the work of a command on a file is one step: no other process of the call runs
+  in it. A call that waited for the tool in the usual way would be a wait, in which the next
+  stage of a pipeline runs. A reader that exits at once would then end `cat` with SIGPIPE, where
+  a `cat` that reads the file itself ends with status 0. The blocking wait keeps the work one
+  step.
 - The guest runtime gives a blocking wait each task that was spawned and has not been polled
   yet, and the wait would run that task to its end. `component/src/blocking.rs` therefore wraps
   each task of the shell. While a blocking wait runs, a wrapped task that is polled goes back
   without a poll, and it is spawned again after the wait, in the same order.
-- The reader is not used while another sibling call of the script is in flight. The body of that
-  call can wait for the script, to hand over its output for example. The body of `read-file`
+- A tool is not used while another sibling call of the script is in flight. The body of that
+  call can wait for the script, to hand over its output for example. The body of a file tool
   waits for that body, because Golem runs one filesystem-capable body of an owner at a time. A
   script that stands still would then wait forever.
-- The read gives each byte of the file or nothing. The number of bytes must be the size that
-  `cat` saw when it opened the file, and each cursor must be at the end of the bytes so far. If
-  not, `cat` reads the file that it has opened.
+- The tool does all of the work for a file or nothing. For `cat`, the number of bytes must be
+  the size that `cat` saw when it opened the file, and each cursor must be at the end of the
+  bytes so far. `tee` and `sed` look at the size of the file after the call. If a check fails,
+  the command does the work itself: `cat` reads the file that it has opened, `tee` empties the
+  file and writes it, and `sed` makes its rename.
+- `write-file` takes a file only as a whole, and `tee` takes its input piece by piece. Another
+  process of the call can run only while `tee` waits. So `tee` holds the bytes for a file while
+  it does not wait, and it writes them to the file itself before each wait
+  (`before_each_wait` in `shell/src/tools/streaming.rs`). From then on it writes that file
+  itself. A file thus never has fewer bytes than `tee` has taken when another process looks.
+- `sed -i` is code of the `sed` fork. It writes the new content to a copy in the same directory
+  and renames the copy over the file. The build wraps the `rename` of libc, and
+  `shell/src/tools/in_place.rs` answers it while such a run has a file editor: the editor
+  changes the file, and the copy is removed. The rename puts a new file in the place of the old
+  one, and the editor changes the old file. A process can see that difference only through
+  another name of the file or through a descriptor on it. So the rename is made for a symbolic
+  link, for a file with a second name, and for a file on which a descriptor from before the run
+  is open. The wrappers of `open` and `close` keep the list of open descriptors for that.
 
 ### Replay safety
 
@@ -269,7 +287,8 @@ or a result is either in the call's input or recorded by Golem:
 
 - the random `shell_pid`;
 - timers, including the 1-second grace;
-- sibling calls and their cancellation, which include each page that `cat` took from `read-file`;
+- sibling calls and their cancellation, which include each call that a local command made to a
+  file tool;
 - the completion order the guest observed.
 
 A recovered run therefore allocates the same numbers and produces byte-identical output. This is

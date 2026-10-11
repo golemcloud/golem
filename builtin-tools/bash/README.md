@@ -200,21 +200,51 @@ flowchart TD
   output draining and terminal waiting run together; independent local stages can progress. Each
   attachment is limited to 16 MiB, the host's `max_tool_attachment_bytes`. The call's own output and substitutions are bounded too; see
   [Limits](#limits).
-- A local command can take work from a bound tool. With the built-in `read-file` tool bound,
-  `cat` takes the content of each regular file from it, with one `read-file` call for each page
-  (200 lines or 64 KiB). `cat` formats and writes those bytes as it always does, so a script sees
-  the same output, messages and status with the tool and without it. `cat` opens the file itself
-  first, and it reads the file itself when the tool does not give each byte of it: an empty
-  file, a file with a NUL byte or invalid UTF-8, a file above 1 MiB or one that needs more than
-  64 calls, a path with `..`, and a call that fails or is refused. After such a failure the tool
-  is not used for the rest of the call, and one line in the agent's log says so. Standard input,
-  a named descriptor, `/dev/null` and a directory never go to the tool. The script stands still
-  during the read, as it does while `cat` reads a file itself: no other pipeline stage, job or
-  timer of the call runs, so `cat small | head -n 0` keeps its status. For the same reason the
-  tool is not asked while another bound tool call of the script is in flight. Each page that the
-  tool returns is recorded in the agent's oplog, and a replay makes each of these calls again.
-  A tool that is bound under the name `read-file` with other commands, arguments or result is
-  not used.
+- A local command can give part of its work to a built-in file tool that is bound to the agent.
+  The command keeps its own code for all its other work, so a script sees the same output,
+  messages and status with the tool and without it.
+
+  | Command | Part of its work | Tool |
+  |---|---|---|
+  | `cat` | reads the content of a regular file | `read-file`, one call for each page (200 lines or 64 KiB) |
+  | `tee` | writes the content of a regular file | `write-file`, one call for each file |
+  | `sed -i` | puts the new content of a file in the place of the old content | `edit-file`, one call for each file |
+
+  The tool does all of that work for a file or nothing. When it does nothing, the command does
+  the work itself, as it does with no tool bound. These rules are the same for each command:
+
+  - The tools take UTF-8 text and a path without `..`. Other content and other paths stay with
+    the command, and so does a file above 1 MiB.
+  - When a call fails or is refused, the command does the work itself. After such a failure
+    that tool is not used for the rest of the call, and one line in the agent's log says so.
+  - The script stands still during a call, as it does while a command works on a file itself:
+    no other pipeline stage, job or timer of the call runs. So `cat small | head -n 0` keeps
+    its status. For the same reason a tool is not asked while another bound tool call of the
+    script is in flight.
+  - Each call is recorded in the agent's oplog with its text: each page that `read-file`
+    returns, the content for `write-file`, and the two texts for `edit-file`. A replay makes
+    each of these calls again.
+  - A tool that is bound under one of these names with other commands, arguments or result is
+    not used.
+
+  `cat` opens the file itself first. It also reads the file itself when the file is empty, has
+  a NUL byte or invalid UTF-8, or needs more than 64 calls. Standard input, a named descriptor,
+  `/dev/null` and a directory never go to the tool.
+
+  `tee` opens the file itself, which makes or empties it. It holds the bytes for the file and
+  gives them to the tool when its input ends. The tool takes a file only as a whole, so `tee`
+  writes the file itself when it adds to the file (`-a`), and when it must wait before its
+  input ends, for more input or for the reader of its output. It then writes what it holds
+  before it waits, so another part of the script never sees a file that has fewer bytes than
+  `tee` has taken. A standard stream and `/dev/null` never go to the tool.
+
+  `sed` makes the new content itself. Its last step puts that content in the place of the old
+  content, and with the tool that step is one call: it replaces the text between the first and
+  the last difference. The tool changes the file that is there, where `sed -i` puts a new file
+  in its place. A script can see that difference only through another name of the file or
+  through a descriptor that it has open on the file. So `sed` replaces the file itself when the
+  file is a symbolic link, has a second name or is open in the script, and when `-i` has a
+  suffix for a copy. A file that has a NUL byte or no content also stays with `sed`.
 
 ## Commands
 
@@ -349,8 +379,8 @@ with bash's message (``bash: -c: line 2: syntax error near unexpected token `the
 | Commands | Source |
 |---|---|
 | `b2sum base32 base64 basename basenc cksum comm cp csplit date dd dirname du env expand expr factor fmt fold join link ln ls md5sum mkdir mktemp mv nl numfmt od paste readlink realpath rm rmdir sha1sum sha256sum sha512sum shuf sort split touch truncate tsort unexpand unlink uname nproc` | uutils Coreutils fork, run to completion on the command's input |
-| `cat cut head printf sleep tail tee tr uniq wc` | Coreutils fork, with drivers that stream one record at a time; `cat` takes the content of a text file from a bound `read-file` (see [Implementation](#implementation)) |
-| `sed` | uutils sed fork with a record-at-a-time engine; `-i` and `-s` run on whole files |
+| `cat cut head printf sleep tail tee tr uniq wc` | Coreutils fork, with drivers that stream one record at a time; `cat` reads and `tee` writes a text file through a bound `read-file` or `write-file` (see [Implementation](#implementation)) |
+| `sed` | uutils sed fork with a record-at-a-time engine; `-i` and `-s` run on whole files, and `-i` changes a text file through a bound `edit-file` (see [Implementation](#implementation)) |
 | `grep` | GNU grep 3.12 options and BRE/ERE dialect, over `regex` and `fancy-regex` (`-P`, back-references) |
 | `jq` | jaq with jq's CLI options and a jq-compatible fork of `jaq-json` |
 | `diff` | uutils diffutils formatters, driven by our own CLI (`-r`, `-N`, `-q`, `-y` and more) |
