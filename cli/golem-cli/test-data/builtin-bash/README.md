@@ -34,15 +34,27 @@ and that a later crash replays completed invocations without another request. It
 (`#[ignore]`): since #3992, replaying the owner after that crash sometimes fails with `Unexpected oplog
 entry during replay`, so the in-flight request is never re-sent.
 
-`app::builtin_bash::bound_bash_cat_reads_text_files_through_read_file` binds the built-in
-`read-file` tool to one owner. It runs each script on that owner and on an owner without the tool,
-and the two results must be equal. In the oplog it checks which files `cat` took from the tool:
-1,000 lines in five calls, and files whose pages end inside a line, inside a character and inside
-a CR LF pair. It also checks that a file with a NUL byte and a missing file give GNU's output, that
-`cat` ends before a reader that exits at once, that a replay passes the reads, that a job that has
-not started does not run during a read, and that `cat` reads the file itself while a sibling call
-is in flight. It is ignored (`#[ignore]`) while the pinned `bash` artifact is one in which `cat`
-does not take file content from `read-file`.
+Three tests bind the built-in `read-file`, `write-file` and `edit-file` tools to one owner. Each
+test runs its scripts on that owner and on an owner without the tools, and the two results must be
+equal. In the oplog it checks which files went to the tool.
+
+- `app::builtin_bash::bound_bash_cat_reads_text_files_through_read_file`: 1,000 lines in five
+  calls, and files whose pages end inside a line, inside a character and inside a CR LF pair. A
+  file with a NUL byte and a missing file give GNU's output, and `cat` ends before a reader that
+  exits at once.
+- `app::builtin_bash::bound_bash_tee_writes_text_files_through_write_file`: a text, bytes that
+  need care, two operands and a file that exists. `tee` writes the file itself for an append, for
+  bytes that are not text and for no input. When `tee` must wait for more input, the file has the
+  bytes so far.
+- `app::builtin_bash::bound_bash_sed_changes_text_files_in_place_through_edit_file`: one line, a
+  new, a removed and a changed line, and a file with no change. `sed` replaces the file itself for
+  a copy under a suffix, a symbolic link, a file with a second name and a file that the script
+  has open.
+
+Each test also checks that a replay passes the calls, and that the command does the work itself
+while a sibling call is in flight. The `cat` and `tee` tests check that a job that has not started
+does not run during a call. The three tests are ignored (`#[ignore]`) while the pinned `bash`
+artifact is one in which these commands do not use the tools.
 
 `app::builtin_bash::bound_bash_background_jobs_signal_and_cancel_siblings` covers the process
 model in Golem. It checks that each call gets a new `$$`, and that `kill` and the end of a run

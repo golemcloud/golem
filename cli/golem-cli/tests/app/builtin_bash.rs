@@ -1304,12 +1304,12 @@ async fn bound_bash_routes_a_siblings_stderr() {
     );
 }
 
-// The owner whose shell has no `read-file` tool: `cat` reads each file itself.
+// The owner whose shell has no file tool: each command does all of its work itself.
 const PLAIN_OWNER: &str = r#"BashOnlyOwner("isolated")"#;
 
-// Start an isolated server with two owners: one with `read-file` bound next to bash and the
-// sibling, and one with bash only.
-async fn context_with_read_file() -> TestContext {
+// Start an isolated server with two owners: one with `read-file`, `write-file` and `edit-file`
+// bound next to bash and the sibling, and one with bash only.
+async fn context_with_file_tools() -> TestContext {
     let mut ctx = TestContext::new();
     write_component(&ctx);
     write_manifest(
@@ -1326,6 +1326,16 @@ async fn context_with_read_file() -> TestContext {
                   account: builtin-tool-owner@golem.cloud
                   name: read-file
                   version: "0.4.1"
+              write-file:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: write-file
+                  version: "0.4.1"
+              edit-file:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: edit-file
+                  version: "0.4.1"
               fixture: {}
             agents:
               BashOwner:
@@ -1333,6 +1343,10 @@ async fn context_with_read_file() -> TestContext {
                   bash:
                     filesystemAccess: allowed
                   read-file:
+                    filesystemAccess: allowed
+                  write-file:
+                    filesystemAccess: allowed
+                  edit-file:
                     filesystemAccess: allowed
                   fixture:
                     filesystemAccess: allowed
@@ -1352,9 +1366,9 @@ async fn context_with_read_file() -> TestContext {
     ctx
 }
 
-// The path of each `read-file` call in the oplog of `owner`, in order. Each call must have
-// blocked the script, which its call mode records.
-async fn read_file_calls(ctx: &TestContext, owner: &str) -> Vec<String> {
+// The path of each call of the bound tool `tool` in the oplog of `owner`, in order. Each call
+// must have blocked the script, which its call mode records.
+async fn tool_calls(ctx: &TestContext, owner: &str, tool: &str) -> Vec<String> {
     let oplog = ctx
         .cli([cmd::AGENT, "oplog", owner, flag::FORMAT, "json"])
         .await;
@@ -1371,8 +1385,7 @@ async fn read_file_calls(ctx: &TestContext, owner: &str) -> Vec<String> {
         .filter(|entry| {
             text(entry, "/entry/type").as_deref() == Some("Start")
                 && text(entry, "/entry/functionName").as_deref() == Some("golem::entity::invoke")
-                && text(entry, "/attribution/invocation/entity/name").as_deref()
-                    == Some("read-file")
+                && text(entry, "/attribution/invocation/entity/name").as_deref() == Some(tool)
         })
         .map(|entry| {
             assert_eq!(
@@ -1381,30 +1394,30 @@ async fn read_file_calls(ctx: &TestContext, owner: &str) -> Vec<String> {
                 "{entry:#}"
             );
             text(&entry, "/entry/request/value/value/fields/0/value")
-                .unwrap_or_else(|| panic!("a read-file call without a path: {entry:#}"))
+                .unwrap_or_else(|| panic!("a {tool} call without a path: {entry:#}"))
         })
         .collect()
 }
 
-// The `read-file` calls that the owner with the tool made after the first `seen` ones, which
-// are counted as seen from now on.
-async fn new_read_file_calls(ctx: &TestContext, seen: &mut usize) -> Vec<String> {
-    let calls = read_file_calls(ctx, OWNER).await;
+// The calls of `tool` that the owner with the file tools made after the first `seen` ones,
+// which are counted as seen from now on.
+async fn new_tool_calls(ctx: &TestContext, tool: &str, seen: &mut usize) -> Vec<String> {
+    let calls = tool_calls(ctx, OWNER, tool).await;
     let new = calls[*seen..].to_vec();
     *seen = calls.len();
     new
 }
 
-// Runs `script` on the owner with `read-file` and on the owner without it. A script must not
-// see where `cat` gets the content of a file, so the two results must be equal.
+// Runs `script` on the owner with the file tools and on the owner without them. A script must
+// not see which part of its work a command gives to a tool, so the two results must be equal.
 async fn on_both_owners(ctx: &TestContext, cwd: &str, script: &str) -> BashResult {
-    let with_tool = invoke(ctx, OWNER, cwd, script).await;
-    let without_tool = invoke(ctx, PLAIN_OWNER, cwd, script).await;
-    assert_eq!(with_tool.stdout, without_tool.stdout, "{script}");
-    assert_eq!(with_tool.stderr, without_tool.stderr, "{script}");
-    assert_eq!(with_tool.exit_code, without_tool.exit_code, "{script}");
-    assert_eq!(with_tool.cwd, without_tool.cwd, "{script}");
-    with_tool
+    let with_tools = invoke(ctx, OWNER, cwd, script).await;
+    let without_tools = invoke(ctx, PLAIN_OWNER, cwd, script).await;
+    assert_eq!(with_tools.stdout, without_tools.stdout, "{script}");
+    assert_eq!(with_tools.stderr, without_tools.stderr, "{script}");
+    assert_eq!(with_tools.exit_code, without_tools.exit_code, "{script}");
+    assert_eq!(with_tools.cwd, without_tools.cwd, "{script}");
+    with_tools
 }
 
 // With `read-file` bound, `cat` takes the content of a text file from the tool. The pinned bash
@@ -1413,7 +1426,7 @@ async fn on_both_owners(ctx: &TestContext, cwd: &str, script: &str) -> BashResul
 #[timeout("20 minutes")]
 #[ignore = "needs a bash artifact in which cat takes file content from read-file"]
 async fn bound_bash_cat_reads_text_files_through_read_file() {
-    let ctx = context_with_read_file().await;
+    let ctx = context_with_file_tools().await;
     let (address, mut arrived, stop, server) = checkpoint_server().await;
     let directory = "/tmp/builtin-bash/forward";
     let made = on_both_owners(&ctx, "", &format!("mkdir -p {directory}; cd {directory}")).await;
@@ -1434,7 +1447,7 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
         "{lines:?}"
     );
     assert_eq!(
-        new_read_file_calls(&ctx, &mut seen).await,
+        new_tool_calls(&ctx, "read-file", &mut seen).await,
         vec![path("lines"); 5]
     );
 
@@ -1454,7 +1467,7 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
         ("", 0),
         "{edges:?}"
     );
-    let mut read = new_read_file_calls(&ctx, &mut seen).await;
+    let mut read = new_tool_calls(&ctx, "read-file", &mut seen).await;
     read.dedup();
     assert_eq!(read, ["long", "wide", "crlf", "tail", "bom"].map(path));
 
@@ -1475,7 +1488,7 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
     );
     let mut expected = vec![path("binary")];
     expected.extend(vec![path("lines"); 10]);
-    assert_eq!(new_read_file_calls(&ctx, &mut seen).await, expected);
+    assert_eq!(new_tool_calls(&ctx, "read-file", &mut seen).await, expected);
 
     // A read through the tool is not a wait: `cat` ends before a reader that exits at once, as
     // it does when it reads the file itself.
@@ -1486,14 +1499,17 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
     )
     .await;
     assert_result(&early, "0 0\n", "", 0);
-    assert_eq!(new_read_file_calls(&ctx, &mut seen).await, [path("small")]);
+    assert_eq!(
+        new_tool_calls(&ctx, "read-file", &mut seen).await,
+        [path("small")]
+    );
 
     // A replay runs each read through the tool again and gives the owner the same files.
     simulate_crash(&ctx).await;
     let replayed = invoke(&ctx, OWNER, directory, "cat lines | cksum").await;
     assert_result(&replayed, &lines.stdout, "", 0);
     assert_eq!(
-        new_read_file_calls(&ctx, &mut seen).await,
+        new_tool_calls(&ctx, "read-file", &mut seen).await,
         vec![path("lines"); 5]
     );
 
@@ -1505,7 +1521,10 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
     )
     .await;
     assert_result(&job, "a\nb\njob\n", "", 0);
-    assert_eq!(new_read_file_calls(&ctx, &mut seen).await, [path("small")]);
+    assert_eq!(
+        new_tool_calls(&ctx, "read-file", &mut seen).await,
+        [path("small")]
+    );
 
     // While a sibling call is in flight, `cat` reads the file itself. A read through the tool
     // would wait for the sibling, and the sibling is held until the script has passed `cat`.
@@ -1523,9 +1542,280 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
         after_cat.release.send(()).unwrap();
     });
     assert_result(&held, "a\nb\n", "", 0);
-    assert!(new_read_file_calls(&ctx, &mut seen).await.is_empty());
+    assert!(
+        new_tool_calls(&ctx, "read-file", &mut seen)
+            .await
+            .is_empty()
+    );
 
-    assert!(read_file_calls(&ctx, PLAIN_OWNER).await.is_empty());
+    assert!(tool_calls(&ctx, PLAIN_OWNER, "read-file").await.is_empty());
+    let _ = stop.send(());
+    server.await.unwrap();
+}
+
+// With `write-file` bound, `tee` gives the content of a text file to the tool. The pinned bash
+// artifact was built from a source in which `tee` did not do that, so the test cannot pass with it.
+#[test]
+#[timeout("20 minutes")]
+#[ignore = "needs a bash artifact in which tee gives file content to write-file"]
+async fn bound_bash_tee_writes_text_files_through_write_file() {
+    let ctx = context_with_file_tools().await;
+    let (address, mut arrived, stop, server) = checkpoint_server().await;
+    let directory = "/tmp/builtin-bash/forward-write";
+    let made = on_both_owners(&ctx, "", &format!("mkdir -p {directory}; cd {directory}")).await;
+    assert_result(&made, "", "", 0);
+    let path = |file: &str| format!("{directory}/{file}");
+    let mut seen = 0;
+
+    // A text, bytes that need care (NUL, CR LF, a byte order mark, long characters), two
+    // operands, and a file that exists: the file has the bytes that `tee` took.
+    let text = indoc! {r#"
+        printf 'one\ntwo\n' | tee plain; echo "status=$?"
+        printf 'a\0b\r\n\357\273\277\303\251\360\237\230\200' | tee bytes | cksum
+        echo old > first; echo new | tee first second
+        cksum plain bytes first second
+    "#};
+    let text = on_both_owners(&ctx, directory, text).await;
+    assert_eq!((text.stderr.as_str(), text.exit_code), ("", 0), "{text:?}");
+    assert!(text.stdout.starts_with("one\ntwo\nstatus=0\n"), "{text:?}");
+    assert_eq!(
+        new_tool_calls(&ctx, "write-file", &mut seen).await,
+        ["plain", "bytes", "first", "second"].map(path)
+    );
+
+    // `tee` writes the file itself when the tool cannot make the same file: an append, bytes
+    // that are not text, and no input. A file that `tee` cannot open keeps its message.
+    let itself = indoc! {r#"
+        echo more | tee -a plain > /dev/null; cksum < plain
+        printf 'x\377y\n' | tee binary | cksum; cksum < binary
+        tee empty < /dev/null; wc -c < empty
+        echo x | tee missing/file; echo "status=$?"
+    "#};
+    let itself = on_both_owners(&ctx, directory, itself).await;
+    assert_eq!(
+        (itself.stderr.as_str(), itself.exit_code),
+        ("tee: missing/file: No such file or directory\n", 0),
+        "{itself:?}"
+    );
+    assert!(itself.stdout.ends_with("0\nx\nstatus=1\n"), "{itself:?}");
+    assert!(
+        new_tool_calls(&ctx, "write-file", &mut seen)
+            .await
+            .is_empty()
+    );
+
+    // A write through the tool is not a wait: the next stage sees the file as written.
+    let next = on_both_owners(&ctx, directory, "echo hi | tee stage | cat stage").await;
+    assert_result(&next, "hi\n", "", 0);
+    assert_eq!(
+        new_tool_calls(&ctx, "write-file", &mut seen).await,
+        [path("stage")]
+    );
+
+    // A replay makes each write through the tool again and gives the owner the same files.
+    let files = "cksum plain bytes first second stage";
+    let sums = on_both_owners(&ctx, directory, files).await;
+    simulate_crash(&ctx).await;
+    let replayed = invoke(
+        &ctx,
+        OWNER,
+        directory,
+        &format!("{files}; echo again | tee after"),
+    )
+    .await;
+    assert_result(&replayed, &format!("{}again\n", sums.stdout), "", 0);
+    assert_eq!(
+        new_tool_calls(&ctx, "write-file", &mut seen).await,
+        [path("after")]
+    );
+
+    // A job that has not started does not run during the write. This one ends only after `tee`.
+    let job = on_both_owners(
+        &ctx,
+        directory,
+        "rm -f go; ( until [ -e go ]; do :; done; echo job ) & echo x | tee small; touch go; wait",
+    )
+    .await;
+    assert_result(&job, "x\njob\n", "", 0);
+    assert_eq!(
+        new_tool_calls(&ctx, "write-file", &mut seen).await,
+        [path("small")]
+    );
+
+    // The tool takes a file only as a whole. When `tee` must wait for more input, it writes
+    // what it has to the file itself, so another part of the script sees the bytes so far.
+    let waits = formatdoc! {r#"
+        {{ echo first; curl -s http://{address}/checkpoint; cat slow; echo last; }} | tee slow
+    "#};
+    let (waits, ()) = tokio::join!(invoke(&ctx, OWNER, directory, &waits), async {
+        next_arrival(&mut arrived).await.release.send(()).unwrap();
+    });
+    assert_result(&waits, "first\nfirst\nlast\n", "", 0);
+    assert!(
+        new_tool_calls(&ctx, "write-file", &mut seen)
+            .await
+            .is_empty()
+    );
+
+    // While a sibling call is in flight, `tee` writes the file itself. A write through the tool
+    // would wait for the sibling, and the sibling is held until the script has passed `tee`.
+    let held = formatdoc! {r#"
+        fixture checkpoint "$PWD/held" {address} >/dev/null &
+        until [ "$(curl -s http://{address}/arrivals)" = 2 ]; do sleep 0.01; done
+        echo held | tee during
+        curl -s http://{address}/checkpoint
+        wait
+        cat during
+    "#};
+    let (held, ()) = tokio::join!(invoke(&ctx, OWNER, directory, &held), async {
+        let sibling = next_arrival(&mut arrived).await;
+        let after_tee = next_arrival(&mut arrived).await;
+        sibling.release.send(()).unwrap();
+        after_tee.release.send(()).unwrap();
+    });
+    assert_result(&held, "held\nheld\n", "", 0);
+    assert!(
+        new_tool_calls(&ctx, "write-file", &mut seen)
+            .await
+            .is_empty()
+    );
+
+    assert!(tool_calls(&ctx, PLAIN_OWNER, "write-file").await.is_empty());
+    let _ = stop.send(());
+    server.await.unwrap();
+}
+
+// With `edit-file` bound, `sed -i` gives the change of a text file to the tool. The pinned bash
+// artifact was built from a source in which `sed` did not do that, so the test cannot pass with it.
+#[test]
+#[timeout("20 minutes")]
+#[ignore = "needs a bash artifact in which sed -i gives a change to edit-file"]
+async fn bound_bash_sed_changes_text_files_in_place_through_edit_file() {
+    let ctx = context_with_file_tools().await;
+    let (address, mut arrived, stop, server) = checkpoint_server().await;
+    let directory = "/tmp/builtin-bash/forward-edit";
+    let made = on_both_owners(&ctx, "", &format!("mkdir -p {directory}; cd {directory}")).await;
+    assert_result(&made, "", "", 0);
+    let path = |file: &str| format!("{directory}/{file}");
+    let mut seen = 0;
+
+    // One line of a text, bytes that need care (CR LF, a byte order mark, long characters),
+    // two operands, a file that the script does not change, and a new, a removed and a changed
+    // line: the file has the content that `sed` made.
+    let text = indoc! {r#"
+        printf 'one\ntwo\nthree\n' > plain; sed -i s/two/2/ plain; echo "status=$?"; cat plain
+        printf 'a\r\n\357\273\277\303\251\360\237\230\200 x\n' > bytes; sed -i s/x/y/ bytes
+        printf 'k1\n' > first; printf 'k2\n' > second; sed -i s/k/K/ first second
+        sed -i s/none/some/ first
+        printf '1\n2\n3\n' > lines; sed -i '$a last' lines; sed -i 1d lines; sed -i 's/^/> /' lines
+        cksum plain bytes first second lines; ls -A
+    "#};
+    let text = on_both_owners(&ctx, directory, text).await;
+    assert_eq!((text.stderr.as_str(), text.exit_code), ("", 0), "{text:?}");
+    assert!(
+        text.stdout.starts_with("status=0\none\n2\nthree\n"),
+        "{text:?}"
+    );
+    assert!(
+        text.stdout
+            .ends_with("bytes\nfirst\nlines\nplain\nsecond\n"),
+        "{text:?}"
+    );
+    assert_eq!(
+        new_tool_calls(&ctx, "edit-file", &mut seen).await,
+        [
+            "plain", "bytes", "first", "second", "first", "lines", "lines", "lines"
+        ]
+        .map(path)
+    );
+
+    // `sed` replaces the file itself when the tool cannot make the same change: a file with a
+    // NUL byte, a file that is not text, a file with no content, and a copy under a suffix.
+    // The tool changes the file that is there, and `sed -i` puts a new file in its place. So a
+    // symbolic link, a file with another name and a file that the script has open are also
+    // left to `sed`.
+    let itself = indoc! {r#"
+        printf 'a\0b\nx\n' > nul; sed -i s/x/y/ nul; cksum < nul
+        printf 'x\377y\n' > binary; sed -i s/x/z/ binary; cksum < binary
+        : > empty; sed -i s/a/b/ empty; wc -c < empty
+        sed -i.bak s/one/1/ plain; cat plain.bak
+        ln -s plain link; sed -i s/1/one/ link; [ -L link ] || echo "link is a file"; cat plain
+        ln plain other; sed -i s/three/3/ plain; cat other
+        printf 'p\nq\n' > open; exec 3< open; sed -i s/p/P/ open; cat <&3; exec 3<&-; cat open
+    "#};
+    let itself = on_both_owners(&ctx, directory, itself).await;
+    assert_eq!(
+        (itself.stderr.as_str(), itself.exit_code),
+        ("", 0),
+        "{itself:?}"
+    );
+    assert!(
+        itself
+            .stdout
+            .ends_with("one\n2\nthree\nlink is a file\n1\n2\nthree\n1\n2\nthree\np\nq\nP\nq\n"),
+        "{itself:?}"
+    );
+    assert!(
+        new_tool_calls(&ctx, "edit-file", &mut seen)
+            .await
+            .is_empty()
+    );
+
+    // The first `sed -i` of this loop leaves the descriptor of the loop on the old file. So
+    // the second one has a file that the script does not have open, and the tool changes it.
+    let reads_itself = on_both_owners(
+        &ctx,
+        directory,
+        "printf 'x\\ny\\n' > loop; while read -r word; do sed -i \"s/$word/<$word>/\" loop; done < loop; cat loop",
+    )
+    .await;
+    assert_result(&reads_itself, "<x>\n<y>\n", "", 0);
+    assert_eq!(
+        new_tool_calls(&ctx, "edit-file", &mut seen).await,
+        [path("loop")]
+    );
+
+    // A replay makes each change through the tool again and gives the owner the same files.
+    let files = "cksum plain bytes first second lines open loop";
+    let sums = on_both_owners(&ctx, directory, files).await;
+    simulate_crash(&ctx).await;
+    let replayed = invoke(
+        &ctx,
+        OWNER,
+        directory,
+        &format!("{files}; sed -i s/q/Q/ open; cat open"),
+    )
+    .await;
+    assert_result(&replayed, &format!("{}P\nQ\n", sums.stdout), "", 0);
+    assert_eq!(
+        new_tool_calls(&ctx, "edit-file", &mut seen).await,
+        [path("open")]
+    );
+
+    // While a sibling call is in flight, `sed` replaces the file itself. A change through the
+    // tool would wait for the sibling, and the sibling is held until the script has passed `sed`.
+    let held = formatdoc! {r#"
+        fixture checkpoint "$PWD/held" {address} >/dev/null &
+        until [ "$(curl -s http://{address}/arrivals)" = 1 ]; do sleep 0.01; done
+        sed -i s/Q/q/ open
+        curl -s http://{address}/checkpoint
+        wait
+        cat open
+    "#};
+    let (held, ()) = tokio::join!(invoke(&ctx, OWNER, directory, &held), async {
+        let sibling = next_arrival(&mut arrived).await;
+        let after_sed = next_arrival(&mut arrived).await;
+        sibling.release.send(()).unwrap();
+        after_sed.release.send(()).unwrap();
+    });
+    assert_result(&held, "P\nq\n", "", 0);
+    assert!(
+        new_tool_calls(&ctx, "edit-file", &mut seen)
+            .await
+            .is_empty()
+    );
+
+    assert!(tool_calls(&ctx, PLAIN_OWNER, "edit-file").await.is_empty());
     let _ = stop.send(());
     server.await.unwrap();
 }
