@@ -36,12 +36,16 @@ entry during replay`, so the in-flight request is never re-sent.
 
 Three tests bind the built-in `read-file`, `write-file` and `edit-file` tools to one owner. Each
 test runs its scripts on that owner and on an owner without the tools, and the two results must be
-equal. In the oplog it checks which files went to the tool.
+equal. In the oplog it checks which files went to the tool. The steps in which the test acts
+between two points of a script (a crash, a held sibling call, a wait of `tee`) run on the owner
+with the tools only.
 
 - `app::builtin_bash::bound_bash_cat_reads_text_files_through_read_file`: 1,000 lines in five
   calls, and files whose pages end inside a line, inside a character and inside a CR LF pair. A
   file with a NUL byte and a missing file give GNU's output, and `cat` ends before a reader that
-  exits at once.
+  exits at once. When `tee` empties the file while `cat` waits, `cat` writes the same bytes as
+  on the owner without the tools. Only a real server shows this: it gives a file to a reader in
+  blocks.
 - `app::builtin_bash::bound_bash_tee_writes_text_files_through_write_file`: a text, bytes that
   need care, two operands and a file that exists. `tee` writes the file itself for an append, for
   bytes that are not text and for no input. When `tee` must wait for more input, the file has the

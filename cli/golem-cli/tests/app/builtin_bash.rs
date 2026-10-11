@@ -1478,22 +1478,27 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
     read.dedup();
     assert_eq!(read, ["long", "wide", "crlf", "tail", "bom"].map(path));
 
-    // `read-file` refuses a file with a NUL byte, and `cat` then reads it itself. A missing
-    // file never reaches the tool. After both, the tool is still used.
+    // `read-file` refuses a file with a NUL byte, and `cat` then reads it itself. It also
+    // refuses a page that starts with a byte from the inside of a character: the first page of
+    // `middle`, and the second page of `edge`, whose first page is 64 KiB of text. A missing
+    // file never reaches the tool. After all of them, the tool is still used.
     let refused = indoc! {r#"
         printf 'a\0b\n' > binary
         cat binary | od -An -c
+        printf '\200a\n' > middle
+        printf '%65535s\n\200b\n' '' > edge
+        cat middle edge | wc -c
         cat missing; echo "status=$?"
         cat lines missing lines | wc -l; echo "status=${PIPESTATUS[0]}"
     "#};
     let refused = on_both_owners(&ctx, directory, refused).await;
     assert_result(
         &refused,
-        "   a  \\0   b  \\n\nstatus=1\n2000\nstatus=1\n",
+        "   a  \\0   b  \\n\n65542\nstatus=1\n2000\nstatus=1\n",
         "cat: missing: No such file or directory\ncat: missing: No such file or directory\n",
         0,
     );
-    let mut expected = vec![path("binary")];
+    let mut expected = ["binary", "middle", "edge", "edge"].map(path).to_vec();
     expected.extend(vec![path("lines"); 10]);
     assert_eq!(new_tool_calls(&ctx, "read-file", &mut seen).await, expected);
 
@@ -1554,6 +1559,30 @@ async fn bound_bash_cat_reads_text_files_through_read_file() {
             .await
             .is_empty()
     );
+
+    // `cat` waits when the pipe to `tee` is full, and `tee` empties the file in that time. The
+    // host gives a file to a reader in blocks, so a `cat` that reads the file itself still has
+    // the rest of a block from before the wait. `cat` writes the same bytes when it took the
+    // first part of the file from the tool.
+    let cut = on_both_owners(
+        &ctx,
+        directory,
+        "printf '%204799s\\n' '' > big; wc -c < big; cat big | tee big | wc -c; wc -c < big",
+    )
+    .await;
+    assert_eq!((cut.stderr.as_str(), cut.exit_code), ("", 0), "{cut:?}");
+    let sizes = cut
+        .stdout
+        .lines()
+        .map(|line| line.trim().parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(sizes[..], [204_800, written, left] if written == left && written < 204_800),
+        "{cut:?}"
+    );
+    let mut read = new_tool_calls(&ctx, "read-file", &mut seen).await;
+    read.dedup();
+    assert_eq!(read, [path("big")]);
 
     assert!(tool_calls(&ctx, PLAIN_OWNER, "read-file").await.is_empty());
     let _ = stop.send(());
@@ -1681,6 +1710,35 @@ async fn bound_bash_tee_writes_text_files_through_write_file() {
         after_tee.release.send(()).unwrap();
     });
     assert_result(&held, "held\nheld\n", "", 0);
+    assert!(
+        new_tool_calls(&ctx, "write-file", &mut seen)
+            .await
+            .is_empty()
+    );
+
+    // `tee` also writes the file itself when the tool cannot make the file that the descriptor
+    // of `tee` makes. `tee` adds to the file through another descriptor after it has taken
+    // bytes for it: an operand, or a message on its standard error. Or another part of the
+    // script has put another empty file at the path, here one with the same modification time.
+    let other = indoc! {r#"
+        echo hi | tee own /dev/stderr 2>> own; cat own
+        echo hi | tee message /dev/fd/0 2>> message; cat message
+        { sleep 0.05; touch -r same time; rm same; : > same; touch -r time same; echo late; } | tee same > /dev/null
+        cat same; echo "same=$?"
+    "#};
+    let other = on_both_owners(&ctx, directory, other).await;
+    assert_eq!(
+        (other.stderr.as_str(), other.exit_code),
+        ("", 0),
+        "{other:?}"
+    );
+    assert!(
+        other
+            .stdout
+            .starts_with("hi\nhi\nhi\nhi\nhi\ntee: /dev/fd/0: ")
+            && other.stdout.ends_with("\nsame=0\n"),
+        "{other:?}"
+    );
     assert!(
         new_tool_calls(&ctx, "write-file", &mut seen)
             .await
