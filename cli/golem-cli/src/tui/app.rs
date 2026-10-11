@@ -1099,8 +1099,7 @@ impl TuiApp {
                     && key.modifiers.is_empty()
                     && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
-                self.metrics.mode = self.metrics.mode.previous();
-                self.reload_metrics(event_tx);
+                self.set_metrics_mode(self.metrics.mode.previous(), event_tx);
             }
             KeyCode::Right
                 if self.active_workspace == Workspace::Ops
@@ -1108,8 +1107,7 @@ impl TuiApp {
                     && key.modifiers.is_empty()
                     && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
-                self.metrics.mode = self.metrics.mode.next();
-                self.reload_metrics(event_tx);
+                self.set_metrics_mode(self.metrics.mode.next(), event_tx);
             }
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
@@ -1348,17 +1346,14 @@ impl TuiApp {
                     && self.ops.active() == OpsDestination::Oplog
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                let selected = self.activity_selection_key();
-                self.activity.order = self.activity.order.toggle();
-                self.sort_activity_entries();
-                self.restore_activity_selection(selected);
+                self.set_activity_order(self.activity.order.toggle());
             }
             KeyCode::Char('s')
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Metrics
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.metrics.source = match self.metrics.source {
+                let source = match self.metrics.source {
                     crate::model::local_observability::LocalMetricSource::Agents => {
                         crate::model::local_observability::LocalMetricSource::Services
                     }
@@ -1366,10 +1361,7 @@ impl TuiApp {
                         crate::model::local_observability::LocalMetricSource::Agents
                     }
                 };
-                self.metrics.selected_family = 0;
-                self.metrics.selected_series = 0;
-                self.metrics.selected_panel = 0;
-                self.reload_metrics(event_tx);
+                self.set_metrics_source(source, event_tx);
             }
             KeyCode::Char('t')
                 if self.active_workspace == Workspace::Ops
@@ -1383,21 +1375,7 @@ impl TuiApp {
                     && self.ops.active() == OpsDestination::Metrics
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                if self.metrics.range.is_custom() {
-                    self.metrics.live = false;
-                    self.open_metrics_range_form();
-                    if let Some(form) = self.metrics_range_form.as_mut() {
-                        form.error = Some(
-                            "Live refresh requires a relative preset; choose one and Apply"
-                                .to_string(),
-                        );
-                    }
-                } else {
-                    self.metrics.live = !self.metrics.live;
-                    if self.metrics.live {
-                        self.refresh_metrics_live(event_tx);
-                    }
-                }
+                self.set_metrics_live(!self.metrics.live, event_tx);
             }
             KeyCode::Char(' ')
                 if self.active_workspace == Workspace::Ops
@@ -1814,7 +1792,7 @@ impl TuiApp {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, event_tx: Option<&TuiEventSender>) {
-        if self.handle_scrollbar_mouse(mouse) {
+        if self.handle_scrollbar_mouse(mouse, event_tx) {
             return;
         }
         if self.mode == InteractionMode::Help {
@@ -1853,10 +1831,10 @@ impl TuiApp {
         }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true)
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true, event_tx)
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false)
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false, event_tx)
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let target = self.drag_target_at(mouse.column, mouse.row);
@@ -1893,7 +1871,11 @@ impl TuiApp {
         }
     }
 
-    fn handle_scrollbar_mouse(&mut self, mouse: MouseEvent) -> bool {
+    fn handle_scrollbar_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        event_tx: Option<&TuiEventSender>,
+    ) -> bool {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let Some(target) = self.scrollbar_target_at(mouse.column, mouse.row) else {
@@ -1901,21 +1883,21 @@ impl TuiApp {
                 };
                 self.scrollbar_dragging = Some(target);
                 self.layout.dragging = None;
-                self.drag_scrollbar(target, mouse.row);
+                self.drag_scrollbar(target, mouse.row, event_tx);
                 true
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 let Some(target) = self.scrollbar_dragging else {
                     return false;
                 };
-                self.drag_scrollbar(target, mouse.row);
+                self.drag_scrollbar(target, mouse.row, event_tx);
                 true
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 let Some(target) = self.scrollbar_dragging.take() else {
                     return false;
                 };
-                self.drag_scrollbar(target, mouse.row);
+                self.drag_scrollbar(target, mouse.row, event_tx);
                 true
             }
             _ => false,
@@ -1942,7 +1924,12 @@ impl TuiApp {
         }
     }
 
-    fn drag_scrollbar(&mut self, target: ScrollbarTarget, y: u16) {
+    fn drag_scrollbar(
+        &mut self,
+        target: ScrollbarTarget,
+        y: u16,
+        event_tx: Option<&TuiEventSender>,
+    ) {
         let Some(area) = self.geometry.region(RegionKind::Scrollbar(target)) else {
             return;
         };
@@ -2056,6 +2043,42 @@ impl TuiApp {
                 self.stream.scroll_from_end = max.saturating_sub(start);
                 self.stream.follow = self.stream.scroll_from_end == 0;
             }
+            ScrollbarTarget::MetricsFamilies => {
+                let count = self.metrics.families.len();
+                if count > 0 {
+                    let selected = scrollbar_value_from_pointer(area, y, count.saturating_sub(1));
+                    self.select_metrics_family(selected, event_tx);
+                }
+            }
+            ScrollbarTarget::MetricsSeries => {
+                let count = self.metrics.series.len();
+                if count > 0 {
+                    let selected = scrollbar_value_from_pointer(area, y, count.saturating_sub(1));
+                    self.select_metrics_series(selected);
+                }
+            }
+            ScrollbarTarget::ResourceKinds => {
+                let count = resources::ResourceKind::for_scope(self.resources.scope).len();
+                if count > 0 {
+                    let selected = scrollbar_value_from_pointer(area, y, count.saturating_sub(1));
+                    if self.resources.focus_kind(selected) {
+                        self.refresh_resources(event_tx, false);
+                    }
+                }
+            }
+            ScrollbarTarget::ResourceItems => {
+                let count = self.resources.visible_rows().len();
+                if count > 0 {
+                    let selected = scrollbar_value_from_pointer(area, y, count.saturating_sub(1));
+                    self.resources.focus_row(selected);
+                }
+            }
+            ScrollbarTarget::ResourceDetails => {
+                let max = self.resources.details_max_scroll();
+                let scroll = scrollbar_value_from_pointer(area, y, max);
+                self.resources.focus_details();
+                self.resources.set_details_scroll(scroll);
+            }
             ScrollbarTarget::Help => {
                 let max = self
                     .help_content_height
@@ -2066,7 +2089,14 @@ impl TuiApp {
         }
     }
 
-    fn scroll_region_under_pointer(&mut self, x: u16, y: u16, amount: usize, up: bool) {
+    fn scroll_region_under_pointer(
+        &mut self,
+        x: u16,
+        y: u16,
+        amount: usize,
+        up: bool,
+        event_tx: Option<&TuiEventSender>,
+    ) {
         let region = self.geometry.hit_test(x, y);
         if region.is_none() {
             self.scroll_focused_region(amount, up);
@@ -2169,6 +2199,51 @@ impl TuiApp {
             {
                 self.move_metrics_chart_cursor(!up)
             }
+            Some(RegionKind::MetricsFamilies)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.metrics.focus = MetricsFocus::Families;
+                for _ in 0..amount {
+                    self.move_metrics_selection(!up, event_tx);
+                }
+            }
+            Some(RegionKind::MetricsSeries)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.metrics.focus = MetricsFocus::Series;
+                for _ in 0..amount {
+                    self.move_metrics_selection(!up, event_tx);
+                }
+            }
+            Some(RegionKind::ResourceKinds)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration =>
+            {
+                self.resources
+                    .focus_kind(self.resources.selected_kind_index());
+                for _ in 0..amount {
+                    self.move_resource_selection(!up, event_tx);
+                }
+            }
+            Some(RegionKind::ResourceItems)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration =>
+            {
+                self.resources
+                    .focus_row(self.resources.selected_row_index());
+                for _ in 0..amount {
+                    self.move_resource_selection(!up, event_tx);
+                }
+            }
+            Some(RegionKind::ResourceDetails)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration =>
+            {
+                self.resources.focus_details();
+                self.resources.scroll_details(amount, !up);
+            }
             _ => {}
         }
     }
@@ -2263,6 +2338,9 @@ impl TuiApp {
             return;
         }
         match hit {
+            Some(RegionKind::OpsControl { group, choice }) => {
+                self.activate_ops_control(group, choice, event_tx)
+            }
             Some(RegionKind::OpsLink(destination)) => {
                 self.open_related_destination(destination, event_tx)
             }
@@ -2314,6 +2392,43 @@ impl TuiApp {
             }
             Some(RegionKind::OpsDetails) if self.ops_activity_focused() => {
                 self.activity.focus = ActivityFocus::Details
+            }
+            Some(RegionKind::MetricsFamilies)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.select_metrics_family_at(y, event_tx)
+            }
+            Some(RegionKind::MetricsSeries)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.select_metrics_series_at(y)
+            }
+            Some(RegionKind::MetricsSeriesToggle(index))
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.select_metrics_series(index);
+                self.toggle_metrics_series(event_tx);
+            }
+            Some(RegionKind::ResourceKinds)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration =>
+            {
+                self.select_resource_kind_at(y, event_tx)
+            }
+            Some(RegionKind::ResourceItems)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration =>
+            {
+                self.select_resource_row_at(y)
+            }
+            Some(RegionKind::ResourceDetails)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Configuration =>
+            {
+                self.resources.focus_details()
             }
             Some(RegionKind::OverviewItem(index))
                 if self.active_workspace == Workspace::Ops
@@ -2496,6 +2611,66 @@ impl TuiApp {
             self.activity.selected = index;
             self.activity.details_scroll = 0;
         }
+    }
+
+    fn select_metrics_family_at(&mut self, y: u16, event_tx: Option<&TuiEventSender>) {
+        let Some(area) = self.geometry.region(RegionKind::MetricsFamilies) else {
+            return;
+        };
+        let index = self
+            .metrics
+            .families_first_visible
+            .get()
+            .saturating_add(y.saturating_sub(area.y) as usize);
+        if index >= self.metrics.families.len() {
+            return;
+        }
+        self.select_metrics_family(index, event_tx);
+    }
+
+    fn select_metrics_series_at(&mut self, y: u16) {
+        let Some(area) = self.geometry.region(RegionKind::MetricsSeries) else {
+            return;
+        };
+        let index = self
+            .metrics
+            .series_first_visible
+            .get()
+            .saturating_add(y.saturating_sub(area.y) as usize);
+        if index >= self.metrics.series.len() {
+            return;
+        }
+        self.select_metrics_series(index);
+    }
+
+    fn select_resource_kind_at(&mut self, y: u16, event_tx: Option<&TuiEventSender>) {
+        let Some(area) = self.geometry.region(RegionKind::ResourceKinds) else {
+            return;
+        };
+        let index = self
+            .resources
+            .kind_first_visible()
+            .saturating_add(y.saturating_sub(area.y) as usize);
+        if index >= resources::ResourceKind::for_scope(self.resources.scope).len() {
+            return;
+        }
+        if self.resources.focus_kind(index) {
+            self.refresh_resources(event_tx, false);
+        }
+    }
+
+    fn select_resource_row_at(&mut self, y: u16) {
+        let Some(area) = self.geometry.region(RegionKind::ResourceItems) else {
+            return;
+        };
+        let index = self
+            .resources
+            .row_first_visible()
+            .saturating_add(y.saturating_sub(area.y) as usize);
+        if index >= self.resources.visible_rows().len() {
+            return;
+        }
+        self.resources.focus_row(index);
     }
 
     fn select_deployment_at_row(&mut self, y: u16) {
@@ -3488,6 +3663,66 @@ impl TuiApp {
         }
     }
 
+    fn activate_ops_control(
+        &mut self,
+        group: usize,
+        choice: usize,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        match self.ops.active() {
+            OpsDestination::Oplog => match (group, choice) {
+                (0, 0) => {
+                    self.set_activity_representation(ActivityRepresentation::Grouped, event_tx)
+                }
+                (0, 1) => {
+                    self.set_activity_representation(ActivityRepresentation::Entries, event_tx)
+                }
+                (1, 0) => self.set_activity_order(ActivityOrder::Newest),
+                (1, 1) => self.set_activity_order(ActivityOrder::Oldest),
+                _ => {}
+            },
+            OpsDestination::Metrics => match (group, choice) {
+                (0, 0) => self.set_metrics_mode(MetricsMode::Dashboard, event_tx),
+                (0, 1) => self.set_metrics_mode(MetricsMode::Explore, event_tx),
+                (1, 0) => self.set_metrics_source(
+                    crate::model::local_observability::LocalMetricSource::Agents,
+                    event_tx,
+                ),
+                (1, 1) => self.set_metrics_source(
+                    crate::model::local_observability::LocalMetricSource::Services,
+                    event_tx,
+                ),
+                (2, 0) => self.set_metrics_live(true, event_tx),
+                (2, 1) => self.set_metrics_live(false, event_tx),
+                _ => {}
+            },
+            OpsDestination::Deployments
+                if matches!(self.ops.current_route(), OpsRoute::DeploymentCompare(_)) =>
+            {
+                if let Some(route) = self.ops.deployment_compare_mut() {
+                    route.focus = match (group, choice) {
+                        (0, 0) => DeploymentCompareFocus::Base,
+                        (0, 1) => DeploymentCompareFocus::Target,
+                        _ => route.focus,
+                    };
+                }
+            }
+            OpsDestination::Configuration if group == 0 => {
+                if let Some(scope) = ResourceScope::ALL.get(choice).copied()
+                    && scope != self.resources.scope
+                {
+                    self.resources.select_scope(scope);
+                    self.refresh_resources(event_tx, false);
+                }
+            }
+            OpsDestination::Overview
+            | OpsDestination::Agents
+            | OpsDestination::Stream
+            | OpsDestination::Deployments
+            | OpsDestination::Configuration => {}
+        }
+    }
+
     fn open_agent_scope_in_oplog(&mut self, event_tx: Option<&TuiEventSender>) {
         self.open_scope_in_oplog(self.agent_handoff_scope(), event_tx);
     }
@@ -3864,6 +4099,17 @@ impl TuiApp {
         self.activity.details_scroll = 0;
         self.activity.reveal_selection(self.activity_visible_len());
         self.activity.error = None;
+    }
+
+    fn set_activity_order(&mut self, order: ActivityOrder) {
+        if self.activity.order == order {
+            return;
+        }
+        let selected = self.activity_selection_key();
+        self.activity.order = order;
+        self.sort_activity_entries();
+        self.restore_activity_selection(selected);
+        self.activity.reveal_selection(self.activity_visible_len());
     }
 
     fn activity_visible_len(&self) -> usize {
@@ -4410,6 +4656,49 @@ impl TuiApp {
         self.reload_metrics(event_tx);
     }
 
+    fn set_metrics_mode(&mut self, mode: MetricsMode, event_tx: Option<&TuiEventSender>) {
+        if self.metrics.mode == mode {
+            return;
+        }
+        self.metrics.mode = mode;
+        self.reload_metrics(event_tx);
+    }
+
+    fn set_metrics_source(
+        &mut self,
+        source: crate::model::local_observability::LocalMetricSource,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        if self.metrics.source == source {
+            return;
+        }
+        self.metrics.source = source;
+        self.metrics.selected_family = 0;
+        self.metrics.selected_series = 0;
+        self.metrics.selected_panel = 0;
+        self.reload_metrics(event_tx);
+    }
+
+    fn set_metrics_live(&mut self, live: bool, event_tx: Option<&TuiEventSender>) {
+        if self.metrics.live == live {
+            return;
+        }
+        if live && self.metrics.range.is_custom() {
+            self.metrics.live = false;
+            self.open_metrics_range_form();
+            if let Some(form) = self.metrics_range_form.as_mut() {
+                form.error = Some(
+                    "Live refresh requires a relative preset; choose one and Apply".to_string(),
+                );
+            }
+            return;
+        }
+        self.metrics.live = live;
+        if live {
+            self.refresh_metrics_live(event_tx);
+        }
+    }
+
     fn metrics_query(&self, load: MetricsLoad) -> Option<MetricsQuery> {
         let source = self.metrics.source;
         let agent_ids = (source == crate::model::local_observability::LocalMetricSource::Agents)
@@ -4644,23 +4933,12 @@ impl TuiApp {
                     self.refresh_metrics_with_load(MetricsLoad::AppendFamilies, event_tx);
                     return;
                 }
-                let previous = self.metrics.selected_family;
-                self.metrics.selected_family = if down {
+                let selected = if down {
                     self.metrics.selected_family.saturating_add(1).min(last)
                 } else {
                     self.metrics.selected_family.saturating_sub(1)
                 };
-                if previous != self.metrics.selected_family {
-                    self.metrics.notice = None;
-                    self.metrics.chart_cursor = None;
-                    self.metrics.selected_series = 0;
-                    self.metrics.series.clear();
-                    self.metrics.samples.clear();
-                    self.metrics.series_samples.clear();
-                    self.metrics.selected_series_keys.clear();
-                    self.metrics.series_next_cursor = None;
-                    self.refresh_metrics_with_load(MetricsLoad::SelectFamily, event_tx);
-                }
+                self.select_metrics_family(selected, event_tx);
             }
             MetricsFocus::Series => {
                 let last = self.metrics.series.len().saturating_sub(1);
@@ -4671,14 +4949,48 @@ impl TuiApp {
                     self.refresh_metrics_with_load(MetricsLoad::AppendSeries, event_tx);
                     return;
                 }
-                self.metrics.selected_series = if down {
+                let selected = if down {
                     self.metrics.selected_series.saturating_add(1).min(last)
                 } else {
                     self.metrics.selected_series.saturating_sub(1)
                 };
+                self.select_metrics_series(selected);
             }
             MetricsFocus::Chart => return,
         }
+    }
+
+    fn select_metrics_family(&mut self, index: usize, event_tx: Option<&TuiEventSender>) {
+        if self.metrics.families.is_empty() {
+            return;
+        }
+        self.metrics.focus = MetricsFocus::Families;
+        let selected = index.min(self.metrics.families.len() - 1);
+        if selected == self.metrics.selected_family {
+            self.metrics.reveal_family_selection();
+            return;
+        }
+        self.metrics.selected_family = selected;
+        self.metrics.notice = None;
+        self.metrics.chart_cursor = None;
+        self.metrics.selected_series = 0;
+        self.metrics.series.clear();
+        self.metrics.samples.clear();
+        self.metrics.series_samples.clear();
+        self.metrics.selected_series_keys.clear();
+        self.metrics.series_next_cursor = None;
+        self.metrics.reveal_family_selection();
+        self.metrics.series_first_visible.set(0);
+        self.refresh_metrics_with_load(MetricsLoad::SelectFamily, event_tx);
+    }
+
+    fn select_metrics_series(&mut self, index: usize) {
+        if self.metrics.series.is_empty() {
+            return;
+        }
+        self.metrics.focus = MetricsFocus::Series;
+        self.metrics.selected_series = index.min(self.metrics.series.len() - 1);
+        self.metrics.reveal_series_selection();
     }
 
     fn toggle_metrics_series(&mut self, event_tx: Option<&TuiEventSender>) {
@@ -10142,6 +10454,19 @@ fn render_ops_related_links(
     }
 }
 
+fn render_ops_control_strip(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    groups: &[ControlGroup<'_>],
+    status: Option<&str>,
+) {
+    for (group, choice, region) in (ControlStrip { groups, status }).render(frame, area, &theme()) {
+        app.geometry
+            .add_region(RegionKind::OpsControl { group, choice }, region);
+    }
+}
+
 fn adaptive_ops_pane_layout(area: Rect, horizontal_at: u16, weights: &[u32]) -> PaneLayout {
     if area.width == 0 || area.height == 0 {
         return PaneLayout {
@@ -10167,6 +10492,59 @@ fn adaptive_ops_pane_layout(area: Rect, horizontal_at: u16, weights: &[u32]) -> 
             dividers: Vec::new(),
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_ops_selection_list(
+    frame: &mut Frame<'_>,
+    body: Rect,
+    chrome: PaneChrome,
+    app: &TuiApp,
+    lines: &[Line<'static>],
+    selected: usize,
+    first_visible: &Cell<usize>,
+    viewport_height: &Cell<u16>,
+    region_kind: RegionKind,
+    scrollbar_target: ScrollbarTarget,
+) {
+    let region = chrome.region(body, lines.len());
+    viewport_height.set(region.content_area.height);
+    let start = selection_window_start(
+        selected,
+        lines.len(),
+        region.content_area.height,
+        first_visible.get(),
+    );
+    first_visible.set(start);
+    app.geometry.add_region(region_kind, region.content_area);
+    ScrollableDocument {
+        lines,
+        offset: start,
+    }
+    .render(frame, region, &theme());
+    if let Some(slot) = region.scrollbar {
+        app.geometry
+            .add_region(RegionKind::Scrollbar(scrollbar_target), slot.area);
+    }
+}
+
+fn selection_window_start(
+    selected: usize,
+    count: usize,
+    viewport_height: u16,
+    current: usize,
+) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let capacity = viewport_height.max(1) as usize;
+    let mut first = current.min(count.saturating_sub(1));
+    if selected < first {
+        first = selected;
+    } else if selected >= first.saturating_add(capacity) {
+        first = selected.saturating_add(1).saturating_sub(capacity);
+    }
+    first.min(count.saturating_sub(capacity))
 }
 
 fn render_ops_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -10964,17 +11342,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     .flatten()
     .collect::<Vec<_>>()
     .join("   ");
-    frame.render_widget(
-        Paragraph::new(
-            ControlStrip {
-                groups: &groups,
-                status: Some(&control_status),
-            }
-            .line(&theme()),
-        )
-        .style(surface_style()),
-        controls,
-    );
+    render_ops_control_strip(frame, controls, app, &groups, Some(&control_status));
     let query_state = if app.activity.query == app.activity.applied_query.text {
         "(applied)"
     } else {
@@ -11568,17 +11936,7 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         status.push_str("   ");
         status.push_str(&freshness);
     }
-    frame.render_widget(
-        Paragraph::new(
-            ControlStrip {
-                groups: &groups,
-                status: Some(&status),
-            }
-            .line(&theme()),
-        )
-        .style(surface_style()),
-        controls,
-    );
+    render_ops_control_strip(frame, controls, app, &groups, Some(&status));
 
     if let Some(error) = &app.metrics.error {
         render_metrics_notice(frame, body, NoticeKind::Warning, error);
@@ -12082,7 +12440,9 @@ fn render_metrics_families(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome
     }
     .render(frame, area, &theme());
     let outer_body = chrome.body_area(area);
-    let body = chrome.content_area(outer_body);
+    let body = chrome
+        .region(outer_body, app.metrics.families.len())
+        .content_area;
     let lines = app
         .metrics
         .families
@@ -12099,7 +12459,18 @@ fn render_metrics_families(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome
             )
         })
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    render_ops_selection_list(
+        frame,
+        outer_body,
+        chrome,
+        app,
+        &lines,
+        app.metrics.selected_family,
+        &app.metrics.families_first_visible,
+        &app.metrics.families_viewport_height,
+        RegionKind::MetricsFamilies,
+        ScrollbarTarget::MetricsFamilies,
+    );
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
@@ -12136,7 +12507,9 @@ fn render_metrics_series(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, 
     }
     .render(frame, area, &theme());
     let outer_body = chrome.body_area(area);
-    let body = chrome.content_area(outer_body);
+    let body = chrome
+        .region(outer_body, app.metrics.series.len())
+        .content_area;
     let lines = app
         .metrics
         .series
@@ -12174,7 +12547,37 @@ fn render_metrics_series(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, 
             )
         })
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    render_ops_selection_list(
+        frame,
+        outer_body,
+        chrome,
+        app,
+        &lines,
+        app.metrics.selected_series,
+        &app.metrics.series_first_visible,
+        &app.metrics.series_viewport_height,
+        RegionKind::MetricsSeries,
+        ScrollbarTarget::MetricsSeries,
+    );
+    if let Some(region) = app.geometry.region(RegionKind::MetricsSeries) {
+        let start = app.metrics.series_first_visible.get();
+        for (line, index) in (start..app.metrics.series.len())
+            .take(region.height as usize)
+            .enumerate()
+        {
+            if region.width >= 4 {
+                app.geometry.add_region(
+                    RegionKind::MetricsSeriesToggle(index),
+                    Rect::new(
+                        region.x.saturating_add(1),
+                        region.y.saturating_add(line as u16),
+                        3,
+                        1,
+                    ),
+                );
+            }
+        }
+    }
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
@@ -12537,17 +12940,7 @@ fn render_ops_resources(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         label: "Scope",
         choices: &scope_choices,
     }];
-    frame.render_widget(
-        Paragraph::new(
-            ControlStrip {
-                groups: &groups,
-                status: None,
-            }
-            .line(&theme()),
-        )
-        .style(surface_style()),
-        controls,
-    );
+    render_ops_control_strip(frame, controls, app, &groups, None);
 
     let pane_layout = adaptive_ops_pane_layout(body, 96, &[28, 36, 36]);
     render_resource_kinds(frame, pane_layout.panes[0], chrome, app);
@@ -12570,7 +12963,12 @@ fn render_resource_kinds(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, 
         &theme(),
     );
     let outer_body = chrome.body_area(area);
-    let body = chrome.content_area(outer_body);
+    let body = chrome
+        .region(
+            outer_body,
+            resources::ResourceKind::for_scope(app.resources.scope).len(),
+        )
+        .content_area;
     let lines = resources::ResourceKind::for_scope(app.resources.scope)
         .iter()
         .enumerate()
@@ -12592,7 +12990,19 @@ fn render_resource_kinds(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, 
             )
         })
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    let (first_visible, viewport_height) = app.resources.kind_viewport();
+    render_ops_selection_list(
+        frame,
+        outer_body,
+        chrome,
+        app,
+        &lines,
+        app.resources.selected_kind_index(),
+        first_visible,
+        viewport_height,
+        RegionKind::ResourceKinds,
+        ScrollbarTarget::ResourceKinds,
+    );
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
@@ -12609,7 +13019,10 @@ fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, a
         &theme(),
     );
     let outer_body = chrome.body_area(area);
-    let body = chrome.content_area(outer_body);
+    let body = chrome
+        .region(outer_body, app.resources.visible_rows().len())
+        .content_area;
+    app.geometry.add_region(RegionKind::ResourceItems, body);
     if app.resources.loading == Some(app.resources.selected_kind())
         && !app.resources.is_loaded(app.resources.selected_kind())
     {
@@ -12649,7 +13062,19 @@ fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, a
             )
         })
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    let (first_visible, viewport_height) = app.resources.row_viewport();
+    render_ops_selection_list(
+        frame,
+        outer_body,
+        chrome,
+        app,
+        &lines,
+        app.resources.selected_row_index(),
+        first_visible,
+        viewport_height,
+        RegionKind::ResourceItems,
+        ScrollbarTarget::ResourceItems,
+    );
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
@@ -12671,34 +13096,54 @@ fn render_resource_detail(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome,
     );
     let outer_body = chrome.body_area(area);
     let body = chrome.content_area(outer_body);
-    let lines = selected.map_or_else(Vec::new, |row| {
-        let mut lines = vec![
-            Line::from(Span::styled(
-                row.name.clone(),
-                Style::default()
-                    .fg(theme().text)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::default(),
-        ];
-        for field in &row.fields {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{}  ", field.label),
-                    Style::default().fg(theme().text_secondary),
-                ),
-                Span::styled(field.value.clone(), Style::default().fg(theme().text)),
-            ]));
-        }
-        lines
-    });
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(surface_style())
-            .wrap(Wrap { trim: false })
-            .scroll((app.resources.details_scroll(), 0)),
-        body,
-    );
+    let build_lines = |width: u16| {
+        selected.map_or_else(Vec::new, |row| {
+            let mut lines = wrap_styled_line(
+                Line::from(Span::styled(
+                    row.name.clone(),
+                    Style::default()
+                        .fg(theme().text)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                width as usize,
+            );
+            lines.push(Line::default());
+            for field in &row.fields {
+                lines.extend(wrap_styled_line(
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{}  ", field.label),
+                            Style::default().fg(theme().text_secondary),
+                        ),
+                        Span::styled(field.value.clone(), Style::default().fg(theme().text)),
+                    ]),
+                    width as usize,
+                ));
+            }
+            lines
+        })
+    };
+    let mut lines = build_lines(body.width);
+    let mut region = chrome.region(outer_body, lines.len());
+    if region.content_area.width != body.width {
+        lines = build_lines(region.content_area.width);
+        region = chrome.region(outer_body, lines.len());
+    }
+    app.resources
+        .set_details_dimensions(lines.len(), region.content_area.height);
+    app.geometry
+        .add_region(RegionKind::ResourceDetails, region.content_area);
+    ScrollableDocument {
+        lines: &lines,
+        offset: app.resources.details_scroll() as usize,
+    }
+    .render(frame, region, &theme());
+    if let Some(slot) = region.scrollbar {
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::ResourceDetails),
+            slot.area,
+        );
+    }
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
@@ -13111,6 +13556,27 @@ fn render_ops_deployment_compare(
         .style(surface_style()),
         selectors,
     );
+    let base_width = UnicodeWidthStr::width(format!(" Base {base} ").as_str()) as u16;
+    if base_width <= selectors.width {
+        app.geometry.add_region(
+            RegionKind::OpsControl {
+                group: 0,
+                choice: 0,
+            },
+            Rect::new(selectors.x, selectors.y, base_width, 1),
+        );
+    }
+    let target_x = selectors.x.saturating_add(base_width).saturating_add(5);
+    let target_width = UnicodeWidthStr::width(format!(" Target {target} ").as_str()) as u16;
+    if target_x.saturating_add(target_width) <= selectors.right() {
+        app.geometry.add_region(
+            RegionKind::OpsControl {
+                group: 0,
+                choice: 1,
+            },
+            Rect::new(target_x, selectors.y, target_width, 1),
+        );
+    }
     if let Some(error) = &app.deployments.error {
         frame.render_widget(
             Paragraph::new(
@@ -21223,6 +21689,181 @@ mod tests {
     }
 
     #[test]
+    fn ops_control_strips_and_compare_fields_are_pointer_addressable() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        render_app_text_at(&app, 160, 28);
+        let entries = snapshot_region(
+            &app,
+            RegionKind::OpsControl {
+                group: 0,
+                choice: 1,
+            },
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                entries.x,
+                entries.y,
+            ),
+            None,
+        );
+        assert_eq!(app.activity.representation, ActivityRepresentation::Entries);
+
+        app.ops.select(OpsDestination::Metrics);
+        render_app_text_at(&app, 160, 28);
+        let explore = snapshot_region(
+            &app,
+            RegionKind::OpsControl {
+                group: 0,
+                choice: 1,
+            },
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                explore.x,
+                explore.y,
+            ),
+            None,
+        );
+        assert_eq!(app.metrics.mode, MetricsMode::Explore);
+        render_app_text_at(&app, 160, 28);
+        let server = snapshot_region(
+            &app,
+            RegionKind::OpsControl {
+                group: 1,
+                choice: 1,
+            },
+        );
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), server.x, server.y),
+            None,
+        );
+        assert_eq!(app.metrics.source, LocalMetricSource::Services);
+
+        app.ops.select(OpsDestination::Configuration);
+        render_app_text_at(&app, 160, 28);
+        let account = snapshot_region(
+            &app,
+            RegionKind::OpsControl {
+                group: 0,
+                choice: 1,
+            },
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                account.x,
+                account.y,
+            ),
+            None,
+        );
+        assert_eq!(app.resources.scope, ResourceScope::Account);
+
+        app.ops.open_deployment_compare(1, 2);
+        render_app_text_at(&app, 160, 28);
+        let target = snapshot_region(
+            &app,
+            RegionKind::OpsControl {
+                group: 0,
+                choice: 1,
+            },
+        );
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), target.x, target.y),
+            None,
+        );
+        assert!(matches!(
+            app.ops.current_route(),
+            OpsRoute::DeploymentCompare(route)
+                if route.focus == DeploymentCompareFocus::Target
+        ));
+    }
+
+    #[test]
+    fn metrics_explore_lists_support_click_wheel_and_scrollbar_selection() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.mode = MetricsMode::Explore;
+        app.metrics.families = (0..20)
+            .map(|index| LocalMetricFamily {
+                name: format!("family-{index:02}"),
+                description: String::new(),
+                unit: "1".to_string(),
+                kind: LocalMetricKind::Counter,
+                temporality: LocalMetricTemporality::Delta,
+                category: "agent".to_string(),
+                series_count: 20,
+                latest_value: Some(index as f64),
+                latest_unix_nanos: Some(index),
+            })
+            .collect();
+        let series = || {
+            (0..20)
+                .map(|index| LocalMetricSeries {
+                    series_key: format!("series-{index:02}"),
+                    statistic: "value".to_string(),
+                    temporality: LocalMetricTemporality::Delta,
+                    attributes: BTreeMap::new(),
+                    environment_id: None,
+                    component_id: None,
+                    agent_id: Some(format!("agent-{index:02}")),
+                    agent_type: Some("Counter".to_string()),
+                    latest_value: Some(index as f64),
+                    latest_unix_nanos: Some(index),
+                })
+                .collect::<Vec<_>>()
+        };
+        app.metrics.series = series();
+
+        render_app_text_at(&app, 140, 14);
+        let families = snapshot_region(&app, RegionKind::MetricsFamilies);
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                families.x,
+                families.y.saturating_add(1),
+            ),
+            None,
+        );
+        assert_eq!(app.metrics.focus, MetricsFocus::Families);
+        assert_eq!(app.metrics.selected_family, 1);
+
+        app.metrics.series = series();
+        render_app_text_at(&app, 140, 14);
+        let series_area = snapshot_region(&app, RegionKind::MetricsSeries);
+        let toggle = snapshot_region(&app, RegionKind::MetricsSeriesToggle(1));
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), toggle.x, toggle.y),
+            None,
+        );
+        assert_eq!(app.metrics.focus, MetricsFocus::Series);
+        assert_eq!(app.metrics.selected_series, 1);
+        assert_eq!(
+            app.metrics.selected_series_keys,
+            vec!["series-01".to_string()]
+        );
+        app.handle_mouse(
+            mouse(MouseEventKind::ScrollDown, series_area.x, series_area.y),
+            None,
+        );
+        assert_eq!(app.metrics.selected_series, 4);
+
+        let scrollbar =
+            snapshot_region(&app, RegionKind::Scrollbar(ScrollbarTarget::MetricsSeries));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+        assert!(app.metrics.selected_series >= 18);
+    }
+
+    #[test]
     fn ops_destination_cycle_is_stable() {
         let mut app = test_app();
         assert_eq!(app.ops.active().next(), OpsDestination::Oplog);
@@ -21314,6 +21955,100 @@ mod tests {
         assert_eq!(app.resources.focus(), resources::ResourceFocus::Details);
         app.handle_key(key(KeyCode::BackTab));
         assert_eq!(app.resources.focus(), resources::ResourceFocus::Items);
+    }
+
+    #[test]
+    fn configuration_panes_support_click_wheel_and_scrollbar_interaction() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Ops;
+        app.ops.select(OpsDestination::Configuration);
+        let context_id = TuiContextId::new(7);
+        let (generation, scope, kind) = app.resources.begin_load(context_id);
+        app.resources.finish(
+            generation,
+            context_id,
+            Ok(ResourcesRefreshPayload {
+                scope,
+                kind,
+                rows: (0..20)
+                    .map(|index| resources::ResourceRow {
+                        name: format!("secret-{index:02}"),
+                        summary: "masked".to_string(),
+                        fields: (0..20)
+                            .map(|field| resources::ResourceField {
+                                label: format!("Field {field:02}"),
+                                value: format!("value-{index:02}-{field:02}"),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+        );
+
+        render_app_text_at(&app, 140, 14);
+        let items = snapshot_region(&app, RegionKind::ResourceItems);
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                items.x,
+                items.y.saturating_add(1),
+            ),
+            None,
+        );
+        assert_eq!(app.resources.focus(), resources::ResourceFocus::Items);
+        assert_eq!(app.resources.selected_row_index(), 1);
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, items.x, items.y), None);
+        assert_eq!(app.resources.selected_row_index(), 4);
+
+        let item_scrollbar =
+            snapshot_region(&app, RegionKind::Scrollbar(ScrollbarTarget::ResourceItems));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                item_scrollbar.x,
+                item_scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+        assert!(app.resources.selected_row_index() >= 18);
+
+        render_app_text_at(&app, 140, 14);
+        let details = snapshot_region(&app, RegionKind::ResourceDetails);
+        app.handle_mouse(
+            mouse(MouseEventKind::ScrollDown, details.x, details.y),
+            None,
+        );
+        assert_eq!(app.resources.focus(), resources::ResourceFocus::Details);
+        assert!(app.resources.details_scroll() > 0);
+        let details_scrollbar = snapshot_region(
+            &app,
+            RegionKind::Scrollbar(ScrollbarTarget::ResourceDetails),
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                details_scrollbar.x,
+                details_scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+        assert_eq!(
+            app.resources.details_scroll() as usize,
+            app.resources.details_max_scroll()
+        );
+
+        render_app_text_at(&app, 140, 14);
+        let kinds = snapshot_region(&app, RegionKind::ResourceKinds);
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                kinds.x,
+                kinds.y.saturating_add(1),
+            ),
+            None,
+        );
+        assert_eq!(app.resources.focus(), resources::ResourceFocus::Kinds);
+        assert_eq!(app.resources.selected_kind_index(), 1);
     }
 
     #[test]

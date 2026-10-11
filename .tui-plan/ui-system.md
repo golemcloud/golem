@@ -281,6 +281,15 @@ optional for primary workflows. Scrolling must affect the panel under the
 pointer, clicks should focus tabs, splits, buttons, and selectable rows, and
 split handles are resizable by pointer.
 
+The shared segmented `ControlStrip` exposes a hit region for every fully
+visible choice; clipped choices are never partially clickable. Scrollable Ops
+collections keep a viewport anchor, reveal keyboard or pointer selection only
+when needed, reserve one trailing-right scrollbar cell, and map scrollbar
+click/drag positions to the same selection or document offset used by keyboard
+navigation. Empty space below collection rows is inert. A checkbox inside a
+row may own a smaller higher-priority hit region without changing whole-row
+selection behavior.
+
 ctrl+x l enters temporary Layout mode. Tab and shift+tab choose a pane;
 arrows move the applicable divider one cell and shift+arrow moves five cells.
 In Dev, `b`, `s`, and `r` toggle the three views, `m` promotes the focused view

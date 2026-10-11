@@ -699,5 +699,6 @@ renderers are no longer live contracts.
   have separate production preview cases. Agent, Oplog, Metrics, and Stream now
   expose scope-aware related links in their owning title row, including exact
   Metrics sample/bucket correlation and safe passive Stream navigation.
-  Remaining pointer parity and the final Metrics review remain tracked in
-  `tasks.md`.
+  Shared controls, collection panes, wheel routing, split handles, and
+  scrollbars now have pointer parity across Ops. The final Metrics review
+  remains tracked in `tasks.md`.

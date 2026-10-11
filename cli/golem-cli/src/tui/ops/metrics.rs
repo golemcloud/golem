@@ -23,6 +23,7 @@ use crate::model::local_observability::{
     LocalMetricTimeRange, LocalObservabilityCapability, LocalObservabilityStatus,
 };
 use crate::tui::ops::AgentIdentity;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -229,6 +230,10 @@ pub(in crate::tui) struct MetricsState {
     pub(in crate::tui) series_next_cursor: Option<String>,
     pub(in crate::tui) selected_family: usize,
     pub(in crate::tui) selected_series: usize,
+    pub(in crate::tui) families_first_visible: Cell<usize>,
+    pub(in crate::tui) families_viewport_height: Cell<u16>,
+    pub(in crate::tui) series_first_visible: Cell<usize>,
+    pub(in crate::tui) series_viewport_height: Cell<u16>,
     pub(in crate::tui) chart_cursor: Option<usize>,
     pub(in crate::tui) focus: MetricsFocus,
     pub(in crate::tui) error: Option<String>,
@@ -259,6 +264,10 @@ impl Default for MetricsState {
             series_next_cursor: None,
             selected_family: 0,
             selected_series: 0,
+            families_first_visible: Cell::new(0),
+            families_viewport_height: Cell::new(0),
+            series_first_visible: Cell::new(0),
+            series_viewport_height: Cell::new(0),
             chart_cursor: None,
             focus: MetricsFocus::Families,
             error: None,
@@ -290,6 +299,44 @@ impl MetricsState {
             .get(self.selected_series)
             .map(|series| series.series_key.clone())
     }
+
+    pub(in crate::tui) fn reveal_family_selection(&self) {
+        reveal_selection(
+            &self.families_first_visible,
+            self.families_viewport_height.get(),
+            self.selected_family,
+            self.families.len(),
+        );
+    }
+
+    pub(in crate::tui) fn reveal_series_selection(&self) {
+        reveal_selection(
+            &self.series_first_visible,
+            self.series_viewport_height.get(),
+            self.selected_series,
+            self.series.len(),
+        );
+    }
+}
+
+fn reveal_selection(
+    first_visible: &Cell<usize>,
+    viewport_height: u16,
+    selected: usize,
+    count: usize,
+) {
+    if count == 0 {
+        first_visible.set(0);
+        return;
+    }
+    let capacity = viewport_height.max(1) as usize;
+    let mut first = first_visible.get().min(count.saturating_sub(1));
+    if selected < first {
+        first = selected;
+    } else if selected >= first.saturating_add(capacity) {
+        first = selected.saturating_add(1).saturating_sub(capacity);
+    }
+    first_visible.set(first.min(count.saturating_sub(capacity)));
 }
 
 pub(in crate::tui) async fn load(

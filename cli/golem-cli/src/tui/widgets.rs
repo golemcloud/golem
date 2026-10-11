@@ -2616,7 +2616,7 @@ pub(super) struct ControlStrip<'a> {
 }
 
 impl ControlStrip<'_> {
-    pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
+    pub fn line(&self, visual: &TuiVisualStyle) -> Line<'static> {
         let mut spans = Vec::new();
         for (group_index, group) in self.groups.iter().enumerate() {
             if group_index > 0 {
@@ -2657,6 +2657,44 @@ impl ControlStrip<'_> {
             ));
         }
         Line::from(spans)
+    }
+
+    pub fn render(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        visual: &TuiVisualStyle,
+    ) -> Vec<(usize, usize, Rect)> {
+        frame.render_widget(
+            Paragraph::new(self.line(visual)).style(Style::default().bg(visual.surface)),
+            area,
+        );
+        if area.width == 0 || area.height == 0 {
+            return Vec::new();
+        }
+        let mut x = area.x;
+        let mut regions = Vec::new();
+        for (group_index, group) in self.groups.iter().enumerate() {
+            if group_index > 0 {
+                x = x.saturating_add(3);
+            }
+            x = x.saturating_add(UnicodeWidthStr::width(group.label) as u16 + 2);
+            for (choice_index, choice) in group.choices.iter().enumerate() {
+                if choice_index > 0 {
+                    x = x.saturating_add(1);
+                }
+                let width = UnicodeWidthStr::width(choice.label) as u16
+                    + if choice.selected { 2 } else { 0 };
+                if x < area.right() {
+                    let visible_width = width.min(area.right().saturating_sub(x));
+                    if visible_width == width {
+                        regions.push((group_index, choice_index, Rect::new(x, area.y, width, 1)));
+                    }
+                }
+                x = x.saturating_add(width);
+            }
+        }
+        regions
     }
 }
 
@@ -3381,6 +3419,37 @@ mod tests {
             rendered,
             "View  [Dashboard] Explore   Source  Agents [Server]   Scope environment"
         );
+    }
+
+    #[test]
+    fn control_strip_exposes_only_fully_visible_choice_regions() {
+        let visual = TuiVisualStyle::production();
+        let choices = [
+            ControlChoice {
+                label: "Dashboard",
+                selected: true,
+            },
+            ControlChoice {
+                label: "Explore",
+                selected: false,
+            },
+        ];
+        let groups = [ControlGroup {
+            label: "View",
+            choices: &choices,
+        }];
+        let mut regions = Vec::new();
+        let buffer = render(20, 1, |frame| {
+            regions = (ControlStrip {
+                groups: &groups,
+                status: None,
+            })
+            .render(frame, frame.area(), &visual);
+        });
+
+        assert!(text(&buffer).contains("View  [Dashboard] Ex"));
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0], (0, 0, Rect::new(6, 0, 11, 1)));
     }
 
     #[test]

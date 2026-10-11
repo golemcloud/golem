@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-10-11: Ops Pointer Parity
+
+- Made the shared segmented control strip expose exact hit regions, so Oplog
+  view/order, Metrics view/source/state, Configuration scope, and deployment
+  compare focus use the same visible controls for mouse and keyboard.
+- Added scroll-aware, pointer-addressable Metrics family/series and
+  Configuration kind/item/detail panes. Click selects and focuses, wheel input
+  follows the pane under the pointer, and every overflowing pane owns a
+  trailing-right draggable scrollbar.
+- Kept selection visible in short panes without recentering an already visible
+  row. Metrics series checkboxes are independently clickable, while blank pane
+  space remains inert.
+- Preserved the existing pointer-complete Overview, Agents, Oplog, Stream, and
+  Deployments behavior, including shared split precedence over adjacent
+  scrollbars.
+
+Ready for combined terminal review with the preceding Ops checkpoints. The
+final Metrics density and inspection pass is now the only active Ops UX slice.
+
 ## 2026-10-11: Visible Ops Investigation Handoffs
 
 - Added a compact `open` action cluster to the existing pane-title row for

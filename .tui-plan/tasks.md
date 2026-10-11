@@ -76,7 +76,7 @@
 - [x] Apply one hierarchy and continuous pane chrome across Ops destinations.
 - [x] Make Agent, Metrics, Oplog, and Stream scope handoffs visible in-page.
 - [x] Rebuild Oplog as a navigable master/details journal and forensic viewer.
-- [ ] Bring row selection, pane scrolling, split resizing, and scrollbar
+- [x] Bring row selection, pane scrolling, split resizing, and scrollbar
   interaction to pointer parity on every Ops destination.
 - [ ] Review Metrics chart density, legends, inspection, and empty/error states
   as a final minimal-Grafana pass.

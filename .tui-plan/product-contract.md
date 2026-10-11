@@ -67,6 +67,10 @@ The permanent destinations are:
   empty, unavailable, partial, stale, and failed states.
 - Details placement and ratio persist per destination. Query, selection,
   cursor, and live state do not persist across TUI sessions.
+- Visible segmented controls, collection rows, pane bodies, split handles, and
+  scrollbars are pointer-addressable. Wheel input follows the pane under the
+  pointer; a blank row area does not change selection. Pointer interaction is
+  an equal path to the same state transitions, never a separate data contract.
 
 ## Overview
 

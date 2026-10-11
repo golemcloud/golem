@@ -26,6 +26,7 @@ use golem_client::api::{
 };
 use golem_client::model::StoredCard;
 use golem_common::model::account_usage::{MemoryLimit, StorageLimit};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -271,7 +272,13 @@ struct ResourceScopeState {
     selected_kind: usize,
     selected_row: usize,
     focus: ResourceFocus,
-    details_scroll: u16,
+    details_scroll: Cell<u16>,
+    kind_first_visible: Cell<usize>,
+    kind_viewport_height: Cell<u16>,
+    row_first_visible: Cell<usize>,
+    row_viewport_height: Cell<u16>,
+    details_content_height: Cell<usize>,
+    details_viewport_height: Cell<u16>,
     cache: BTreeMap<ResourceKind, ResourceKindCache>,
 }
 
@@ -339,6 +346,37 @@ impl ResourcesState {
         };
     }
 
+    pub(in crate::tui) fn focus_kind(&mut self, index: usize) -> bool {
+        let scope = self.scope;
+        let state = self.current_mut();
+        let previous = state.selected_kind;
+        state.focus = ResourceFocus::Kinds;
+        state.selected_kind = index.min(ResourceKind::for_scope(scope).len().saturating_sub(1));
+        if state.selected_kind != previous {
+            state.selected_row = 0;
+            state.row_first_visible.set(0);
+            state.details_scroll.set(0);
+        }
+        previous != state.selected_kind
+    }
+
+    pub(in crate::tui) fn focus_row(&mut self, index: usize) {
+        let kind = self.selected_kind();
+        let state = self.current_mut();
+        let count = state
+            .cache
+            .get(&kind)
+            .map(|cache| cache.rows.len())
+            .unwrap_or(0);
+        state.focus = ResourceFocus::Items;
+        state.selected_row = index.min(count.saturating_sub(1));
+        state.details_scroll.set(0);
+    }
+
+    pub(in crate::tui) fn focus_details(&mut self) {
+        self.current_mut().focus = ResourceFocus::Details;
+    }
+
     pub(in crate::tui) fn visible_rows(&self) -> &[ResourceRow] {
         self.current()
             .cache
@@ -389,7 +427,7 @@ impl ResourcesState {
                     state.selected_kind.saturating_sub(1)
                 };
                 state.selected_row = 0;
-                state.details_scroll = 0;
+                state.details_scroll.set(0);
                 old != state.selected_kind
             }
             ResourceFocus::Items => {
@@ -403,22 +441,94 @@ impl ResourcesState {
                 } else {
                     state.selected_row.saturating_sub(1)
                 };
-                state.details_scroll = 0;
+                state.details_scroll.set(0);
                 false
             }
             ResourceFocus::Details => {
-                state.details_scroll = if down {
-                    state.details_scroll.saturating_add(1)
+                let max = state
+                    .details_content_height
+                    .get()
+                    .saturating_sub(state.details_viewport_height.get() as usize)
+                    .min(u16::MAX as usize) as u16;
+                state.details_scroll.set(if down {
+                    state.details_scroll.get().saturating_add(1).min(max)
                 } else {
-                    state.details_scroll.saturating_sub(1)
-                };
+                    state.details_scroll.get().saturating_sub(1)
+                });
                 false
             }
         }
     }
 
     pub(in crate::tui) fn details_scroll(&self) -> u16 {
-        self.current().details_scroll
+        self.current().details_scroll.get()
+    }
+
+    pub(in crate::tui) fn kind_first_visible(&self) -> usize {
+        self.current().kind_first_visible.get()
+    }
+
+    pub(in crate::tui) fn row_first_visible(&self) -> usize {
+        self.current().row_first_visible.get()
+    }
+
+    pub(in crate::tui) fn kind_viewport(&self) -> (&Cell<usize>, &Cell<u16>) {
+        (
+            &self.current().kind_first_visible,
+            &self.current().kind_viewport_height,
+        )
+    }
+
+    pub(in crate::tui) fn row_viewport(&self) -> (&Cell<usize>, &Cell<u16>) {
+        (
+            &self.current().row_first_visible,
+            &self.current().row_viewport_height,
+        )
+    }
+
+    pub(in crate::tui) fn set_details_dimensions(&self, content: usize, viewport: u16) {
+        let state = self.current();
+        state.details_content_height.set(content);
+        state.details_viewport_height.set(viewport);
+        let max = content
+            .saturating_sub(viewport as usize)
+            .min(u16::MAX as usize) as u16;
+        state
+            .details_scroll
+            .set(state.details_scroll.get().min(max));
+    }
+
+    pub(in crate::tui) fn scroll_details(&mut self, amount: usize, down: bool) {
+        let state = self.current_mut();
+        let max = state
+            .details_content_height
+            .get()
+            .saturating_sub(state.details_viewport_height.get() as usize)
+            .min(u16::MAX as usize) as u16;
+        let amount = u16::try_from(amount).unwrap_or(u16::MAX);
+        state.details_scroll.set(if down {
+            state.details_scroll.get().saturating_add(amount).min(max)
+        } else {
+            state.details_scroll.get().saturating_sub(amount)
+        });
+    }
+
+    pub(in crate::tui) fn details_max_scroll(&self) -> usize {
+        self.current()
+            .details_content_height
+            .get()
+            .saturating_sub(self.current().details_viewport_height.get() as usize)
+    }
+
+    pub(in crate::tui) fn set_details_scroll(&mut self, scroll: usize) {
+        let state = self.current_mut();
+        let max = state
+            .details_content_height
+            .get()
+            .saturating_sub(state.details_viewport_height.get() as usize);
+        state
+            .details_scroll
+            .set(scroll.min(max).min(u16::MAX as usize) as u16);
     }
 
     pub(in crate::tui) fn begin_load(
