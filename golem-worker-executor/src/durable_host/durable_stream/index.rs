@@ -305,6 +305,11 @@ impl ProducerStreamIndex {
                 "unsupported or malformed durable consumer journal record".to_string(),
             ));
         }
+        if record.reobserves().is_some() {
+            // The oplog fold validates the original record before applying this boundary.
+            // Its logical ordinal, source high-water and nested readers already exist.
+            return Ok(());
+        }
         let relative_session_key = match record {
             StreamSessionRecord::ConsumerItemValue(record) => Some(&record.session_key),
             StreamSessionRecord::ConsumerTerminal(record) => Some(&record.session_key),

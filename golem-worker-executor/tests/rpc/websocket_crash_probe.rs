@@ -199,7 +199,13 @@ async fn effect_duplex_websocket_crash_continuation(
                         if start.function_name.ends_with("client::receive")
                             && has_terminal(&entries, entry.oplog_index))
                 });
-                if completed_internal_clock && completed_receive {
+                let observed_input = entries.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
+                        if matches!(StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                            StreamSessionRecord::ConsumerItemValue(record)
+                                if matches!(record.observation, golem_common::model::durable_stream::StreamConsumerObservation::Guest { .. })))
+                });
+                if completed_internal_clock && completed_receive && observed_input {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -296,6 +302,27 @@ async fn effect_duplex_websocket_crash_continuation(
             count_agent_invocation_pair_since(&entries, boundary),
             (1, 1)
         );
+        let guest_values: Vec<_> = entries.iter().filter_map(|entry| {
+            if entry.oplog_index <= boundary {
+                return None;
+            }
+            let PublicOplogEntry::StreamSession(session) = &entry.entry else {
+                return None;
+            };
+            match StreamSessionRecord::from_value(session.record.value()).unwrap() {
+                StreamSessionRecord::ConsumerItemValue(record)
+                    if matches!(record.observation, golem_common::model::durable_stream::StreamConsumerObservation::Guest { .. }) => Some(record),
+                _ => None,
+            }
+        }).collect();
+        assert_eq!(
+            guest_values.len(),
+            2,
+            "one journal record per guest input read"
+        );
+        assert_eq!(guest_values[0].consumer_read_ordinal, 0);
+        assert_eq!(guest_values[1].consumer_read_ordinal, 1);
+        assert_ne!(guest_values[0].source_offset, guest_values[1].source_offset);
         for entry in &entries {
             if let PublicOplogEntry::Start(start) = &entry.entry {
                 assert!(

@@ -1891,7 +1891,9 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     assert_eq!((started, finished), (1, 1));
     assert_eq!(
         appended, single_invocation_entries,
-        "coalesced followers must not persist durable aliases, keys, or queue entries"
+        "coalesced followers must not persist durable aliases, keys, or queue entries; \
+         control_before={control_before}, before={before}, \
+         control_entries={control_entries:#?}, entries={entries:#?}"
     );
 
     Ok(())

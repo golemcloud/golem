@@ -3476,6 +3476,209 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
     assert_eq!(idx, OplogIndex::from_u64(7));
 }
 
+fn consumer_observation(reader_slot: u32, guest: bool, terminal: bool) -> OplogEntry {
+    use golem_common::model::durable_stream::{
+        LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
+        StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
+        StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
+    };
+    let observation = if guest {
+        StreamConsumerObservation::Guest {
+            parent_start_index: None,
+        }
+    } else {
+        StreamConsumerObservation::Host
+    };
+    let session_key =
+        StreamRegistrationInvocation::Local(IdempotencyKey::new("observations".to_string()));
+    let reader_id = LocalStreamReaderId {
+        introducing_oplog_index: OplogIndex::from_u64(1),
+        binding_slot: reader_slot,
+    };
+    let source_offset = StreamOffset::new(OplogIndex::from_u64(10), 0);
+    let record = if terminal {
+        StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
+            reobserves: None,
+            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+            observation,
+            session_key,
+            reader_id,
+            source_offset,
+            consumer_read_ordinal: 1,
+            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+        })
+    } else {
+        StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
+            reobserves: None,
+            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+            observation,
+            session_key,
+            reader_id,
+            source_offset,
+            consumer_read_ordinal: 0,
+            value: vec![42],
+            packed_u8: true,
+            recursive_mappings: vec![],
+        })
+    };
+    let summary = golem_common::model::oplog::DurableStreamEventSummary::session(&record);
+    OplogEntry::stream_session(None, OplogPayload::Inline(Box::new(record)), summary)
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn custom_subtree_guest_observation_does_not_block_resolution() {
+    for complete in [true, false] {
+        let mut observation = consumer_observation(0, true, false);
+        if let OplogEntry::StreamSession { record, .. } = &mut observation
+            && let OplogPayload::Inline(record) = record
+            && let golem_common::model::durable_stream::StreamSessionRecord::ConsumerItemValue(
+                record,
+            ) = record.as_mut()
+        {
+            record.observation =
+                golem_common::model::durable_stream::StreamConsumerObservation::Guest {
+                    parent_start_index: Some(OplogIndex::from_u64(2)),
+                };
+        }
+        let mut entries = vec![noop(), custom_start("outer", 1, None, 1), observation];
+        if complete {
+            entries.push(custom_end(2, 10));
+        }
+        let rs = replay_state_over(entries).await;
+        let claimed = claim_custom_start(
+            &rs,
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            rs.await_resolution_outcome(claimed.handle),
+        )
+        .await
+        .expect("a custom subtree has no replaying guest read observer")
+        .unwrap();
+        assert!(matches!(
+            (complete, outcome),
+            (
+                true,
+                ResolutionOutcome::Resolved(Resolution::Completed { .. })
+            ) | (false, ResolutionOutcome::Incomplete)
+        ));
+    }
+}
+
+#[test]
+async fn replay_consumer_observations_reserve_item_and_terminal_guest_boundaries() {
+    for terminal in [false, true] {
+        let rs = replay_state_over(vec![
+            noop(),
+            consumer_observation(1, true, terminal),
+            noop(),
+            consumer_observation(0, true, terminal),
+            noop(),
+        ])
+        .await;
+        let mut next = Box::pin(rs.get_oplog_entry(None));
+        assert!(futures::poll!(next.as_mut()).is_pending());
+        let b = rs
+            .await_stream_observation(OplogIndex::from_u64(2))
+            .await
+            .unwrap();
+        assert!(
+            futures::poll!(next.as_mut()).is_pending(),
+            "an unrelated reader cannot acknowledge B"
+        );
+        b.acknowledge();
+        assert_eq!(next.await.unwrap().0, OplogIndex::from_u64(3));
+        let a = rs
+            .await_stream_observation(OplogIndex::from_u64(4))
+            .await
+            .unwrap();
+        let mut next = Box::pin(rs.get_oplog_entry(None));
+        assert!(
+            futures::poll!(next.as_mut()).is_pending(),
+            "an unrelated reader cannot acknowledge A"
+        );
+        a.acknowledge();
+        assert_eq!(next.await.unwrap().0, OplogIndex::from_u64(5));
+    }
+}
+
+#[test]
+async fn invocation_boundary_after_guest_observation_preserves_finished_or_incomplete_tail() {
+    for finished in [false, true] {
+        let mut entries = vec![
+            noop(),
+            consumer_observation(0, true, true),
+            stdout_log("after-consumption"),
+        ];
+        if finished {
+            entries.push(invocation_finished());
+        }
+        let rs = replay_state_over(entries).await;
+        let barrier = rs
+            .await_stream_observation(OplogIndex::from_u64(2))
+            .await
+            .unwrap();
+        barrier.acknowledge();
+        assert_eq!(
+            rs.get_oplog_entry_agent_invocation_finished()
+                .await
+                .unwrap()
+                .is_some(),
+            finished,
+            "deferred hint skipping must distinguish a recorded finish from a natural tail"
+        );
+    }
+}
+
+#[test]
+async fn replay_host_projection_observations_remain_skippable_hints() {
+    let rs = replay_state_over(vec![
+        noop(),
+        consumer_observation(0, false, false),
+        consumer_observation(0, false, true),
+        noop(),
+    ])
+    .await;
+    assert_eq!(
+        rs.get_oplog_entry(None).await.unwrap().0,
+        OplogIndex::from_u64(4)
+    );
+}
+
+#[test]
+async fn replay_start_claim_cannot_cross_a_guest_stream_observation() {
+    let rs = replay_state_over(vec![
+        noop(),
+        consumer_observation(0, true, false),
+        start_now(),
+        end_for(3, 42),
+    ])
+    .await;
+    let mut claim = Box::pin(rs.claim_concurrent_start(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+    ));
+    assert!(futures::poll!(claim.as_mut()).is_pending());
+    let barrier = rs
+        .await_stream_observation(OplogIndex::from_u64(2))
+        .await
+        .unwrap();
+    assert!(futures::poll!(claim.as_mut()).is_pending());
+    barrier.acknowledge();
+    let handle = claim.await.unwrap();
+    assert!(
+        matches!(rs.await_resolution(handle).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4))
+    );
+}
+
 #[test]
 async fn replay_delivery_marker_skips_following_hints_after_guest_boundary() {
     let rs = replay_state_over(vec![

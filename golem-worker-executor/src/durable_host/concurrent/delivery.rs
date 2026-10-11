@@ -19,7 +19,7 @@ use crate::durable_host::tail_work::TailActivity;
 pub struct MarkerReceipt(tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>);
 
 impl MarkerReceipt {
-    pub(super) fn pending(
+    pub(in crate::durable_host) fn pending(
         receiver: tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>,
     ) -> Self {
         Self(receiver)
@@ -181,7 +181,7 @@ impl CompletionMarkerRecord {
     }
 }
 
-pub(super) async fn await_marker_receipt(
+pub(in crate::durable_host) async fn await_marker_receipt(
     receipt: &mut MarkerReceipt,
 ) -> Result<(), WorkerExecutorError> {
     (&mut receipt.0)

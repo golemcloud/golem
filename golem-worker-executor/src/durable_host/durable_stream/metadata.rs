@@ -1108,6 +1108,30 @@ pub(crate) async fn project_producer_metadata(
                 ..
             } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
+                if let Some(original_index) = record.reobserves() {
+                    if original_index >= *index {
+                        return Err(
+                            "consumer re-observation must reference an earlier record".into()
+                        );
+                    }
+                    let original = oplog.read_exact(owner, mode, original_index, 1).await;
+                    let Some(OplogEntry::StreamSession {
+                        record: original, ..
+                    }) = original.get(&original_index)
+                    else {
+                        return Err(
+                            "consumer re-observation has no original consumer record".into()
+                        );
+                    };
+                    let original = oplog
+                        .download_payload(owner, mode, original.clone())
+                        .await?;
+                    if !record.has_supported_format() || !record.matches_reobserved(&original) {
+                        return Err(
+                            "consumer re-observation differs from its original input".into()
+                        );
+                    }
+                }
                 if let StreamSessionRecord::ForkCut(cut) = &record {
                     if entries.len() != 1 {
                         return Err("fork marker must occupy its own projection transaction".into());
@@ -3761,7 +3785,9 @@ mod tests {
                 .append_session_record(
                     None,
                     StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                        format_version: 1,
+                        format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                        reobserves: None,
                         session_key: StreamRegistrationInvocation::Remote(
                             source.invocation.clone(),
                         ),
@@ -3913,7 +3939,9 @@ mod tests {
             for record in [
                 StreamSessionRecord::Prepared(prepared),
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                    reobserves: None,
                     session_key: StreamRegistrationInvocation::Local(
                         source.idempotency_key.clone(),
                     ),
@@ -3926,7 +3954,9 @@ mod tests {
                 }),
                 if terminal_record {
                     StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
-                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                        reobserves: None,
                         session_key: StreamRegistrationInvocation::Local(
                             source.idempotency_key.clone(),
                         ),
@@ -3937,7 +3967,9 @@ mod tests {
                     })
                 } else {
                     StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        reobserves: None,
+                        format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         session_key: StreamRegistrationInvocation::Local(
                             source.idempotency_key.clone(),
                         ),
@@ -4147,7 +4179,9 @@ mod tests {
                         entity_parent_start_index: None,
                         record: OplogPayload::Inline(Box::new(
                             StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                                observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                                reobserves: None,
                                 session_key: StreamRegistrationInvocation::Local(
                                     target.idempotency_key.clone(),
                                 ),
@@ -4217,7 +4251,9 @@ mod tests {
                 producer
                     .append_session_record(None, StreamSessionRecord::ConsumerItemValue(
                         golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
-                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                            observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                            reobserves: None,
                             session_key: StreamRegistrationInvocation::Remote(session),
                             reader_id,
                             source_offset: StreamOffset::new(
@@ -4282,7 +4318,9 @@ mod tests {
                     None,
                     StreamSessionRecord::ConsumerItemValue(
                         golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
-                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                            observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                            reobserves: None,
                             session_key: StreamRegistrationInvocation::Local(
                                 session_key.idempotency_key.clone(),
                             ),
@@ -4304,7 +4342,9 @@ mod tests {
                 None,
                 StreamSessionRecord::ConsumerTerminal(
                     golem_common::model::durable_stream::StreamConsumerTerminalRecord {
-                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                        reobserves: None,
                         session_key: StreamRegistrationInvocation::Local(
                             session_key.idempotency_key.clone(),
                         ),
@@ -4356,7 +4396,9 @@ mod tests {
             .oplog
             .upload_payload(&StreamSessionRecord::ConsumerItemValue(
                 golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                    reobserves: None,
                     session_key: StreamRegistrationInvocation::Local(
                         session.idempotency_key.clone(),
                     ),

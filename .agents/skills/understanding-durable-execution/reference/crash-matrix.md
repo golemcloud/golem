@@ -26,6 +26,25 @@ below for what that leaves behind.
 | Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: parked, the guest drops at the same point | Marker |
 | Guest trapped mid-call | `Start` only | Same as "after Start" — trap is never `Cancelled` | `abandon_for_trap` |
 
+Native guest stream reads append one existing `ConsumerItemValue` or `ConsumerTerminal` record
+when Wasmtime's per-read observer confirms consumption. The observer reserves its oplog position
+synchronously. No extra Start/End or delivery marker is recorded. Guest records remain hints and
+satisfy no claim, but reserve their replay position until the observer acknowledges consumption.
+Host projections keep take-time journaling and ordinary hint skipping; the consumer discriminant
+distinguishes the two uses because source bindings alone do not identify the consuming operation.
+
+| Native read replay window | Oplog shape | Reconstruction behaviour | Durable fact |
+|---|---|---|---|
+| Host takes an item before guest consumption | No consumer journal record for that read | Re-read the durable source at the offset after the last observed item | The producer journal retains the unobserved item |
+| Guest consumes an item or terminal | One guest `ConsumerItemValue` or `ConsumerTerminal` | Retain the reconstructed value until its journal position; only the per-read observer releases the cursor | The journal position is the guest boundary |
+| Guest consumes part of a packed byte batch | One guest `ConsumerItemValue` covering only the delivered bytes | Recover the unconsumed remainder by source offset; later reads record their own portions | No take-time batch plus separate marker |
+| Guest cancels a read whose recorded delivery replay cannot retain | Guest consumer observation | Fail with `UnexpectedOplogEntry` and poison the shared cursor; do not discard the recorded value or remain parked | A recorded guest delivery cannot become an unread cancellation |
+| Atomic rollback deletes the physical guest-read boundary, then the region reads again | Original consumer record, `Jump`, one consumer record with `reobserves` pointing to the original | Validate identical logical content, replay the replacement boundary; do not advance progress twice or introduce nested readers again | Ordinal, source offset and nested identities retain the original logical input |
+
+Native read cancellation does not reconstruct whether the canonical cancellation returned
+inline or blocked. Successful cancellation replay across those different return dispositions
+is not supported. Cancellation keeps the canonical policy; it is not forced to return blocked.
+
 ## Owner lifecycle handoff (`worker/mod.rs`, `worker/invocation_loop.rs`, `services/active_agents/mod.rs`)
 
 The primary Store plus current entity Stores form one resident lifecycle unit. Lifecycle
@@ -123,7 +142,7 @@ concurrent-agent permit.
 |---|---|---|---|
 | Producer after committing `StreamItems`, before bus publication | producer: `StreamItems` | Items are already durable; consumers catch up by offset from producer segments | Commit precedes `publish_committed` |
 | Producer between guest write and `StreamItems` commit | producer: previous items only | Producer replays and the guest re-drives the write; sequence continues from the last committed `first_sequence` | Guest determinism + committed sequence |
-| Consumer after `ConsumerItemValue`, before the guest observed it | consumer: journal record | Journal replays by `consumer_read_ordinal`; the item is delivered once from the journal, not refetched | `consumer_read_ordinal` / `source_offset` |
+| Host projection after `ConsumerItemValue`, before downstream observation | consumer: host journal record | Journal replays by `consumer_read_ordinal`; the item is delivered once from the journal, not refetched | `consumer_read_ordinal` / `source_offset` |
 | Consumer bus reader closed (socket, executor loss) | consumer journal up to last offset | Resubscribe samples high-water under the publication lock; overlap discarded by offset; gap filled from producer segments | Offsets, not connection state |
 | Producer deleted and recreated with same `AgentId` | new producer has a new `AgentFingerprint` | Fingerprint checks (`validate_forwarded_mapping`, producer-side `CorruptHistory`) reject the session; the consumer never sees a spliced stream | Fingerprint pinned at registration |
 | Caller RPC `End` recorded, stream still draining | caller: `Start`, `End`; journals partial | Recorded RPC result returned; stream resumes by offset from the journals | Result completed stripped of streams |

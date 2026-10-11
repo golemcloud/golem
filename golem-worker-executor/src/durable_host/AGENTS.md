@@ -104,9 +104,24 @@ not add a feature-specific recovery path or immediate restart.
 - Reconstruct terminal outputs from committed records without requiring the finished consumer to
   reattach. Open agent-RPC outputs still require an active attachment before production.
 - Stream entries are hints and must stay hints: they take part in no `Start`/terminal pairing and
-  never satisfy a claim.
+  never satisfy a claim. Guest-consumed `ConsumerItemValue` and `ConsumerTerminal` records reserve
+  their replay position until Wasmtime's per-read observer confirms guest consumption. Host
+  projection records remain ordinary skippable hints.
 - The RPC result is completed (stripped of streams) before the stream-bearing value reaches the
   guest; do not assume an open stream implies an incomplete RPC `Start`.
+- Native guest reads append one consumer journal record at Wasmtime's per-read consumption
+  observer, not at host take time. Its oplog position is the guest boundary; there is no extra
+  durable call or delivery marker. Packed bytes record only the consumed portion. A crash before
+  consumption leaves no record and recovery re-reads the source by offset. Host projections keep
+  take-time journaling. Native read cancellation does not yet reconstruct the inline-versus-blocked
+  return disposition. If cancellation cannot retain a recorded guest delivery, replay fails with
+  `UnexpectedOplogEntry` and poisons the shared cursor instead of discarding the value or waiting
+  forever. The canonical cancellation policy is unchanged; do not force always-blocked returns.
+- Atomic rollback retains logical consumer input, including its ordinal, source offset and nested
+  reader identities. Re-executing a read whose physical boundary a `Jump` deleted appends one
+  consumer record with `reobserves` referencing the original record. Append and replay validate
+  identical logical content. A re-observation reserves its new guest boundary but advances no
+  consumer progress and introduces no nested readers; their identities retain the original index.
 
 ## Entity bodies and tool invocations
 
