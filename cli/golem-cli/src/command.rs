@@ -1808,6 +1808,10 @@ pub mod worker {
                 verbatim_doc_comment,
             )]
             query: Option<String>,
+            /// Write the oplog into a self-contained interactive HTML viewer at the given path instead of printing it.
+            /// Structured formats still emit one output document per oplog entry.
+            #[arg(long, value_name = "FILE")]
+            html: Option<std::path::PathBuf>,
         },
         /// DESTRUCTIVE: Rewrites the agent's oplog by undoing recent operations. Reverted entries are lost. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
         #[command(after_help = crate::command_examples::AGENT_REVERT)]

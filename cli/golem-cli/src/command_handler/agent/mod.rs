@@ -25,6 +25,7 @@ use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
+use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
@@ -37,6 +38,7 @@ use crate::model::agent::action_result::{
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog_html::{OplogViewerDocument, render_oplog_viewer_html};
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
@@ -91,7 +93,7 @@ use itertools::{EitherOrBoth, Itertools};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -250,7 +252,8 @@ impl AgentCommandHandler {
                     agent_id,
                     from,
                     query,
-                } => self.cmd_oplog(agent_id, from, query).await,
+                    html,
+                } => self.cmd_oplog(agent_id, from, query, html).await,
                 AgentSubcommand::Revert {
                     agent_id,
                     last_oplog_index,
@@ -812,6 +815,7 @@ impl AgentCommandHandler {
         agent_id: AgentIdArgs,
         from: Option<u64>,
         query: Option<String>,
+        html: Option<PathBuf>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
@@ -820,6 +824,8 @@ impl AgentCommandHandler {
         let batch_size = self.ctx.http_batch_size();
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
+        let print_entries = html.is_none() || self.ctx.format().is_structured();
+        let mut collected_entries = Vec::<AgentOplogEntryView>::new();
         loop {
             let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
             cursor = {
@@ -845,11 +851,17 @@ impl AgentCommandHandler {
             if !entries.is_empty() {
                 had_entries = true;
                 for entry in entries {
-                    self.ctx.log_handler().log_output(AgentOplogEntryView {
+                    let view = AgentOplogEntryView {
                         index: entry.oplog_index.as_u64(),
                         attribution: entry.attribution,
                         entry: entry.entry,
-                    })?;
+                    };
+                    if html.is_some() {
+                        collected_entries.push(view.clone());
+                    }
+                    if print_entries {
+                        self.ctx.log_handler().log_output(view)?;
+                    }
                 }
             }
 
@@ -858,7 +870,34 @@ impl AgentCommandHandler {
             }
         }
 
-        if !self.ctx.format().is_structured() && !had_entries {
+        if let Some(html_path) = html {
+            let entry_count = collected_entries.len();
+            let document = OplogViewerDocument {
+                agent_id: format_agent_id_match(&agent_id_match),
+                component_name: component.component_name.0.clone(),
+                component_id: component.id.0.to_string(),
+                generated_at: Utc::now().to_rfc3339(),
+                cli_version: crate::version().to_string(),
+                from,
+                query,
+                entries: collected_entries,
+            };
+            let rendered = render_oplog_viewer_html(&document)?;
+            if let Some(parent) = html_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write_str(&html_path, rendered)?;
+            log_action(
+                "Generated",
+                format!(
+                    "HTML oplog viewer with {} entries: {}",
+                    entry_count,
+                    html_path.display().to_string().log_color_highlight()
+                ),
+            );
+        } else if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 

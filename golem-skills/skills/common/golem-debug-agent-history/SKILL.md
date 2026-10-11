@@ -25,6 +25,7 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 |------|-------------|
 | `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query`. |
 | `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
+| `--html <FILE>` | Write the selected entries into a self-contained interactive HTML viewer at `FILE` instead of printing them. Can be combined with `--from` or `--query`. In structured formats the entries are still emitted on stdout. |
 
 If neither `--from` nor `--query` is provided, the entire oplog is streamed.
 
@@ -81,4 +82,9 @@ golem agent oplog <AGENT_ID> --from 100
 Search for specific entries:
 ```shell
 golem agent oplog <AGENT_ID> --query "error"
+```
+
+Write an interactive HTML viewer (grouped by invocation, with foldable host calls, filters, search and decoded payloads) and open it in a browser:
+```shell
+golem agent oplog <AGENT_ID> --html oplog.html
 ```

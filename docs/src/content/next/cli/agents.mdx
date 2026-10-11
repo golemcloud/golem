@@ -153,6 +153,18 @@ golem agent oplog --from 100 'CounterAgent("my-counter")'
 
 Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the agent.
 
+### Viewing the oplog in a browser
+
+The `--html` parameter writes the oplog into a **self-contained HTML viewer** instead of printing it to the terminal:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --html oplog.html
+```
+
+The generated file has no external dependencies, so it can be opened directly from disk or shared. The viewer groups the entries by invocation, merges each durable host call's **start** and **end** entries into one foldable row with its duration, nests the entries executed by tool entities under the tool invocation, and marks the regions skipped by a **jump** or a **revert**. It can filter by entry category, log level or index range, search the full content of the entries, decode typed payloads, binary and snapshot data, and it shows per-invocation and per-type statistics. The `--html` parameter can be combined with `--from` and `--query`.
+
+The viewer can also load a dump produced by `--format json` through its _Load JSON_ button.
+
 ### Searching for oplog entries
 
 The same command can also be used to **search** for oplog entries, using the `--query` parameter. This parameter requires a query using **lucene query syntax**. The following syntax elements are supported:
