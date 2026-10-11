@@ -13,8 +13,10 @@ use std::path::{Component, Path};
 #[cfg(target_arch = "wasm32")]
 const TOOL: &str = "read-file";
 /// The error of the tool for a file that has a NUL byte or is not UTF-8.
-#[cfg(target_arch = "wasm32")]
 const NOT_TEXT: &str = "binary-file";
+/// The error of the tool for a wrong line bound or cursor, and for a page whose first byte is a
+/// UTF-8 continuation byte (0x80 to 0xBF).
+const NOT_AT_A_CHARACTER: &str = "invalid-range";
 
 /// The largest file that is read through the tool. The content of each page goes into the oplog
 /// of the agent, and all pages are held in memory until the last one has arrived.
@@ -88,10 +90,7 @@ impl ReadFileTool {
                 end_line: None,
                 cursor,
             })
-            .map_err(|failure| match failure.error.as_deref() {
-                Some(NOT_TEXT) => Refusal::NotText,
-                _ => Refusal::Other(failure.reason),
-            })
+            .map_err(|failure| refusal(failure.error.as_deref(), failure.reason))
     }
 }
 
@@ -109,6 +108,20 @@ impl bash_shell::commands::FileReader for ReadFileTool {
                 None
             }
         }
+    }
+}
+
+/// What a failed call means for the file. `error` is the name of the error, when the tool
+/// itself returned one.
+fn refusal(error: Option<&str>, reason: String) -> Refusal {
+    match error {
+        Some(NOT_TEXT) => Refusal::NotText,
+        // A call from this module has no line bound, and no cursor but the one that the tool
+        // returned for the page before. For a file that does not change between two pages, the
+        // tool then gives this error only when the first byte of a page is a UTF-8 continuation
+        // byte. No page of UTF-8 text starts with such a byte.
+        Some(NOT_AT_A_CHARACTER) => Refusal::NotText,
+        _ => Refusal::Other(reason),
     }
 }
 

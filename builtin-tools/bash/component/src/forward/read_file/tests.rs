@@ -149,6 +149,29 @@ fn a_file_is_read_with_the_limit_of_calls_and_not_with_one_call_more() {
     assert_eq!(sent.len(), limit);
 }
 
+/// The tool has two errors for a file that is not UTF-8 text. It gives `invalid-range` for a
+/// page whose first byte is a UTF-8 continuation byte, which no page of a text file starts with.
+#[test]
+fn an_error_of_the_tool_for_a_file_that_is_not_text_is_about_that_file_only() {
+    assert_eq!(refusal(Some("binary-file"), "x".into()), Refusal::NotText);
+    assert_eq!(refusal(Some("invalid-range"), "x".into()), Refusal::NotText);
+    assert_eq!(
+        refusal(Some("path-policy-denied"), "x".into()),
+        Refusal::Other("x".into())
+    );
+    assert_eq!(refusal(None, "x".into()), Refusal::Other("x".into()));
+}
+
+/// For 64 KiB of text in fewer than 200 lines and then a continuation byte, the first page is
+/// the text, and the next page starts with the continuation byte.
+#[test]
+fn a_later_page_that_starts_with_a_continuation_byte_leaves_the_file_to_the_command() {
+    let not_text = refusal(Some("invalid-range"), "x".into());
+    let (result, sent) = read(5, vec![page("ab", Some(2)), Err(not_text)]);
+    assert_eq!(result, Ok(None));
+    assert_eq!(sent, [None, Some(2)]);
+}
+
 #[test]
 fn only_the_definition_of_the_built_in_read_file_is_accepted() {
     crate::forward::tests::assert_accepts_only(include_str!("definition.json"), is_read_file);
