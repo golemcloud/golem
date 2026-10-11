@@ -73,9 +73,9 @@
   styling, a visible terminal cursor, and apply/cancel semantics.
 - [x] Replace the query-heavy Overview dashboard with a cheap status and
   quick-jump cockpit.
-- [~] Apply one hierarchy and continuous pane chrome across Ops destinations.
+- [x] Apply one hierarchy and continuous pane chrome across Ops destinations.
 - [ ] Make Agent, Metrics, Oplog, and Stream scope handoffs visible in-page.
-- [ ] Rebuild Oplog as a navigable master/details journal and forensic viewer.
+- [~] Rebuild Oplog as a navigable master/details journal and forensic viewer.
 - [ ] Bring row selection, pane scrolling, split resizing, and scrollbar
   interaction to pointer parity on every Ops destination.
 - [ ] Review Metrics chart density, legends, inspection, and empty/error states

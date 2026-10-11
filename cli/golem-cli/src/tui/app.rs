@@ -75,14 +75,14 @@ use crate::tui::visual::active_style;
 use crate::tui::visual::{TuiVisualStyle, with_style};
 use crate::tui::widgets::{
     ActionButton, CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandMarker,
-    CommandRow, ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow,
-    FooterStatusCluster, FooterStatusItem, HelpRow, JsonDocument, KeyHint, NavigationRow, Notice,
-    NoticeKind, OverlayFrame, PaneChrome, PaneEnding, PaneFocus, PaneHeader, PaneHeaderStatus,
-    PaneLayout, PaneScrollbarSlot, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
-    PaneTableColumn, PaneTableState, ReviewFieldRow, ScrollableDocument, SearchInput,
-    SectionHeading, SelectableRow, ShortcutRow, StatusKind, StatusMarker, WorkspaceItem,
-    WorkspaceSelector, fit, pane_table_virtual_width, render_scrollbar, responsive_table_columns,
-    shortcut_line, wrap_styled_line,
+    CommandRow, ContextHeader, ContextPair, ControlChoice, ControlGroup, ControlStrip,
+    CursorCollectionState, DecisionTableRow, FieldRow, FooterStatusCluster, FooterStatusItem,
+    HelpRow, JsonDocument, KeyHint, NavigationRow, Notice, NoticeKind, OverlayFrame, PaneChrome,
+    PaneEnding, PaneFocus, PaneHeader, PaneHeaderStatus, PaneLayout, PaneScrollbarSlot,
+    PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan, PaneTableColumn, PaneTableState,
+    ReviewFieldRow, ScrollableDocument, SearchInput, SectionHeading, SelectableRow, ShortcutRow,
+    StatusKind, StatusMarker, WorkspaceItem, WorkspaceSelector, fit, pane_table_virtual_width,
+    render_scrollbar, responsive_table_columns, shortcut_line, wrap_styled_line,
 };
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -9755,6 +9755,33 @@ fn render_ops_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
 }
 
+fn adaptive_ops_pane_layout(area: Rect, horizontal_at: u16, weights: &[u32]) -> PaneLayout {
+    if area.width == 0 || area.height == 0 {
+        return PaneLayout {
+            panes: vec![area; weights.len()],
+            dividers: Vec::new(),
+        };
+    }
+    if area.width >= horizontal_at {
+        PaneLayout::horizontal(area, weights)
+    } else {
+        let total = weights.iter().copied().sum::<u32>().max(1);
+        let panes = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(
+                weights
+                    .iter()
+                    .map(|weight| Constraint::Ratio((*weight).max(1), total)),
+            )
+            .split(area)
+            .to_vec();
+        PaneLayout {
+            panes,
+            dividers: Vec::new(),
+        }
+    }
+}
+
 fn render_ops_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     match app.ops.current_route() {
         OpsRoute::OverviewServer => render_overview_server(frame, area, app),
@@ -9960,11 +9987,6 @@ fn overview_status_line(
 
 fn render_overview_server(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let mut lines = vec![
-        SectionHeading {
-            title: "Server & collector",
-            detail: Some("Esc returns to Overview"),
-        }
-        .line(&theme()),
         overview_value_line("Nested server", app.server.run.status.title()),
         overview_value_line(
             "Connected endpoint",
@@ -10036,32 +10058,32 @@ fn render_overview_server(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 }
 
 fn render_overview_issues(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    PaneHeader {
-        title: "Overview / Issues · Enter routes · Esc back",
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+    let chrome = PaneChrome { area };
+    chrome.render_header(
+        frame,
+        area,
+        "Overview / Issues",
+        PaneFocus::Active,
+        &theme(),
+    );
+    let body = chrome.body_area(area);
+    let content = chrome.content_area(body);
     let issues = app.overview_issues();
     if issues.is_empty() {
         render_metrics_notice(
             frame,
-            body,
+            content,
             NoticeKind::Empty,
             "No actionable issues detected",
         );
+        chrome.render_body_boundary(frame, body, &theme());
         return;
     }
-    let detail_height = if body.height >= 6 { 3 } else { 0 };
+    let detail_height = if content.height >= 6 { 3 } else { 0 };
     let [list, detail] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(detail_height)])
-        .areas(body);
+        .areas(content);
     let visible = list.height.max(1) as usize;
     let start = app
         .overview
@@ -10108,6 +10130,7 @@ fn render_overview_issues(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             detail,
         );
     }
+    chrome.render_body_boundary(frame, body, &theme());
 }
 
 fn overview_loading_lines(message: impl Into<String>) -> Vec<Line<'static>> {
@@ -10175,6 +10198,7 @@ fn overview_bytes(bytes: u64) -> String {
 }
 
 fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let chrome = PaneChrome { area };
     let target = app
         .stream
         .target
@@ -10215,26 +10239,19 @@ fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let status_height = status_lines
         .len()
         .min(area.height.saturating_sub(1) as usize) as u16;
-    let [header, status, body] = Layout::default()
+    chrome.render_header(frame, area, &title, PaneFocus::Active, &theme());
+    let outer_body = chrome.body_area(area);
+    let [status_row, body] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(status_height),
-            Constraint::Min(0),
-        ])
-        .areas(area);
-    PaneHeader {
-        title: &title,
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+        .constraints([Constraint::Length(status_height), Constraint::Min(0)])
+        .areas(outer_body);
+    let status = chrome.content_area(status_row);
     frame.render_widget(Paragraph::new(status_lines).style(surface_style()), status);
 
     let pane_layout = PaneLayout::horizontal(body, &[1]);
     let content_length = app.stream.events.len().max(1);
     let Some(region) = pane_layout.regions(&[content_length]).into_iter().next() else {
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     };
     app.geometry.add_region(RegionKind::OpsStream, body);
@@ -10275,6 +10292,7 @@ fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .add_region(RegionKind::Scrollbar(ScrollbarTarget::OpsStream), slot.area);
     }
     pane_layout.render_body_boundaries(frame, &[region], &theme());
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn stream_status_line(app: &TuiApp, width: usize) -> Line<'static> {
@@ -10417,38 +10435,65 @@ fn format_bytes(bytes: usize) -> String {
 }
 
 fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, query_bar, body] = Layout::default()
+    let chrome = PaneChrome { area };
+    chrome.render_header(frame, area, "Oplog", PaneFocus::Active, &theme());
+    let outer_body = chrome.body_area(area);
+    let content_area = chrome.content_area(outer_body);
+    let [controls, query_bar, body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(1),
         ])
-        .areas(area);
+        .areas(content_area);
     let representation = app.activity.representation;
-    let choices = [
-        ActivityRepresentation::Grouped,
-        ActivityRepresentation::Entries,
-    ]
-    .into_iter()
-    .map(|choice| {
-        if choice == representation {
-            format!("[{}]", choice.label())
-        } else {
-            choice.label().to_string()
-        }
-    })
-    .collect::<Vec<_>>()
-    .join("  ");
-    let load_state = if app.activity.loading {
-        " · [Loading…]"
+    let representation_choices = [
+        ControlChoice {
+            label: "Grouped",
+            selected: representation == ActivityRepresentation::Grouped,
+        },
+        ControlChoice {
+            label: "Entries",
+            selected: representation == ActivityRepresentation::Entries,
+        },
+    ];
+    let order_choices = [
+        ControlChoice {
+            label: "Newest",
+            selected: app.activity.order == ActivityOrder::Newest,
+        },
+        ControlChoice {
+            label: "Oldest",
+            selected: app.activity.order == ActivityOrder::Oldest,
+        },
+    ];
+    let groups = [
+        ControlGroup {
+            label: "View",
+            choices: &representation_choices,
+        },
+        ControlGroup {
+            label: "Order",
+            choices: &order_choices,
+        },
+    ];
+    let (load_label, load_tone) = if app.activity.loading {
+        (Some("loading"), PaneStatusTone::Loading)
     } else if app.activity.stopped {
-        " · [Stopped]"
+        (Some("stopped"), PaneStatusTone::Idle)
     } else if app.activity.paused {
-        " · (More available)"
+        (Some("more available"), PaneStatusTone::Active)
     } else {
-        ""
+        (None, PaneStatusTone::Idle)
     };
+    if let Some(label) = load_label {
+        PaneHeaderStatus {
+            label,
+            tone: load_tone,
+        }
+        .render(frame, area, &theme());
+    }
     let scan_progress = app
         .activity
         .progress
@@ -10459,7 +10504,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 .map(|scanned| (scanned, progress.last_index))
         })
         .max_by_key(|(scanned, _)| *scanned)
-        .map(|(scanned, last)| format!(" · scan #{scanned}/#{last}"))
+        .map(|(scanned, last)| format!("Scan #{scanned}/#{last}"))
         .unwrap_or_default();
     let scan_bound = if app
         .activity
@@ -10467,7 +10512,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .iter()
         .any(|progress| progress.scan_limit_reached && progress.has_more)
     {
-        " · bounded"
+        "bounded"
     } else {
         ""
     };
@@ -10476,29 +10521,39 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         app.activity.applied_query.to,
     ) {
         (Some(from), Some(to)) => format!(
-            " · time {}→{}",
+            "Time {}→{}",
             from.format("%H:%M:%S%.3fZ"),
             to.format("%H:%M:%S%.3fZ")
         ),
-        (Some(from), None) => format!(" · from {}", from.format("%H:%M:%S%.3fZ")),
-        (None, Some(to)) => format!(" · to {}", to.format("%H:%M:%S%.3fZ")),
+        (Some(from), None) => format!("From {}", from.format("%H:%M:%S%.3fZ")),
+        (None, Some(to)) => format!("To {}", to.format("%H:%M:%S%.3fZ")),
         (None, None) => String::new(),
     };
-    PaneHeader {
-        title: &format!(
-            "Oplog · {choices} · [{}] · {} Agent(s){time_filter}{scan_progress}{scan_bound}{load_state}",
-            app.activity.order.label(),
-            app.activity.agents.len(),
-        ),
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+    let control_status = [
+        Some(format!("Scope {} Agent(s)", app.activity.agents.len())),
+        (!time_filter.is_empty()).then_some(time_filter),
+        (!scan_progress.is_empty()).then_some(scan_progress),
+        (!scan_bound.is_empty()).then_some(scan_bound.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("   ");
+    frame.render_widget(
+        Paragraph::new(
+            ControlStrip {
+                groups: &groups,
+                status: Some(&control_status),
+            }
+            .line(&theme()),
+        )
+        .style(surface_style()),
+        controls,
+    );
     let query_state = if app.activity.query == app.activity.applied_query.text {
-        "applied"
+        "(applied)"
     } else {
-        "Enter to apply"
+        "[enter to apply]"
     };
     let status_width = (UnicodeWidthStr::width(query_state) + 3)
         .min(query_bar.width.saturating_sub(1) as usize) as u16;
@@ -10516,7 +10571,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
-            format!("· {query_state}"),
+            query_state.to_string(),
             Style::default().fg(theme().text_muted),
         ))
         .style(surface_style()),
@@ -10533,6 +10588,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 
     if let Some(error) = &app.activity.error {
         render_metrics_notice(frame, body, NoticeKind::Warning, error);
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     if app.activity.loading && app.activity.entries.is_empty() {
@@ -10542,6 +10598,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             NoticeKind::Info,
             "Loading durable Agent activity…",
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     if app.activity.entries.is_empty() {
@@ -10551,6 +10608,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             NoticeKind::Empty,
             "No oplog entries in this scope",
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
 
@@ -10610,6 +10668,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     } else {
         render_activity_entries(frame, content, app, false);
     }
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn render_activity_entries(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, journal: bool) {
@@ -10715,50 +10774,99 @@ fn render_activity_detail(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 }
 
 fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
+    let chrome = PaneChrome { area };
+    chrome.render_header(frame, area, "Metrics", PaneFocus::Active, &theme());
+    if app.metrics.loading {
+        PaneHeaderStatus {
+            label: "refreshing",
+            tone: PaneStatusTone::Loading,
+        }
+        .render(frame, area, &theme());
+    }
+    let outer_body = chrome.body_area(area);
+    let [controls_row, body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    let mode = match app.metrics.mode {
-        MetricsMode::Dashboard => "[Dashboard] Explore",
-        MetricsMode::Explore => "Dashboard [Explore]",
-    };
-    let sources = match app.metrics.source {
-        crate::model::local_observability::LocalMetricSource::Services => "Agents [Server]",
-        crate::model::local_observability::LocalMetricSource::Agents => "[Agents] Server",
-    };
-    let live = if app.metrics.live {
-        "[Live]"
-    } else {
-        "[Paused]"
-    };
+        .areas(outer_body);
+    let controls = chrome.content_area(controls_row);
+    let mode_choices = [
+        ControlChoice {
+            label: "Dashboard",
+            selected: app.metrics.mode == MetricsMode::Dashboard,
+        },
+        ControlChoice {
+            label: "Explore",
+            selected: app.metrics.mode == MetricsMode::Explore,
+        },
+    ];
+    let source_choices = [
+        ControlChoice {
+            label: "Agents",
+            selected: app.metrics.source
+                == crate::model::local_observability::LocalMetricSource::Agents,
+        },
+        ControlChoice {
+            label: "Server",
+            selected: app.metrics.source
+                == crate::model::local_observability::LocalMetricSource::Services,
+        },
+    ];
+    let state_choices = [
+        ControlChoice {
+            label: "Live",
+            selected: app.metrics.live,
+        },
+        ControlChoice {
+            label: "Paused",
+            selected: !app.metrics.live,
+        },
+    ];
+    let groups = [
+        ControlGroup {
+            label: "View",
+            choices: &mode_choices,
+        },
+        ControlGroup {
+            label: "Source",
+            choices: &source_choices,
+        },
+        ControlGroup {
+            label: "State",
+            choices: &state_choices,
+        },
+    ];
     let freshness = app
         .metrics
         .dashboard
         .as_ref()
         .and_then(|dashboard| dashboard.freshest_sample_unix_nanos)
         .map(metric_freshness_label)
-        .map(|freshness| format!(" · {freshness}"))
+        .map(|freshness| format!("Freshness {freshness}"))
         .unwrap_or_default();
-    let loading = if app.metrics.loading {
-        " · refreshing…"
-    } else {
-        ""
-    };
-    PaneHeader {
-        title: &format!(
-            "Metrics · {mode} · {sources} · scope {} · time [{}] · {live}{freshness}{loading}",
-            app.metrics.scope_label(),
-            app.metrics.range.label(),
-        ),
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
+    let mut status = format!(
+        "Scope {}   Time {}",
+        app.metrics.scope_label(),
+        app.metrics.range.label()
+    );
+    if !freshness.is_empty() {
+        status.push_str("   ");
+        status.push_str(&freshness);
     }
-    .render(frame, header, &theme());
+    frame.render_widget(
+        Paragraph::new(
+            ControlStrip {
+                groups: &groups,
+                status: Some(&status),
+            }
+            .line(&theme()),
+        )
+        .style(surface_style()),
+        controls,
+    );
 
     if let Some(error) = &app.metrics.error {
         render_metrics_notice(frame, body, NoticeKind::Warning, error);
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     if let Some(capability) = &app.metrics.capability
@@ -10773,6 +10881,7 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 .as_deref()
                 .unwrap_or("Local metrics collection is unavailable"),
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     if app.metrics.families.is_empty() && app.metrics.mode == MetricsMode::Explore {
@@ -10782,6 +10891,7 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             "No samples in the last 15 minutes. New local deployments are attached automatically; existing deployments begin exporting after their next deploy."
         };
         render_metrics_notice(frame, body, NoticeKind::Info, message);
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
 
@@ -10800,55 +10910,31 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         } else {
             render_metrics_dashboard(frame, body, app);
         }
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
 
-    let areas = if body.width >= 100 {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(31),
-                Constraint::Percentage(31),
-                Constraint::Percentage(38),
-            ])
-            .split(body)
-            .to_vec()
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(32),
-                Constraint::Percentage(32),
-                Constraint::Percentage(36),
-            ])
-            .split(body)
-            .to_vec()
-    };
-    render_metrics_families(frame, areas[0], app);
-    render_metrics_series(frame, areas[1], app);
-    render_metrics_chart(frame, areas[2], app);
+    let pane_layout = adaptive_ops_pane_layout(body, 100, &[31, 31, 38]);
+    render_metrics_families(frame, pane_layout.panes[0], chrome, app);
+    render_metrics_series(frame, pane_layout.panes[1], chrome, app);
+    render_metrics_chart(frame, pane_layout.panes[2], chrome, app);
+    chrome.render_dividers(frame, &pane_layout.dividers, &theme());
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn render_ops_metric_panel_route(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, panel_id: &str) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
+    let chrome = PaneChrome { area };
     let panel = app
         .metrics
         .dashboard
         .as_ref()
         .and_then(|dashboard| dashboard.panels.iter().find(|panel| panel.id == panel_id));
     let title = panel
-        .map(|panel| format!("Metrics / {} · Esc back", panel.title))
-        .unwrap_or_else(|| "Metrics / unavailable panel · Esc back".to_string());
-    PaneHeader {
-        title: &title,
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+        .map(|panel| format!("Metrics / {}", panel.title))
+        .unwrap_or_else(|| "Metrics / unavailable panel".to_string());
+    chrome.render_header(frame, area, &title, PaneFocus::Active, &theme());
+    let outer_body = chrome.body_area(area);
+    let body = chrome.content_area(outer_body);
     let Some(panel) = panel else {
         render_metrics_notice(
             frame,
@@ -10856,6 +10942,7 @@ fn render_ops_metric_panel_route(frame: &mut Frame<'_>, area: Rect, app: &TuiApp
             NoticeKind::Warning,
             "This dashboard snapshot no longer contains the opened panel",
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     };
     if panel.series.is_empty() {
@@ -10868,6 +10955,7 @@ fn render_ops_metric_panel_route(frame: &mut Frame<'_>, area: Rect, app: &TuiApp
                 .as_deref()
                 .unwrap_or("No samples in this range"),
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
 
@@ -11005,6 +11093,7 @@ fn render_ops_metric_panel_route(frame: &mut Frame<'_>, area: Rect, app: &TuiApp
             .wrap(Wrap { trim: false }),
         body,
     );
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -11246,31 +11335,38 @@ fn render_metrics_notice(frame: &mut Frame<'_>, area: Rect, kind: NoticeKind, me
     );
 }
 
-fn render_metrics_families(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    let title = format!(
-        "Families · {} loaded{}",
-        app.metrics.families.len(),
-        if app.metrics.families_next_cursor.is_some() {
-            " · more"
-        } else {
-            ""
-        }
-    );
-    PaneHeader {
-        title: &title,
-        focus: if app.metrics.focus == MetricsFocus::Families {
+fn render_metrics_families(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, app: &TuiApp) {
+    chrome.render_header(
+        frame,
+        area,
+        "Families",
+        if app.metrics.focus == MetricsFocus::Families {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
         },
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
+        &theme(),
+    );
+    let status = format!(
+        "{} loaded{}",
+        app.metrics.families.len(),
+        if app.metrics.families_next_cursor.is_some() {
+            " / more"
+        } else {
+            ""
+        }
+    );
+    PaneHeaderStatus {
+        label: &status,
+        tone: if app.metrics.families_next_cursor.is_some() {
+            PaneStatusTone::Active
+        } else {
+            PaneStatusTone::Idle
+        },
     }
-    .render(frame, header, &theme());
+    .render(frame, area, &theme());
+    let outer_body = chrome.body_area(area);
+    let body = chrome.content_area(outer_body);
     let lines = app
         .metrics
         .families
@@ -11288,35 +11384,43 @@ fn render_metrics_families(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
-fn render_metrics_series(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    let title = format!(
-        "Series · {} loaded · {}/{} shown{}",
-        app.metrics.series.len(),
-        app.metrics.selected_series_keys.len(),
-        MAX_EXPLORE_SERIES,
-        if app.metrics.series_next_cursor.is_some() {
-            " · more"
-        } else {
-            ""
-        }
-    );
-    PaneHeader {
-        title: &title,
-        focus: if app.metrics.focus == MetricsFocus::Series {
+fn render_metrics_series(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, app: &TuiApp) {
+    chrome.render_header(
+        frame,
+        area,
+        "Series",
+        if app.metrics.focus == MetricsFocus::Series {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
         },
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
+        &theme(),
+    );
+    let status = format!(
+        "{} loaded / {}/{} shown{}",
+        app.metrics.series.len(),
+        app.metrics.selected_series_keys.len(),
+        MAX_EXPLORE_SERIES,
+        if app.metrics.series_next_cursor.is_some() {
+            " / more"
+        } else {
+            ""
+        }
+    );
+    PaneHeaderStatus {
+        label: &status,
+        tone: if app.metrics.series_next_cursor.is_some() {
+            PaneStatusTone::Active
+        } else {
+            PaneStatusTone::Idle
+        },
     }
-    .render(frame, header, &theme());
+    .render(frame, area, &theme());
+    let outer_body = chrome.body_area(area);
+    let body = chrome.content_area(outer_body);
     let lines = app
         .metrics
         .series
@@ -11355,24 +11459,23 @@ fn render_metrics_series(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
-fn render_metrics_chart(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    PaneHeader {
-        title: "Chart / Details",
-        focus: if app.metrics.focus == MetricsFocus::Chart {
+fn render_metrics_chart(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, app: &TuiApp) {
+    chrome.render_header(
+        frame,
+        area,
+        "Chart / Details",
+        if app.metrics.focus == MetricsFocus::Chart {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
         },
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+        &theme(),
+    );
+    let outer_body = chrome.body_area(area);
+    let body = chrome.content_area(outer_body);
     let mut lines = Vec::new();
     if let Some(notice) = &app.metrics.notice {
         lines.push(
@@ -11559,6 +11662,7 @@ fn render_metrics_chart(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .wrap(Wrap { trim: false }),
         body,
     );
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn metric_chart_region(area: Rect, leading: u16, trailing: u16) -> Rect {
@@ -11694,76 +11798,63 @@ fn metric_series_short_label(
 }
 
 fn render_ops_resources(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
+    let chrome = PaneChrome { area };
+    chrome.render_header(frame, area, "Configuration", PaneFocus::Active, &theme());
+    if app.resources.loading.is_some() {
+        PaneHeaderStatus {
+            label: "refreshing",
+            tone: PaneStatusTone::Loading,
+        }
+        .render(frame, area, &theme());
+    }
+    let outer_body = chrome.body_area(area);
+    let [controls_row, body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    let scopes = ResourceScope::ALL
-        .into_iter()
-        .map(|scope| {
-            if scope == app.resources.scope {
-                format!("[{}]", scope.label())
-            } else {
-                scope.label().to_string()
+        .areas(outer_body);
+    let controls = chrome.content_area(controls_row);
+    let scope_choices = ResourceScope::ALL.map(|scope| ControlChoice {
+        label: scope.label(),
+        selected: scope == app.resources.scope,
+    });
+    let groups = [ControlGroup {
+        label: "Scope",
+        choices: &scope_choices,
+    }];
+    frame.render_widget(
+        Paragraph::new(
+            ControlStrip {
+                groups: &groups,
+                status: None,
             }
-        })
-        .collect::<Vec<_>>()
-        .join("  ");
-    let loading = if app.resources.loading.is_some() {
-        " · refreshing…"
-    } else {
-        ""
-    };
-    PaneHeader {
-        title: &format!("Configuration · {scopes}{loading}"),
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+            .line(&theme()),
+        )
+        .style(surface_style()),
+        controls,
+    );
 
-    let areas = if body.width >= 96 {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(28),
-                Constraint::Percentage(36),
-                Constraint::Percentage(36),
-            ])
-            .split(body)
-            .to_vec()
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(35),
-                Constraint::Percentage(35),
-            ])
-            .split(body)
-            .to_vec()
-    };
-    render_resource_kinds(frame, areas[0], app);
-    render_resource_rows(frame, areas[1], app);
-    render_resource_detail(frame, areas[2], app);
+    let pane_layout = adaptive_ops_pane_layout(body, 96, &[28, 36, 36]);
+    render_resource_kinds(frame, pane_layout.panes[0], chrome, app);
+    render_resource_rows(frame, pane_layout.panes[1], chrome, app);
+    render_resource_detail(frame, pane_layout.panes[2], chrome, app);
+    chrome.render_dividers(frame, &pane_layout.dividers, &theme());
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
-fn render_resource_kinds(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    PaneHeader {
-        title: "Kinds",
-        focus: if app.resources.focus() == resources::ResourceFocus::Kinds {
+fn render_resource_kinds(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, app: &TuiApp) {
+    chrome.render_header(
+        frame,
+        area,
+        "Kinds",
+        if app.resources.focus() == resources::ResourceFocus::Kinds {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
         },
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+        &theme(),
+    );
+    let outer_body = chrome.body_area(area);
+    let body = chrome.content_area(outer_body);
     let lines = resources::ResourceKind::for_scope(app.resources.scope)
         .iter()
         .enumerate()
@@ -11786,32 +11877,33 @@ fn render_resource_kinds(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
-fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    PaneHeader {
-        title: app.resources.selected_kind().label(),
-        focus: if app.resources.focus() == resources::ResourceFocus::Items {
+fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, app: &TuiApp) {
+    chrome.render_header(
+        frame,
+        area,
+        app.resources.selected_kind().label(),
+        if app.resources.focus() == resources::ResourceFocus::Items {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
         },
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+        &theme(),
+    );
+    let outer_body = chrome.body_area(area);
+    let body = chrome.content_area(outer_body);
     if app.resources.loading == Some(app.resources.selected_kind())
         && !app.resources.is_loaded(app.resources.selected_kind())
     {
         render_metrics_notice(frame, body, NoticeKind::Info, "Loading this resource kind…");
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     if let Some(error) = app.resources.current_error() {
         render_metrics_notice(frame, body, NoticeKind::Warning, error);
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     if app.resources.visible_rows().is_empty() {
@@ -11821,6 +11913,7 @@ fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             NoticeKind::Empty,
             "No items in this resource kind",
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     let lines = app
@@ -11841,28 +11934,27 @@ fn render_resource_rows(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines).style(surface_style()), body);
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
-fn render_resource_detail(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
+fn render_resource_detail(frame: &mut Frame<'_>, area: Rect, chrome: PaneChrome, app: &TuiApp) {
     let selected = app
         .resources
         .visible_rows()
         .get(app.resources.selected_row_index());
-    PaneHeader {
-        title: "Details",
-        focus: if app.resources.focus() == resources::ResourceFocus::Details {
+    chrome.render_header(
+        frame,
+        area,
+        "Details",
+        if app.resources.focus() == resources::ResourceFocus::Details {
             PaneFocus::Active
         } else {
             PaneFocus::Idle
         },
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+        &theme(),
+    );
+    let outer_body = chrome.body_area(area);
+    let body = chrome.content_area(outer_body);
     let lines = selected.map_or_else(Vec::new, |row| {
         let mut lines = vec![
             Line::from(Span::styled(
@@ -11891,6 +11983,7 @@ fn render_resource_detail(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .scroll((app.resources.details_scroll(), 0)),
         body,
     );
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn metric_selection_line(text: String, selected: bool, width: u16) -> Line<'static> {
@@ -11979,7 +12072,7 @@ fn render_ops_agent_overview(
         .agents
         .iter()
         .find(|agent| agent.identity() == *identity);
-    let title = format!("Agents / {} · Overview", identity.agent_id);
+    let title = format!("Agents / {}", identity.agent_id);
     let lines = build_ops_agent_details_lines(
         agent,
         app.agents.included.len(),
@@ -12014,6 +12107,7 @@ fn render_ops_deployment_history(
     app: &TuiApp,
     recent_only: bool,
 ) {
+    let chrome = PaneChrome { area };
     let mut lines = ops_environment_status_lines(app);
     if recent_only && let Some(snapshot) = &app.ops_environment.snapshot {
         match &snapshot.deployment {
@@ -12055,27 +12149,19 @@ fn render_ops_deployment_history(
         ));
     }
 
-    let [header, body] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
     let title = if recent_only {
-        "Deployments · Current & Recent"
+        "Deployments / Current & recent"
     } else {
         "Deployments / All History"
     };
-    PaneHeader {
-        title,
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
-    let status_height = lines.len().min(body.height as usize) as u16;
-    let [status_area, table_body] = Layout::default()
+    chrome.render_header(frame, area, title, PaneFocus::Active, &theme());
+    let outer_body = chrome.body_area(area);
+    let status_height = lines.len().min(outer_body.height as usize) as u16;
+    let [status_row, table_body] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(status_height), Constraint::Min(1)])
-        .areas(body);
+        .areas(outer_body);
+    let status_area = chrome.content_area(status_row);
     if status_height > 0 {
         frame.render_widget(Paragraph::new(lines).style(surface_style()), status_area);
     }
@@ -12100,6 +12186,7 @@ fn render_ops_deployment_history(
                 table_body,
             );
         }
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     let owned_rows = history
@@ -12126,6 +12213,7 @@ fn render_ops_deployment_history(
         None,
         app.deployments.selected.min(count.saturating_sub(1)),
     );
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn render_ops_deployment_revision(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, revision: u64) {
@@ -12250,21 +12338,20 @@ fn render_ops_deployment_compare(
     target: u64,
     focus: DeploymentCompareFocus,
 ) {
-    let [header, selectors, table_body] = Layout::default()
+    let chrome = PaneChrome { area };
+    chrome.render_header(
+        frame,
+        area,
+        "Deployments / Compare",
+        PaneFocus::Active,
+        &theme(),
+    );
+    let outer_body = chrome.body_area(area);
+    let [selector_row, table_body] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .areas(area);
-    PaneHeader {
-        title: "Deployments / Compare",
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(outer_body);
+    let selectors = chrome.content_area(selector_row);
     let selector = |label: &'static str, revision: u64, active: bool| {
         Span::styled(
             format!(" {label} {revision} "),
@@ -12303,6 +12390,7 @@ fn render_ops_deployment_compare(
             .style(surface_style()),
             table_body,
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     let Some(changes) = app.deployments.changes(base, target) else {
@@ -12315,6 +12403,7 @@ fn render_ops_deployment_compare(
             .style(surface_style()),
             table_body,
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     };
     if changes.is_empty() {
@@ -12329,6 +12418,7 @@ fn render_ops_deployment_compare(
             .style(surface_style()),
             table_body,
         );
+        chrome.render_body_boundary(frame, outer_body, &theme());
         return;
     }
     let owned_rows = changes
@@ -12376,6 +12466,7 @@ fn render_ops_deployment_compare(
             .selected_change
             .min(changes.len().saturating_sub(1)),
     );
+    chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
 fn render_deployment_table(
@@ -17611,17 +17702,14 @@ mod tests {
         app.handle_key(key(KeyCode::Char('m')));
         let frame = render_app_text(&app);
         assert_eq!(app.ops.active(), OpsDestination::Metrics);
-        assert!(frame.contains("Metrics · [Dashboard] Explore"), "{frame}");
+        assert!(frame.contains("View  [Dashboard] Explore"), "{frame}");
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('v')));
         app.handle_key(key(KeyCode::Char('o')));
         let frame = render_app_text(&app);
         assert_eq!(app.ops.active(), OpsDestination::Overview);
-        assert!(
-            frame.contains("Overview · environment status & routing"),
-            "{frame}"
-        );
+        assert!(frame.contains("[ Overview ]"), "{frame}");
     }
 
     #[test]
@@ -19023,7 +19111,7 @@ mod tests {
                 .any(|action| action.id == ActionId::UseEnvironmentMetricsScope)
         );
         let frame = render_app_text_at(&app, 160, 28);
-        assert!(frame.contains("scope 2 Agents"), "{frame}");
+        assert!(frame.contains("Scope 2 Agents"), "{frame}");
 
         app.execute_action(ActionId::UseEnvironmentMetricsScope, None);
 
@@ -19491,7 +19579,8 @@ mod tests {
         let frame = render_app_text_at(&app, 120, 28);
 
         assert_eq!(app.ops.active(), OpsDestination::Metrics);
-        assert!(frame.contains("Metrics · [Dashboard] Explore"), "{frame}");
+        assert!(frame.contains("[ Metrics ]"), "{frame}");
+        assert!(frame.contains("View  [Dashboard] Explore"), "{frame}");
         assert!(
             frame.contains("No dashboard snapshot is available"),
             "{frame}"
@@ -20243,7 +20332,10 @@ mod tests {
         );
 
         let frame = render_app_text_at(&app, 120, 30);
-        assert!(frame.contains("Configuration · [Environment]"), "{frame}");
+        assert!(
+            frame.contains("Scope  [Environment] Account Server"),
+            "{frame}"
+        );
         assert!(frame.contains("Secrets"), "{frame}");
         assert!(frame.contains("/payments/token"), "{frame}");
         assert!(frame.contains("revision 7"), "{frame}");
@@ -20429,7 +20521,7 @@ mod tests {
         app.activity.paused = true;
 
         let grouped = render_app_text_at(&app, 120, 28);
-        assert!(grouped.contains("scan #9/#20 · bounded"), "{grouped}");
+        assert!(grouped.contains("Scan #9/#20   bounded"), "{grouped}");
         assert!(
             grouped.contains("group #7 · End → Start · 2 entries"),
             "{grouped}"
@@ -21071,7 +21163,7 @@ mod tests {
 
         let frame = render_app_text(&app);
         assert_eq!(app.ops.active(), OpsDestination::Oplog);
-        assert!(frame.contains("Oplog · [Grouped]"), "{frame}");
+        assert!(frame.contains("View  [Grouped] Entries"), "{frame}");
         assert!(frame.contains("Oplog has no Agent scope"), "{frame}");
         assert!(!frame.contains("[ Commands ]"), "{frame}");
     }
@@ -22478,7 +22570,7 @@ mod tests {
         for (width, height) in [(120, 32), (80, 12), (42, 24), (1, 1)] {
             let frame = render_app_text_at(&app, width, height);
             if width > 40 && height > 4 {
-                assert!(frame.contains("Current & Recent"), "{frame}");
+                assert!(frame.contains("Current & recent"), "{frame}");
             }
         }
 

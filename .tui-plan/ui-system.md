@@ -217,6 +217,14 @@ description columns. Short layouts may omit the status block and keep the
 selected quick jump visible; they do not collapse the directory into a new
 navigation language.
 
+Every Ops destination uses the same page hierarchy. Its first content row is
+an identity-only page or route title. View, source, order, liveness, and scope
+choices belong to a shared segmented `ControlStrip` beneath it; loading,
+refresh, and continuation state belongs to `PaneHeaderStatus`, not to the
+title. Nested data panes use `PaneChrome`, continuous outer-left spines, and
+owned structural dividers. Responsive stacking changes geometry only: it does
+not add duplicate headings or a destination-specific control grammar.
+
 Metrics separates curated Dashboard from ad-hoc Explore and keeps Server and
 Agent telemetry explicit. Oplog separates Grouped from exact Entries. Stream
 is an exact-Agent live session. Fake telemetry belongs only to visibly labelled
@@ -451,6 +459,12 @@ bold primary title and optional muted detail. Label/value fields align labels to
 a caller-declared shared width and keep values primary. Status always combines a
 stable glyph and text label so color is supplementary: `●` running, `○` idle,
 `×` failed, and `!` attention.
+
+Within Ops pages, section headings are content labels rather than substitutes
+for pane identity. A page must not repeat its destination title in a second
+heading, embed mode or scope metadata in that title, or join unrelated state
+with decorative dot separators. Use the page control strip and pane-header
+status slot for those roles.
 
 Informational, active, success, loading, warning, error, unavailable, and empty
 states use the shared notice representation with a stable glyph, kind label,

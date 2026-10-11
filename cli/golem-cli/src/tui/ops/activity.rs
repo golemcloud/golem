@@ -48,13 +48,6 @@ impl ActivityRepresentation {
             Self::Entries => Self::Grouped,
         }
     }
-
-    pub(in crate::tui) fn label(self) -> &'static str {
-        match self {
-            Self::Grouped => "Grouped",
-            Self::Entries => "Entries",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,13 +61,6 @@ impl ActivityOrder {
         match self {
             Self::Newest => Self::Oldest,
             Self::Oldest => Self::Newest,
-        }
-    }
-
-    pub(in crate::tui) fn label(self) -> &'static str {
-        match self {
-            Self::Newest => "Newest",
-            Self::Oldest => "Oldest",
         }
     }
 }

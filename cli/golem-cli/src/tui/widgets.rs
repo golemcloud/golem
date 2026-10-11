@@ -2500,6 +2500,68 @@ pub(super) struct NavigationRow<'a> {
     pub selected: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ControlChoice<'a> {
+    pub label: &'a str,
+    pub selected: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ControlGroup<'a> {
+    pub label: &'a str,
+    pub choices: &'a [ControlChoice<'a>],
+}
+
+pub(super) struct ControlStrip<'a> {
+    pub groups: &'a [ControlGroup<'a>],
+    pub status: Option<&'a str>,
+}
+
+impl ControlStrip<'_> {
+    pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
+        let mut spans = Vec::new();
+        for (group_index, group) in self.groups.iter().enumerate() {
+            if group_index > 0 {
+                spans.push(Span::raw("   "));
+            }
+            spans.push(Span::styled(
+                format!("{}  ", group.label),
+                Style::default().fg(visual.text_muted),
+            ));
+            for (choice_index, choice) in group.choices.iter().enumerate() {
+                if choice_index > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled(
+                    if choice.selected {
+                        format!("[{}]", choice.label)
+                    } else {
+                        choice.label.to_string()
+                    },
+                    Style::default()
+                        .fg(if choice.selected {
+                            visual.accent_hover
+                        } else {
+                            visual.text_secondary
+                        })
+                        .add_modifier(if choice.selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ));
+            }
+        }
+        if let Some(status) = self.status {
+            spans.push(Span::styled(
+                format!("   {status}"),
+                Style::default().fg(visual.text_muted),
+            ));
+        }
+        Line::from(spans)
+    }
+}
+
 impl NavigationRow<'_> {
     pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
         let marker_width = width.min(2);
@@ -3171,6 +3233,56 @@ mod tests {
         assert!(rendered.contains("Open curated dashboards"), "{rendered}");
         assert!(rendered.contains("Configuration"), "{rendered}");
         assert!((0..52).all(|x| buffer[(x, 0)].bg == visual.selection_background));
+    }
+
+    #[test]
+    fn control_strip_uses_one_selection_grammar_for_multiple_groups() {
+        let visual = TuiVisualStyle::production();
+        let view = [
+            ControlChoice {
+                label: "Dashboard",
+                selected: true,
+            },
+            ControlChoice {
+                label: "Explore",
+                selected: false,
+            },
+        ];
+        let source = [
+            ControlChoice {
+                label: "Agents",
+                selected: false,
+            },
+            ControlChoice {
+                label: "Server",
+                selected: true,
+            },
+        ];
+        let groups = [
+            ControlGroup {
+                label: "View",
+                choices: &view,
+            },
+            ControlGroup {
+                label: "Source",
+                choices: &source,
+            },
+        ];
+        let line = ControlStrip {
+            groups: &groups,
+            status: Some("Scope environment"),
+        }
+        .line(&visual);
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert_eq!(
+            rendered,
+            "View  [Dashboard] Explore   Source  Agents [Server]   Scope environment"
+        );
     }
 
     #[test]

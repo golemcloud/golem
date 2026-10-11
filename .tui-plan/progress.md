@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-10-11: Unified Ops Page Hierarchy
+
+- Made each Ops page title identify only its destination or route. View,
+  source, ordering, liveness, and scope controls now use a reusable segmented
+  control strip below that identity; transient loading and refresh state use
+  the shared pane-header status slot.
+- Applied continuous left spines and structural pane dividers to Overview
+  drill-downs, Oplog, Stream, Metrics, Deployments, and Configuration instead
+  of assembling unrelated heading rows inside each destination.
+- Made the three-pane Metrics Explore and Configuration layouts adaptive: wide
+  terminals use connected side-by-side panes, while narrow terminals stack
+  the same titled panes without introducing a second navigation language.
+- Added focused coverage for the shared control grammar and retained the full
+  production-rendered wide, medium, narrow, short, and 1×1 size matrix.
+
+Ready for visual review together with the next Oplog checkpoint. Oplog's shell
+now follows the hierarchy, but its list/details investigation model is the next
+active slice.
+
 ## 2026-10-11: Lightweight Ops Overview Cockpit
 
 - Replaced the dense five-card landing dashboard with one compact status block
@@ -14,8 +33,7 @@
 - Added the reusable `NavigationRow`, full-row selection, mouse hit regions,
   short-layout selection windows, and wide/narrow/short/1×1 render coverage.
 
-Ready for visual review with the Ops hierarchy checkpoint. The next active
-slice unifies destination nesting and continuous pane chrome.
+Ready for visual review with the Ops hierarchy checkpoint.
 
 ## 2026-10-11: Explicit Ops Text Input Ownership
 
