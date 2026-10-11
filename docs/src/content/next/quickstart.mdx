@@ -69,6 +69,8 @@ It is possible to test Golem locally without installing anything other than the 
 golem server run
 ```
 
+Before it can serve requests, the server downloads and provisions its built-in plugins and tools. This takes the longest on the first start, and it can take a minute or more. The server logs `Golem server is ready` when it is done. Until then, it answers API requests with `503 Service Unavailable` and a description of the current startup phase. A `golem` command that uses the local server waits and shows the startup progress.
+
 <Callout type="info">
     If you want to start with a clean state, deleting all previous data, use `--clean`:
     ```shell copy
