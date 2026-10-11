@@ -4,6 +4,7 @@ use bash_shell::{
     commands::{CommandDescriptor, CommandFuture, CommandInvoker, CommandOutput, PreparedCommand},
     session::Session,
 };
+use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -109,7 +110,12 @@ struct Prepared {
     args: Vec<String>,
 }
 impl CommandInvoker for Invoker {
-    fn prepare(&self, _: &str, argv: &[String]) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
+    fn prepare(
+        &self,
+        _: &str,
+        argv: &[String],
+        _: &HashMap<String, String>,
+    ) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
         if argv.first().is_some_and(|a| a == "--help") {
             return Err(CommandOutput {
                 stdout: b"probe help\n".to_vec(),
@@ -693,6 +699,80 @@ fn uutils_run_in_process_with_their_own_names_statuses_and_cwd() {
     });
 }
 
+/// A bound tool that prints, one per line, each variable its arguments name as the shell gave it.
+struct Variables;
+struct Printed(Vec<u8>);
+impl CommandInvoker for Variables {
+    fn prepare(
+        &self,
+        _: &str,
+        argv: &[String],
+        variables: &HashMap<String, String>,
+    ) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
+        let lines = argv
+            .iter()
+            .map(|name| match variables.get(name) {
+                Some(value) => format!("{name}={value}\n"),
+                None => format!("{name} is not given\n"),
+            })
+            .collect::<String>();
+        Ok(Box::new(Printed(lines.into_bytes())))
+    }
+}
+impl PreparedCommand for Printed {
+    fn takes_stdin(&self) -> bool {
+        false
+    }
+    fn invoke(&self, _: Option<Vec<u8>>) -> CommandFuture<'_> {
+        Box::pin(async move {
+            CommandOutput {
+                stdout: self.0.clone(),
+                ..Default::default()
+            }
+        })
+    }
+}
+
+#[test]
+fn bound_commands_get_the_exported_variables_and_the_real_directory() {
+    run(async {
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().canonicalize().unwrap().join("dir with space");
+        std::fs::create_dir(&directory).unwrap();
+        let directory = directory.display().to_string();
+        let mut shell = Session::new().await.unwrap();
+        shell
+            .register_commands(
+                vec![CommandDescriptor {
+                    name: "variables".into(),
+                    help: String::new(),
+                }],
+                Arc::new(Variables),
+            )
+            .unwrap();
+        // The shell's own commands see an exported function; a bound command does not.
+        assert_eq!(
+            shell
+                .run("f() { :; }; export -f f; env | grep -c '^BASH_FUNC_f%%='")
+                .await
+                .stdout,
+            b"1\n"
+        );
+        let script = format!(
+            "export SHOWN=one; HIDDEN=two; f() {{ :; }}; export -f f; cd '{directory}'; \
+             PWD=/wrong; variables SHOWN HIDDEN 'BASH_FUNC_f%%' PWD"
+        );
+        let result = shell.run(&script).await;
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            format!(
+                "SHOWN=one\nHIDDEN is not given\nBASH_FUNC_f%% is not given\nPWD={directory}\n"
+            ),
+            "{result:?}"
+        );
+    });
+}
+
 /// A bound tool whose behaviour follows its first argument: `fail` exits 7 with a message,
 /// `usage` is rejected before any call, `slow` yields before answering; anything else echoes.
 struct Scripted(Arc<AtomicUsize>);
@@ -701,7 +781,12 @@ struct ScriptedCall {
     args: Vec<String>,
 }
 impl CommandInvoker for Scripted {
-    fn prepare(&self, _: &str, argv: &[String]) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
+    fn prepare(
+        &self,
+        _: &str,
+        argv: &[String],
+        _: &HashMap<String, String>,
+    ) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
         if argv.first().is_some_and(|a| a == "usage") {
             return Err(CommandOutput {
                 stderr: b"scripted: unknown subcommand\n".to_vec(),

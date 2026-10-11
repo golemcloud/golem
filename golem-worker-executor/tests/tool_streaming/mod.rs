@@ -47,6 +47,7 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
+use golem_common::schema::tool::argv::{self, ParsedToolArguments};
 use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
@@ -1279,6 +1280,60 @@ async fn invoke_git_tool_success_with_key(
                 .ok_or_else(|| anyhow::anyhow!("missing canonical git field '{}'", field.name))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        idempotency_key,
+        principal,
+        command_path,
+        TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+    )
+    .await
+}
+
+/// Runs git from a command line, parsed the way the CLI and the bash tool parse it.
+async fn invoke_git_tool_argv_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    args: &[&str],
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command_line = args.join(" ");
+    let argv = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let parsed = argv::parse(definition, &argv)
+        .map_err(|error| anyhow::anyhow!("git {command_line} was rejected: {error}"))?;
+    let ParsedToolArguments::Invoke {
+        command_path,
+        input,
+    } = parsed
+    else {
+        anyhow::bail!("git {command_line} printed help instead of running");
+    };
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        IdempotencyKey::fresh(),
+        principal,
+        command_path,
+        *input,
+    )
+    .await
+}
+
+async fn invoke_git_tool_input(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    idempotency_key: IdempotencyKey,
+    principal: Principal,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command = command_path.join(" ");
     let output = executor
         .invoke_external_tool(
             worker_id,
@@ -1286,7 +1341,7 @@ async fn invoke_git_tool_success_with_key(
             idempotency_key,
             ToolName::try_from("git").unwrap(),
             command_path,
-            TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+            input,
             InvocationContextStack::fresh(),
             principal,
             None,
@@ -13876,18 +13931,14 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     });
     let cwd = string_list(&["/workspace/repo"]);
 
-    invoke_git_tool_success(
+    // Optional arguments reach git from a command line both when given and when left out.
+    invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "init",
-        BTreeMap::from([
-            ("working-directory", string_list(&[])),
-            ("directory", optional_string(Some("workspace/repo"))),
-            ("initial-branch", optional_string(Some("main"))),
-        ]),
+        &["init", "-b", "main", "workspace/repo"],
     )
     .await?;
     for (key, value) in [
@@ -13903,6 +13954,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
             "config",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String(key.to_string())),
                 ("value", optional_string(Some(value))),
                 ("local", SchemaValue::Bool(true)),
@@ -13945,6 +13997,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["hello.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -13960,6 +14013,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "commit",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("message", string_list(&["initial"])),
             ("author", optional_string(None)),
             ("allow-empty", SchemaValue::Bool(false)),
@@ -14012,6 +14066,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["hello.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -14067,6 +14122,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "config",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("key", SchemaValue::String("user.name".to_string())),
             ("value", optional_string(None)),
             ("local", SchemaValue::Bool(true)),
@@ -14095,6 +14151,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "status",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&[])),
             ("short", SchemaValue::Bool(false)),
             ("porcelain", SchemaValue::String("v1".to_string())),
@@ -14147,19 +14204,13 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         .into_typed()?;
     assert_eq!(branch_tip.trim(), commit_oid);
 
-    let log = invoke_git_tool_success(
+    let log = invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "log",
-        BTreeMap::from([
-            ("working-directory", cwd.clone()),
-            ("ref", optional_string(None)),
-            ("max-count", SchemaValue::F64(1.0)),
-            ("oneline", SchemaValue::Bool(true)),
-        ]),
+        &["-C", "/workspace/repo", "log", "-n", "1", "--oneline"],
     )
     .await?;
     let Some(SchemaValue::Record { fields: log_fields }) = log else {
@@ -14179,6 +14230,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "diff",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("from", optional_string(None)),
             ("to", optional_string(None)),
             ("paths", string_list(&["hello.txt"])),
@@ -14209,6 +14261,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "diff",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("from", optional_string(None)),
             ("to", optional_string(None)),
             ("paths", string_list(&["hello.txt"])),
@@ -14239,6 +14292,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(Some("persisted-state"))),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(None)),
@@ -14276,6 +14330,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(None)),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(None)),
@@ -14303,6 +14358,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(None)),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(Some("main"))),
@@ -14466,6 +14522,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
         "init",
         BTreeMap::from([
             ("working-directory", string_list(&[])),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("directory", optional_string(Some("workspace/repo"))),
             ("initial-branch", optional_string(Some(branch))),
         ]),
@@ -14484,6 +14541,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
             "config",
             BTreeMap::from([
                 ("working-directory", string_list(&["/workspace/repo"])),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String(key.to_string())),
                 ("value", optional_string(Some(value))),
                 ("local", SchemaValue::Bool(true)),
@@ -14541,6 +14599,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             "status",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("paths", string_list(&[])),
                 ("short", SchemaValue::Bool(true)),
                 ("porcelain", SchemaValue::String("v1".to_string())),
@@ -14596,6 +14655,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             "config",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String("user.name".to_string())),
                 ("value", optional_string(Some("Cancelled Name"))),
                 ("local", SchemaValue::Bool(true)),
@@ -14648,6 +14708,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         "config",
         BTreeMap::from([
             ("working-directory", cwd),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("key", SchemaValue::String("user.name".to_string())),
             ("value", optional_string(None)),
             ("local", SchemaValue::Bool(true)),
@@ -14694,6 +14755,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             "commit",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("message", string_list(&["baseline"])),
                 ("author", optional_string(None)),
                 ("allow-empty", SchemaValue::Bool(true)),
@@ -14736,6 +14798,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["recovered.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -14758,6 +14821,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             "commit",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("message", string_list(&["survives terminal crash"])),
                 ("author", optional_string(None)),
                 ("allow-empty", SchemaValue::Bool(false)),
@@ -14827,6 +14891,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
                 "commit",
                 BTreeMap::from([
                     ("working-directory", cwd.clone()),
+                    ("cwd", SchemaValue::String("/".to_string())),
                     ("message", string_list(&["survives terminal crash"])),
                     ("author", optional_string(None)),
                     ("allow-empty", SchemaValue::Bool(false)),
@@ -14859,6 +14924,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "log",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("ref", optional_string(None)),
             ("max-count", SchemaValue::F64(2.0)),
             ("oneline", SchemaValue::Bool(true)),
@@ -14901,6 +14967,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "init",
         BTreeMap::from([
             ("working-directory", string_list(&[])),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("directory", optional_string(Some("workspace/repo"))),
             ("initial-branch", optional_string(Some("isolated"))),
         ]),

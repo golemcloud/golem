@@ -274,6 +274,8 @@ When an AI coding agent runs `golem ssh` at a terminal, the session is plain: a 
 Every command runs in a fresh shell. Only the directory a command ends in carries over to the next one; variables, functions, aliases, shell options and `$?` do not. Write anything that must last to the agent's files, for example a file you `source`.
 </Callout>
 
+A tool bound to the agent is not a program the shell starts, so it does not inherit the shell's directory by itself. A tool that declares an option for it does start where the session is: after `cd repo`, `git status` reports on `repo`. A tool that does not declare one starts from its own default, whatever directory the session is in.
+
 Waiting at the prompt holds nothing open on the agent, so its other methods and tools keep running. If the directory the session is in is removed, the next command is refused before it runs, and the session says so and continues from the directory it started in. A session at a prompt ends with the status of its last command, or with `N` after `exit N`.
 
 To run one script and exit with its status, pass `-c`. Standard output and standard error carry exactly what the script wrote:
