@@ -1,30 +1,33 @@
 /**
  * @since 1.5.0
  */
-import { Context } from "effect"
+import { Effect } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import { AgentHostClient } from "./host/AgentHostClient.js"
 
 /**
- * Effect service exposing the running agent's own structured
+ * Read the running agent's own structured
  * {@link CoreTypes.AgentId}.
  *
- * Captured once by the dispatcher (via a single `getSelfMetadata` call
- * at agent `initialize` / `load-snapshot`) and provided to all
- * subsequent constructor (`impl`) and per-method effects. Resolving
- * this is free — no host call, no oplog entry — which makes it the
- * right primitive for self-targeting wrappers like
- * {@link Durability.unwrapOrRevert} and `Agents.fork` defaults.
+ * Each execution reads durable host metadata without caching. During
+ * replay it reproduces the identity observed at that point in history;
+ * new live reads after a fork identify the child, even within the same
+ * invocation. Use `yield* SelfAgentId.SelfAgentId` in initialization,
+ * methods, or snapshot effects. Values explicitly saved in application
+ * state are ordinary state and are not rebound after a fork.
  *
  * For richer fields (component revision, status, retry count, env,
  * config), use `Agents.getSelfMetadata` directly.
  *
- * Outside the dispatcher (e.g. unit tests) this service must be
- * provided explicitly via `Effect.provideService(SelfAgentId, …)`,
- * mirroring how {@link Principal} works.
+ * Outside the dispatcher (e.g. unit tests), provide `AgentHostClient`
+ * with a host implementation. Host failures become Effect defects.
  *
  * @since 1.5.0
  * @category host services
  */
-export class SelfAgentId extends Context.Service<SelfAgentId, CoreTypes.AgentId>()(
-  "effect-golem/SelfAgentId",
-) {}
+export const SelfAgentId: Effect.Effect<CoreTypes.AgentId, never, AgentHostClient> = Effect.gen(
+  function* () {
+    const host = yield* AgentHostClient
+    return yield* Effect.sync(() => host.getSelfMetadata().agentId)
+  },
+)

@@ -1,4 +1,5 @@
 import { Effect, Schema, Stream } from "effect"
+import "./concurrent-stream.js"
 import {
   defineAgent,
   defineConfig,

@@ -281,3 +281,43 @@ test "wire type pool reserves recursive named definitions before their body" {
   assert_eq(encoder.nodes[1].body, @types.OptionType(0))
   assert_eq(encoder.nodes[root].body, @types.RefType(0))
 }
+
+///|
+test "wire resource identities include the resource kind" {
+  let secret = @model.GuestSecretHandle::new(@types.Secret::Secret(91))
+  let quota = @model.GuestQuotaTokenHandle::new(
+    @types.QuotaToken::QuotaToken(91),
+  )
+  let card = @model.GuestPermissionCardHandle::new(
+    @types.PermissionCard::PermissionCard(91),
+  )
+  let stream = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(91),
+  )
+  let value = @schema.into_wire((secret, quota, card, stream))
+  assert_eq(value.value_nodes.length(), 5)
+  assert_false(secret.is_present())
+  assert_false(quota.is_present())
+  assert_false(card.is_present())
+  assert_false(stream.is_present())
+}
+
+///|
+test "early and late wrapped endpoint aliases preserve every holder" {
+  for at in [1, 49] {
+    let handles = Array::makei(50, i => {
+      @model.GuestSchemaValueStreamHandle::from_wrapped(
+        @types.SchemaValueStream::SchemaValueStream(100 + i),
+      )
+    })
+    handles[at] = @model.GuestSchemaValueStreamHandle::from_wrapped(
+      @types.SchemaValueStream::SchemaValueStream(100),
+    )
+    try @schema.into_wire(handles) catch {
+      @schema.WireError::Invalid(_) => ()
+    } noraise {
+      _ => fail("accepted distinct holders of the same endpoint")
+    }
+    assert_true(handles.all(handle => handle.is_present()))
+  }
+}

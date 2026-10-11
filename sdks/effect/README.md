@@ -243,7 +243,7 @@ definition.implement({
 ```
 
 For SQLite snapshots, add `databases: state => ({ main: state.database })` to the snapshot strategy;
-the SDK restores each declared image before constructing methods. DDL must be idempotent. A
+the SDK hydrates in-memory/temp images before constructing methods. DDL must be idempotent. A
 `Snapshot.custom(...)` implementation uses `{ save(state), restore(saved, context) }` with raw
 bytes. Snapshot schema evolution remains the application's responsibility.
 
@@ -251,6 +251,36 @@ Auto snapshots can declare `databases: ["main"] as const`; expose the correspond
 `SqliteClient` or `node:sqlite` `DatabaseSync` from the implementation snapshot strategy. Every
 declared database must be present, be in autocommit mode, and have no extra attached schemas.
 External Postgres/MySQL/Ignite data is not part of a worker snapshot.
+
+For schema state plus arbitrary named bytes, opt into `Snapshot.multipart({ schema, policy,
+databases? })` and provide an explicit strategy. `save(ref)` returns an Effect of
+`{ state, parts: new Map([["index", { bytes, contentType: "application/octet-stream" }]]) }`;
+`restore(saved, context)` receives decoded state and the complete user-part Map.
+`yield* Snapshot.requirePart(saved.parts, "index", "application/octet-stream")` checks both presence
+and MIME type. Binary-only applications use `Schema.Null` state. Logical names are case-sensitive
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`; content types are bare ASCII MIME types without parameters.
+The SDK owns the envelope and principal, always emits multipart (including zero parts), and never
+interprets user parts as resources. Existing JSON and byte-only modes are unchanged.
+
+Optional managed SQLite composition uses the same `databases` accessor in both `Snapshot.define`
+and `Snapshot.multipart`. `DatabaseSync.location()` classifies each handle: `null` means an
+in-memory/temp image; a non-null location is recorded in `fileDatabases` metadata only. Host
+filesystem snapshots exclusively own file-backed contents. The SDK never captures those contents
+as application parts or hydrates them from bytes, even when filesystem snapshotting is disabled.
+Filesystem snapshot availability is controlled by the host; without it, changed files prevent
+periodic snapshots and snapshot-based manual updates.
+
+The SDK validates the complete, disjoint image/location inventory and checks recorded files exist
+before `restore`. That factory must reopen the recorded locations. All returned handles must match
+their recorded categories and locations. Memory/temp images hydrate and connection caches warm
+before `methods`; defer database-dependent reconstruction until then. Small nonempty file databases
+may be read in full during cache warming, with the bytes discarded rather than stored in the
+application snapshot. Use scoped database acquisition for cleanup if restoration fails. Raw
+handles and `SqliteClient.fromDatabase` wrappers remain externally owned unless you register a
+finalizer or request `closeOnScopeClose: true`. Arbitrary user parts remain application-owned.
+Snapshot hooks run unpersisted and may be retried. Whole-buffer
+copies amplify peak memory use; the host's 64 KiB inline/blob-spill threshold is not a size cap.
+See the [multipart examples](https://learn.golem.cloud/next/develop/snapshotting) for all SDKs.
 
 ## Agent streams
 
@@ -596,6 +626,26 @@ host resource owns their begin index and lifecycle.
 Other durability controls remain under `Durability`: persistence and idempotence scopes, atomic
 regions, checkpoint/revert/compensable helpers, oplog commits, and `FunctionType` constructors.
 `Saga` provides fallible/infallible compensating transactions; compensations run in reverse order.
+
+`Durability.checkpoint` captures an invocation-local oplog position when the Effect runs:
+
+```ts
+const program = Effect.gen(function* () {
+  const cp = yield* Durability.checkpoint
+  const value = yield* cp.runOrRevert(doWork)
+  yield* cp.assertOrRevert(value.isValid)
+  return value
+})
+```
+
+`cp.revert` rewinds with `Oplog.setIndex` and never returns on successful rollback.
+`Durability.unwrapOrRevert(doWork)` captures a checkpoint and runs the same typed-failure
+policy. Defects and interruption propagate without rollback. Host errors remain typed
+`OplogHostError` failures; a host that returns after rollback causes an unreachable defect.
+There is no returned `reverted` result. Do not persist a checkpoint or use it in another
+invocation. Rollback does not undo external side effects; `Durability.compensable` runs its
+compensation before rewind on typed body failure. `Agents.revertAgent` manages other agents;
+management self-revert is unsupported.
 
 ## Existing Effect integrations
 

@@ -22,6 +22,164 @@ use serde_json::{Map, Number, Value};
 
 const EXCEPTIONAL_FLOAT_KEY: &str = "$float";
 
+struct BorrowedExternalValue<'a>(&'a SchemaValue);
+struct BorrowedExternalValues<'a>(&'a [SchemaValue]);
+struct BorrowedExternalEntries<'a>(&'a [(SchemaValue, SchemaValue)]);
+
+impl Serialize for BorrowedExternalValues<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for value in self.0 {
+            sequence.serialize_element(&BorrowedExternalValue(value))?;
+        }
+        sequence.end()
+    }
+}
+
+impl Serialize for BorrowedExternalEntries<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for (key, value) in self.0 {
+            sequence
+                .serialize_element(&[BorrowedExternalValue(key), BorrowedExternalValue(value)])?;
+        }
+        sequence.end()
+    }
+}
+
+impl Serialize for BorrowedExternalValue<'_> {
+    #[allow(non_camel_case_types)]
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Tagged<T> {
+            kind: &'static str,
+            value: T,
+        }
+        macro_rules! tagged {
+            ($kind:literal, $value:expr) => {
+                Tagged {
+                    kind: $kind,
+                    value: $value,
+                }
+                .serialize(serializer)
+            };
+        }
+        macro_rules! object {
+            ($($field:ident: $value:expr),+ $(,)?) => {{
+                #[derive(Serialize)]
+                #[allow(non_camel_case_types)]
+                struct Payload<$($field),+> { $($field: $field),+ }
+                Payload { $($field: $value),+ }
+            }};
+        }
+        match self.0 {
+            SchemaValue::Bool(v) => tagged!("bool", v),
+            SchemaValue::S8(v) => tagged!("s8", v),
+            SchemaValue::S16(v) => tagged!("s16", v),
+            SchemaValue::S32(v) => tagged!("s32", v),
+            SchemaValue::S64(v) => tagged!("s64", v.to_string()),
+            SchemaValue::U8(v) => tagged!("u8", v),
+            SchemaValue::U16(v) => tagged!("u16", v),
+            SchemaValue::U32(v) => tagged!("u32", v),
+            SchemaValue::U64(v) => tagged!("u64", v.to_string()),
+            SchemaValue::F32(v) => {
+                tagged!("f32", encode_f32(*v).map_err(serde::ser::Error::custom)?)
+            }
+            SchemaValue::F64(v) => {
+                tagged!("f64", encode_float(*v).map_err(serde::ser::Error::custom)?)
+            }
+            SchemaValue::Char(v) => tagged!("char", v),
+            SchemaValue::String(v) => tagged!("string", v),
+            SchemaValue::Uuid(v) => tagged!("uuid", v.hyphenated().to_string()),
+            SchemaValue::Record { fields } => {
+                tagged!("record", object!(fields: BorrowedExternalValues(fields)))
+            }
+            SchemaValue::Tuple { elements } => {
+                tagged!("tuple", object!(elements: BorrowedExternalValues(elements)))
+            }
+            SchemaValue::List { elements } => {
+                tagged!("list", object!(elements: BorrowedExternalValues(elements)))
+            }
+            SchemaValue::FixedList { elements } => tagged!(
+                "fixed-list",
+                object!(elements: BorrowedExternalValues(elements))
+            ),
+            SchemaValue::Map { entries } => {
+                tagged!("map", object!(entries: BorrowedExternalEntries(entries)))
+            }
+            SchemaValue::Variant(v) => {
+                #[derive(Serialize)]
+                struct Variant<'a> {
+                    case: u32,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    payload: Option<BorrowedExternalValue<'a>>,
+                }
+                tagged!(
+                    "variant",
+                    Variant {
+                        case: v.case,
+                        payload: v.payload.as_deref().map(BorrowedExternalValue)
+                    }
+                )
+            }
+            SchemaValue::Enum { case } => tagged!("enum", object!(case: case)),
+            SchemaValue::Flags { bits } => tagged!("flags", object!(bits: bits)),
+            SchemaValue::Option { inner } => tagged!(
+                "option",
+                object!(inner: inner.as_deref().map(BorrowedExternalValue))
+            ),
+            SchemaValue::Result(v) => {
+                let (tag, value) = match v {
+                    ResultValuePayload::Ok { value } => ("ok", value),
+                    ResultValuePayload::Err { value } => ("err", value),
+                };
+                tagged!(
+                    "result",
+                    object!(tag: tag, value: value.as_deref().map(BorrowedExternalValue))
+                )
+            }
+            SchemaValue::Text(v) => {
+                #[derive(Serialize)]
+                struct Text<'a> {
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    language: &'a Option<String>,
+                    text: &'a str,
+                }
+                tagged!(
+                    "text",
+                    Text {
+                        language: &v.language,
+                        text: &v.text
+                    }
+                )
+            }
+            SchemaValue::Binary(v) => tagged!("binary", v),
+            SchemaValue::Path { path } => tagged!("path", object!(path: path)),
+            SchemaValue::Url { url } => tagged!("url", object!(url: url)),
+            SchemaValue::Datetime { value } => tagged!("datetime", object!(value: value)),
+            SchemaValue::Duration(v) => {
+                tagged!("duration", object!(nanoseconds: v.nanoseconds.to_string()))
+            }
+            SchemaValue::Quantity(v) => tagged!(
+                "quantity",
+                object!(mantissa: v.mantissa.to_string(), scale: v.scale, unit: &v.unit)
+            ),
+            SchemaValue::Union(v) => tagged!(
+                "union",
+                object!(body: BorrowedExternalValue(&v.body), tag: &v.tag)
+            ),
+            SchemaValue::Secret(_)
+            | SchemaValue::QuotaToken(_)
+            | SchemaValue::PermissionCard(_)
+            | SchemaValue::Stream(_) => Err(serde::ser::Error::custom(
+                "host-managed capabilities cannot cross an external JSON boundary",
+            )),
+        }
+    }
+}
+
 fn exact_object<'a>(value: &'a Value, fields: &[&str]) -> Result<&'a Map<String, Value>, String> {
     let object = value
         .as_object()
@@ -117,138 +275,7 @@ fn parse_float(value: &Value) -> Result<f64, String> {
 }
 
 pub(crate) fn encode_external_schema_value(value: &SchemaValue) -> Result<Value, String> {
-    let payload = match value {
-        SchemaValue::Bool(value) => ("bool", Value::Bool(*value)),
-        SchemaValue::S8(value) => ("s8", Value::Number((*value).into())),
-        SchemaValue::S16(value) => ("s16", Value::Number((*value).into())),
-        SchemaValue::S32(value) => ("s32", Value::Number((*value).into())),
-        SchemaValue::S64(value) => ("s64", Value::String(value.to_string())),
-        SchemaValue::U8(value) => ("u8", Value::Number((*value).into())),
-        SchemaValue::U16(value) => ("u16", Value::Number((*value).into())),
-        SchemaValue::U32(value) => ("u32", Value::Number((*value).into())),
-        SchemaValue::U64(value) => ("u64", Value::String(value.to_string())),
-        SchemaValue::F32(value) => ("f32", encode_f32(*value)?),
-        SchemaValue::F64(value) => ("f64", encode_float(*value)?),
-        SchemaValue::Char(value) => ("char", Value::String(value.to_string())),
-        SchemaValue::String(value) => ("string", Value::String(value.clone())),
-        SchemaValue::Uuid(value) => ("uuid", Value::String(value.hyphenated().to_string())),
-        SchemaValue::Record { fields } => (
-            "record",
-            serde_json::json!({
-                "fields": fields.iter().map(encode_external_schema_value).collect::<Result<Vec<_>, _>>()?
-            }),
-        ),
-        SchemaValue::Variant(value) => {
-            let mut payload = Map::new();
-            payload.insert("case".to_string(), Value::Number(value.case.into()));
-            if let Some(value) = &value.payload {
-                payload.insert("payload".to_string(), encode_external_schema_value(value)?);
-            }
-            ("variant", Value::Object(payload))
-        }
-        SchemaValue::Enum { case } => ("enum", serde_json::json!({ "case": case })),
-        SchemaValue::Flags { bits } => ("flags", serde_json::json!({ "bits": bits })),
-        SchemaValue::Tuple { elements } => (
-            "tuple",
-            serde_json::json!({
-                "elements": elements.iter().map(encode_external_schema_value).collect::<Result<Vec<_>, _>>()?
-            }),
-        ),
-        SchemaValue::List { elements } => (
-            "list",
-            serde_json::json!({
-                "elements": elements.iter().map(encode_external_schema_value).collect::<Result<Vec<_>, _>>()?
-            }),
-        ),
-        SchemaValue::FixedList { elements } => (
-            "fixed-list",
-            serde_json::json!({
-                "elements": elements.iter().map(encode_external_schema_value).collect::<Result<Vec<_>, _>>()?
-            }),
-        ),
-        SchemaValue::Map { entries } => (
-            "map",
-            serde_json::json!({
-                "entries": entries
-                    .iter()
-                    .map(|(key, value)| Ok([encode_external_schema_value(key)?, encode_external_schema_value(value)?]))
-                    .collect::<Result<Vec<_>, String>>()?
-            }),
-        ),
-        SchemaValue::Option { inner } => (
-            "option",
-            serde_json::json!({
-                "inner": inner.as_deref().map(encode_external_schema_value).transpose()?
-            }),
-        ),
-        SchemaValue::Result(result) => {
-            let (tag, value) = match result {
-                ResultValuePayload::Ok { value } => ("ok", value),
-                ResultValuePayload::Err { value } => ("err", value),
-            };
-            (
-                "result",
-                serde_json::json!({
-                    "tag": tag,
-                    "value": value.as_deref().map(encode_external_schema_value).transpose()?
-                }),
-            )
-        }
-        SchemaValue::Text(value) => {
-            let mut payload = Map::new();
-            payload.insert("text".to_string(), Value::String(value.text.clone()));
-            if let Some(language) = &value.language {
-                payload.insert("language".to_string(), Value::String(language.clone()));
-            }
-            ("text", Value::Object(payload))
-        }
-        SchemaValue::Binary(value) => {
-            let mut payload = Map::new();
-            payload.insert(
-                "bytes".to_string(),
-                Value::Array(
-                    value
-                        .bytes
-                        .iter()
-                        .map(|byte| Value::Number((*byte).into()))
-                        .collect(),
-                ),
-            );
-            if let Some(mime_type) = &value.mime_type {
-                payload.insert("mimeType".to_string(), Value::String(mime_type.clone()));
-            }
-            ("binary", Value::Object(payload))
-        }
-        SchemaValue::Path { path } => ("path", serde_json::json!({ "path": path })),
-        SchemaValue::Url { url } => ("url", serde_json::json!({ "url": url })),
-        SchemaValue::Datetime { value } => ("datetime", serde_json::json!({ "value": value })),
-        SchemaValue::Duration(value) => (
-            "duration",
-            serde_json::json!({ "nanoseconds": value.nanoseconds.to_string() }),
-        ),
-        SchemaValue::Quantity(value) => (
-            "quantity",
-            serde_json::json!({
-                "mantissa": value.mantissa.to_string(),
-                "scale": value.scale,
-                "unit": value.unit,
-            }),
-        ),
-        SchemaValue::Union(value) => (
-            "union",
-            serde_json::json!({
-                "tag": value.tag,
-                "body": encode_external_schema_value(&value.body)?,
-            }),
-        ),
-        SchemaValue::Secret(_)
-        | SchemaValue::QuotaToken(_)
-        | SchemaValue::PermissionCard(_)
-        | SchemaValue::Stream(_) => {
-            return Err("host-managed capabilities cannot cross an external JSON boundary".into());
-        }
-    };
-    Ok(serde_json::json!({ "kind": payload.0, "value": payload.1 }))
+    serde_json::to_value(BorrowedExternalValue(value)).map_err(|error| error.to_string())
 }
 
 fn object_with_optional<'a>(
@@ -543,11 +570,218 @@ pub(crate) fn decode_external_schema_value(value: &Value) -> Result<SchemaValue,
     }
 }
 
+fn decode_owned_external_schema_value(mut value: Value) -> Result<SchemaValue, String> {
+    let outer = exact_object(&value, &["kind", "value"])?;
+    let kind = required(outer, "kind")?
+        .as_str()
+        .ok_or_else(|| "kind must be a string".to_string())?;
+    // Scalar parsing retains the same range and canonical-token checks. These
+    // branches have no owned containers or strings to transfer.
+    if !matches!(
+        kind,
+        "string"
+            | "record"
+            | "tuple"
+            | "list"
+            | "fixed-list"
+            | "map"
+            | "variant"
+            | "option"
+            | "result"
+            | "union"
+            | "text"
+            | "binary"
+            | "path"
+            | "url"
+            | "quantity"
+    ) {
+        return decode_external_schema_value(&value);
+    }
+    let outer = value.as_object_mut().unwrap();
+    let Value::String(kind) = outer.remove("kind").unwrap() else {
+        unreachable!()
+    };
+    let mut payload = outer.remove("value").unwrap();
+    if kind == "string" {
+        return match payload {
+            Value::String(value) => Ok(SchemaValue::String(value)),
+            _ => Err("string value must be a string".into()),
+        };
+    }
+    let fields: &[&str] = match kind.as_str() {
+        "record" => &["fields"],
+        "tuple" | "list" | "fixed-list" => &["elements"],
+        "map" => &["entries"],
+        "option" => &["inner"],
+        "result" => &["tag", "value"],
+        "union" => &["tag", "body"],
+        "path" => &["path"],
+        "url" => &["url"],
+        "quantity" => &["mantissa", "scale", "unit"],
+        _ => &[],
+    };
+    match kind.as_str() {
+        "variant" => {
+            object_with_optional(&payload, &["case"], &["payload"])?;
+        }
+        "text" => {
+            object_with_optional(&payload, &["text"], &["language"])?;
+        }
+        "binary" => {
+            object_with_optional(&payload, &["bytes"], &["mimeType"])?;
+        }
+        _ => {
+            exact_object(&payload, fields)?;
+        }
+    }
+    let object = payload.as_object_mut().unwrap();
+    fn take_string(
+        object: &mut Map<String, Value>,
+        field: &str,
+        error: &str,
+    ) -> Result<String, String> {
+        match object.remove(field).unwrap() {
+            Value::String(value) => Ok(value),
+            _ => Err(error.into()),
+        }
+    }
+    fn take_values(
+        object: &mut Map<String, Value>,
+        field: &str,
+        error: &str,
+    ) -> Result<Vec<SchemaValue>, String> {
+        match object.remove(field).unwrap() {
+            Value::Array(values) => values
+                .into_iter()
+                .map(decode_owned_external_schema_value)
+                .collect(),
+            _ => Err(error.into()),
+        }
+    }
+    fn optional_value(value: Value) -> Result<Option<Box<SchemaValue>>, String> {
+        if value.is_null() {
+            Ok(None)
+        } else {
+            decode_owned_external_schema_value(value).map(|v| Some(Box::new(v)))
+        }
+    }
+    match kind.as_str() {
+        "record" => Ok(SchemaValue::Record {
+            fields: take_values(object, "fields", "record fields must be an array")?,
+        }),
+        "tuple" | "list" | "fixed-list" => {
+            let elements = take_values(object, "elements", "elements must be an array")?;
+            Ok(match kind.as_str() {
+                "tuple" => SchemaValue::Tuple { elements },
+                "list" => SchemaValue::List { elements },
+                _ => SchemaValue::FixedList { elements },
+            })
+        }
+        "map" => {
+            let Value::Array(entries) = object.remove("entries").unwrap() else {
+                return Err("map entries must be an array".into());
+            };
+            let entries = entries
+                .into_iter()
+                .map(|entry| {
+                    let Value::Array(mut pair) = entry else {
+                        return Err("map entry must contain a key and value".into());
+                    };
+                    if pair.len() != 2 {
+                        return Err("map entry must contain a key and value".into());
+                    }
+                    let value = pair.pop().unwrap();
+                    let key = pair.pop().unwrap();
+                    Ok((
+                        decode_owned_external_schema_value(key)?,
+                        decode_owned_external_schema_value(value)?,
+                    ))
+                })
+                .collect::<Result<_, String>>()?;
+            Ok(SchemaValue::Map { entries })
+        }
+        "variant" => Ok(SchemaValue::Variant(VariantValuePayload {
+            case: parse_unsigned(&object.remove("case").unwrap(), "variant case")?,
+            payload: object
+                .remove("payload")
+                .map(decode_owned_external_schema_value)
+                .transpose()?
+                .map(Box::new),
+        })),
+        "option" => Ok(SchemaValue::Option {
+            inner: optional_value(object.remove("inner").unwrap())?,
+        }),
+        "result" => {
+            let value = optional_value(object.remove("value").unwrap())?;
+            match object.remove("tag").unwrap().as_str() {
+                Some("ok") => Ok(SchemaValue::Result(ResultValuePayload::Ok { value })),
+                Some("err") => Ok(SchemaValue::Result(ResultValuePayload::Err { value })),
+                _ => Err("result tag must be `ok` or `err`".into()),
+            }
+        }
+        "union" => Ok(SchemaValue::Union(UnionValuePayload {
+            tag: take_string(object, "tag", "union tag must be a string")?,
+            body: Box::new(decode_owned_external_schema_value(
+                object.remove("body").unwrap(),
+            )?),
+        })),
+        "path" => Ok(SchemaValue::Path {
+            path: take_string(object, "path", "path must be a string")?,
+        }),
+        "url" => Ok(SchemaValue::Url {
+            url: take_string(object, "url", "url must be a string")?,
+        }),
+        "quantity" => Ok(SchemaValue::Quantity(QuantityValue {
+            mantissa: parse_s64(&object.remove("mantissa").unwrap())?,
+            scale: parse_signed(&object.remove("scale").unwrap(), "quantity scale")?,
+            unit: take_string(object, "unit", "quantity unit must be a string")?,
+        })),
+        "text" => {
+            let text = take_string(object, "text", "text must be a string")?;
+            let language = if object.contains_key("language") {
+                Some(take_string(
+                    object,
+                    "language",
+                    "language must be a string",
+                )?)
+            } else {
+                None
+            };
+            Ok(SchemaValue::Text(TextValuePayload { text, language }))
+        }
+        "binary" => {
+            let Value::Array(bytes) = object.remove("bytes").unwrap() else {
+                return Err("binary bytes must be an array".into());
+            };
+            let bytes = bytes
+                .into_iter()
+                .map(|v| parse_unsigned(&v, "byte"))
+                .collect::<Result<_, _>>()?;
+            let mime_type = if object.contains_key("mimeType") {
+                Some(take_string(
+                    object,
+                    "mimeType",
+                    "MIME type must be a string",
+                )?)
+            } else {
+                None
+            };
+            Ok(SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }))
+        }
+        _ => unreachable!(),
+    }
+}
+
 /// Canonical schema-value JSON that cannot contain a host-managed capability.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExternalSchemaValue(SchemaValue);
 
 impl ExternalSchemaValue {
+    fn from_json(value: Value) -> Result<Self, String> {
+        // The tagged decoder has no capability-producing branch.
+        decode_owned_external_schema_value(value).map(Self)
+    }
+
     pub fn as_inner(&self) -> &SchemaValue {
         &self.0
     }
@@ -583,9 +817,7 @@ impl Serialize for ExternalSchemaValue {
     where
         S: Serializer,
     {
-        encode_external_schema_value(&self.0)
-            .map_err(serde::ser::Error::custom)?
-            .serialize(serializer)
+        BorrowedExternalValue(&self.0).serialize(serializer)
     }
 }
 
@@ -595,8 +827,7 @@ impl<'de> Deserialize<'de> for ExternalSchemaValue {
         D: Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
-        let value = decode_external_schema_value(&value).map_err(serde::de::Error::custom)?;
-        Self::try_from(value).map_err(serde::de::Error::custom)
+        Self::from_json(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -605,6 +836,15 @@ impl<'de> Deserialize<'de> for ExternalSchemaValue {
 pub struct ExternalTypedSchemaValue(TypedSchemaValue);
 
 impl ExternalTypedSchemaValue {
+    fn from_json(mut value: Value) -> Result<Self, String> {
+        exact_object(&value, &["graph", "value"])?;
+        let object = value.as_object_mut().unwrap();
+        let graph = serde_json::from_value(object.remove("graph").unwrap())
+            .map_err(|error| error.to_string())?;
+        let value = decode_owned_external_schema_value(object.remove("value").unwrap())?;
+        Ok(Self(TypedSchemaValue::new(graph, value)))
+    }
+
     pub fn as_inner(&self) -> &TypedSchemaValue {
         &self.0
     }
@@ -640,16 +880,11 @@ impl Serialize for ExternalTypedSchemaValue {
     where
         S: Serializer,
     {
-        let mut object = Map::new();
-        object.insert(
-            "graph".to_string(),
-            serde_json::to_value(self.0.graph()).map_err(serde::ser::Error::custom)?,
-        );
-        object.insert(
-            "value".to_string(),
-            encode_external_schema_value(self.0.value()).map_err(serde::ser::Error::custom)?,
-        );
-        Value::Object(object).serialize(serializer)
+        use serde::ser::SerializeMap;
+        let mut object = serializer.serialize_map(Some(2))?;
+        object.serialize_entry("graph", self.0.graph())?;
+        object.serialize_entry("value", &BorrowedExternalValue(self.0.value()))?;
+        object.end()
     }
 }
 
@@ -659,13 +894,7 @@ impl<'de> Deserialize<'de> for ExternalTypedSchemaValue {
         D: Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
-        let object = exact_object(&value, &["graph", "value"]).map_err(serde::de::Error::custom)?;
-        let graph = serde_json::from_value(required(object, "graph").unwrap().clone())
-            .map_err(serde::de::Error::custom)?;
-        let value = decode_external_schema_value(required(object, "value").unwrap())
-            .map_err(serde::de::Error::custom)?;
-        let value = TypedSchemaValue::new(graph, value);
-        Self::try_from(value).map_err(serde::de::Error::custom)
+        Self::from_json(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -980,7 +1209,7 @@ mod poem_impl {
             impl ParseFromJSON for $external {
                 fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
                     let value = value.ok_or_else(|| ParseError::expected_input())?;
-                    serde_json::from_value(value).map_err(ParseError::custom)
+                    Self::from_json(value).map_err(ParseError::custom)
                 }
             }
 
@@ -1030,6 +1259,17 @@ mod tests {
         let external = ExternalSchemaValue::try_from(value.clone()).unwrap();
         let encoded = serde_json::to_value(&external).unwrap();
         assert_eq!(encoded, expected);
+        let bytes = serde_json::to_vec(&external).unwrap();
+        assert_eq!(bytes, serde_json::to_vec(&expected).unwrap());
+        let from_bytes: ExternalSchemaValue = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(from_bytes.into_inner(), value);
+        assert_eq!(decode_external_schema_value(&encoded).unwrap(), value);
+        assert_eq!(
+            ExternalSchemaValue::from_json(encoded.clone())
+                .unwrap()
+                .into_inner(),
+            value
+        );
 
         let decoded: ExternalSchemaValue = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded.into_inner(), value);
@@ -1300,6 +1540,11 @@ mod tests {
             json!({"kind":"binary","value":{"bytes":[],"mimeType":null}}),
             json!({"kind":"binary","value":{"bytes":[256]}}),
         ] {
+            let expected = decode_external_schema_value(&value).unwrap_err();
+            assert_eq!(
+                decode_owned_external_schema_value(value.clone()).unwrap_err(),
+                expected
+            );
             assert!(
                 serde_json::from_value::<ExternalSchemaValue>(value).is_err(),
                 "malformed external value was accepted"
@@ -1425,7 +1670,41 @@ mod tests {
             json!({"kind":"result","value":{"tag":"ok"}}),
         ];
         for value in rejected {
+            assert_eq!(
+                decode_owned_external_schema_value(value.clone()).unwrap_err(),
+                decode_external_schema_value(&value).unwrap_err(),
+            );
             assert!(serde_json::from_value::<ExternalSchemaValue>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn owned_external_decoder_preserves_nested_rejections() {
+        let malformed = [
+            json!({"kind":"secret","value":{}}),
+            json!({"kind":"quota-token","value":{}}),
+            json!({"kind":"permission-card","value":{}}),
+            json!({"kind":"stream","value":{}}),
+            json!({"kind":"map","value":{"entries":[[1]]}}),
+            json!({"kind":"union","value":{"tag":null,"body":{"kind":"u8","value":1}}}),
+            json!({"kind":"quantity","value":{"mantissa":"01","scale":0,"unit":"m"}}),
+            json!({"kind":"result","value":{"tag":"unknown","value":null}}),
+            json!({"kind":"list","value":{"elements":null}}),
+        ];
+        for leaf in malformed {
+            let nested = json!({"kind":"record","value":{"fields":[
+                {"kind":"string","value":"valid sibling"},
+                {"kind":"option","value":{"inner":leaf}}
+            ]}});
+            assert_eq!(
+                decode_owned_external_schema_value(nested.clone()).unwrap_err(),
+                decode_external_schema_value(&nested).unwrap_err()
+            );
+            #[cfg(feature = "full")]
+            {
+                use poem_openapi::types::ParseFromJSON;
+                assert!(ExternalSchemaValue::parse_from_json(Some(nested)).is_err());
+            }
         }
     }
 

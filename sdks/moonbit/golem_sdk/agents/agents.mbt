@@ -55,6 +55,19 @@ pub(open) trait Snapshottable {
 }
 
 ///|
+/// Async custom multipart save; restoration is a separate static factory.
+pub(open) trait MultipartSnapshottable {
+  async fn save_snapshot_parts(Self) -> Result[MultipartSnapshot, String]
+}
+
+///|
+pub(all) enum SnapshotData {
+  Json(Bytes)
+  Binary(Bytes)
+  Multipart(MultipartSnapshot)
+} derive(Debug, Eq)
+
+///|
 /// Indicates the serialization format used for snapshots.
 pub(all) enum SnapshotFormat {
   Json
@@ -68,6 +81,7 @@ pub(all) struct ConstructedAgent {
   raw : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
+  multipart_snapshottable : &MultipartSnapshottable?
 }
 
 ///|
@@ -98,7 +112,7 @@ pub(all) struct RegisteredAgent {
     ConstructedAgent,
     @common.AgentError,
   ]
-  load_snapshot : (async (Bytes, SnapshotRestoreContext) -> Result[
+  load_snapshot : (async (SnapshotData, SnapshotRestoreContext) -> Result[
     ConstructedAgent,
     String,
   ])?
@@ -114,6 +128,7 @@ pub(all) struct AgentInstance {
   interface : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
+  multipart_snapshottable : &MultipartSnapshottable?
 }
 
 ///|
@@ -130,6 +145,7 @@ fn install_constructed_agent(
     interface: constructed.raw,
     snapshottable: constructed.snapshottable,
     snapshot_format: constructed.snapshot_format,
+    multipart_snapshottable: constructed.multipart_snapshottable,
   })
 }
 
@@ -180,7 +196,7 @@ pub async fn construct_and_set_instance(
 /// restoration factory has returned a complete agent successfully.
 pub async fn restore_and_set_instance(
   agent_type : String,
-  snapshot : Bytes,
+  snapshot : SnapshotData,
   context : SnapshotRestoreContext,
 ) -> Result[Unit, String] {
   defer context.identity_fields.abort()

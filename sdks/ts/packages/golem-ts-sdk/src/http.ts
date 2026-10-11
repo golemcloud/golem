@@ -50,6 +50,7 @@ import type {
   EndpointBoundAny,
   HeaderKeysTuple,
   HeaderValuesArray,
+  Invalid,
   PathTupleOf,
   PathVarsOf,
   QueryTupleOf,
@@ -106,6 +107,29 @@ export const agentVersion = (): PathSegment => ({ tag: 'system-variable', val: '
 
 /** A path: either a `{var}`-template string or an array of segment builders. */
 export type PathInput = string | readonly PathSegment[];
+
+/** Explicit phantom UUID selection. Omission of an optional selector selects the original. */
+export type PhantomIdSpec<N extends string = string> =
+  | { readonly source: 'path'; readonly name: N; readonly optional: boolean }
+  | { readonly source: 'query'; readonly name: N; readonly optional: boolean };
+
+/** Select an exact phantom UUID scoped to this agent's constructor. */
+export const phantomId = {
+  path: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
+    ({
+      source: 'path',
+      name,
+      optional: options?.optional === undefined ? false : options.optional,
+    }) as const,
+  query: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
+    ({
+      source: 'query',
+      name,
+      optional: options?.optional === undefined ? false : options.optional,
+    }) as const,
+};
+
+type PhantomPathName<S> = S extends { readonly source: 'path'; readonly name: infer N } ? N : never;
 
 /** A method input or output value exposed as a named durable stream. */
 export interface DurableStreamSlotOptions {
@@ -213,6 +237,7 @@ export interface HttpMountSpec<
   readonly cors?: readonly string[];
   /** Mark this agent as a phantom agent (fresh instance per request). */
   readonly phantomAgent?: boolean;
+  readonly phantomId?: PhantomIdSpec;
   /** Ordered live file mappings, only for durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[];
   /** Response headers applied by the host when serving exposed files. */
@@ -401,13 +426,17 @@ export const custom = ((
   ({ method: { custom: verb }, path, ...opts }) as HttpEndpointSpec) as unknown as CustomFactory;
 
 /** Options accepted by {@link mount}. */
-export interface MountOptionsFor<W extends string = string> {
+export interface MountOptionsFor<
+  W extends string = string,
+  S extends PhantomIdSpec = PhantomIdSpec,
+> {
   /** When `true`, the host treats every endpoint as authentication-required. */
   readonly auth?: boolean;
   /** CORS allowed-origin patterns advertised at the mount level. */
   readonly cors?: readonly string[];
   /** Mark this agent as a phantom agent (one fresh instance per HTTP request). */
   readonly phantomAgent?: boolean;
+  readonly phantomId?: S;
   /** Ordered live file mappings, only for durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[];
   /** Response headers applied by the host when serving exposed files. */
@@ -426,11 +455,16 @@ type MountSugarOpts = MountOptionsFor<string> & { readonly webhookSuffix?: PathI
 
 /** Overloaded factory shape for {@link mount}. */
 export interface MountFactory {
-  <const P extends string, const W extends string = string>(
+  <const P extends string, const W extends string = string, const S extends PhantomIdSpec = never>(
     path: ValidMountPath<P>,
-    opts?: MountOptionsFor<W>,
+    opts?: MountOptionsFor<W, S> &
+      (string extends P
+        ? unknown
+        : Exclude<PhantomPathName<S>, Exclude<PathVarsOf<P>, SystemVariableName>> extends never
+          ? unknown
+          : Invalid<'phantom path selector must name a mount capture'>),
   ): HttpMountSpec<
-    Exclude<PathVarsOf<P>, SystemVariableName>,
+    Exclude<PathVarsOf<P>, SystemVariableName | PhantomPathName<S>>,
     Exclude<PathVarsOf<W>, SystemVariableName>
   >;
   (path: readonly PathSegment[], opts?: MountSugarOpts): HttpMountSpec;
@@ -479,6 +513,12 @@ export function compileMount(spec: HttpMountSpec): HttpMountDetails {
     pathPrefix,
     authDetails: spec.auth ? { required: true } : { required: false },
     phantomAgent: spec.phantomAgent ?? false,
+    phantomIdBinding: spec.phantomId
+      ? {
+          tag: spec.phantomId.source,
+          val: { name: spec.phantomId.name, optional: spec.phantomId.optional },
+        }
+      : undefined,
     corsOptions: { allowedPatterns: spec.cors ? [...spec.cors] : [] },
     webhookSuffix: spec.webhookSuffix ? resolvePath(spec.webhookSuffix, 'webhook suffix') : [],
     staticBindings: [],

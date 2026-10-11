@@ -430,16 +430,35 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
     service.clear_mcp_observations();
     service.clear_mcp_credentials();
     drop(executor);
-    executor = start_with_overrides(deps, &context, overrides).await?;
-    let replayed = executor
-        .invoke_and_await_agent(
+    tracing::info!(agent_id = %owned_agent_id, "Starting executor for completed MCP replay");
+    executor = tokio::time::timeout(
+        Duration::from_secs(30),
+        start_with_overrides(deps, &context, overrides),
+    )
+    .await
+    .expect("executor startup stalled before completed MCP replay")?;
+    tracing::info!(agent_id = %owned_agent_id, "Replaying completed MCP history");
+    let replayed = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
             &component,
             &agent_id,
             "get_self_metadata_result",
             data_value!(),
-        )
-        .await?
-        .into_typed::<Result<String, String>>()?;
+        ),
+    )
+    .await;
+    let replayed = match replayed {
+        Ok(result) => result?.into_typed::<Result<String, String>>()?,
+        Err(_) => {
+            let active = tokio::time::timeout(
+                Duration::from_secs(5),
+                executor.active_entity_metadata(&owned_agent_id),
+            )
+            .await;
+            panic!("completed MCP replay stalled; active entity: {active:?}");
+        }
+    };
     assert_eq!(replayed, Ok(agent_id.to_string()));
     assert_eq!(
         calls.lock().unwrap().len(),

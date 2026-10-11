@@ -237,6 +237,31 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
       test("schema value tree round-trips Wit -> Js -> Wit") {
         assertTrue(SchemaWireInterop.valueTreeFromJs(SchemaWireInterop.valueTreeToJs(valueTree)) == valueTree)
       },
+      test("resource-free async lowering preserves a large nested list and its nonzero root") {
+        val bytes = Vector.tabulate(10000)(i => U8Value(i % 251))
+        val tree  = WitSchemaValueTree(
+          bytes ++ Vector(ListValue(bytes.indices.toVector), RecordValue(Vector(10000))),
+          10001
+        )
+        ZIO.fromFuture(_ => SchemaWireInterop.valueTreeToJsAsync(tree)).map { lowered =>
+          assertTrue(SchemaWireInterop.valueTreeFromJs(lowered) == tree)
+        }
+      },
+      test("resource-free async lowering still checks invalid unreachable nodes") {
+        val invalid = Vector(
+          U8Value(256),
+          U16Value(-1),
+          U32Value(4294967296L),
+          CharValue(0xd800),
+          DatetimeValue(Datetime(1L, 1000000000))
+        )
+        val rejected = invalid.map { node =>
+          scala.util
+            .Try(SchemaWireInterop.valueTreeToJsAsync(WitSchemaValueTree(Vector(BoolValue(true), node), 0)))
+            .isFailure
+        }
+        assertTrue(rejected.forall(identity))
+      },
       test("typed schema value round-trips Wit -> Js -> Wit (all cases)") {
         assertTrue(SchemaWireInterop.typedFromJs(SchemaWireInterop.typedToJs(typed)) == typed)
       },

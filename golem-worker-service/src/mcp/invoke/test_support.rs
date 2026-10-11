@@ -343,6 +343,8 @@ pub(crate) struct RecordedInvocationContext {
 
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
+    metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
@@ -449,7 +451,13 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AuthCtx,
     ) -> WorkerResult<AgentMetadataDto> {
-        Err(WorkerServiceError::AgentNotFound(agent_id.clone()))
+        self.metadata_reads.lock().unwrap().push(agent_id.clone());
+        self.metadata
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .cloned()
+            .ok_or_else(|| WorkerServiceError::AgentNotFound(agent_id.clone()))
     }
 
     async fn find_metadata(
@@ -733,6 +741,8 @@ pub(crate) struct InvocationHarness {
     pub(crate) account_id: AccountId,
     pub(crate) account_email: AccountEmail,
     pub(crate) file_reads: Arc<FileReadMock>,
+    pub(crate) metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
+    pub(crate) metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
@@ -807,6 +817,8 @@ impl InvocationHarness {
             object_store_key: String::new(),
         };
         let agent_ids = Arc::new(Mutex::new(Vec::new()));
+        let metadata = Arc::new(Mutex::new(HashMap::new()));
+        let metadata_reads = Arc::new(Mutex::new(Vec::new()));
         let prepared_agent_ids = Arc::new(Mutex::new(Vec::new()));
         let method_params = Arc::new(Mutex::new(Vec::new()));
         let durable_stream_controls = Arc::new(Mutex::new(Vec::new()));
@@ -817,6 +829,8 @@ impl InvocationHarness {
         let contexts = Arc::new(Mutex::new(Vec::new()));
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
+            metadata: metadata.clone(),
+            metadata_reads: metadata_reads.clone(),
             prepared_agent_ids,
             method_params: method_params.clone(),
             durable_stream_controls: durable_stream_controls.clone(),
@@ -846,6 +860,8 @@ impl InvocationHarness {
             account_id,
             account_email,
             file_reads,
+            metadata,
+            metadata_reads,
             agent_ids,
             method_params,
             durable_stream_controls,

@@ -299,7 +299,9 @@ fn call_agent_route(
                 input_schema: InputSchema::Parameters(vec![]),
             },
             constructor_parameters: vec![],
-            phantom: false,
+            phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
+                phantom: false,
+            },
             method_name: "test_method".to_string(),
             method_input: CompiledInputSchema {
                 graph: SchemaGraph::empty(),
@@ -403,6 +405,117 @@ fn test_durable_stream_policy(call: &CallAgentBehaviour) -> DurableStreamRoutePo
         allow_stream_delete: true,
         allow_invocation_delete: true,
         load: None,
+    }
+}
+
+#[test]
+fn phantom_selector_openapi_documents_concrete_paths_and_query_requiredness() {
+    use golem_service_base::custom_api::PhantomSelection;
+    let mut routes = vec![];
+    for absent in [false, true] {
+        let mut path = vec![
+            PathSegment::Literal {
+                value: "compare".into(),
+            },
+            PathSegment::Variable {
+                display_name: "left".into(),
+            },
+        ];
+        if !absent {
+            path.push(PathSegment::Variable {
+                display_name: "instance".into(),
+            });
+        }
+        path.push(PathSegment::Literal {
+            value: "middle".into(),
+        });
+        path.push(PathSegment::Variable {
+            display_name: "right".into(),
+        });
+        let mut route = call_agent_route(
+            Method::GET,
+            path,
+            RequestBodySchema::Unused,
+            vec![
+                MethodParameter::Path {
+                    path_segment_index: 0.into(),
+                    parameter_type: PathSegmentType::U32,
+                },
+                MethodParameter::Path {
+                    path_segment_index: (if absent { 1 } else { 2 }).into(),
+                    parameter_type: PathSegmentType::Str,
+                },
+            ],
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+            unreachable!()
+        };
+        call.phantom_selection = if absent {
+            PhantomSelection::Original
+        } else {
+            PhantomSelection::Path { index: 1.into() }
+        };
+        routes.push(route);
+    }
+    let spec = spec_for(routes);
+    for (path, names) in [
+        (
+            "/compare/{left}/{instance}/middle/{right}",
+            vec!["left", "instance", "right"],
+        ),
+        ("/compare/{left}/middle/{right}", vec!["left", "right"]),
+    ] {
+        let params = spec["paths"][path]["get"]["parameters"].as_array().unwrap();
+        assert_eq!(
+            params
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            names
+        );
+        for param in params {
+            assert_eq!(param["in"], "path");
+            assert_eq!(param["required"], true);
+            if param["name"] == "instance" {
+                assert_eq!(param["schema"]["format"], "uuid");
+            }
+            if param["name"] == "left" {
+                assert_eq!(param["schema"]["type"], "integer");
+            }
+            if param["name"] == "right" {
+                assert_eq!(param["schema"]["type"], "string");
+            }
+        }
+    }
+    for optional in [false, true] {
+        let mut route = call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "query".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+            unreachable!()
+        };
+        call.phantom_selection = PhantomSelection::Query {
+            name: "instance".into(),
+            optional,
+        };
+        let spec = spec_for(vec![route]);
+        let params = spec["paths"]["/query"]["get"]["parameters"]
+            .as_array()
+            .unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0]["name"], "instance");
+        assert_eq!(params[0]["in"], "query");
+        assert_eq!(params[0]["required"], !optional);
+        assert_eq!(params[0]["schema"]["format"], "uuid");
     }
 }
 
@@ -1483,6 +1596,86 @@ fn durable_stream_method_bindings_are_operation_specific() {
             let parameters = fork[method]["parameters"].as_array().unwrap();
             assert!(!parameters.iter().any(|p| p["name"] == "count"));
             assert!(parameters.iter().any(|p| p["name"] == expected));
+        }
+    }
+}
+
+#[test]
+fn durable_stream_query_selector_is_identity_on_every_operation() {
+    use golem_common::schema::NamedField;
+    use golem_service_base::custom_api::{AgentRouteMode, PhantomSelection};
+    for optional in [false, true] {
+        for body_bound in [false, true] {
+            let mut bindings = vec![MethodParameter::Query {
+                query_parameter_name: "count".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+            }];
+            let body = if body_bound {
+                bindings.push(MethodParameter::JsonObjectBodyField {
+                    field_index: 1.into(),
+                });
+                json_body(record(vec![field("value", str())]))
+            } else {
+                RequestBodySchema::Unused
+            };
+            let mut route = call_agent_route(
+                Method::PUT,
+                vec![PathSegment::Literal {
+                    value: "selected".into(),
+                }],
+                body,
+                bindings,
+                unit_response(),
+                None,
+            );
+            let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                unreachable!()
+            };
+            call.route_mode = AgentRouteMode::DurableStreams;
+            call.phantom_selection = PhantomSelection::Query {
+                name: "instance".into(),
+                optional,
+            };
+            call.method_input.input_schema = InputSchema::parameters([
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("value", str()),
+                NamedField::user_supplied("input", SchemaType::stream(Some(str()))),
+            ]);
+            let spec = spec_for(vec![route]);
+            let mut operations = 0;
+            for (path, item) in spec["paths"].as_object().unwrap() {
+                for method in ["get", "put", "post", "head", "delete"] {
+                    let Some(op) = item.get(method) else { continue };
+                    operations += 1;
+                    let parameters = op["parameters"].as_array().unwrap();
+                    let selectors: Vec<_> = parameters
+                        .iter()
+                        .filter(|p| p["in"] == "query" && p["name"] == "instance")
+                        .collect();
+                    assert_eq!(selectors.len(), 1, "{path} {method}");
+                    assert_eq!(selectors[0]["required"], !optional, "{path} {method}");
+                    assert_eq!(selectors[0]["schema"]["format"], "uuid");
+                    assert!(
+                        !selectors[0]["description"]
+                            .as_str()
+                            .unwrap()
+                            .contains("ignored")
+                    );
+                    let count = parameters.iter().find(|p| p["name"] == "count");
+                    if !path.contains("/forks/") && method == "put" && !path.contains("/streams/") {
+                        assert_eq!(count.unwrap()["required"], true);
+                    } else if !body_bound
+                        && !path.contains("/forks/")
+                        && path.contains("/streams/")
+                        && ["put", "post"].contains(&method)
+                    {
+                        assert_eq!(count.unwrap()["required"], method == "put");
+                    } else {
+                        assert!(count.is_none(), "{path} {method}");
+                    }
+                }
+            }
+            assert_eq!(operations, 17);
         }
     }
 }

@@ -38,6 +38,31 @@ impl<'a> DurableCallAdmission<'a> {
             host_function,
         }
     }
+
+    fn is_wallet_independent_value_read(self) -> bool {
+        use golem_common::model::oplog::host_functions::HostFunctionName;
+        matches!(
+            HostFunctionName::from(self.host_function),
+            HostFunctionName::WallClockNow
+                | HostFunctionName::WallClockResolution
+                | HostFunctionName::MonotonicClockNow
+                | HostFunctionName::MonotonicClockResolution
+                | HostFunctionName::P3SystemClockNow
+                | HostFunctionName::P3SystemClockGetResolution
+                | HostFunctionName::P3MonotonicClockNow
+                | HostFunctionName::P3MonotonicClockGetResolution
+                | HostFunctionName::RandomGetRandomBytes
+                | HostFunctionName::RandomGetRandomU64
+                | HostFunctionName::RandomInsecureGetInsecureRandomBytes
+                | HostFunctionName::RandomInsecureGetInsecureRandomU64
+                | HostFunctionName::RandomInsecureSeedInsecureSeed
+                | HostFunctionName::P3RandomRandomGetRandomBytes
+                | HostFunctionName::P3RandomRandomGetRandomU64
+                | HostFunctionName::P3RandomInsecureGetInsecureRandomBytes
+                | HostFunctionName::P3RandomInsecureGetInsecureRandomU64
+                | HostFunctionName::P3RandomInsecureSeedGetInsecureSeed
+        )
+    }
 }
 
 /// The result of successful admission and durable-scope recovery for a host call.
@@ -80,7 +105,25 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         admission: DurableCallAdmission<'_>,
     ) -> Result<DurableCallBoundary, WorkerExecutorError> {
         self.check_allowed(admission)?;
-        self.ctx.synchronize_agent_wallet_at_boundary().await?;
+        if admission.is_wallet_independent_value_read()
+            && self.ctx.runtime == OwnerRuntime::Agent
+            && !self.ctx.state.snapshotting_mode
+            && self.ctx.state.durable_call_is_live()
+        {
+            // A fresh clock/random value needs no authority. Waiting for an accessor's wallet
+            // reconciliation here can deadlock: this call owns the Store that accessor needs.
+            // Automatic updates still fence target-only history until success is committed.
+            if self.ctx.state.automatic_update_unsettled {
+                let _boundary = self.ctx.lock_synchronized_card_event_boundary().await?;
+                if self.ctx.state.automatic_update_unsettled {
+                    return Err(WorkerExecutorError::runtime(
+                        "automatic update did not finalize before live host-call admission",
+                    ));
+                }
+            }
+        } else {
+            self.ctx.synchronize_agent_wallet_at_boundary().await?;
+        }
         let begin_index = self.ctx.begin_function(admission.function_type).await?;
         Ok(DurableCallBoundary::from_begin_index(begin_index))
     }
@@ -1429,6 +1472,9 @@ where
         crate::worker::start_outcome::success_details_of(&reference),
     )
     .await?;
+    store.with(|mut access| {
+        get_ctx(access.data_mut()).state.automatic_update_unsettled = false;
+    });
     tracing::debug!("Finalizing automatic update to revision {target_revision}");
     Ok(())
 }

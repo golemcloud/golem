@@ -1083,6 +1083,7 @@ where
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,
+                ..Default::default()
             },
             DemandDeliveryMode::Deferred,
             async |_| Ok(HostRequestNoInput {}),

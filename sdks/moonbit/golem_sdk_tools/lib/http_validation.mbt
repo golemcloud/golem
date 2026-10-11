@@ -50,6 +50,28 @@ pub fn validate_http_routes(
           }
         }
         let mount_var_names = collect_path_variable_names(segments)
+        match mount.phantom_id_binding {
+          Some(binding) => {
+            if agent.mode != Durable ||
+              mount.router ||
+              !mount.filesystem_bindings.is_empty() {
+              http_fail(
+                "phantom selectors require a regular durable mount without filesystem exposure",
+              )
+            }
+            match binding {
+              Path(name, _) =>
+                if mount_var_names.filter(v => v == name).length() != 1 ||
+                  agent.constructor_params.any(p => p.0 == name) {
+                  http_fail(
+                    "phantom path selector must name exactly one mount capture, not a constructor parameter",
+                  )
+                }
+              Query(_, _) => ()
+            }
+          }
+          None => ()
+        }
         // Rule 8: Principal params cannot be mount path variables
         for v in mount_var_names {
           let param = agent.constructor_params
@@ -67,6 +89,9 @@ pub fn validate_http_routes(
         }
         // Rule 3: All mount path variables must exist in constructor params
         for v in mount_var_names {
+          if mount.phantom_id_binding is Some(Path(name, _)) && name == v {
+            continue
+          }
           let exists = agent.constructor_params
             .iter()
             .find_first(fn(p) { p.0 == v })
@@ -122,6 +147,28 @@ pub fn validate_http_routes(
           // Query variables
           for qv in query_vars {
             all_var_names.push(qv.variable_name)
+          }
+          match agent.http_mount {
+            Some({ phantom_id_binding: Some(Path(name, _)), .. }) =>
+              if path_segs.any(s => {
+                  match s.kind {
+                    PathVariable(n) | RemainingPathVariable(n) => n == name
+                    _ => false
+                  }
+                }) {
+                http_fail("phantom selector conflicts with an endpoint binding")
+              }
+            Some({ phantom_id_binding: Some(Query(name, _)), .. }) =>
+              if query_vars.any(q => q.query_param_name == name) ||
+                (
+                  endpoint.durable_streams is Some(_) &&
+                  ["offset", "cursor", "live"].contains(name)
+                ) {
+                http_fail(
+                  "phantom selector conflicts with an endpoint binding or durable-stream control",
+                )
+              }
+            _ => ()
           }
           // Header variables
           for header in endpoint.headers {

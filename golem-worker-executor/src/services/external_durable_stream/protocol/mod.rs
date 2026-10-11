@@ -336,7 +336,7 @@ pub(super) async fn read_batch(
         return read_sse(response, request, max_bytes).await;
     }
     let headers = response.headers();
-    let closed = flag(headers, "stream-closed")?;
+    let closed = stream_closed(headers)?;
     let up_to_date = flag(headers, "stream-up-to-date")? || closed;
     let next = checkpoint(
         required_header(headers, "stream-next-offset")?,
@@ -423,7 +423,7 @@ pub(super) async fn append_batch(
     }
     .map(|offset| checkpoint(offset, None, true, false).map(|next| next.offset))
     .transpose()?;
-    let closed = flag(headers, "stream-closed")?;
+    let closed = stream_closed(headers)?;
     if request.close && !closed {
         return Err(protocol("Close was not acknowledged"));
     }
@@ -454,7 +454,9 @@ fn header<'a>(
         })
         .transpose()
         .and_then(|value| {
-            if value.is_some_and(|value| !valid_header(value)) {
+            if value.is_some_and(|value| {
+                !valid_header(value) && !(name == "stream-closed" && value.is_empty())
+            }) {
                 Err(protocol("Invalid protocol header"))
             } else {
                 Ok(value)
@@ -475,6 +477,10 @@ fn flag(headers: &HeaderMap, name: &'static str) -> Result<bool, DurableStreamEr
         Some("true") => Ok(true),
         _ => Err(protocol("Invalid protocol flag")),
     }
+}
+
+fn stream_closed(headers: &HeaderMap) -> Result<bool, DurableStreamError> {
+    Ok(header(headers, "stream-closed")?.is_some_and(|value| value.eq_ignore_ascii_case("true")))
 }
 
 fn integer_header(
@@ -525,7 +531,7 @@ fn http_error(status: StatusCode, headers: &HeaderMap, now: DateTime<Utc>) -> Du
     if let Err(error) = integer_header(headers, "producer-received-seq") {
         return error;
     }
-    let closed = match flag(headers, "stream-closed") {
+    let closed = match stream_closed(headers) {
         Ok(value) => value,
         Err(error) => return error,
     };

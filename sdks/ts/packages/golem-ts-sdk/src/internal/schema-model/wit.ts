@@ -531,7 +531,7 @@ function checkIntRange(tag: keyof typeof INT_RANGES, value: number): void {
   }
 }
 
-function assertDenseModelArray(value: unknown, name: string): asserts value is unknown[] {
+export function assertDenseModelArray(value: unknown, name: string): asserts value is unknown[] {
   if (!Array.isArray(value)) {
     throw new SchemaEncodeError(`${name} must be an array`);
   }
@@ -559,8 +559,8 @@ function assertDenseModelArray(value: unknown, name: string): asserts value is u
 export function assertSchemaValueRepresentable(
   value: SchemaValue,
   allowNativeStreams = false,
+  seen = new Set<unknown>(),
 ): void {
-  const seen = new Set<unknown>();
   const visit = (v: SchemaValue): void => {
     switch (v.tag) {
       case 's8':

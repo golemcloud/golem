@@ -71,7 +71,7 @@ pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> 
 #[allow(clippy::large_enum_variant)]
 pub enum InvocationMode {
     /// The invocation is happening live and should write oplog markers.
-    Live(AgentInvocation),
+    Live(crate::worker::HydratedInvocation),
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
 }
@@ -350,9 +350,23 @@ pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
     let component_revision = component.revision;
     let worker = store.data().get_public_state().worker();
     let interrupt = store.data().durable_ctx().create_interrupt_signal();
-    let materialized = store
+    let runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let entity_invocation = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .map(|scope| scope.invocation_id().clone());
+    let policy = store.data().durable_ctx().suspension_policy();
+    let runtime_for_call = runtime.clone();
+    let preparation = runtime.as_ref().map(|runtime| runtime.external_activity());
+    let future = store
         .as_context_mut()
-        .run_concurrent(async move |_accessor| {
+        .run_concurrent(async move |accessor| {
+            if let (Some(runtime), Some(activity)) =
+                (&runtime_for_call, accessor.runtime_activity())
+            {
+                runtime.certify_root(activity);
+            }
             tokio::select! {
                 biased;
                 result = worker.materialize_durable_streaming_result(
@@ -361,11 +375,20 @@ pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
                     &graph,
                     &root,
                     component_revision,
+                    runtime_for_call.as_ref().map(|runtime| runtime.source()),
+                    preparation,
                 ) => Ok(result),
                 interrupt_kind = interrupt => Err(interrupt_kind),
             }
-        })
-        .await;
+        });
+    let materialized = match runtime {
+        Some(runtime) => {
+            runtime
+                .drive(future, entity_invocation.as_ref(), policy)
+                .await
+        }
+        None => future.await,
+    };
     let interrupted = store.data().durable_ctx().is_interrupting();
     let output = match classify_guest_call_settlement(materialized, None, interrupted) {
         Ok(Ok(result)) => result?,
@@ -594,12 +617,23 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     store: &mut StoreContextMut<'_, Ctx>,
     fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
 ) -> Result<R, GuestCallSettlementError> {
+    let runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let entity_invocation = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .map(|scope| scope.invocation_id().clone());
+    let policy = store.data().durable_ctx().suspension_policy();
     let tracker = store.data().durable_ctx().tail_work_tracker();
     let tracker_for_error = tracker.clone();
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
     let fun = {
         let drain_started = drain_started.clone();
+        let runtime = runtime.clone();
         async move |accessor: &Accessor<Ctx>| {
+            if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
+                runtime.certify_root(activity);
+            }
             let result = fun(accessor).await;
             // The root future has completed: everything from here on is the (bounded) drain
             // phase. Arm the timeout here rather than in the settlement predicate — the
@@ -618,10 +652,17 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
         .data()
         .durable_ctx()
         .arm_tail_work_deadline(drain_started);
-    let result = store
+    let future = store
         .as_context_mut()
-        .run_concurrent_and_settle(fun, &mut settled)
-        .await;
+        .run_concurrent_and_settle(fun, &mut settled);
+    let result = match runtime {
+        Some(runtime) => {
+            runtime
+                .drive(future, entity_invocation.as_ref(), policy)
+                .await
+        }
+        None => future.await,
+    };
     let interrupted = store.data().durable_ctx().is_interrupting()
         || store.data().durable_ctx().invocation_deadline_exceeded();
     let tail_timeout = if tail_work_deadline.exceeded() && !interrupted {

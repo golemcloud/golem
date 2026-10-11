@@ -527,9 +527,20 @@ type Node = { kind: string; value?: any }
 type Graph = { root: Node; defs?: ReadonlyArray<{ id: string; body: Node }> }
 type MemberNames = Record<string, ReadonlyArray<string>>
 
+const definitions = new WeakMap<Graph, Map<string, Node>>()
 const body = (node: Node, graph: Graph): Node => node.kind === "ref"
-  ? graph.defs?.find(def => def.id === node.value.id)?.body ?? node
+  ? (definitions.get(graph) ?? (() => { const index = new Map(graph.defs?.map(def => [def.id, def.body] as const)); definitions.set(graph, index); return index })()).get(node.value.id) ?? node
   : node
+const scalarKinds = new Set(["bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "char", "string", "enum", "flags", "text", "binary", "path", "url", "uuid", "datetime", "duration", "quantity", "secret", "quota-token", "permission-card"])
+const scalar = (node: Node, graph: Graph): boolean => scalarKinds.has(body(node, graph).kind)
+const recordNames = new WeakMap<MemberNames, WeakMap<Node, ReadonlyArray<string>>>()
+const membersFor = (node: Node, names: MemberNames): ReadonlyArray<string> => {
+  let cache = recordNames.get(names)
+  if (!cache) { cache = new WeakMap(); recordNames.set(names, cache) }
+  let members = cache.get(node)
+  if (!members) { const raw = node.value.fields.map((field: any) => field.name); members = names[JSON.stringify(raw)] ?? raw; cache.set(node, members!) }
+  return members!
+}
 const plain = (value: unknown): value is Record<string, unknown> => {
   if (value === null || typeof value !== "object") return false
   const prototype = Object.getPrototypeOf(value)
@@ -541,9 +552,9 @@ export const fromEffectValue = (value: any, schema: Node, graph: Graph, names: M
   if (value === undefined || value === null) return value
   switch (node.kind) {
     case "stream": return yield* Stream.toAsyncIterableEffect(Stream.mapEffect(value as Stream.Stream<any, unknown, never>, (item) => fromEffectValue(item, node.value.inner, graph, names)))
-    case "record": { if (!plain(value)) return value; const result: Record<string, any> = {}; const members = names[JSON.stringify(node.value.fields.map((field: any) => field.name))] ?? node.value.fields.map((field: any) => field.name); for (const [index, field] of node.value.fields.entries()) result[members[index]] = yield* fromEffectValue(value[members[index]], field.body, graph, names); return result }
+    case "record": { if (!plain(value)) return value; const result: Record<string, any> = {}; const members = membersFor(node, names); for (const [index, field] of node.value.fields.entries()) result[members[index]] = yield* fromEffectValue(value[members[index]], field.body, graph, names); return result }
     case "tuple": return yield* Effect.forEach(node.value.elements as Node[], (item, index) => fromEffectValue(value[index], item, graph, names))
-    case "list": case "fixed-list": return value instanceof Uint8Array ? value : yield* Effect.forEach(value, (item: any) => fromEffectValue(item, node.value.element, graph, names))
+    case "list": case "fixed-list": return value instanceof Uint8Array ? value : scalar(node.value.element, graph) ? Array.from(value) : yield* Effect.forEach(value, (item: any) => fromEffectValue(item, node.value.element, graph, names))
     case "map": return new Map(yield* Effect.forEach([...value], ([key, item]) => Effect.all([fromEffectValue(key, node.value.key, graph, names), fromEffectValue(item, node.value.value, graph, names)])))
     case "option": return yield* fromEffectValue(value, node.value.inner, graph, names)
     case "variant": { const multimodal = "type" in value; const key = multimodal ? "value" : "val"; const branch = node.value.cases.find((entry: any) => entry.name === (multimodal ? value.type : value.tag)); return branch?.payload ? { ...value, [key]: yield* fromEffectValue(value[key], branch.payload, graph, names) } : value }
@@ -560,9 +571,9 @@ export const toEffectValue = (value: any, schema: Node | null, graph: Graph, nam
     case "stream": return Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => {
       const source = value[Symbol.asyncIterator](); return { next: async () => { const item = await source.next(); return item.done ? item : { done: false, value: toEffectValue(item.value, node.value.inner, graph, names) } }, return: async () => source.return ? source.return() : { done: true, value: undefined } }
     }}, (error: unknown) => error)
-    case "record": { if (!plain(value)) return value; const result: Record<string, any> = {}; const members = names[JSON.stringify(node.value.fields.map((field: any) => field.name))] ?? node.value.fields.map((field: any) => field.name); for (const [index, field] of node.value.fields.entries()) result[members[index]] = toEffectValue(value[members[index]], field.body, graph, names); return result }
+    case "record": { if (!plain(value)) return value; const result: Record<string, any> = {}; const members = membersFor(node, names); for (const [index, field] of node.value.fields.entries()) result[members[index]] = toEffectValue(value[members[index]], field.body, graph, names); return result }
     case "tuple": return node.value.elements.map((item: Node, index: number) => toEffectValue(value[index], item, graph, names))
-    case "list": case "fixed-list": return value instanceof Uint8Array ? value : value.map((item: any) => toEffectValue(item, node.value.element, graph, names))
+    case "list": case "fixed-list": return value instanceof Uint8Array ? value : scalar(node.value.element, graph) ? value.map((item: any) => item) : value.map((item: any) => toEffectValue(item, node.value.element, graph, names))
     case "map": return new Map([...value].map(([key, item]) => [toEffectValue(key, node.value.key, graph, names), toEffectValue(item, node.value.value, graph, names)]))
     case "option": return toEffectValue(value, node.value.inner, graph, names)
     case "variant": { const multimodal = "type" in value; const key = multimodal ? "value" : "val"; const branch = node.value.cases.find((entry: any) => entry.name === (multimodal ? value.type : value.tag)); return branch?.payload ? { ...value, [key]: toEffectValue(value[key], branch.payload, graph, names) } : value }

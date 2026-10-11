@@ -1,0 +1,165 @@
+---
+import { codingAgent } from "../data/homepage";
+
+const { eyebrow, heading, paragraphsHtml, toolkitLabel, toolkit, terminal, noteHtml, cta } =
+  codingAgent;
+---
+
+<section class="coding-agent">
+  <div class="container ca-inner">
+    <div class="ca-text">
+      <span class="eyebrow">{eyebrow}</span>
+      <h2 class="section-heading">{heading}</h2>
+      {paragraphsHtml.map((p) => <p class="ca-para" set:html={p} />)}
+      <p class="ca-note" set:html={noteHtml} />
+      <a href={cta.href} class="btn btn-secondary ca-cta">{cta.label}</a>
+    </div>
+
+    <div class="ca-visual">
+      <div
+        class="ca-terminal"
+        role="img"
+        aria-label="A golem ssh session inside an agent's sandbox"
+      >
+        <div class="ca-terminal-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="ca-terminal-label mono">{terminal.label}</span>
+        </div>
+        <div class="ca-terminal-body mono">
+          {
+            terminal.lines.map((l) => (
+              <div class={`line line-${l.kind}`}>
+                {l.kind === "cmd" && <span class="sigil">$</span>}
+                {l.kind === "prompt" && <span class="sigil">❯</span>}
+                <span>{l.text}</span>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+
+      <div class="ca-toolkit">
+        <span class="ca-toolkit-label">{toolkitLabel}</span>
+        <ul class="ca-chips">
+          {toolkit.map((t) => <li class="mono">{t}</li>)}
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .coding-agent {
+    padding: 5rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .ca-inner {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+    align-items: start;
+  }
+  @media (min-width: 960px) {
+    .ca-inner {
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+      gap: 3.5rem;
+    }
+  }
+  .ca-para {
+    font-size: 1.02rem;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+    max-width: 60ch;
+  }
+  .ca-note {
+    font-size: 0.95rem;
+    line-height: 1.55;
+    color: var(--text);
+    border-left: 3px solid var(--accent);
+    padding: 0.2rem 0 0.2rem 0.9rem;
+    margin: 1.4rem 0 1.6rem;
+    max-width: 60ch;
+  }
+  .ca-visual {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+  .ca-terminal {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--code-bg);
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  }
+  .ca-terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 0.85rem;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+  }
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--border-strong);
+  }
+  .ca-terminal-label {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .ca-terminal-body {
+    padding: 1.1rem 1.25rem;
+    font-size: 0.86rem;
+    line-height: 1.7;
+  }
+  .line {
+    display: flex;
+    gap: 0.6ch;
+    word-break: break-word;
+  }
+  .line-out {
+    padding-left: 1.6ch;
+  }
+  .line-cmd {
+    margin-bottom: 0.4rem;
+  }
+  .line-cmd {
+    color: var(--text);
+  }
+  .line-prompt {
+    color: var(--text);
+  }
+  .line-out {
+    color: var(--text-muted);
+  }
+  .sigil {
+    color: var(--accent);
+  }
+  .ca-toolkit-label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.65rem;
+  }
+  .ca-chips {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+  .ca-chips li {
+    font-size: 0.8rem;
+    color: var(--text);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.25rem 0.6rem;
+  }
+</style>

@@ -45,7 +45,7 @@ object Bridge {
     config: List[AgentConfigEntry]
   ): Future[CreateAgentResponse] = {
     implicit val ec: scala.concurrent.ExecutionContext = configuration.executionContext
-    val request = CreateAgentRequest(
+    val request                                        = CreateAgentRequest(
       appName = configuration.appName,
       envName = configuration.envName,
       agentTypeName = agentTypeName,
@@ -53,7 +53,7 @@ object Bridge {
       phantomId = phantomId,
       config = config
     )
-    Future.fromTry(Try(BridgeProtocol.encodeCreateAgentRequest(request).render)).flatMap { body =>
+    Future.fromTry(Try(BridgeProtocol.renderCreateAgentRequest(request))).flatMap { body =>
       send(configuration, "create-agent", body, None).flatMap { response =>
         complete("create-agent", response, BridgeProtocol.decodeCreateAgentResponse)
       }
@@ -68,9 +68,9 @@ object Bridge {
     mode: String,
     scheduleAt: Option[String]
   ): Future[AgentInvocationResult] = {
-    val configuration = resolved.configuration
+    val configuration                                  = resolved.configuration
     implicit val ec: scala.concurrent.ExecutionContext = configuration.executionContext
-    val request = AgentInvocationRequest(
+    val request                                        = AgentInvocationRequest(
       appName = configuration.appName,
       envName = configuration.envName,
       agentTypeName = resolved.agentTypeName,
@@ -83,7 +83,7 @@ object Bridge {
       scheduleAt = scheduleAt,
       idempotencyKey = None
     )
-    Future.fromTry(Try(BridgeProtocol.encodeAgentInvocationRequest(request).render)).flatMap { body =>
+    Future.fromTry(Try(BridgeProtocol.renderAgentInvocationRequest(request))).flatMap { body =>
       send(configuration, "invoke-agent", body, request.idempotencyKey).flatMap { response =>
         complete("invoke-agent", response, BridgeProtocol.decodeAgentInvocationResult)
       }
@@ -120,7 +120,7 @@ object Bridge {
       val decoded = Json.parse(response.body()).flatMap(decode)
       decoded match {
         case Right(value) => Future.successful(value)
-        case Left(error) =>
+        case Left(error)  =>
           Future.failed(BridgeException(s"Failed to decode $endpoint response: $error"))
       }
     } else {
@@ -151,6 +151,14 @@ object Bridge {
     configCodecs: List[(List[String], PublicValueCodec.Codec)]
   ): Future[AgentInvocationResult] =
     Try(
-      StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec, configCodecs)
+      StreamSession.invoke(
+        resolved,
+        methodName,
+        methodParameters,
+        constructorCodec,
+        inputCodec,
+        outputCodec,
+        configCodecs
+      )
     ).fold(Future.failed, future => future)
 }

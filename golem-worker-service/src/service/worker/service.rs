@@ -240,7 +240,7 @@ fn validate_one_shot_invocation_is_stream_free(
     component: &Component,
     agent_id: &AgentId,
     method_name: &str,
-    method_parameters: &golem_schema::proto::golem::schema::SchemaValue,
+    input: &SchemaValue,
 ) -> WorkerResult<()> {
     let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
@@ -263,10 +263,8 @@ fn validate_one_shot_invocation_is_stream_free(
                 agent_type.type_name
             ))
         })?;
-    let input = SchemaValue::try_from(method_parameters.clone())
-        .map_err(WorkerServiceError::TypeChecker)?;
     method
-        .validate_input(&agent_type.schema, &input)
+        .validate_input(&agent_type.schema, input)
         .map_err(|error| {
             WorkerServiceError::TypeChecker(format!(
                 "Invalid input for agent method '{method_name}': {error}"
@@ -2776,8 +2774,25 @@ impl WorkerService {
             )
         };
 
+        let method_parameters = if let Some(component) = validation_component.as_ref() {
+            let method = method_name.as_deref().ok_or_else(|| {
+                WorkerServiceError::TypeChecker(
+                    "method_name is required for non-lookup invocations".to_string(),
+                )
+            })?;
+            let input = method_parameters.ok_or_else(|| {
+                WorkerServiceError::TypeChecker(
+                    "method_parameters are required for non-lookup invocations".to_string(),
+                )
+            })?;
+            let input = SchemaValue::try_from(input).map_err(WorkerServiceError::TypeChecker)?;
+            validate_one_shot_invocation_is_stream_free(component, &agent_id, method, &input)?;
+            Some(input.try_into().map_err(WorkerServiceError::TypeChecker)?)
+        } else {
+            method_parameters
+        };
+
         self.dispatch_prepared_agent_invocation(
-            validation_component.as_ref(),
             agent_id,
             method_name,
             method_parameters,
@@ -2838,7 +2853,6 @@ impl WorkerService {
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_prepared_agent_invocation(
         &self,
-        validation_component: Option<&Component>,
         agent_id: AgentId,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
@@ -2854,25 +2868,6 @@ impl WorkerService {
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        if let Some(validation_component) = validation_component {
-            let method_name = method_name.as_deref().ok_or_else(|| {
-                WorkerServiceError::TypeChecker(
-                    "method_name is required for non-lookup invocations".to_string(),
-                )
-            })?;
-            let method_parameters = method_parameters.as_ref().ok_or_else(|| {
-                WorkerServiceError::TypeChecker(
-                    "method_parameters are required for non-lookup invocations".to_string(),
-                )
-            })?;
-            validate_one_shot_invocation_is_stream_free(
-                validation_component,
-                &agent_id,
-                method_name,
-                method_parameters,
-            )?;
-        }
-
         let mut output = self
             .worker_client
             .invoke_agent(
@@ -2897,16 +2892,16 @@ impl WorkerService {
         Ok(output)
     }
 
-    async fn component_for_invocation(
+    async fn component_for_invocation<'a>(
         &self,
-        fallback: &Component,
+        fallback: &'a Component,
         agent_id: &AgentId,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         freshness_disposition: InvocationFreshnessDisposition,
-    ) -> WorkerResult<Component> {
+    ) -> WorkerResult<std::borrow::Cow<'a, Component>> {
         if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-            return Ok(fallback.clone());
+            return Ok(std::borrow::Cow::Borrowed(fallback));
         }
 
         let component_revision = match self
@@ -2917,18 +2912,19 @@ impl WorkerService {
             Ok(metadata) => metadata.component_revision,
             Err(WorkerServiceError::AgentNotFound(_))
             | Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. })) => {
-                return Ok(fallback.clone());
+                return Ok(std::borrow::Cow::Borrowed(fallback));
             }
             Err(error) => return Err(error),
         };
 
         if component_revision == fallback.revision {
-            Ok(fallback.clone())
+            Ok(std::borrow::Cow::Borrowed(fallback))
         } else {
-            Ok(self
-                .component_service
-                .get_revision(fallback.id, component_revision)
-                .await?)
+            Ok(std::borrow::Cow::Owned(
+                self.component_service
+                    .get_revision(fallback.id, component_revision)
+                    .await?,
+            ))
         }
     }
 
@@ -3474,16 +3470,14 @@ impl WorkerService {
             )));
         }
 
-        let method_parameters = json_input_schema_value_to_typed_schema_value(
-            request.method_parameters.into_inner(),
-            &invocation_agent_type.schema,
-            &method.input_schema,
-        )
-        .map_err(|err| {
-            WorkerServiceError::TypeChecker(format!("Agent method parameters type error: {err}"))
-        })?
-        .into_parts()
-        .1;
+        let method_parameters = request.method_parameters.into_inner();
+
+        validate_one_shot_invocation_is_stream_free(
+            &invocation_component,
+            &agent_id,
+            &method_name,
+            &method_parameters,
+        )?;
 
         let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             method_parameters.try_into().map_err(|error| {
@@ -3505,7 +3499,6 @@ impl WorkerService {
 
         let output = self
             .dispatch_prepared_agent_invocation(
-                Some(&invocation_component),
                 agent_id.clone(),
                 Some(method_name.clone()),
                 Some(proto_method_parameters),
@@ -6219,6 +6212,83 @@ mod tests {
         }
 
         assert_eq!(harness.worker_client.invocations().len(), 3);
+    }
+
+    #[test]
+    async fn one_shot_native_and_protobuf_inputs_validate_before_dispatch() {
+        let harness = RestHarness::new_with_input(
+            AgentMode::Durable,
+            InputSchema::Parameters(vec![NamedField::user_supplied(
+                "bytes",
+                SchemaType::list(SchemaType::u8()),
+            )]),
+        );
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        for mode in [AgentInvocationMode::Await, AgentInvocationMode::Schedule] {
+            let mut request = harness.invoke_request();
+            request.mode = mode;
+            request.method_parameters =
+                golem_common::schema::ExternalSchemaValue::try_from(SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: vec![SchemaValue::U8(3), SchemaValue::String("bad".into())],
+                    }],
+                })
+                .unwrap();
+            let error = harness
+                .worker_service
+                .invoke_agent_rest(request, AuthCtx::system())
+                .await
+                .expect_err("a malformed native input must not be dispatched");
+            assert!(
+                error.to_string().contains("bytes"),
+                "unexpected error: {error}"
+            );
+        }
+        for (input, valid) in [
+            (
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: (0..10_000)
+                            .map(|i| SchemaValue::U8((i % 251) as u8))
+                            .collect(),
+                    }],
+                },
+                true,
+            ),
+            (
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: vec![SchemaValue::U8(3), SchemaValue::String("bad".into())],
+                    }],
+                },
+                false,
+            ),
+        ] {
+            let result = harness
+                .worker_service
+                .invoke_agent(
+                    &agent_id,
+                    Some("run".to_string()),
+                    Some(input.try_into().unwrap()),
+                    golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+                    None,
+                    Some(IdempotencyKey::fresh()),
+                    None,
+                    false,
+                    InvocationFreshnessDisposition::MayExist,
+                    Vec::new(),
+                    AuthCtx::system(),
+                    Principal::anonymous().into(),
+                    None,
+                    None,
+                )
+                .await;
+            assert_eq!(result.is_ok(), valid, "unexpected result: {result:?}");
+        }
+        assert_eq!(harness.worker_client.invocations().len(), 1);
     }
 
     #[test]

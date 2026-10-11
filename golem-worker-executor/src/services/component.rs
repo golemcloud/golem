@@ -22,6 +22,7 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -214,9 +215,7 @@ impl ComponentService for ComponentServiceDefault {
                                             })
                                     })
                                     .await
-                                    .map_err(|join_err| {
-                                        WorkerExecutorError::unknown(join_err.to_string())
-                                    })??;
+                                    .map_err(compilation_join_error)??;
                                     let end = Instant::now();
 
                                     let compilation_time = end.duration_since(start);
@@ -480,6 +479,26 @@ enum RegistryCall {
     DownloadComponent,
 }
 
+/// Metadata-detectable restrictions checked before reserving memory or loading a target.
+/// Wasmtime still validates features that are not represented in component metadata.
+pub(crate) fn component_support_error(metadata: &ComponentMetadata) -> Option<&'static str> {
+    if metadata.has_shared_linear_memory() {
+        Some("The target revision uses WebAssembly threads, which Golem does not support")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn compilation_join_error(error: tokio::task::JoinError) -> WorkerExecutorError {
+    if error.is_cancelled() {
+        WorkerExecutorError::Interrupted {
+            kind: golem_service_base::error::worker_executor::InterruptKind::Restart,
+        }
+    } else {
+        WorkerExecutorError::runtime(format!("Component compilation task failed: {error}"))
+    }
+}
+
 /// The executor error of a failed component service call. It keeps the kind of the failure: the
 /// service did not answer (`ComponentServiceUnavailable`, a later call can succeed), the revision
 /// does not exist (`ComponentNotFound`), or the service refused the call
@@ -549,6 +568,28 @@ mod tests {
     use golem_service_base::service::compiled_component::CompiledComponentServiceDisabled;
     use std::collections::HashMap;
     use test_r::test;
+
+    #[test]
+    fn component_support_validation_distinguishes_shared_and_unshared_memory() {
+        for (memory, expected) in [
+            ("(memory 1 1)", None),
+            (
+                "(memory 1 1 shared)",
+                Some("The target revision uses WebAssembly threads, which Golem does not support"),
+            ),
+        ] {
+            let bytes = wat::parse_str(format!("(component (core module {memory}))")).unwrap();
+            let metadata = ComponentMetadata::analyse_component(
+                &bytes,
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap();
+            assert_eq!(component_support_error(&metadata), expected);
+        }
+    }
 
     struct MockRegistryService {
         components: HashMap<ComponentId, Component>,

@@ -19,7 +19,7 @@ use super::ok_or_continue;
 use super::route_compilation::{
     add_agent_method_http_routes, add_cors_preflight_http_routes, add_openapi_spec_routes,
     add_webhook_callback_routes, build_agent_http_api_deployment_details, compile_fallback_mount,
-    make_invalid_agent_mount_error_maker,
+    expand_http_mount, make_invalid_agent_mount_error_maker,
 };
 use crate::model::agent_secret::{
     DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
@@ -865,6 +865,7 @@ impl DeploymentContext {
         for deployment in self.http_api_deployments.values() {
             let first_route_id = current_route_id;
             let mut deployment_routes = Vec::new();
+            let mut omitted_selector_routes = HashSet::new();
 
             for (agent_type, agent_options) in &deployment.agents {
                 let registered_agent_type = ok_or_continue!(
@@ -917,50 +918,57 @@ impl DeploymentContext {
                     errors
                 );
 
-                let constructor_parameters = ok_or_continue!(
-                    build_http_agent_constructor_parameters(
-                        http_mount,
-                        &registered_agent_type.agent_type.schema,
-                        &registered_agent_type.agent_type.constructor.input_schema,
-                        &make_mount_validation_error
-                    ),
-                    errors
-                );
-
-                if let Some(mount) = ok_or_continue!(
-                    compile_fallback_mount(
-                        &self.environment,
-                        deployment,
-                        &registered_agent_type.agent_type,
-                        &registered_agent_type.implemented_by,
-                        http_mount,
-                        constructor_parameters.clone(),
-                        agent_options,
-                        current_route_id,
-                    ),
-                    errors
-                ) {
-                    deployment_routes.push(mount);
-                    current_route_id = current_route_id.checked_add(1).unwrap();
-                }
-
-                if registered_agent_type.agent_type.kind
-                    != golem_common::schema::AgentTypeKind::HttpRouter
-                {
-                    add_agent_method_http_routes(
-                        &self.environment,
-                        deployment,
-                        &registered_agent_type.agent_type,
-                        &registered_agent_type.implemented_by,
-                        http_mount,
-                        &registered_agent_type.agent_type.methods,
-                        constructor_parameters,
-                        agent_options,
-                        &mut current_route_id,
-                        &mut deployment_routes,
-                        errors,
-                        warnings,
+                for (alternative, http_mount) in expand_http_mount(http_mount).iter().enumerate() {
+                    let first_alternative_route = deployment_routes.len();
+                    let constructor_parameters = ok_or_continue!(
+                        build_http_agent_constructor_parameters(
+                            http_mount,
+                            &registered_agent_type.agent_type.schema,
+                            &registered_agent_type.agent_type.constructor.input_schema,
+                            &make_mount_validation_error
+                        ),
+                        errors
                     );
+
+                    if let Some(mount) = ok_or_continue!(
+                        compile_fallback_mount(
+                            &self.environment,
+                            deployment,
+                            &registered_agent_type.agent_type,
+                            &registered_agent_type.implemented_by,
+                            http_mount,
+                            constructor_parameters.clone(),
+                            agent_options,
+                            current_route_id,
+                        ),
+                        errors
+                    ) {
+                        deployment_routes.push(mount);
+                        current_route_id = current_route_id.checked_add(1).unwrap();
+                    }
+
+                    if registered_agent_type.agent_type.kind
+                        != golem_common::schema::AgentTypeKind::HttpRouter
+                    {
+                        add_agent_method_http_routes(
+                            &self.environment,
+                            deployment,
+                            &registered_agent_type.agent_type,
+                            &registered_agent_type.implemented_by,
+                            http_mount,
+                            &registered_agent_type.agent_type.methods,
+                            constructor_parameters,
+                            agent_options,
+                            &mut current_route_id,
+                            &mut deployment_routes,
+                            errors,
+                            warnings,
+                        );
+                    }
+                    if alternative != 0 {
+                        omitted_selector_routes
+                            .extend(first_alternative_route..deployment_routes.len());
+                    }
                 }
 
                 add_webhook_callback_routes(
@@ -977,6 +985,12 @@ impl DeploymentContext {
                 errors.push(error);
             }
 
+            validate_optional_mount_overlaps(
+                &deployment.domain,
+                &deployment_routes,
+                &omitted_selector_routes,
+                errors,
+            );
             add_cors_preflight_http_routes(
                 deployment,
                 &mut current_route_id,
@@ -1717,6 +1731,70 @@ fn validate_final_http_api_router(
         security_schemes,
         errors,
     );
+}
+
+fn validate_optional_mount_overlaps(
+    domain: &Domain,
+    routes: &[UnboundCompiledRoute],
+    omitted: &HashSet<usize>,
+    errors: &mut Vec<DeployValidationError>,
+) {
+    use golem_service_base::custom_api::{PathSegment, RouteMatch};
+    fn paths_overlap(a: &[PathSegment], a_prefix: bool, b: &[PathSegment], b_prefix: bool) -> bool {
+        for (left, right) in a.iter().zip(b) {
+            match (left, right) {
+                (PathSegment::Literal { value: left }, PathSegment::Literal { value: right })
+                    if left != right =>
+                {
+                    return false;
+                }
+                (PathSegment::CatchAll { .. }, _) | (_, PathSegment::CatchAll { .. }) => {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        a.len() == b.len() || (a.len() < b.len() && a_prefix) || (b.len() < a.len() && b_prefix)
+    }
+    for &index in omitted {
+        let route = &routes[index];
+        for (other_index, other) in routes.iter().enumerate() {
+            if index == other_index || (omitted.contains(&other_index) && index > other_index) {
+                continue;
+            }
+            let same_method = match (&route.route_match, &other.route_match) {
+                (
+                    RouteMatch::Method {
+                        method: a,
+                        trailing_slash: a_slash,
+                    },
+                    RouteMatch::Method {
+                        method: b,
+                        trailing_slash: b_slash,
+                    },
+                ) => {
+                    a_slash == b_slash
+                        && super::route_compilation::render_http_method(a)
+                            == super::route_compilation::render_http_method(b)
+                }
+                _ => true,
+            };
+            if same_method
+                && paths_overlap(
+                    &route.path,
+                    matches!(route.route_match, RouteMatch::MountPrefix),
+                    &other.path,
+                    matches!(other.route_match, RouteMatch::MountPrefix),
+                )
+            {
+                errors.push(DeployValidationError::HttpApiDeploymentInvalidRoute {
+                    domain: domain.clone(),
+                    path: route.path.clone(),
+                    error: "Optional phantom selector expansion overlaps another route".into(),
+                });
+            }
+        }
+    }
 }
 
 pub(crate) fn validate_final_http_api_router_for_origin(

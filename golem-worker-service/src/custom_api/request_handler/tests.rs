@@ -60,6 +60,240 @@ async fn unavailable_security_fails_before_route_dispatch() {
 
 struct StaticApiDefinitionsLookup;
 
+#[test]
+async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::agent::{CachePolicy, OwnerKind, ReadOnlyConfig};
+    use golem_common::model::worker::AgentMetadataDto;
+    use golem_common::model::{AgentFingerprint, AgentId, AgentStatus, OplogIndex, Timestamp};
+    use golem_service_base::custom_api::PhantomSelection;
+    use poem::IntoResponse;
+    let p = "550e8400-e29b-41d4-a716-446655440000";
+    let q = "8badf00d-1234-4567-89ab-0123456789ab";
+    let harness = InvocationHarness::new(
+        AgentInvocationOutput {
+            result: golem_common::model::AgentInvocationResult::AgentInitialization,
+            consumed_fuel: None,
+            invocation_status: None,
+            component_revision: None,
+            agent_id: None,
+            idempotency_key: None,
+            oplog_index: None,
+            agent_fingerprint: None,
+        },
+        AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![]),
+        },
+        vec![golem_common::schema::AgentMethodSchema {
+            name: "run".into(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        }],
+    );
+    let fingerprint = AgentFingerprint(uuid::Uuid::new_v4());
+    let mut route = test_route(1, "/selected", Some("GET"), "typed");
+    route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+        header_name: "x-golem-session".into(),
+    });
+    let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        unreachable!()
+    };
+    call.component_id = harness.component_id;
+    call.agent_type = AgentTypeName("mcp-agent".into());
+    call.phantom_selection = PhantomSelection::Query {
+        name: "instance".into(),
+        optional: true,
+    };
+    call.read_only = Some(ReadOnlyConfig {
+        cache_policy: CachePolicy::UntilWrite(Empty {}),
+        uses_principal: false,
+    });
+    let bound_call = call.clone();
+    let mut ids = vec![];
+    for phantom in [None, Some(p), Some(q)] {
+        let id = AgentId {
+            component_id: harness.component_id,
+            agent_id: phantom
+                .map(|p| format!("mcp-agent()[{p}]"))
+                .unwrap_or_else(|| "mcp-agent()".into()),
+        };
+        harness.metadata.lock().unwrap().insert(
+            id.clone(),
+            AgentMetadataDto {
+                agent_id: id.clone(),
+                owner_kind: OwnerKind::ComponentAgent,
+                environment_id: harness.environment_id,
+                created_by: harness.account_id,
+                env: Default::default(),
+                config: vec![],
+                status: AgentStatus::Idle,
+                component_revision: ComponentRevision::INITIAL,
+                retry_count: 0,
+                pending_invocation_count: 0,
+                updates: vec![],
+                created_at: Timestamp::now_utc(),
+                last_error: None,
+                last_error_kind: None,
+                component_size: 0,
+                total_linear_memory_size: 0,
+                exported_resource_instances: vec![],
+                active_plugins: Default::default(),
+                skipped_regions: vec![],
+                deleted_regions: vec![],
+                last_oplog_index: OplogIndex::from_u64(17),
+                fingerprint,
+            },
+        );
+        ids.push(id);
+    }
+    let mut routes = vec![route];
+    for (id, path, selection) in [
+        (
+            2,
+            "/selected-path/{instance}",
+            PhantomSelection::Path { index: 0.into() },
+        ),
+        (3, "/original", PhantomSelection::Original),
+        (
+            4,
+            "/required",
+            PhantomSelection::Query {
+                name: "instance".into(),
+                optional: false,
+            },
+        ),
+    ] {
+        let mut route = test_route(id, path, Some("GET"), "typed");
+        let mut call = bound_call.clone();
+        call.phantom_selection = selection;
+        route.behavior = RouteBehaviour::CallAgent(call);
+        route.security = routes[0].security.clone();
+        routes.push(route);
+    }
+    let handler = request_handler_with_worker(
+        test_resolver(routes),
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+        harness.worker_service.clone(),
+    );
+    let etag = |id: &AgentId| {
+        format!(
+            "\"{}/{}/{fingerprint}:17\"",
+            id.component_id,
+            id.agent_name_encoded()
+        )
+    };
+    for (query, authorized, expected) in [
+        ("instance=invalid".into(), false, StatusCode::UNAUTHORIZED),
+        ("instance=invalid".into(), true, StatusCode::BAD_REQUEST),
+        ("instance=".into(), true, StatusCode::BAD_REQUEST),
+        (
+            format!("instance={p}&instance={p}"),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("instance={p}&instance={q}"),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (format!("instance={p}"), true, StatusCode::NOT_MODIFIED),
+        (
+            format!("instance={}", p.to_uppercase()),
+            true,
+            StatusCode::NOT_MODIFIED,
+        ),
+        ("".into(), true, StatusCode::NOT_MODIFIED),
+    ] {
+        harness.metadata_reads.lock().unwrap().clear();
+        let mut request = Request::builder()
+            .method(http::Method::GET)
+            .uri(format!("/selected?{query}").parse().unwrap())
+            .header("host", "example.com")
+            .header(
+                http::header::IF_NONE_MATCH,
+                etag(&ids[usize::from(!query.is_empty())]),
+            );
+        if authorized {
+            request = request.header("x-golem-session", "{}");
+        }
+        let response = match handler.handle_request(request.finish()).await {
+            Ok(response) => response,
+            Err(failure) => {
+                crate::api::common::ApiEndpointError::from(failure.error).into_response()
+            }
+        };
+        assert_eq!(response.status(), expected, "{query}");
+        assert!(harness.contexts.lock().unwrap().is_empty());
+        let reads = harness.metadata_reads.lock().unwrap();
+        if expected == StatusCode::NOT_MODIFIED {
+            assert_eq!(*reads, vec![ids[usize::from(!query.is_empty())].clone()]);
+        } else {
+            assert!(reads.is_empty());
+        }
+    }
+    for (uri, selected, expected) in [
+        (format!("/selected-path/{p}"), 1, StatusCode::NOT_MODIFIED),
+        ("/selected-path/invalid".into(), 1, StatusCode::BAD_REQUEST),
+        ("/selected-path".into(), 1, StatusCode::NOT_FOUND),
+        ("/original".into(), 0, StatusCode::NOT_MODIFIED),
+        ("/required".into(), 1, StatusCode::BAD_REQUEST),
+    ] {
+        harness.metadata_reads.lock().unwrap().clear();
+        let request = Request::builder()
+            .method(http::Method::GET)
+            .uri(uri.parse().unwrap())
+            .header("host", "example.com")
+            .header("x-golem-session", "{}")
+            .header(http::header::IF_NONE_MATCH, etag(&ids[selected]))
+            .finish();
+        let response = match handler.handle_request(request).await {
+            Ok(response) => response,
+            Err(failure) => {
+                crate::api::common::ApiEndpointError::from(failure.error).into_response()
+            }
+        };
+        assert_eq!(response.status(), expected, "{uri}");
+        assert!(harness.contexts.lock().unwrap().is_empty());
+        let reads = harness.metadata_reads.lock().unwrap();
+        if expected == StatusCode::NOT_MODIFIED {
+            assert_eq!(*reads, vec![ids[selected].clone()]);
+        } else {
+            assert!(reads.is_empty());
+        }
+    }
+    for (index, source) in [&ids[0], &ids[1]].into_iter().enumerate() {
+        harness.metadata_reads.lock().unwrap().clear();
+        let request = Request::builder()
+            .method(http::Method::GET)
+            .uri(format!("/selected?instance={q}").parse().unwrap())
+            .header("host", "example.com")
+            .header("x-golem-session", "{}")
+            .header(http::header::IF_NONE_MATCH, etag(source))
+            .finish();
+        let response = handler.handle_request(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(harness.contexts.lock().unwrap().len(), index + 1);
+        assert_eq!(harness.recorded_agent_id(), ids[2]);
+        assert!(
+            harness
+                .metadata_reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|id| id == &ids[2])
+        );
+    }
+}
+
 #[async_trait]
 impl HttpApiDefinitionsLookup for StaticApiDefinitionsLookup {
     async fn get(
@@ -216,7 +450,9 @@ fn durable_stream_routes() -> CompiledRoutes {
             input_schema: InputSchema::Parameters(vec![]),
         },
         constructor_parameters: vec![],
-        phantom: false,
+        phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
+            phantom: false,
+        },
         method_name: "stream".to_string(),
         method_input: CompiledInputSchema {
             graph: SchemaGraph::empty(),
@@ -670,6 +906,169 @@ async fn durable_stream_write_disabled_fork_rejects_oversized_initial_content_as
 
     let response = handler.handle_request(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
+    use crate::custom_api::route_resolver::tests::test_resolver;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ForkStreamSlotSuccess, ReadStreamSlotSuccess,
+    };
+    use golem_common::model::OplogIndex;
+    use golem_common::model::durable_stream::StreamOffset;
+    use golem_service_base::custom_api::PhantomSelection;
+    let p = "550e8400-e29b-41d4-a716-446655440000";
+    let q = "8badf00d-1234-4567-89ab-0123456789ab";
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let target_fork =
+        golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let source_fork =
+        golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    let named_fork = |root: &str, name: &str| {
+        let hash = blake3::hash(format!("{root}\0{name}").as_bytes());
+        let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
+        bytes[6] = (bytes[6] & 15) | 64;
+        bytes[8] = (bytes[8] & 63) | 128;
+        format!("oracle-agent()[{}]", uuid::Uuid::from_bytes(bytes))
+    };
+    for path_selector in [false, true] {
+        for root in [None, Some(p), Some(q)] {
+            if path_selector && root.is_none() {
+                continue;
+            }
+            for nested in [false, true] {
+                let harness = invocation_harness();
+                let mut routes = durable_stream_routes().routes;
+                for route in &mut routes {
+                    if let RouteBehaviour::CallAgent(call) = &mut route.behavior {
+                        call.phantom_selection = if path_selector {
+                            PhantomSelection::Path { index: 0.into() }
+                        } else {
+                            PhantomSelection::Query {
+                                name: "instance".into(),
+                                optional: true,
+                            }
+                        };
+                        if path_selector {
+                            route.path.insert(
+                                1,
+                                PathSegment::Variable {
+                                    display_name: "instance".into(),
+                                },
+                            );
+                            call.base_path_variables += 1;
+                        }
+                    }
+                }
+                let handler = request_handler_with_worker(
+                    test_resolver(routes),
+                    Arc::new(InitialAgentFilesService::new(Arc::new(
+                        golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+                    ))),
+                    harness.worker_service.clone(),
+                );
+                let base = if path_selector {
+                    format!("/writable/{}", root.unwrap())
+                } else {
+                    "/writable".into()
+                };
+                let source = if nested {
+                    format!("{base}/forks/{source_fork}/invocations/{session}/streams/requests")
+                } else {
+                    format!("{base}/invocations/{session}/streams/requests")
+                };
+                let target =
+                    format!("{base}/forks/{target_fork}/invocations/{session}/streams/requests");
+                let uri = if path_selector {
+                    target.replace(root.unwrap(), &root.unwrap().to_uppercase())
+                } else {
+                    format!(
+                        "{target}?{}",
+                        root.map(|id| format!("instance={}&count=17", id.to_uppercase()))
+                            .unwrap_or_default()
+                    )
+                };
+                let mut invalid_sources = vec![
+                    format!("{source}?instance={p}"),
+                    format!("{source}#fragment"),
+                ];
+                if path_selector {
+                    let other = if root == Some(p) { q } else { p };
+                    invalid_sources.push(source.replace(root.unwrap(), other));
+                }
+                for source in invalid_sources {
+                    let response = handler
+                        .handle_request(
+                            Request::builder()
+                                .method(http::Method::PUT)
+                                .uri(uri.parse().unwrap())
+                                .header("host", "example.com")
+                                .header("x-golem-session", "{}")
+                                .header("stream-forked-from", source)
+                                .finish(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                    assert!(harness.recorded_durable_stream_forks().is_empty());
+                }
+                let offset = StreamOffset::new(OplogIndex::from_u64(42), 0)
+                    .as_bytes()
+                    .to_vec();
+                harness.script_durable_stream_fork_success(
+                    ForkStreamSlotSuccess::default(),
+                    vec![ReadStreamSlotSuccess {
+                        content_type: "application/octet-stream".into(),
+                        next_offset: offset.clone(),
+                        head_offset: offset,
+                        stream_identity: "selected-fork".into(),
+                        writable: true,
+                        ..Default::default()
+                    }],
+                );
+                let response = handler
+                    .handle_request(
+                        Request::builder()
+                            .method(http::Method::PUT)
+                            .uri(uri.parse().unwrap())
+                            .header("host", "example.com")
+                            .header("x-golem-session", "{}")
+                            .header("stream-forked-from", &source)
+                            .finish(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED);
+                let expected_url = if path_selector {
+                    target.clone()
+                } else {
+                    format!(
+                        "{target}{}",
+                        root.map(|id| format!("?instance={id}")).unwrap_or_default()
+                    )
+                };
+                assert_eq!(response.headers()[http::header::LOCATION], expected_url);
+                let forks = harness.recorded_durable_stream_forks();
+                assert_eq!(forks.len(), 1);
+                let root_id = root
+                    .map(|id| format!("oracle-agent()[{id}]"))
+                    .unwrap_or_else(|| "oracle-agent()".into());
+                assert_eq!(
+                    forks[0].source_agent_id.as_ref().unwrap().name,
+                    if nested {
+                        named_fork(&root_id, &source_fork)
+                    } else {
+                        root_id.clone()
+                    }
+                );
+                assert_eq!(
+                    forks[0].target_agent_id.as_ref().unwrap().name,
+                    named_fork(&root_id, &target_fork)
+                );
+                assert_eq!(forks[0].source_path, source);
+            }
+        }
+    }
 }
 
 #[test]

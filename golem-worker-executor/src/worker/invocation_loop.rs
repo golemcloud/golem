@@ -43,10 +43,10 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
-    PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningAgent,
-    RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest, Worker, WorkerCommand,
-    WorkerRunningAgent, WorkerTrace,
+    CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation,
+    PendingLiveInvocationDisposition, PendingWorkerInterrupt, QueuedWorkerInvocation,
+    RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest,
+    Worker, WorkerCommand, WorkerRunningAgent, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
@@ -60,7 +60,7 @@ use golem_common::model::oplog::FilesystemSnapshotName;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
-    IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
+    IdempotencyKey, OwnedAgentId,
 };
 use golem_common::model::{
     AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
@@ -159,6 +159,8 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     /// Reconstruction reached a live continuation whose recovery data was temporarily
     /// unavailable. The incomplete runtime and filesystem have already been discarded.
     RecoveryRequired(WorkerExecutorError),
+    /// The update head changed before a runtime was created; memory admission must run again.
+    ReacquireMemory,
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
 }
@@ -455,6 +457,31 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     window,
                     recovery_decision,
                 } => (*agent, window, recovery_decision),
+                CreateInstanceResult::ReacquireMemory => {
+                    if let Some(interrupt) = self.pending_interrupt().await {
+                        match self
+                            .interrupted_before_instance(interrupt.kind, Some(interrupt))
+                            .await
+                        {
+                            StartupStep::Stop => break,
+                            StartupStep::Retry => {}
+                        }
+                    }
+                    let pending_startup_attempt = self.parent.pending_startup_attempt();
+                    if let Err(error) = Worker::restart_with_memory_admission(
+                        self.parent.clone(),
+                        true,
+                        None,
+                        self.oom_retry_count,
+                        pending_startup_attempt,
+                        UnloadReason::Restart,
+                    )
+                    .await
+                    {
+                        warn!("Failed to restart worker after changing update admission: {error}");
+                    }
+                    break;
+                }
                 CreateInstanceResult::Interrupted(kind) => {
                     self.release_concurrent_agent_permit();
                     let pending_interrupt = self.pending_interrupt().await;
@@ -1057,12 +1084,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         "Invocation queue loop dropping memory permits and triggering restart"
                     );
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
-                    if let Err(error) = Worker::restart_on_oom(
+                    if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
                         true,
                         delay,
                         self.oom_retry_count + 1,
                         pending_startup_attempt,
+                        UnloadReason::OutOfMemory,
                     )
                     .await
                     {
@@ -1536,14 +1564,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 // Instance creation was interrupted by a recoverable condition. The worker exists
                 // and its metadata and `Create` oplog entry are already persisted, so the caller
                 // parks or restarts the worker without exposing an unprepared runtime.
-                Err(CreateWorkerInstanceError {
+                Err(CreateWorkerInstanceError::ReacquireMemory) => {
+                    CreateInstanceResult::ReacquireMemory
+                }
+                Err(CreateWorkerInstanceError::Failed {
                     error: WorkerExecutorError::Interrupted { kind },
                     filesystem_cleanup_failure: None,
                 }) => {
                     debug!("Worker instantiation interrupted: {kind:?}");
                     CreateInstanceResult::Interrupted(kind)
                 }
-                Err(CreateWorkerInstanceError {
+                Err(CreateWorkerInstanceError::Failed {
                     error: err,
                     filesystem_cleanup_failure: None,
                 }) if self.parent.agent_mode() == AgentMode::Durable
@@ -1552,7 +1583,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.parent.record_recovery_failure(&err).await;
                     CreateInstanceResult::RecoveryRequired(err)
                 }
-                Err(CreateWorkerInstanceError {
+                Err(CreateWorkerInstanceError::Failed {
                     error: err,
                     filesystem_cleanup_failure,
                 }) => {
@@ -2825,7 +2856,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// it is a special case of the exported function invocation).
     async fn external_invocation(
         &mut self,
-        inner: TimestampedAgentInvocation,
+        inner: HydratedInvocation,
         update_attempt_index: OplogIndex,
     ) -> CommandOutcome {
         // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
@@ -2838,14 +2869,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.manual_update(target_revision, update_attempt_index)
                     .await
             }
-            invocation => {
-                if let Some(idempotency_key) = invocation.idempotency_key() {
+            _ => {
+                if let Some(idempotency_key) = inner.invocation.idempotency_key() {
                     let has_result = matches!(
                         self.parent.lookup_invocation_result(idempotency_key).await,
                         LookupResult::Complete(_) | LookupResult::Interrupted
                     );
                     if !has_result {
-                        self.invoke_agent(invocation).await
+                        self.invoke_agent(inner).await
                     } else {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
@@ -2876,17 +2907,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         }
                     }
                 } else {
-                    self.invoke_agent(invocation).await
+                    self.invoke_agent(inner).await
                 }
             }
         }
     }
 
     /// Invokes an agent function on the worker
-    async fn invoke_agent(&mut self, invocation: AgentInvocation) -> CommandOutcome {
-        let display_name = invocation.display_name();
-        let invocation_context = invocation.invocation_context();
+    async fn invoke_agent(&mut self, invocation: HydratedInvocation) -> CommandOutcome {
+        let display_name = invocation.invocation.display_name();
+        let invocation_context = invocation.invocation.invocation_context();
         let idempotency_key = invocation
+            .invocation
             .idempotency_key()
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
@@ -2915,13 +2947,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        invocation: AgentInvocation,
+        invocation: HydratedInvocation,
     ) -> CommandOutcome {
-        let kind = invocation.kind();
-        let display_name = invocation.display_name();
+        let kind = invocation.invocation.kind();
+        let display_name = invocation.invocation.display_name();
         let invocation_idempotency_key = idempotency_key.clone();
         self.uses_streams = invocation_uses_streams(
-            &invocation,
+            &invocation.invocation,
             &self.store.data().component_metadata().metadata,
             self.parent.parsed_agent_id.as_ref(),
         );
@@ -2982,7 +3014,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        invocation: AgentInvocation,
+        invocation: HydratedInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
@@ -2990,12 +3022,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .set_current_idempotency_key(idempotency_key.clone())
                 .await;
 
-            let component_metadata = self.store.data().component_metadata().metadata.clone();
-
             Self::extend_invocation_context(
                 &mut invocation_context,
                 &idempotency_key,
-                &invocation,
+                &invocation.invocation,
                 &self.owned_agent_id.agent_id(),
                 &self.parent.parsed_agent_id,
             );
@@ -3017,14 +3047,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
             let invocation_for_lowering = if self.uses_streams {
                 self.parent
-                    .rehydrate_durable_streaming_invocation(invocation.clone())
+                    .rehydrate_durable_streaming_invocation(invocation.invocation.clone())
                     .await?
             } else {
-                invocation.clone()
+                invocation.invocation.clone()
             };
             let lowered = lower_invocation(
                 invocation_for_lowering,
-                &component_metadata,
+                &self.store.data().component_metadata().metadata,
                 self.parent.parsed_agent_id.as_ref(),
             )?;
 
@@ -4237,7 +4267,7 @@ mod tests {
     use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
     use crate::worker::{
-        EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
+        CreateWorkerInstanceError, EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
         PendingLiveInvocationDisposition, RetryDecision, RunningAgent, StoppingWorker,
         UnloadReason, WorkerCommand, WorkerInstance, complete_stopping_worker,
     };
@@ -5157,16 +5187,18 @@ mod tests {
                 close_error.clone(),
             )
             .await;
-            assert!(failure.error.to_string().contains("instantiation failure"));
-            assert!(
-                failure
-                    .error
-                    .to_string()
-                    .contains("startup cleanup failure")
-            );
+            let CreateWorkerInstanceError::Failed {
+                error,
+                filesystem_cleanup_failure,
+            } = failure
+            else {
+                panic!("cleanup must return a startup failure");
+            };
+            assert!(error.to_string().contains("instantiation failure"));
+            assert!(error.to_string().contains("startup cleanup failure"));
             let (cleanup, sender) = super::UnloadCleanup::new();
             sender
-                .send(Err(failure.filesystem_cleanup_failure.unwrap()))
+                .send(Err(filesystem_cleanup_failure.unwrap()))
                 .unwrap();
             control.push_delete_and_verify(Ok(()));
             let retry = cleanup.retry();

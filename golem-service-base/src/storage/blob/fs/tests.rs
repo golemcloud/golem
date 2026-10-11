@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::{
-    Commit, CommitGate, FileSystemBlobStorage, STAGING_DIRECTORY, STAGING_FILE_AGE,
-    absent_on_not_found, add_files, add_names, blob_path_of, copy_staged, encoded_name,
-    first_error, listed_entry, remove_unless_dropped, staging_file_is_old, write_if_absent,
-    write_staged,
+    Commit, CommitGate, DIRECTORY_ATTEMPTS, FileSystemBlobStorage, PathEntry, STAGING_DIRECTORY,
+    STAGING_FILE_AGE, absent_on_not_found, add_files, add_names, blob_path_of, copy_staged,
+    directory_attempts, encoded_name, first_error, listed_entry, persist_with,
+    remove_unless_dropped, staging_file_is_old, write_if_absent, write_staged,
 };
 use crate::storage::blob::{
     BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
@@ -137,38 +137,6 @@ async fn get_raw_slice_gives_a_range_error_for_a_range_that_is_not_in_the_file()
         outside
             .map(|(_, start, end)| Err(Some(BlobRangeError { start, end })))
             .to_vec()
-    );
-}
-
-#[test]
-async fn get_raw_slice_gives_the_error_of_get_raw_for_a_directory() {
-    let (_root, storage) = storage_with_blobs().await;
-    let io_error_kind = |error: anyhow::Error| {
-        error
-            .downcast_ref::<std::io::Error>()
-            .map(std::io::Error::kind)
-    };
-
-    let slice = storage
-        .get_raw_slice(
-            "test",
-            "get-raw-slice",
-            namespace(),
-            Path::new("ranges"),
-            0,
-            0,
-        )
-        .await;
-    let raw = storage
-        .get_raw("test", "get-raw", namespace(), Path::new("ranges"))
-        .await;
-
-    assert_eq!(
-        (slice.map_err(io_error_kind), raw.map_err(io_error_kind)),
-        (
-            Err(Some(ErrorKind::IsADirectory)),
-            Err(Some(ErrorKind::IsADirectory))
-        )
     );
 }
 
@@ -304,7 +272,7 @@ fn listed_entry_gives_none_only_for_a_missing_entry_or_a_directory_that_became_a
 async fn a_whole_and_a_partial_read_of_a_blob_removed_after_its_metadata_check_give_none() {
     let (_root, storage) = storage_with_blobs().await;
     let blob = storage
-        .path_of(
+        .blob_of(
             &namespace(),
             &normalized_blob_path(Path::new("ranges/blob")).unwrap(),
         )
@@ -358,18 +326,22 @@ fn a_read_of_a_blob_deleted_after_its_metadata_gives_none() {
 #[test]
 fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
     let root = tempfile::tempdir().unwrap();
-    let on_disk = |name: &str| root.path().join(encoded_name(name).collect::<PathBuf>());
-    std::fs::write(on_disk("kept"), b"kept").unwrap();
-    std::fs::write(on_disk("removed"), b"removed").unwrap();
-    std::fs::create_dir(on_disk("gone")).unwrap();
+    let on_disk = |name: &str, entry: PathEntry| {
+        root.path()
+            .join(encoded_name(name, entry).collect::<PathBuf>())
+    };
+    std::fs::write(on_disk("kept", PathEntry::Blob), b"kept").unwrap();
+    std::fs::write(on_disk("removed", PathEntry::Blob), b"removed").unwrap();
+    let gone = on_disk("gone", PathEntry::Directory);
+    std::fs::create_dir(&gone).unwrap();
     std::fs::write(
-        on_disk("gone").join(on_disk("file").file_name().unwrap()),
+        gone.join(on_disk("file", PathEntry::Blob).file_name().unwrap()),
         b"file",
     )
     .unwrap();
     let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
-    std::fs::remove_file(on_disk("removed")).unwrap();
-    std::fs::remove_dir_all(on_disk("gone")).unwrap();
+    std::fs::remove_file(on_disk("removed", PathEntry::Blob)).unwrap();
+    std::fs::remove_dir_all(&gone).unwrap();
 
     let listed = add_files(
         std::iter::once(Err(not_found())).chain(entries),
@@ -394,7 +366,10 @@ fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
 #[cfg(unix)]
 fn listed_after_a_change_of_type(was_directory: bool) -> (bool, Result<Vec<Box<Path>>, ErrorKind>) {
     let root = tempfile::tempdir().unwrap();
-    let on_disk = |name: &str| root.path().join(encoded_name(name).collect::<PathBuf>());
+    let on_disk = |name: &str| {
+        root.path()
+            .join(encoded_name(name, PathEntry::Blob).collect::<PathBuf>())
+    };
     let changed = on_disk("changed");
     std::fs::write(on_disk("sibling"), b"sibling").unwrap();
     let make = |directory: bool| match directory {
@@ -448,12 +423,12 @@ fn a_listing_never_gives_a_directory_that_was_a_file_when_the_walk_saw_it() {
 fn a_listing_of_names_goes_on_when_a_part_directory_becomes_a_file() {
     let root = tempfile::tempdir().unwrap();
     let long = "l".repeat(200);
-    let parts = encoded_name(&long).collect::<Vec<_>>();
+    let parts = encoded_name(&long, PathEntry::Blob).collect::<Vec<_>>();
     let part = root.path().join(&parts[0]);
     std::fs::create_dir(&part).unwrap();
     std::fs::write(
         root.path()
-            .join(encoded_name("sibling").collect::<PathBuf>()),
+            .join(encoded_name("sibling", PathEntry::Blob).collect::<PathBuf>()),
         b"sibling",
     )
     .unwrap();
@@ -573,7 +548,7 @@ fn a_write_if_absent_a_copy_and_a_remove_whose_calls_were_dropped_before_they_st
     let copied = copy_staged(&commit, &source, &staging, &root.path().join("copied/blob"))
         .map(|_| ())
         .map_err(|error| error.kind());
-    let removed = remove_unless_dropped(&commit, &kept).map_err(|error| error.kind());
+    let removed = remove_unless_dropped(&commit, &kept, root.path()).map_err(|error| error.kind());
 
     assert_eq!(
         (
@@ -609,7 +584,7 @@ async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
         .await
         .unwrap();
     let full = storage
-        .path_of(
+        .blob_of(
             &snapshots(),
             &crate::storage::blob::normalized_blob_path(blob).unwrap(),
         )
@@ -624,7 +599,7 @@ async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
         .await
         .unwrap();
     let other = storage
-        .path_of(
+        .blob_of(
             &namespace(),
             &crate::storage::blob::normalized_blob_path(blob).unwrap(),
         )
@@ -650,7 +625,7 @@ async fn a_put_of_another_namespace_writes_in_place() {
     let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
     let blob = Path::new("blob");
     let full = storage
-        .path_of(
+        .blob_of(
             &namespace(),
             &crate::storage::blob::normalized_blob_path(blob).unwrap(),
         )
@@ -908,7 +883,7 @@ async fn a_copy_and_a_move_keep_the_permissions_of_the_source() {
     let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
     let on_disk = |namespace: BlobStorageNamespace, blob: &str| {
         storage
-            .path_of(&namespace, &normalized_blob_path(Path::new(blob)).unwrap())
+            .blob_of(&namespace, &normalized_blob_path(Path::new(blob)).unwrap())
             .unwrap()
     };
     let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
@@ -1010,7 +985,7 @@ fn filesystem_paths_encode_contract_components() {
     let namespace_root = storage.namespace_path(&namespace);
     let physical = |logical: &str| {
         storage
-            .path_of(
+            .blob_of(
                 &namespace,
                 &normalized_blob_path(Path::new(logical)).unwrap(),
             )
@@ -1067,9 +1042,18 @@ fn filesystem_paths_encode_contract_components() {
     );
     assert_eq!(
         storage
-            .path_of(&namespace, &NormalizedBlobPath::root())
+            .directory_of(&namespace, &NormalizedBlobPath::root())
             .unwrap(),
         namespace_root
+    );
+    assert_ne!(
+        storage
+            .directory_of(
+                &namespace,
+                &normalized_blob_path(Path::new("photos")).unwrap()
+            )
+            .unwrap(),
+        physical("photos")
     );
 }
 
@@ -1081,11 +1065,209 @@ fn a_file_name_that_the_codec_does_not_give_is_invalid_data() {
 
     let errors = [
         root.join("plain"),
-        root.join("e-zz"),
+        root.join("e-61"),
+        root.join("b-zz"),
         root.join("c-61"),
-        root.join("e-ff"),
+        root.join("d-ff"),
     ]
     .map(|physical| blob_path_of(&physical, root).map_err(|error| error.kind()));
 
-    assert_eq!(errors, [(); 4].map(|()| Err(ErrorKind::InvalidData)));
+    assert_eq!(errors, [(); 5].map(|()| Err(ErrorKind::InvalidData)));
+}
+
+/// Tells if the directory of the blob path `path` is on disk.
+fn directory_is_on_disk(storage: &FileSystemBlobStorage, path: &str) -> bool {
+    storage
+        .directory_of(
+            &namespace(),
+            &normalized_blob_path(Path::new(path)).unwrap(),
+        )
+        .unwrap()
+        .exists()
+}
+
+/// A delete of a blob and a `delete_dir` remove each directory that they leave empty, so a later
+/// check of a directory does not read the directories of blobs that were deleted. A directory
+/// that holds another blob, or that `create_dir` made, stays.
+#[test]
+async fn a_delete_removes_the_directories_that_it_leaves_empty() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
+    let put = |path: &'static str| {
+        storage.put_raw("test", "put-raw", namespace(), Path::new(path), b"blob")
+    };
+    for path in ["a/b/c/blob", "a/sibling", "kept/x/blob", "z/y/blob"] {
+        put(path).await.unwrap();
+    }
+    storage
+        .create_dir("test", "create-dir", namespace(), Path::new("kept"))
+        .await
+        .unwrap();
+
+    for path in ["a/b/c/blob", "kept/x/blob"] {
+        storage
+            .delete("test", "delete", namespace(), Path::new(path))
+            .await
+            .unwrap();
+    }
+    storage
+        .delete_dir("test", "delete-dir", namespace(), Path::new("z/y"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        ["a/b/c", "a/b", "a", "kept/x", "kept", "z/y", "z"]
+            .map(|path| (path, directory_is_on_disk(&storage, path))),
+        [
+            ("a/b/c", false),
+            ("a/b", false),
+            ("a", true),
+            ("kept/x", false),
+            ("kept", true),
+            ("z/y", false),
+            ("z", false),
+        ]
+    );
+}
+
+/// A delete removes a directory that it leaves empty, and that can be the directory that a write
+/// made for its blob a moment before. The write then makes the directory again, and the blob
+/// lands.
+#[test]
+async fn a_write_lands_when_a_remove_takes_its_directory_before_the_rename() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
+    storage
+        .put_raw(
+            "test",
+            "put-raw",
+            snapshots(),
+            Path::new("source"),
+            b"source",
+        )
+        .await
+        .unwrap();
+    let directory = |namespace: BlobStorageNamespace, path: &str| {
+        storage
+            .directory_of(&namespace, &normalized_blob_path(Path::new(path)).unwrap())
+            .unwrap()
+    };
+    let removing = |directory: PathBuf| {
+        let removed = Arc::new(AtomicBool::new(false));
+        FileSystemBlobStorage {
+            root: storage.root.clone(),
+            before_commit: Some(CommitGate(Arc::new(move || {
+                if !removed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    std::fs::remove_dir(&directory).unwrap();
+                }
+            }))),
+            after_metadata: None,
+        }
+    };
+    let blob = Path::new("dir/blob");
+
+    let if_absent = removing(directory(namespace(), "dir"))
+        .put_raw_if_absent("test", "put-if-absent", namespace(), blob, b"if-absent")
+        .await
+        .map_err(|error| error.to_string());
+    let staged = removing(directory(snapshots(), "dir"))
+        .put_raw("test", "put-raw", snapshots(), blob, b"staged")
+        .await
+        .map_err(|error| error.to_string());
+    let copied = removing(directory(snapshots(), "other"))
+        .copy(
+            "test",
+            "copy",
+            snapshots(),
+            Path::new("source"),
+            Path::new("other/copy"),
+        )
+        .await
+        .map_err(|error| error.to_string());
+    let read = |namespace: BlobStorageNamespace, path: &'static str| {
+        let storage = &storage;
+        async move {
+            storage
+                .get_raw("test", "get-raw", namespace, Path::new(path))
+                .await
+                .unwrap()
+        }
+    };
+
+    assert_eq!(
+        (
+            if_absent,
+            staged,
+            copied,
+            read(namespace(), "dir/blob").await,
+            read(snapshots(), "dir/blob").await,
+            read(snapshots(), "other/copy").await,
+        ),
+        (
+            Ok(PutIfAbsent::Written),
+            Ok(()),
+            Ok(()),
+            Some(b"if-absent".to_vec()),
+            Some(b"staged".to_vec()),
+            Some(b"source".to_vec()),
+        )
+    );
+}
+
+/// A remove of an empty directory can take away a directory above the directory of a write while
+/// the write makes it, and the make then gives `NotFound`. The write makes the directory again, as
+/// for a directory that goes before the file lands, and gives `NotFound` after the last attempt.
+#[test]
+fn a_write_makes_its_directory_again_when_a_remove_takes_a_directory_above_it() {
+    let make_that_fails = |failures: usize| {
+        let mut made = 0;
+        move |_: &Path| {
+            made += 1;
+            if made <= failures {
+                Err(not_found())
+            } else {
+                Ok(())
+            }
+        }
+    };
+    let target = Path::new("dir/blob");
+
+    let placed = directory_attempts(target, make_that_fails(1), || Ok("placed"))
+        .map_err(|error| error.kind());
+    let gone = directory_attempts(target, make_that_fails(DIRECTORY_ATTEMPTS), || Ok("placed"))
+        .map_err(|error| error.kind());
+
+    assert_eq!((placed, gone), (Ok("placed"), Err(ErrorKind::NotFound)));
+}
+
+/// A call that is dropped while its write makes the directory of the target never lands: the
+/// write checks the drop right before the step that names the target, after the directory.
+#[test]
+fn a_write_dropped_while_it_makes_its_directory_never_lands() {
+    let root = tempfile::tempdir().unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let commit = Commit {
+        dropped: dropped.clone(),
+        gate: None,
+    };
+    let staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+    let target = root.path().join("dir/blob");
+
+    let written = persist_with(
+        &commit,
+        staged,
+        &target,
+        |directory| {
+            std::fs::create_dir_all(directory)?;
+            dropped.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+        |file| file.persist(&target).map(|_| ()),
+    )
+    .map_err(|error| error.kind());
+
+    assert_eq!(
+        (written, target.exists()),
+        (Err(ErrorKind::Interrupted), false)
+    );
 }

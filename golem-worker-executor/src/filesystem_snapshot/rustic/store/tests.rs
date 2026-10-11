@@ -26,9 +26,11 @@ use super::super::publish::PublishBound;
 use super::super::runs::{OwnFile, Ran, RunEnd};
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{
-    REACH_LIMIT, backend_of, copy_flat_tree, entries, files_of, one_run, polled_until,
-    publish_bound_for, three_file_tree, wait_past_change_times,
+    REACH_LIMIT, backend_of, copy_flat_tree, files_of, one_run, polled_until, publish_bound_for,
+    three_file_tree,
 };
+#[cfg(unix)]
+use super::super::tests::{entries, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepositoryKey, open_existing};
 use super::{
     RunLate, RusticSnapshotStore, SaveExit, StorePolicy, leaves_marked_packs, ran_at_shutdown,
@@ -5667,6 +5669,7 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
     let scope = new_scope();
     let tree = three_file_tree();
     let copy = Scratch::new();
+    #[cfg(unix)]
     wait_past_change_times(&entries(tree.path()));
     copy_flat_tree(tree.path(), copy.path());
 

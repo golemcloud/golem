@@ -63,6 +63,10 @@ inherit_test_dep!(
     #[tagged_as("constructor_parameter_echo")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("snapshot_sqlite_effect")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 /// The agent type of the test component that takes snapshots.
@@ -3616,6 +3620,145 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
         Ok(())
     })
     .await
+}
+
+#[test]
+#[timeout("6m")]
+async fn effect_sqlite_snapshots_restore_files_and_replay_the_suffix_in_both_modes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("snapshot_sqlite_effect")] snapshot_sqlite_effect: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for agent_type in ["SimpleSqlite", "MultipartSqlite"] {
+        let context = TestContext::new(last_unique_id);
+        with_snapshot_store(|store| async move {
+            let executor =
+                start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+            let component = executor
+                .component_dep(&context.default_environment_id, snapshot_sqlite_effect)
+                .store()
+                .await?;
+            let agent = agent_id!(agent_type, "effect-sqlite");
+            let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+            executor
+                .invoke_and_await_agent(&component, &agent, "append", data_value!(17.0f64))
+                .await?;
+            newest_snapshot_confirmed(&executor, &worker_id).await?;
+
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let snapshot = oplog
+                .iter()
+                .rev()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Snapshot(snapshot) => Some(&snapshot.data),
+                    _ => None,
+                })
+                .ok_or_else(|| anyhow!("no Effect snapshot"))?;
+            let PublicSnapshotData::Multipart(snapshot) = snapshot else {
+                return Err(anyhow!("Effect snapshot is not multipart"));
+            };
+            let names: Vec<_> = snapshot
+                .parts
+                .iter()
+                .map(|part| part.name.as_str())
+                .collect();
+            assert_eq!(
+                names,
+                if agent_type == "SimpleSqlite" {
+                    vec!["state", "db:memory", "db:temp"]
+                } else {
+                    vec!["state", "db:memory", "db:temp", "part:opaque"]
+                }
+            );
+            let MultipartPartData::Json(envelope) = &snapshot.parts[0].data else {
+                return Err(anyhow!("Effect state is not JSON"));
+            };
+            let locations = envelope.data["fileDatabases"]
+                .as_object()
+                .ok_or_else(|| anyhow!("no file database locations"))?;
+            assert_eq!(locations.len(), 2);
+            assert!(
+                locations["file"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/effect-sqlite.db")
+            );
+            assert!(
+                locations["wrappedFile"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/effect-sqlite-wrapped.db")
+            );
+
+            // This recorded read is a suffix after the confirmed snapshot. The load warms
+            // SQLite before replay, so these reads retain the live host-call sequence.
+            executor
+                .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
+                .await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let last_snapshot = oplog
+                .iter()
+                .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                .unwrap();
+            assert!(
+                oplog[last_snapshot..].iter().any(|entry| matches!(
+                    entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(_)
+                ))
+            );
+            executor.release().await?;
+            let executor =
+                start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+            let mut events = executor.capture_output(&worker_id).await?;
+            let restored = executor
+                .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_snapshot_recovery_loaded(&mut events).await;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&restored)?,
+                serde_json::json!({
+                    "count": 1, "values": [[17], [17], [17], [17]]
+                })
+            );
+            executor
+                .invoke_and_await_agent(&component, &agent, "append", data_value!(31.0f64))
+                .await?;
+
+            let updated = executor
+                .update_component(&component.id, "golem_it_snapshot_sqlite_effect")
+                .await?;
+            executor
+                .manual_update_worker(&worker_id, updated.revision, false)
+                .await?;
+            executor
+                .wait_for_component_revision(&worker_id, updated.revision, Duration::from_secs(60))
+                .await?;
+            executor
+                .invoke_and_await_agent(&updated, &agent, "append", data_value!(53.0f64))
+                .await?;
+            let state = executor
+                .invoke_and_await_agent(&updated, &agent, "inspect", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&state)?,
+                serde_json::json!({
+                    "count": 3, "values": [[17, 31, 53], [17, 31, 53], [17, 31, 53], [17, 31, 53]]
+                })
+            );
+            executor.check_oplog_is_queryable(&worker_id).await?;
+            assert_eq!(
+                invocation_shape(&executor.stored_oplog(&worker_id).await),
+                InvocationShape::settled()
+            );
+            executor.release().await?;
+            Ok(())
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 /// Waits until the store holds exactly the snapshots `names` of the incarnation `incarnation`, in

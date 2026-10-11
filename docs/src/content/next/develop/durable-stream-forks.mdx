@@ -66,6 +66,27 @@ Append to the source and fork URLs independently, then read each from `-1`. Both
 
 The example offset is only a shape placeholder—always use the exact offset returned by the source.
 
+## Selecting the root agent
+
+An [explicit mount selector](/next/invoke/making-custom-apis#selecting-a-known-phantom-uuid) chooses the root agent **before** Durable Streams resolves sessions and named forks. Suppose `instance` is an optional query selector and the selected phantom UUID is `dc7f9909-2975-42b3-9635-2f5ba7c73782`:
+
+```shell
+curl -i -X PUT \
+  'https://api.example.com/echo/forks/retry-a/invocations/order-7/streams/input?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782' \
+  -H 'Stream-Forked-From: /echo/invocations/order-7/streams/input' \
+  -H 'Content-Type: application/json'
+```
+
+This forks `order-7` from the selected phantom, not from the original agent. The source header is still a **path only**, as required by the Durable Streams fork protocol. It inherits the target URL's selected root; do not put the query selector in `Stream-Forked-From`. Cross-root source references are not supported. With a path selector, retain the same selector segment in source and target paths.
+
+Returned `Location` and stream URLs retain the canonical selector. For example, the fork URL above retains `?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782`; following that link stays within the same root. Other Durable Streams controls such as `offset` can be added to the query normally.
+
+The public fork name `retry-a` is **not** a phantom UUID. Golem derives the fork's UUID from the exact root identity and public name. Two roots using `retry-a` and `order-7` therefore address different forks. A fork-of-fork still resolves both public fork names within the same selected root namespace.
+
+If you already know a Durable Streams fork's actual phantom UUID, selecting it on a non-`/forks/` URL addresses that exact agent and can read its published sessions, provided the component, constructor parameters, method and slot match. `/forks/<that-uuid>` does something different: it treats the UUID text as a public fork name and derives another phantom. A further named fork from a directly selected phantom uses that phantom as its new root namespace.
+
+SDK agent self-forks also copy agent state, but do not automatically publish inherited Durable Streams sessions. Durable Streams fork creation separately publishes the exported sessions and creation receipt. Selecting an SDK fork UUID does not replace this publication step, and root `PUT` creation/reattachment is not the same operation as fork `PUT` export/retry. Existing cuts, receipts, retries and stream protocol behavior are unchanged by root selection.
+
 ## Cuts and sub-offsets
 
 `Stream-Fork-Offset` retains the prefix through that cursor. `Stream-Fork-Sub-Offset` adds that many subsequent JSON messages or bytes. JSON sub-offsets can cross internal storage batches; byte sub-offsets must remain within the next protocol data boundary. A byte fork may therefore preserve a partial packed byte batch. Invalid or beyond-head cuts return `400`.

@@ -35,6 +35,7 @@ pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use snapshot_parts::{MultipartSnapshot, SnapshotPart};
 pub use tool_client::*;
 pub use tool_impl::OutputStream;
 #[doc(hidden)]
@@ -78,6 +79,7 @@ pub mod reflection;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
+mod snapshot_parts;
 mod tool_client;
 mod tool_impl;
 mod tool_literal;

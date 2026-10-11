@@ -348,9 +348,6 @@ fn test_entity_request(
     .unwrap();
     let metadata = EntityInvocationRequest {
         entity,
-        calling_principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
         call_mode,
         operation: operation.unwrap_or_else(|| {
             EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {

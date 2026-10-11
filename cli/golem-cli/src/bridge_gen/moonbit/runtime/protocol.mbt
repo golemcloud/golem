@@ -78,30 +78,59 @@ fn encode_config_entry(entry : AgentConfigEntry) -> Json {
 }
 
 ///|
-fn encode_create_agent_request(
+fn write_request_fields(
+  output : StringBuilder,
   app_name : String,
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
   phantom_id : String?,
   config : Array[AgentConfigEntry],
-) -> Json {
-  let fields : Array[(String, Json)] = [
-    ("appName", Json::string(app_name)),
-    ("envName", Json::string(env_name)),
-    ("agentTypeName", Json::string(agent_type_name)),
-    ("parameters", schema_value_to_json(parameters)),
-  ]
+) -> Unit {
+  output.write_string("{\"appName\":")
+  output.write_string(Json::string(app_name).stringify())
+  output.write_string(",\"envName\":")
+  output.write_string(Json::string(env_name).stringify())
+  output.write_string(",\"agentTypeName\":")
+  output.write_string(Json::string(agent_type_name).stringify())
+  output.write_string(",\"parameters\":")
+  schema_value_write_json(parameters, output)
   match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id)))
+    Some(id) => {
+      output.write_string(",\"phantomId\":")
+      output.write_string(Json::string(id).stringify())
+    }
     None => ()
   }
-  fields.push(("config", Json::array(config.map(encode_config_entry))))
-  obj(fields)
+  output.write_string(",\"config\":[")
+  for index, entry in config {
+    if index != 0 {
+      output.write_char(',')
+    }
+    output.write_string(encode_config_entry(entry).stringify())
+  }
+  output.write_char(']')
 }
 
 ///|
-fn encode_agent_invocation_request(
+fn render_create_agent_request(
+  app_name : String,
+  env_name : String,
+  agent_type_name : String,
+  parameters : SchemaValue,
+  phantom_id : String?,
+  config : Array[AgentConfigEntry],
+) -> String {
+  let output = StringBuilder()
+  write_request_fields(
+    output, app_name, env_name, agent_type_name, parameters, phantom_id, config,
+  )
+  output.write_char('}')
+  output.to_string()
+}
+
+///|
+fn render_agent_invocation_request(
   app_name : String,
   env_name : String,
   agent_type_name : String,
@@ -113,30 +142,29 @@ fn encode_agent_invocation_request(
   mode : String,
   schedule_at : String?,
   idempotency_key : String?,
-) -> Json {
-  let fields : Array[(String, Json)] = [
-    ("appName", Json::string(app_name)),
-    ("envName", Json::string(env_name)),
-    ("agentTypeName", Json::string(agent_type_name)),
-    ("parameters", schema_value_to_json(parameters)),
-    ("config", Json::array(config.map(encode_config_entry))),
-    ("methodName", Json::string(method_name)),
-    ("methodParameters", schema_value_to_json(method_parameters)),
-    ("mode", Json::string(mode)),
-  ]
-  match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id)))
-    None => ()
+) -> String {
+  let output = StringBuilder()
+  write_request_fields(
+    output, app_name, env_name, agent_type_name, parameters, phantom_id, config,
+  )
+  output.write_string(",\"methodName\":")
+  output.write_string(Json::string(method_name).stringify())
+  output.write_string(",\"methodParameters\":")
+  schema_value_write_json(method_parameters, output)
+  output.write_string(",\"mode\":")
+  output.write_string(Json::string(mode).stringify())
+  for pair in [("scheduleAt", schedule_at), ("idempotencyKey", idempotency_key)] {
+    let (name, value) = pair
+    match value {
+      Some(value) => {
+        output <+ ",\"\{name}\":"
+        output.write_string(Json::string(value).stringify())
+      }
+      None => ()
+    }
   }
-  match schedule_at {
-    Some(at) => fields.push(("scheduleAt", Json::string(at)))
-    None => ()
-  }
-  match idempotency_key {
-    Some(k) => fields.push(("idempotencyKey", Json::string(k)))
-    None => ()
-  }
-  obj(fields)
+  output.write_char('}')
+  output.to_string()
 }
 
 ///|

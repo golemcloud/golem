@@ -337,7 +337,7 @@ impl WebhookAgent for WebhookAgentImpl {
     }
 }
 
-async fn send_json_post(url: &str, body: Vec<u8>) -> Result<(), types::ErrorCode> {
+pub(crate) async fn send_json_post(url: &str, body: Vec<u8>) -> Result<(), types::ErrorCode> {
     let Some(rest) = url.strip_prefix("http://") else {
         panic!("test webhook URL must use http://");
     };

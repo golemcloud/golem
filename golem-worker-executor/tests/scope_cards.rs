@@ -2123,6 +2123,139 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn p2_read_stream_requires_read_capability(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("FileSystem")
+        .add_rw_file(
+            "FileSystem",
+            "/read.txt",
+            "initial-file-system/files/foo.txt",
+        )?
+        .update_agent_provision_config("FileSystem", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(filesystem_permission("read", "/read.txt"));
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "p2-read-capabilities");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    executor.start_agent(&component.id, agent.clone()).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "probe_p2",
+            data_value!("read-capabilities", "/read.txt", "foo\n"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(result, Ok(()));
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn mutable_directory_requires_delete_policy_but_not_write_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    for allow_delete in [false, true] {
+        let component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .without_default_host_permissions("FileSystem")
+            .add_rw_file(
+                "FileSystem",
+                "/mutable/entry.txt",
+                "initial-file-system/files/foo.txt",
+            )?
+            .update_agent_provision_config("FileSystem", |config| {
+                config.initial_permissions.lower_bound.positive.extend([
+                    filesystem_permission("read", "/mutable"),
+                    filesystem_permission("list", "/mutable"),
+                ]);
+                if allow_delete {
+                    config
+                        .initial_permissions
+                        .lower_bound
+                        .positive
+                        .push(filesystem_permission("delete", "/mutable/entry.txt"));
+                }
+            })
+            .store()
+            .await?;
+        for preview in ["probe_p2", "probe_p3"] {
+            let agent = agent_id!("FileSystem", format!("mutable-{allow_delete}-{preview}"));
+            configure_scope_card_root(&authority, &component, &agent)?;
+            let worker = executor.start_agent(&component.id, agent.clone()).await?;
+            let write = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent,
+                    preview,
+                    data_value!("open-write", "/mutable/entry.txt", ""),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            assert!(
+                write.as_ref().is_err_and(|error| is_not_permitted(error)),
+                "{preview}: {write:?}"
+            );
+            let delete = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent,
+                    preview,
+                    data_value!("unlink-file-at-mutable", "/mutable", "entry.txt"),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            if allow_delete {
+                assert_eq!(delete, Ok(()), "{preview}");
+                assert!(
+                    executor
+                        .get_file_contents(&worker, "/mutable/entry.txt")
+                        .await
+                        .is_err()
+                );
+            } else {
+                assert!(
+                    delete.as_ref().is_err_and(|error| is_not_permitted(error)),
+                    "{preview}: {delete:?}"
+                );
+                assert_eq!(
+                    executor
+                        .get_file_contents(&worker, "/mutable/entry.txt")
+                        .await?
+                        .as_ref(),
+                    b"foo\n"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn filesystem_permissions_isolate_resource_owners(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

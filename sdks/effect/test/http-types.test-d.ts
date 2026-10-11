@@ -24,6 +24,32 @@ import type {
 import { multimodal } from "../src/Multimodal.js"
 import { UnstructuredText } from "../src/Unstructured.js"
 
+const selectedMount: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}", {
+  phantomId: Http.phantomId.path("instance", { optional: true }),
+})
+void selectedMount
+// @ts-expect-error a literal path selector must refer to a mount capture
+void Http.mount("/c/{name}", { phantomId: Http.phantomId.path("missing") })
+// @ts-expect-error system variables cannot be selectors
+void Http.mount("/c/{agent-type}", { phantomId: Http.phantomId.path("agent-type") })
+defineAgent({
+  name: "SelectedConstructorHole",
+  id: { name: Schema.String, missing: Schema.String },
+  // @ts-expect-error selection cannot hide an uncovered constructor parameter
+  http: selectedMount,
+  methods: { read: method({ input: {}, success: Schema.String, http: [Http.get("/read")] }) },
+})
+// @ts-expect-error only the declared capture is exempt
+const extraCapture: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}/{other}", {
+  phantomId: Http.phantomId.path("instance"),
+})
+void extraCapture
+// @ts-expect-error query selection does not exempt a path capture
+const queryCapture: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}", {
+  phantomId: Http.phantomId.query("instance"),
+})
+void queryCapture
+
 // Durable-stream route options are public plain data in both construction styles.
 const durableStreams: Http.DurableStreamOptions = {
   slots: [

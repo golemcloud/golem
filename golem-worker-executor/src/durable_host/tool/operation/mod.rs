@@ -206,7 +206,6 @@ pub(crate) struct OwnerToolOperationContext {
     pub parent: OwnerInvocationId,
     pub call_mode: EntityCallMode,
     pub activation: Arc<EntityActivation>,
-    pub calling_principal: Principal,
     pub principal: Principal,
     pub descriptor: EntityInvocationDescriptor,
     pub input: TypedSchemaValue,

@@ -12,7 +12,7 @@ mod load;
 mod read;
 mod session;
 
-use super::call_agent::CallAgentHandler;
+use super::call_agent::{CallAgentHandler, resolve_phantom_id};
 use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RouteExecutionResult};
@@ -28,7 +28,9 @@ use golem_common::model::invocation_session_public::{
     new_durable_stream_session_id, validate_durable_stream_session_id,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
-use golem_service_base::custom_api::{CallAgentBehaviour, DurableStreamRoutePolicy};
+use golem_service_base::custom_api::{
+    CallAgentBehaviour, DurableStreamRoutePolicy, PhantomSelection,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
@@ -157,14 +159,17 @@ impl DurableStreamsHandler {
         {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        let root_phantom = behaviour.phantom.then(|| {
-            let session = suffix.session.as_deref().unwrap_or_default();
-            if behaviour.agent_mode == AgentMode::Ephemeral {
-                ephemeral_invocation_phantom_id(&IdempotencyKey::new(session.to_owned()))
-            } else {
-                stable_phantom(session)
-            }
-        });
+        let root_phantom =
+            resolve_phantom_id(request, route, &behaviour.phantom_selection, |phantom| {
+                phantom.then(|| {
+                    let session = suffix.session.as_deref().unwrap_or_default();
+                    if behaviour.agent_mode == AgentMode::Ephemeral {
+                        ephemeral_invocation_phantom_id(&IdempotencyKey::new(session.to_owned()))
+                    } else {
+                        stable_phantom(session)
+                    }
+                })
+            })?;
         let root_agent_id = CallAgentHandler::build_agent_id(
             route,
             behaviour.component_id,
@@ -480,6 +485,69 @@ fn has_header(r: &RichRequest, n: &str) -> bool {
     r.headers().contains_key(n)
 }
 
+fn canonical_selector_path(
+    path: &str,
+    route: &ResolvedRouteEntry,
+    behaviour: &CallAgentBehaviour,
+) -> Result<String, RequestHandlerError> {
+    let PhantomSelection::Path { index } = behaviour.phantom_selection else {
+        return Ok(path.to_owned());
+    };
+    let segment_index = route
+        .route
+        .path
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| {
+            matches!(
+                segment,
+                golem_service_base::custom_api::PathSegment::Variable { .. }
+                    | golem_service_base::custom_api::PathSegment::CatchAll { .. }
+            )
+        })
+        .nth(usize::from(index))
+        .expect("Compiled phantom capture is missing")
+        .0
+        + 1;
+    let mut segments: Vec<_> = path.split('/').map(str::to_owned).collect();
+    let segment = segments
+        .get_mut(segment_index)
+        .ok_or(RequestHandlerError::MissingValue {
+            expected: "phantom UUID path selector",
+        })?;
+    let decoded =
+        urlencoding::decode(segment).map_err(|_| RequestHandlerError::ValueParsingFailed {
+            value: segment.clone(),
+            expected: "UUID",
+        })?;
+    let uuid = Uuid::parse_str(&decoded).map_err(|_| RequestHandlerError::ValueParsingFailed {
+        value: segment.clone(),
+        expected: "UUID",
+    })?;
+    *segment = uuid.to_string();
+    Ok(segments.join("/"))
+}
+
+fn resource_url(
+    request: &RichRequest,
+    route: &ResolvedRouteEntry,
+    behaviour: &CallAgentBehaviour,
+    path: &str,
+) -> Result<String, RequestHandlerError> {
+    let mut url = canonical_selector_path(path, route, behaviour)?;
+    if let PhantomSelection::Query { name, .. } = &behaviour.phantom_selection
+        && let Some(uuid) =
+            resolve_phantom_id(request, route, &behaviour.phantom_selection, |_| None)?
+    {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair(name, &uuid.to_string())
+            .finish();
+        url.push('?');
+        url.push_str(&query);
+    }
+    Ok(url)
+}
+
 fn stable_phantom(session: &str) -> Uuid {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(session.as_bytes());
@@ -527,6 +595,82 @@ mod tests {
         DurableStreamRepresentation, DurableStreamSlot, DurableStreamSlotDirection,
     };
     use test_r::test;
+
+    #[test]
+    async fn selector_resource_urls_canonicalize_identity_and_omit_other_queries() {
+        use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+        use golem_service_base::custom_api::RouteBehaviour;
+        let p = "550e8400-e29b-41d4-a716-446655440000";
+        for path_selector in [false, true] {
+            let path = if path_selector {
+                "/base/{tenant}/literal/{instance}/run"
+            } else {
+                "/base/{tenant}/run"
+            };
+            let mut compiled = test_route(1, path, Some("PUT"), "typed");
+            let RouteBehaviour::CallAgent(call) = &mut compiled.behavior else {
+                unreachable!()
+            };
+            call.phantom_selection = if path_selector {
+                PhantomSelection::Path { index: 1.into() }
+            } else {
+                PhantomSelection::Query {
+                    name: "instance".into(),
+                    optional: true,
+                }
+            };
+            let behaviour = call.clone();
+            let resolver = test_resolver(vec![compiled]);
+            for present in [false, true] {
+                if path_selector && !present {
+                    continue;
+                }
+                let base = if path_selector {
+                    format!("/base/west/literal/{}/run", p.to_uppercase())
+                } else {
+                    "/base/west/run".into()
+                };
+                let query = if present && !path_selector {
+                    format!(
+                        "%69nstance={}&offset=now&live=long-poll&cursor=ignored&count=17",
+                        p.to_uppercase()
+                    )
+                } else {
+                    "offset=now&count=17".into()
+                };
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .method(Method::PUT)
+                        .uri(format!("{base}?{query}").parse().unwrap())
+                        .header("host", "example.com")
+                        .finish(),
+                );
+                let resolved = resolver
+                    .resolve_matching_route(&request.underlying)
+                    .await
+                    .unwrap();
+                let session_path = format!("{base}/invocations/s1");
+                let url = resource_url(&request, &resolved, &behaviour, &session_path).unwrap();
+                let expected = if path_selector {
+                    format!("/base/west/literal/{p}/run/invocations/s1")
+                } else if present {
+                    format!("/base/west/run/invocations/s1?instance={p}")
+                } else {
+                    "/base/west/run/invocations/s1".into()
+                };
+                assert_eq!(url, expected);
+                let target_path = format!("{base}/forks/alternate/invocations/s1/streams/events");
+                let fork_url = resource_url(&request, &resolved, &behaviour, &target_path).unwrap();
+                assert_eq!(
+                    fork_url,
+                    expected.replace(
+                        "/invocations/s1",
+                        "/forks/alternate/invocations/s1/streams/events"
+                    )
+                );
+            }
+        }
+    }
 
     #[test]
     fn load_rejections_include_retry_after() {

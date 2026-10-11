@@ -203,8 +203,7 @@ impl Services {
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
         provision_component_builtins: bool,
     ) -> anyhow::Result<Self> {
-        config.mcp_oauth.validate()?;
-        config.mcp_import.validate()?;
+        config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;

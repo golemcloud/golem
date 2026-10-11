@@ -22,7 +22,15 @@ pub struct Observation {
     pub seen_at: String,
     pub artifact_name: String,
     pub run_url: String,
-    pub job_url: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct FailureJob {
+    pub run_id: u64,
+    pub attempt: u32,
+    pub seen_at: String,
+    pub artifact_name: String,
+    pub run_url: String,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +58,7 @@ pub struct TestStats {
     pub last_flaky: String,
     pub clean_runs_since_flaky: usize,
     pub links: Vec<String>,
+    pub failure_jobs: Vec<FailureJob>,
     pub flips: u64,
 }
 
@@ -173,6 +182,7 @@ pub fn observations_from_archive(
         found_report = true;
         for test in report.results.tests {
             let retries = match test.retries.unwrap_or(0) {
+                _ if test.flaky == Some(false) => 0,
                 0 if test.flaky == Some(true) => 1,
                 retries => retries,
             };
@@ -190,7 +200,6 @@ pub fn observations_from_archive(
                 seen_at: context.seen_at.clone(),
                 artifact_name: artifact_name.clone(),
                 run_url: context.run_url.clone(),
-                job_url: None,
             });
         }
     }
@@ -202,14 +211,15 @@ pub fn observations_from_archive(
     }
 }
 
-pub fn aggregate(mut observations: Vec<Observation>) -> Vec<TestStats> {
-    observations.sort_by(|left, right| left.seen_at.cmp(&right.seen_at));
+pub fn aggregate(observations: Vec<Observation>) -> Vec<TestStats> {
     let mut stats = HashMap::<String, TestStats>::new();
-    let mut evidence = HashMap::<(String, u64), RunEvidence>::new();
+    let mut evidence = HashMap::<String, HashMap<u64, RunEvidence>>::new();
 
     for observation in observations {
         let run = evidence
-            .entry((observation.name.clone(), observation.run_id))
+            .entry(observation.name.clone())
+            .or_default()
+            .entry(observation.run_id)
             .or_default();
         if observation.seen_at > run.seen_at {
             run.seen_at = observation.seen_at.clone();
@@ -237,6 +247,7 @@ pub fn aggregate(mut observations: Vec<Observation>) -> Vec<TestStats> {
                 last_flaky: String::new(),
                 clean_runs_since_flaky: 0,
                 links: Vec::new(),
+                failure_jobs: Vec::new(),
                 flips: 0,
             });
         test.observations += 1;
@@ -254,39 +265,55 @@ pub fn aggregate(mut observations: Vec<Observation>) -> Vec<TestStats> {
                 test.main_failures += 1;
                 test.main_failure_runs.insert(observation.run_id);
             }
-            let link = observation.job_url.unwrap_or(observation.run_url);
-            if !test.links.contains(&link) {
-                test.links.push(link);
+            test.failure_jobs.push(FailureJob {
+                run_id: observation.run_id,
+                attempt: observation.attempt,
+                seen_at: observation.seen_at,
+                artifact_name: observation.artifact_name,
+                run_url: observation.run_url,
+            });
+        }
+    }
+
+    for (name, runs) in evidence {
+        let test = stats.get_mut(&name).expect("test stats must exist");
+        for run in runs.values() {
+            if run.is_flip() {
+                test.flips += 1;
+            }
+            if run.is_flaky_signal() && run.seen_at > test.last_flaky {
+                test.last_flaky = run.seen_at.clone();
             }
         }
-    }
 
-    for ((name, _), run) in &evidence {
-        let test = stats.get_mut(name).expect("test stats must exist");
-        if run.is_flip() {
-            test.flips += 1;
-        }
-        if run.is_flaky_signal() && run.seen_at > test.last_flaky {
-            test.last_flaky = run.seen_at.clone();
-        }
-    }
-
-    for test in stats.values_mut() {
-        let mut later_runs = evidence
-            .iter()
-            .filter(|((name, _), run)| {
-                name == &test.name && run.seen_at > test.last_flaky && run.was_executed()
-            })
-            .map(|(_, run)| run)
+        let mut later_runs = runs
+            .into_iter()
+            .filter(|(_, run)| run.seen_at > test.last_flaky && run.was_executed())
             .collect::<Vec<_>>();
-        later_runs.sort_by(|left, right| left.seen_at.cmp(&right.seen_at));
-        for run in later_runs {
+        later_runs.sort_by(|(left_id, left), (right_id, right)| {
+            left.seen_at
+                .cmp(&right.seen_at)
+                .then_with(|| left_id.cmp(right_id))
+        });
+        for (_, run) in later_runs {
             if run.is_clean() {
                 test.clean_runs_since_flaky += 1;
             } else {
                 test.clean_runs_since_flaky = 0;
             }
         }
+        test.failure_jobs.sort_by(|left, right| {
+            right
+                .seen_at
+                .cmp(&left.seen_at)
+                .then_with(|| right.run_id.cmp(&left.run_id))
+                .then_with(|| right.attempt.cmp(&left.attempt))
+                .then_with(|| right.artifact_name.cmp(&left.artifact_name))
+        });
+        let mut jobs = HashSet::new();
+        test.failure_jobs.retain(|job| {
+            jobs.insert((job.run_id, job.attempt, report_job_name(&job.artifact_name)))
+        });
     }
 
     let mut candidates = stats
@@ -561,8 +588,6 @@ mod tests {
             seen_at: format!("2026-09-03T10:{run_id:02}:{attempt:02}Z"),
             artifact_name: format!("unit-tests-report-attempt{attempt}"),
             run_url: format!("https://example.test/runs/{run_id}"),
-            job_url: (status == "failed")
-                .then(|| format!("https://example.test/jobs/{run_id}-{attempt}")),
         }
     }
 
@@ -617,6 +642,56 @@ mod tests {
     }
 
     #[test]
+    fn non_flaky_repetitions_are_clean_but_failures_still_count() {
+        let archive = report_archive(serde_json::json!([
+            {"name": "suite::repeated", "status": "passed", "retries": 9, "flaky": false},
+            {"name": "suite::failed", "status": "failed", "retries": 4, "flaky": false},
+            {"name": "suite::retried", "status": "passed", "retries": 2, "flaky": true}
+        ]));
+        let mut observations = vec![observation(
+            "suite::repeated",
+            "failed",
+            1,
+            1,
+            "main",
+            0,
+            10.0,
+        )];
+        for run_id in 2..=11 {
+            let context = ArtifactContext {
+                run_id,
+                attempt: 1,
+                branch: "main".to_string(),
+                seen_at: format!("2026-09-03T10:{run_id:02}:01Z"),
+                artifact_name: "unit-tests-report-attempt1".to_string(),
+                run_url: format!("https://example.test/runs/{run_id}"),
+            };
+            let parsed = observations_from_archive(&archive, &context).unwrap();
+            assert_eq!(parsed[0].retries, 0);
+            assert_eq!(parsed[1].retries, 0);
+            assert_eq!(parsed[2].retries, 2);
+            observations.extend(parsed);
+        }
+        let result = aggregate(observations)
+            .into_iter()
+            .map(|test| (test.name.clone(), test))
+            .collect::<HashMap<_, _>>();
+
+        let repeated = &result["suite::repeated"];
+        assert_eq!(repeated.retries, 0);
+        assert_eq!(repeated.score(), 2);
+        assert_eq!(repeated.clean_runs_since_flaky, 10);
+        assert!(!repeated.is_active());
+        let failed = &result["suite::failed"];
+        assert_eq!(failed.failures, 10);
+        assert_eq!(failed.main_failures, 10);
+        assert_eq!(failed.score(), 20);
+        assert!(failed.is_active());
+        assert_eq!(result["suite::retried"].retries, 20);
+        assert_eq!(result["suite::retried"].score(), 30);
+    }
+
+    #[test]
     fn ranks_flips_retries_and_main_failures() {
         let observations = vec![
             observation("flip", "failed", 1, 1, "feature", 0, 10.0),
@@ -638,6 +713,57 @@ mod tests {
         assert_eq!(result[0].score(), 5);
         assert_eq!(result[1].score(), 3);
         assert_eq!(result[2].score(), 2);
+    }
+
+    #[test]
+    fn clean_streak_uses_run_completion_and_deterministic_timestamp_ties() {
+        let mut observations = vec![
+            observation("suite", "failed", 1, 1, "feature", 0, 10.0),
+            observation("suite", "passed", 1, 2, "feature", 0, 20.0),
+            observation("suite", "passed", 2, 1, "feature", 0, 30.0),
+            observation("suite", "failed", 3, 1, "feature", 0, 40.0),
+            observation("suite", "passed", 4, 1, "feature", 0, 50.0),
+            observation("suite", "skipped", 5, 1, "feature", 0, 0.0),
+        ];
+        observations[0].seen_at = "2026-09-03T10:01:00Z".into();
+        observations[1].seen_at = "2026-09-03T10:10:00Z".into();
+        observations[2].seen_at = observations[1].seen_at.clone();
+        observations[3].seen_at = "2026-09-03T10:11:00Z".into();
+        observations[4].seen_at = observations[3].seen_at.clone();
+        let check = |observations| {
+            let result = aggregate(observations);
+            let test = &result[0];
+            assert_eq!(test.flips, 1);
+            assert_eq!(test.score(), 5);
+            assert_eq!(test.failures, 2);
+            assert_eq!(test.observations, 6);
+            assert_eq!(test.runs.len(), 5);
+            assert_eq!(test.last_flaky, "2026-09-03T10:10:00Z");
+            assert_eq!(test.clean_runs_since_flaky, 1);
+            assert_eq!(test.durations.iter().sum::<f64>(), 150.0);
+        };
+        check(observations.clone());
+        observations.reverse();
+        check(observations);
+    }
+
+    #[test]
+    fn failure_jobs_keep_latest_reference_without_deduplicating_metrics() {
+        let first = observation("suite", "failed", 1, 1, "main", 2, 10.0);
+        let mut latest = first.clone();
+        latest.seen_at = "2026-09-03T10:03:00Z".into();
+        let other = observation("suite", "failed", 2, 1, "main", 0, 20.0);
+        let result = aggregate(vec![latest, other, first]);
+        let test = &result[0];
+        assert_eq!(test.observations, 3);
+        assert_eq!(test.failures, 3);
+        assert_eq!(test.main_failures, 3);
+        assert_eq!(test.retries, 4);
+        assert_eq!(test.score(), 7);
+        assert_eq!(test.failure_jobs.len(), 2);
+        assert_eq!(test.failure_jobs[0].run_id, 1);
+        assert_eq!(test.failure_jobs[0].seen_at, "2026-09-03T10:03:00Z");
+        assert_eq!(test.failure_jobs[1].run_id, 2);
     }
 
     #[test]

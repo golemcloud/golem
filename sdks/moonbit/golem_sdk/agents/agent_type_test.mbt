@@ -203,6 +203,7 @@ test "router metadata is preserved exactly" {
     ],
     file_response_headers: [],
     openapi_provider_method: Some("provider text"),
+    phantom_id_binding: None,
   }
   let def : AgentTypeDef = {
     type_name: "Router",

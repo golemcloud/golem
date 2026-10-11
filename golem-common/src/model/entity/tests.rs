@@ -191,13 +191,9 @@ fn entity_invocation_id_protobuf_roundtrip_is_structured() {
 
 #[test]
 fn entity_invocation_request_binary_roundtrip_preserves_activation() {
-    let owner = owner();
     let activation = activation();
     let request = EntityInvocationRequest {
         entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-        calling_principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id,
-        }),
         call_mode: EntityCallMode::Asynchronous,
         operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 7,
@@ -443,9 +439,6 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
     );
     let request = EntityInvocationRequest {
         entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-        calling_principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
         call_mode: EntityCallMode::Asynchronous,
         operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 7,
@@ -480,7 +473,6 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
     };
     let identity = EntityInvocationRequestIdentity {
         entity: request.entity.clone(),
-        calling_principal: request.calling_principal.clone(),
         call_mode: request.call_mode,
         operation: (&request.operation).into(),
         plan_position: None,
@@ -648,7 +640,6 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
     .unwrap();
     let request = EntityInvocationRequest {
         entity: scope.invocation_id().entity().clone(),
-        calling_principal: scope.calling_principal().clone(),
         call_mode: EntityCallMode::Synchronous,
         operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 1,

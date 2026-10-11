@@ -47,6 +47,7 @@ pub fn get_http_mount_details(
         path_prefix: segments,
         auth_details: Some(AuthDetails { required: auth }),
         phantom_agent,
+        phantom_id_binding: None,
         cors_options: cors_options.clone(),
         webhook_suffix: web_suffix,
         static_bindings: vec![],

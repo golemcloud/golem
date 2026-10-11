@@ -68,6 +68,15 @@ object FileMapping {
   final case class Subtree(publicPrefix: List[String], filesystemRoot: String) extends FileMapping
 }
 
+sealed trait PhantomIdBinding extends Product with Serializable {
+  def name: String
+  def optional: Boolean
+}
+object PhantomIdBinding {
+  final case class Path(name: String, optional: Boolean = false)  extends PhantomIdBinding
+  final case class Query(name: String, optional: Boolean = false) extends PhantomIdBinding
+}
+
 final case class HttpMountDetails(
   pathPrefix: List[PathSegment],
   authRequired: Boolean,
@@ -77,7 +86,8 @@ final case class HttpMountDetails(
   staticBindings: List[FileMapping],
   filesystemBindings: List[FileMapping],
   openapiProviderMethod: Option[String],
-  fileResponseHeaders: List[FileResponseHeader] = Nil
+  fileResponseHeaders: List[FileResponseHeader] = Nil,
+  phantomIdBinding: Option[PhantomIdBinding] = None
 )
 
 final case class HttpEndpointDetails(

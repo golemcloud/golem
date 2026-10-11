@@ -4,8 +4,8 @@ use golem_common::schema::TypedSchemaValue;
 
 #[derive(Debug, Clone)]
 pub(crate) enum RequestClaimIdentity {
-    Exact(HostRequest),
-    EntityInvocation(EntityInvocationRequestIdentity),
+    Exact(Box<HostRequest>),
+    EntityInvocation(Box<EntityInvocationRequestIdentity>),
     ToolInvocation(Box<ToolInvocationClaimIdentity>),
 }
 
@@ -92,7 +92,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
+            matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
         }
     }
 
@@ -105,7 +105,9 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
+            matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
+                request.clone(),
+            ))),
         }
     }
 
@@ -137,7 +139,7 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
+            matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
         }
     }
 
@@ -152,7 +154,9 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
+            matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
+                request.clone(),
+            ))),
         }
     }
 
@@ -438,6 +442,21 @@ pub(crate) enum ReplayStartClaimOutcome {
 }
 
 impl ReplayState {
+    /// Waits until a blocked claim may run again.
+    async fn wait_while_blocked(
+        &self,
+        blocked: BlockedOn,
+        progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>,
+    ) {
+        #[cfg(feature = "test-utils")]
+        if matches!(blocked, BlockedOn::ActiveBody(_)) {
+            self.cursor
+                .active_body_waits
+                .send_modify(|waits| *waits += 1);
+        }
+        blocked.wait(progress).await
+    }
+
     /// Runs a [`StartClaim`] as an owned cursor operation: acquire a cursor transaction, claim
     /// the described `Start` (consuming it and registering a resolver receiver atomically), and
     /// return the registered handle together with the claimed entry. Shared frame of every
@@ -471,8 +490,10 @@ impl ReplayState {
     }
 
     /// Claims a recorded `Start`, reports that the same cursor transaction observed replay already
-    /// ended, or identifies a matching `Start` removed by a replay jump. Every other missing match
-    /// while replay is active remains strict divergence.
+    /// ended, or identifies a matching `Start` removed by a replay jump. A missing match while an
+    /// active entity body owns the cursor head waits for that body or for cursor progress (see
+    /// [`CursorTx::active_body_owning_head`]); every other missing match while replay is active
+    /// remains strict divergence.
     pub(crate) async fn claim_start_or_replay_end(
         &self,
         claim: StartClaim,
@@ -516,32 +537,36 @@ impl ReplayState {
 
             let owned_claim = claim.clone();
             let on_claim = on_claim.clone();
-            let (claimed, blocked_on_completion_delivery, missing) = self
+            let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
                                 on_claim(handle.start_idx(), &entry);
-                                Ok((Some((handle, entry)), false, None))
+                                Ok((Some((handle, entry)), None, None))
                             }
-                            Ok(StartClaimAttempt::Blocked) => {
-                                Ok((None, tx.blocked_on_completion_delivery, None))
-                            }
+                            Ok(StartClaimAttempt::Blocked(on)) => Ok((None, Some(on), None)),
                             Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
-                                Ok((None, false, Some(Missing::ReplayEnded)))
+                                Ok((None, None, Some(Missing::ReplayEnded)))
                             }
                             Ok(StartClaimAttempt::Missing) if store_live => {
-                                Ok((None, false, Some(Missing::StoreAlreadyLive)))
+                                Ok((None, None, Some(Missing::StoreAlreadyLive)))
                             }
                             Ok(StartClaimAttempt::Missing) => {
+                                if let Some(bodies) = tx.active_body_owning_head(
+                                    tx.buffered_head_owner(),
+                                    owned_claim.expected_parent_start_index(),
+                                ) {
+                                    return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
+                                }
                                 match tx.deleted_region_contains_start(&owned_claim).await? {
                                     Some(index) if index > tx.cursor.last_replayed_index() => {
                                         // The entity's atomic mask is installed before its body
                                         // starts. A host subtask must not publish local liveness
                                         // before the guest consumes the retained atomic Begin.
-                                        Ok((None, true, None))
+                                        Ok((None, Some(BlockedOn::CursorProgress), None))
                                     }
-                                    Some(_) => Ok((None, false, Some(Missing::DeletedRegion))),
+                                    Some(_) => Ok((None, None, Some(Missing::DeletedRegion))),
                                     None => Err(WorkerExecutorError::unexpected_oplog_entry(
                                         owned_claim.expected_description(),
                                         "no matching Start between the replay cursor and the replay target"
@@ -571,8 +596,11 @@ impl ReplayState {
                 }
                 None => {}
             }
-            debug_assert!(blocked_on_completion_delivery);
-            progress.await;
+            self.wait_while_blocked(
+                blocked.expect("an undecided Start claim is blocked"),
+                progress,
+            )
+            .await;
         }
     }
 
@@ -785,20 +813,17 @@ impl ReplayState {
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
-            let (outcome, blocked_on_completion_delivery) = self
+            let outcome = self
                 .run_owned_cursor_op(move |state| async move {
-                    let result = state
+                    state
                         .with_tx(async |tx| {
-                            let outcome = tx
-                                .claim_scope_start_with_missing_recovery(
-                                    &owned_claim,
-                                    recover_missing,
-                                )
-                                .await?;
-                            Ok((outcome, tx.blocked_on_completion_delivery))
+                            tx.claim_scope_start_with_missing_recovery(
+                                &owned_claim,
+                                recover_missing,
+                            )
+                            .await
                         })
-                        .await?;
-                    Ok(result)
+                        .await
                 })
                 .await?;
 
@@ -817,10 +842,7 @@ impl ReplayState {
                     debug_assert!(recover_missing);
                     return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
                 }
-                StartClaimAttempt::Blocked => {
-                    debug_assert!(blocked_on_completion_delivery);
-                    progress.await;
-                }
+                StartClaimAttempt::Blocked(on) => self.wait_while_blocked(on, progress).await,
             }
         }
     }
@@ -895,7 +917,9 @@ impl ReplayState {
     /// live transition while unclaimed retained `Start`s exist (see
     /// `WorkerState::durable_call_is_live`) uses this to adopt its retained `Start` or fall back
     /// to recording a new one. A missing id while replay is still positioned before the target
-    /// and the Store is not live remains strict divergence.
+    /// and the Store is not live waits while an active entity body owns the cursor head (see
+    /// [`missing_start_waits_for`](super::cursor::missing_start_waits_for)), and otherwise remains
+    /// strict divergence.
     pub(crate) async fn claim_custom_start_for_store(
         &self,
         expected_function_name: &HostFunctionName,
@@ -917,7 +941,7 @@ impl ReplayState {
             let expected_function_name = expected_function_name.clone();
             let expected_function_type = expected_function_type.clone();
             let expected_request = expected_request.clone();
-            let (claimed, blocked_on_completion_delivery, missing) = self
+            let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
@@ -935,13 +959,19 @@ impl ReplayState {
                         }
 
                         let replay_target = tx.cursor.replay_target();
-                        let exact = tx
+                        // The scan passes the cursor head without buffering it. It notes the owner
+                        // of the entry the head path would stop at, so a missing id is classified
+                        // against the head without another oplog read.
+                        let cursor_index = tx.cursor.last_replayed_index();
+                        let mut scanned_head = None;
+                        let view = &*tx;
+                        let exact = view
                             .cursor
                             .scan_oplog(
                                 OplogIndex::INITIAL,
                                 replay_target.next(),
-                                &tx.st.skipped_regions,
-                                tx.st
+                                &view.st.skipped_regions,
+                                view.st
                                     .skipped_regions
                                     .find_next_deleted_region(OplogIndex::INITIAL),
                                 OplogIndex::NONE,
@@ -955,7 +985,18 @@ impl ReplayState {
                                 },
                                 |_, _, _| true,
                                 None,
-                                |_, idx, index: &mut Option<OplogIndex>| *index = Some(idx),
+                                |entry, idx, index: &mut Option<OplogIndex>| {
+                                    *index = Some(idx);
+                                    if scanned_head.is_none()
+                                        && idx > cursor_index
+                                        && !super::cursor::is_drained_at_head(
+                                            entry,
+                                            view.head_drain_facts(idx, entry),
+                                        )
+                                    {
+                                        scanned_head = Some(super::cursor::head_owner(entry));
+                                    }
+                                },
                             )
                             .await;
 
@@ -1042,7 +1083,7 @@ impl ReplayState {
                                 let request_matches = recorded_request_payload_matches(
                                     tx.cursor.oplog.as_ref(),
                                     recorded_request,
-                                    &RequestClaimIdentity::Exact(expected_request.clone()),
+                                    &RequestClaimIdentity::Exact(Box::new(expected_request.clone())),
                                 )
                                 .await
                                 .map_err(|err| {
@@ -1069,10 +1110,10 @@ impl ReplayState {
                                 )
                                     .await?
                                 {
-                                    StartClaimAttempt::Claimed(handle, entry) => {
-                                        Some((handle, entry))
+                                    StartClaimAttempt::Claimed(handle, entry) => (handle, entry),
+                                    StartClaimAttempt::Blocked(on) => {
+                                        return Ok((None, Some(on), None));
                                     }
-                                    StartClaimAttempt::Blocked => None,
                                     StartClaimAttempt::Missing => {
                                         return Err(WorkerExecutorError::unexpected_oplog_entry(
                                             format!(
@@ -1088,12 +1129,18 @@ impl ReplayState {
                                 }
                             }
                             OplogEntryLookupResult::NotFound { .. } if tx.cursor.is_live() => {
-                                return Ok((None, false, Some(Missing::ReplayEnded)));
+                                return Ok((None, None, Some(Missing::ReplayEnded)));
                             }
                             OplogEntryLookupResult::NotFound { .. } if store_live => {
-                                return Ok((None, false, Some(Missing::StoreAlreadyLive)));
+                                return Ok((None, None, Some(Missing::StoreAlreadyLive)));
                             }
                             OplogEntryLookupResult::NotFound { .. } => {
+                                if let Some(bodies) = tx.active_body_owning_head(
+                                    tx.buffered_head_owner().or(scanned_head),
+                                    expected_parent_start_index,
+                                ) {
+                                    return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
+                                }
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                                     format!(
                                         "custom durable Start {{ invocation_id: {expected_invocation_id} }}"
@@ -1103,14 +1150,11 @@ impl ReplayState {
                                 ));
                             }
                         };
-                        if let Some(result) = &result {
-                            tx.st
-                                .claimed_custom_invocation_ids
-                                .insert(expected_invocation_id);
-                            let root = result.0.start_idx();
-                            tx.register_custom_subtree_root(root);
-                        }
-                        Ok((result, tx.blocked_on_completion_delivery, None))
+                        tx.st
+                            .claimed_custom_invocation_ids
+                            .insert(expected_invocation_id);
+                        tx.register_custom_subtree_root(result.0.start_idx());
+                        Ok((Some(result), None, None))
                     })
                     .await
             })
@@ -1125,8 +1169,11 @@ impl ReplayState {
                 }
                 None => {}
             }
-            debug_assert!(blocked_on_completion_delivery);
-            progress.await;
+            self.wait_while_blocked(
+                blocked.expect("an undecided custom Start claim is blocked"),
+                progress,
+            )
+            .await;
         };
         let OplogEntry::Start {
             timestamp,
@@ -1209,7 +1256,7 @@ fn request_claim_identity_matches(
     expected: &RequestClaimIdentity,
 ) -> Result<bool, String> {
     match expected {
-        RequestClaimIdentity::Exact(expected) => Ok(value == expected),
+        RequestClaimIdentity::Exact(expected) => Ok(value == expected.as_ref()),
         RequestClaimIdentity::EntityInvocation(expected) => {
             let HostRequest::EntityInvocation(request) = value else {
                 return Ok(false);
@@ -1413,7 +1460,6 @@ mod tests {
         });
         let request = EntityInvocationRequest {
             entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
-            calling_principal: calling_principal.clone(),
             call_mode: EntityCallMode::Synchronous,
             operation: operation.clone(),
             principal: calling_principal.clone(),
@@ -1438,7 +1484,6 @@ mod tests {
         };
         let accepted = EntityInvocationRequestIdentity {
             entity: AgentEntity::Tool(ToolName::try_from("grep").unwrap()),
-            calling_principal,
             call_mode: request.call_mode,
             operation: (&operation).into(),
             plan_position: None,
@@ -1515,14 +1560,14 @@ mod tests {
         );
 
         let mut wrong_principal = request.clone();
-        wrong_principal.calling_principal = Principal::Agent(AgentPrincipal {
+        wrong_principal.principal = Principal::Agent(AgentPrincipal {
             agent_id: AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "Example(\"other\")".to_string(),
             },
         });
         assert!(
-            !request_claim_identity_matches(
+            request_claim_identity_matches(
                 &serialized_entity_request(&wrong_principal, recorded_input.clone()),
                 &expected,
             )

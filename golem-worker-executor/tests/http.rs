@@ -2632,6 +2632,109 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_post_cancel_before_replay_start_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogIndex;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage as Stage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let connections_server = connections.clone();
+    let http_server = spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                connections_server.fetch_add(1, Ordering::SeqCst);
+                spawn(async move {
+                    let _ = read_request_headers(&mut stream).await;
+                    let _ = wait_for_peer_close_draining_data(&mut stream).await;
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_and_cancel_before_response",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "cancelled-before-response");
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let mut gate =
+        executor.gate_next_replay_access_admission(&worker_id, "client::send", Stage::AfterScope);
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "post_and_cancel_before_response",
+        data_value!(),
+    );
+    let coordinate = async {
+        gate.entered().await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        gate.release();
+    };
+    let (result2, ()) = timeout(Duration::from_secs(30), async {
+        tokio::join!(invocation, coordinate)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("replayed invocation hung"))?;
+    assert_eq!(
+        result2?.into_typed::<String>()?,
+        "cancelled-before-response"
+    );
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        2,
+        "completed replay must not re-issue the POST"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let sends = partition_starts(&oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (2, 0, 0),
+        "the replayed and fresh sends must retain Start + Cancelled pairs: {sends:?}"
+    );
+    assert_cancelled_send_spans(
+        &oplog,
+        golem_common::model::oplog::PublicSpanOutcome::Cancelled,
+    );
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 /// Dropping a still-pending P3 response future of a non-idempotent (POST)
 /// send must record a durable `Start` + `Cancelled` pair (`Cancellable` drop
 /// policy) and abort the underlying HTTP request. On replay after restart the

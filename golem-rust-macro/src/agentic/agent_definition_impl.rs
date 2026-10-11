@@ -126,6 +126,19 @@ pub(crate) fn expand_agent_definition(
 
             agent_definition_trait.items.push(load_snapshot_item);
             agent_definition_trait.items.push(save_snapshot_item);
+            agent_definition_trait.items.push(syn::parse_quote! {
+                async fn save_snapshot_parts(&self) -> Result<golem_rust::agentic::MultipartSnapshot, String> {
+                    Err("save_snapshot_parts not implemented".to_string())
+                }
+            });
+            agent_definition_trait.items.push(syn::parse_quote! {
+                async fn load_snapshot_parts(
+                    _snapshot: golem_rust::agentic::MultipartSnapshot,
+                    _context: golem_rust::agentic::SnapshotRestoreContext,
+                ) -> Result<Self, String> where Self: Sized {
+                    Err("load_snapshot_parts not implemented".to_string())
+                }
+            });
             agent_definition_trait.items.push(auto_snapshot_item);
             agent_definition_trait.items.push(registration_function);
             agent_definition_trait.items.push(agent_type_name_item);

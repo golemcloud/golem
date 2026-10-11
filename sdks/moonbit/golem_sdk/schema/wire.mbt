@@ -249,15 +249,25 @@ async fn WireEncoder::finish_async(
 
 ///|
 fn WireEncoder::preflight(encoder : WireEncoder) -> Unit raise WireError {
-  let resources : Array[@types.SchemaValueNode] = []
+  let resources : Map[(Int, Int), Bool] = Map([])
   for node in encoder.nodes {
-    if wire_is_resource(node) {
-      guard !resources.contains(node) else {
+    let identity = match node {
+      @types.SecretValue(@types.Secret::Secret(raw)) => Some((0, raw))
+      @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(raw)) =>
+        Some((1, raw))
+      @types.PermissionCardHandle(@types.PermissionCard::PermissionCard(raw)) =>
+        Some((2, raw))
+      @types.StreamValue(@types.SchemaValueStream::SchemaValueStream(raw)) =>
+        Some((3, raw))
+      _ => None
+    }
+    if identity is Some(key) {
+      guard !resources.contains(key) else {
         raise WireError::Invalid(
           "owned resource appears in multiple wire nodes",
         )
       }
-      resources.push(node)
+      resources[key] = true
     }
   }
   for check in encoder.checks {
@@ -265,15 +275,35 @@ fn WireEncoder::preflight(encoder : WireEncoder) -> Unit raise WireError {
       raise WireError::Invalid("resource has already been transferred")
     }
   }
+  let wrapped_streams : Map[Int, Bool] = Map([])
   for i, entry in encoder.streams {
     let (_, stream) = entry
     guard stream.is_present() else {
       raise WireError::Invalid("stream has already been transferred")
     }
-    for j in 0..<i {
-      guard !stream.same_endpoint(encoder.streams[j].1) else {
-        raise WireError::Invalid("owned stream appears more than once")
+    match stream.wrapped() {
+      Some(@types.SchemaValueStream::SchemaValueStream(raw)) => {
+        guard !wrapped_streams.contains(raw) else {
+          raise WireError::Invalid("owned stream appears more than once")
+        }
+        wrapped_streams[raw] = true
       }
+      None => preflight_native_stream(encoder.streams, i, stream)
+    }
+  }
+}
+
+///|
+/// Native readers expose endpoint equality but no resource identity key. Keep
+/// the pairwise loop separate from hash-backed preflight for Wasm optimization.
+fn preflight_native_stream(
+  streams : Array[(Int, @model.GuestSchemaValueStreamHandle)],
+  before : Int,
+  stream : @model.GuestSchemaValueStreamHandle,
+) -> Unit raise WireError {
+  for j in 0..<before {
+    guard !stream.same_endpoint(streams[j].1) else {
+      raise WireError::Invalid("owned stream appears more than once")
     }
   }
 }

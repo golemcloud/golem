@@ -49,11 +49,6 @@ test_r::enable!();
 #[async_trait]
 trait GetBlobStorage: Debug {
     async fn get_blob_storage(&self) -> TestStorage;
-
-    /// Tells if `copy` from a path with no blob gives [`BlobMissingError`] on this backend.
-    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
-        true
-    }
 }
 
 /// The storage of one test, and the RustFS container that the S3 storage uses while the test
@@ -323,10 +318,9 @@ fn filesystem_snapshots_of(
     }
 }
 
+// The in-memory backend stands in for S3 in the tests of other crates, and a deployment can keep
+// its blobs on any of the backends, so every backend must give the same answer.
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
-// The in-memory backend stands in for S3 in the tests of other crates, so the two must give the
-// same answer. The filesystem and the SQLite backends do not give it for every operation yet.
-define_matrix_dimension!(mem_and_s3: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "s3", "s3_prefixed");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 define_matrix_dimension!(s3_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "s3", "s3_prefixed");
 
@@ -1383,14 +1377,14 @@ async fn list_dir_root_only_subdirs(
 #[test]
 #[tracing::instrument]
 async fn list_dir_gives_a_created_directory_below_the_path_at_any_depth(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
-    // The in-memory backend holds the key of a directory that `create_dir` made, and the S3
-    // backend holds the marker object of it. Each of them reads every such key below the path,
-    // so a directory two names below the path is in the list with both names. A directory that
-    // only holds blobs has no key and no marker, so `dir/blobs` is not in the list, and neither
-    // is the blob that is below it.
+    // Each backend keeps a record of a directory that `create_dir` made: a key in memory, a marker
+    // object on S3, a row in SQLite and a marker file on the filesystem. Each of them reads every
+    // such record below the path, so a directory two names below the path is in the list with
+    // both names. A directory that only holds blobs has no record, so `dir/blobs` is not in the
+    // list, and neither is the blob that is below it.
     let storage = test.get_blob_storage().await;
 
     storage
@@ -1429,12 +1423,12 @@ async fn list_dir_gives_a_created_directory_below_the_path_at_any_depth(
 #[test]
 #[tracing::instrument]
 async fn list_dir_gives_a_blob_and_the_directory_of_its_path_one_time(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
-    // A blob and a directory that `create_dir` made can hold one path. The in-memory backend
-    // then holds two keys for the path, and the S3 backend holds the blob and the marker of the
-    // directory. `list_dir` gives the path one time.
+    // A blob and a directory that `create_dir` made can hold one path. Each backend then holds
+    // the blob and the record of the directory as two entries. `list_dir` gives the path one
+    // time.
     let storage = test.get_blob_storage().await;
     let label = "list_dir_gives_a_blob_and_the_directory_of_its_path_one_time";
 
@@ -1466,6 +1460,208 @@ async fn list_dir_gives_a_blob_and_the_directory_of_its_path_one_time(
             .unwrap(),
         vec![PathBuf::from("a")]
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_blob_written_over_a_created_directory_is_a_blob_and_the_directory_stays(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_blob_written_over_a_created_directory_is_a_blob_and_the_directory_stays";
+    let path = Path::new("a");
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), path)
+        .await
+        .unwrap();
+    storage
+        .put_raw(label, "put-blob", namespace.clone(), path, b"hello")
+        .await
+        .unwrap();
+
+    let written = (
+        storage
+            .get_raw(label, "get-blob", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .exists(label, "exists-blob", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .get_metadata(label, "metadata-blob", namespace.clone(), path)
+            .await
+            .unwrap()
+            .map(|metadata| metadata.size),
+        sorted_listing(&storage, namespace, "").await,
+    );
+
+    storage
+        .delete(label, "delete-blob", namespace.clone(), path)
+        .await
+        .unwrap();
+
+    let deleted = (
+        storage
+            .get_raw(label, "get-deleted", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .exists(label, "exists-deleted", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .get_metadata(label, "metadata-deleted", namespace.clone(), path)
+            .await
+            .unwrap()
+            .map(|metadata| metadata.size),
+        sorted_listing(&storage, namespace, "").await,
+    );
+
+    assert_eq!(
+        (written, deleted),
+        (
+            (
+                Some(b"hello".to_vec()),
+                ExistsResult::File,
+                Some(5),
+                listed_blobs(&[("a", 5)]),
+            ),
+            (None, ExistsResult::Directory, Some(0), Vec::new()),
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_blob_below_a_blob_is_a_second_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_blob_below_a_blob_is_a_second_blob";
+    let (upper, lower) = (Path::new("a"), Path::new("a/b"));
+    let read = |path: &'static Path| {
+        let storage = &storage;
+        async move {
+            (
+                storage
+                    .get_raw(label, "get-raw", namespace.clone(), path)
+                    .await
+                    .unwrap(),
+                storage
+                    .exists(label, "exists", namespace.clone(), path)
+                    .await
+                    .unwrap(),
+            )
+        }
+    };
+
+    storage
+        .put_raw(label, "put-upper", namespace.clone(), upper, b"upper")
+        .await
+        .unwrap();
+    storage
+        .put_raw(label, "put-lower", namespace.clone(), lower, b"lower")
+        .await
+        .unwrap();
+    let written = (read(upper).await, read(lower).await);
+
+    storage
+        .delete(label, "delete-upper", namespace.clone(), upper)
+        .await
+        .unwrap();
+    let deleted = (read(upper).await, read(lower).await);
+
+    assert_eq!(
+        (written, deleted),
+        (
+            (
+                (Some(b"upper".to_vec()), ExistsResult::File),
+                (Some(b"lower".to_vec()), ExistsResult::File),
+            ),
+            (
+                (None, ExistsResult::Directory),
+                (Some(b"lower".to_vec()), ExistsResult::File),
+            ),
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_read_at_a_directory_finds_no_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_read_at_a_directory_finds_no_blob";
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), Path::new("made"))
+        .await
+        .unwrap();
+    put_blobs(&storage, namespace, &[("implied/blob", 4)]).await;
+
+    for directory in ["made", "implied"] {
+        let path = Path::new(directory);
+        let found = (
+            storage
+                .get_raw(label, "get-raw", namespace.clone(), path)
+                .await
+                .unwrap(),
+            storage
+                .get_stream(label, "get-stream", namespace.clone(), path)
+                .await
+                .unwrap()
+                .is_some(),
+            storage
+                .get_raw_slice(label, "get-raw-slice", namespace.clone(), path, 0, 0)
+                .await
+                .unwrap(),
+            storage
+                .get_range_stream(label, "get-range-stream", namespace.clone(), path, 0, 0)
+                .await
+                .unwrap()
+                .is_some(),
+        );
+        assert_eq!(found, (None, false, None, false), "{directory}");
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn put_raw_if_absent_writes_a_blob_at_the_path_of_a_directory(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "put_raw_if_absent_writes_a_blob_at_the_path_of_a_directory";
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), Path::new("made"))
+        .await
+        .unwrap();
+    put_blobs(&storage, namespace, &[("implied/blob", 4)]).await;
+
+    for directory in ["made", "implied"] {
+        let path = Path::new(directory);
+        let written = storage
+            .put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, b"blob")
+            .await
+            .unwrap();
+        let read = storage
+            .get_raw(label, "get-raw", namespace.clone(), path)
+            .await
+            .unwrap();
+        assert_eq!(
+            (written, read),
+            (PutIfAbsent::Written, Some(b"blob".to_vec())),
+            "{directory}"
+        );
+    }
 }
 
 #[test]
@@ -3375,9 +3571,7 @@ async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
         .await
         .unwrap();
 
-    // A blob and a directory cannot share one path on the filesystem backend, which refuses
-    // this write, so the rest of the case belongs to the other backends.
-    if storage
+    storage
         .put_raw(
             label,
             "put-below",
@@ -3386,10 +3580,7 @@ async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
             &Bytes::from("payload"),
         )
         .await
-        .is_err()
-    {
-        return;
-    }
+        .unwrap();
 
     assert_eq!(
         storage
@@ -3674,7 +3865,7 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
 #[test]
 #[tracing::instrument]
 async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3763,7 +3954,7 @@ async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
 #[test]
 #[tracing::instrument]
 async fn delete_dir_deletes_a_directory_further_up_that_only_holds_blobs(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3839,7 +4030,7 @@ async fn get_metadata_of_a_created_directory_gives_metadata(
 #[test]
 #[tracing::instrument]
 async fn get_metadata_of_a_created_directory_gives_a_size_of_zero(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3869,7 +4060,7 @@ async fn get_metadata_of_a_created_directory_gives_a_size_of_zero(
 #[test]
 #[tracing::instrument]
 async fn get_metadata_of_a_directory_of_blobs_finds_no_blob(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -4084,7 +4275,6 @@ async fn a_copy_or_a_move_to_another_path_writes_the_blob_there(
         )
         .await
         .map_err(|error| error.downcast_ref::<BlobMissingError>().is_some());
-    let expected_missing_source = Err(test.copy_of_a_missing_source_gives_blob_missing_error());
 
     let payload = Some(Bytes::from("payload").to_vec());
     assert_eq!(
@@ -4092,7 +4282,7 @@ async fn a_copy_or_a_move_to_another_path_writes_the_blob_there(
         (
             (payload.clone(), payload.clone()),
             (None, payload),
-            expected_missing_source,
+            Err(true),
             None
         )
     );
@@ -4777,4 +4967,379 @@ async fn a_delete_of_a_missing_blob_succeeds(
     );
 
     assert_eq!(deleted, (Ok(()), Ok(())));
+}
+
+/// A name that the filesystem backend keeps in more than one part on disk. RustFS refuses a
+/// name of more than 255 bytes, which AWS S3 accepts, so the name stays below that.
+fn long_name() -> String {
+    "l".repeat(250)
+}
+
+/// The paths that the agreement probe gives to each method: blobs, a blob over a created
+/// directory, a blob below a blob, directories that `create_dir` made and directories that only
+/// hold blobs, paths with nothing at them, other forms of those paths, and names that break a rule.
+fn probed_paths() -> Vec<PathBuf> {
+    let long = long_name();
+    let mut paths = [
+        "",
+        ".",
+        "./",
+        "blob",
+        "./blob",
+        "blob/",
+        "blob//",
+        "made",
+        "made/",
+        "made/deep",
+        "made/deep/er",
+        "only",
+        "only/blob",
+        "a",
+        "a/b",
+        "a//b",
+        "a/./b",
+        "missing",
+        "missing/below",
+        "Case",
+        "case",
+        r"x\y",
+        &long,
+        "../up",
+        "up/../down",
+        "/absolute",
+        "__dir_marker",
+        "made/__dir_marker",
+    ]
+    .map(PathBuf::from)
+    .to_vec();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(b"non\xFFutf8")));
+    }
+    paths
+}
+
+/// Gives the text of an answer that is the same on two backends that agree: a value as its debug
+/// text, and an error as its kind. An error with no kind of the blob storage gives one text,
+/// because each backend words such an error in its own way.
+fn probe_answer<T: Debug>(result: Result<T, Error>) -> String {
+    match result {
+        Ok(value) => format!("{value:?}"),
+        Err(error) => {
+            if let Some(name) = error.downcast_ref::<BlobNameError>() {
+                format!("Err({name:?})")
+            } else if error.downcast_ref::<BlobMissingError>().is_some() {
+                "Err(BlobMissingError)".to_string()
+            } else if error.downcast_ref::<BlobRangeError>().is_some() {
+                "Err(BlobRangeError)".to_string()
+            } else {
+                "Err(backend error)".to_string()
+            }
+        }
+    }
+}
+
+/// The answers of the probe, each with the step that gave it.
+struct Probe<'a> {
+    storage: &'a Arc<dyn BlobStorage + Send + Sync>,
+    namespace: BlobStorageNamespace,
+    answers: Vec<(String, String)>,
+}
+
+impl Probe<'_> {
+    fn record<T: Debug>(&mut self, step: String, result: Result<T, Error>) {
+        self.answers.push((step, probe_answer(result)));
+    }
+
+    /// Records the answer of each method that reads at `path`. A blob is its text, a stream its
+    /// length, metadata its size, and a listing its sorted paths.
+    async fn read(&mut self, phase: &str, path: &Path) {
+        let (storage, namespace) = (self.storage, self.namespace.clone());
+        let label = "the_backends_give_the_same_answers";
+        let raw = storage
+            .get_raw(label, "get-raw", namespace.clone(), path)
+            .await
+            .map(|blob| blob.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()));
+        self.record(format!("{phase}: get_raw({path:?})"), raw);
+        let stream = match storage
+            .get_stream(label, "get-stream", namespace.clone(), path)
+            .await
+        {
+            Ok(Some(stream)) => stream
+                .try_fold(0, |length, chunk| async move { Ok(length + chunk.len()) })
+                .await
+                .map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
+        self.record(format!("{phase}: get_stream({path:?})"), stream);
+        let range = match storage
+            .get_range_stream(label, "get-range-stream", namespace.clone(), path, 0, 1)
+            .await
+        {
+            Ok(Some(range)) => range
+                .stream
+                .try_fold(0, |length, chunk| async move { Ok(length + chunk.len()) })
+                .await
+                .map(|length| Some((range.total_size, length))),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
+        self.record(format!("{phase}: get_range_stream({path:?}, 0, 1)"), range);
+        let slice = storage
+            .get_raw_slice(label, "get-raw-slice", namespace.clone(), path, 0, 0)
+            .await;
+        self.record(format!("{phase}: get_raw_slice({path:?}, 0, 0)"), slice);
+        let metadata = storage
+            .get_metadata(label, "get-metadata", namespace.clone(), path)
+            .await
+            .map(|metadata| metadata.map(|metadata| metadata.size));
+        self.record(format!("{phase}: get_metadata({path:?})"), metadata);
+        let exists = storage
+            .exists(label, "exists", namespace.clone(), path)
+            .await;
+        self.record(format!("{phase}: exists({path:?})"), exists);
+        let listed = storage
+            .list_dir(label, "list-dir", namespace.clone(), path)
+            .await
+            .map(|mut listed| {
+                listed.sort();
+                listed
+            });
+        self.record(format!("{phase}: list_dir({path:?})"), listed);
+        let blobs = storage
+            .list_blobs_below(label, "list-blobs-below", namespace, path)
+            .await
+            .map(|listed| {
+                let mut listed = listed.into_vec();
+                listed.sort();
+                listed
+            });
+        self.record(format!("{phase}: list_blobs_below({path:?})"), blobs);
+    }
+
+    async fn read_all(&mut self, phase: &str, paths: &[PathBuf]) {
+        for path in paths {
+            self.read(phase, path).await;
+        }
+    }
+}
+
+/// Runs the same steps on a storage and gives each answer with its step. The steps make one
+/// layout, read every path of [`probed_paths`], and then give each path to each method that
+/// changes the storage, reading every path again after each kind of change.
+async fn probe_the_backend(
+    storage: &Arc<dyn BlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+    other_namespace: &BlobStorageNamespace,
+) -> Vec<(String, String)> {
+    let label = "the_backends_give_the_same_answers";
+    let paths = probed_paths();
+    let mut probe = Probe {
+        storage,
+        namespace: namespace.clone(),
+        answers: Vec::new(),
+    };
+
+    for directory in ["made", "made/deep/er"] {
+        let made = storage
+            .create_dir(label, "create-dir", namespace.clone(), Path::new(directory))
+            .await;
+        probe.record(format!("layout: create_dir({directory:?})"), made);
+    }
+    let long = long_name();
+    for blob in [
+        "blob",
+        "only/blob",
+        "made",
+        "a",
+        "a/b",
+        "Case",
+        "case",
+        r"x\y",
+        &long,
+    ] {
+        let written = storage
+            .put_raw(
+                label,
+                "put-raw",
+                namespace.clone(),
+                Path::new(blob),
+                blob.as_bytes(),
+            )
+            .await;
+        probe.record(format!("layout: put_raw({blob:?})"), written);
+    }
+    probe.read_all("layout", &paths).await;
+
+    for path in &paths {
+        let written = storage
+            .put_raw_if_absent(
+                label,
+                "put-if-absent",
+                namespace.clone(),
+                path,
+                b"if-absent",
+            )
+            .await;
+        probe.record(format!("put_raw_if_absent({path:?})"), written);
+    }
+    probe.read_all("after put_raw_if_absent", &paths).await;
+
+    for path in &paths {
+        let copied = storage
+            .copy(label, "copy", namespace.clone(), path, Path::new("copied"))
+            .await;
+        probe.record(format!("copy({path:?}, \"copied\")"), copied);
+        probe.read("after copy", Path::new("copied")).await;
+        let between = storage
+            .copy_between(
+                label,
+                "copy-between",
+                namespace.clone(),
+                path,
+                other_namespace.clone(),
+                Path::new("copied"),
+            )
+            .await;
+        probe.record(format!("copy_between({path:?}, \"copied\")"), between);
+    }
+
+    for path in &paths {
+        let moved = storage
+            .r#move(label, "move", namespace.clone(), path, Path::new("moved"))
+            .await;
+        probe.record(format!("move({path:?}, \"moved\")"), moved);
+        let restored = storage
+            .r#move(
+                label,
+                "move-back",
+                namespace.clone(),
+                Path::new("moved"),
+                path,
+            )
+            .await;
+        probe.record(format!("move(\"moved\", {path:?})"), restored);
+    }
+    probe.read_all("after move", &paths).await;
+
+    for path in &paths {
+        let data = path.to_string_lossy().as_bytes().to_vec();
+        let stream = (&data)
+            .map_item(|i| i.map_err(widen_infallible))
+            .map_error(widen_infallible)
+            .erased();
+        let written = storage
+            .put_stream(label, "put-stream", namespace.clone(), path, &stream)
+            .await;
+        probe.record(format!("put_stream({path:?})"), written);
+    }
+    probe.read_all("after put_stream", &paths).await;
+
+    for path in &paths {
+        let deleted = storage
+            .delete(label, "delete", namespace.clone(), path)
+            .await;
+        probe.record(format!("delete({path:?})"), deleted);
+    }
+    probe.read_all("after delete", &paths).await;
+
+    for path in &paths {
+        let made = storage
+            .create_dir(label, "create-dir", namespace.clone(), path)
+            .await;
+        probe.record(format!("create_dir({path:?})"), made);
+    }
+    probe.read_all("after create_dir", &paths).await;
+
+    for path in &paths {
+        let deleted = storage
+            .delete_dir(label, "delete-dir", namespace.clone(), path)
+            .await;
+        probe.record(format!("delete_dir({path:?})"), deleted);
+    }
+    probe.read_all("after delete_dir", &paths).await;
+
+    put_blobs(storage, namespace, &[("blob", 1), ("a/b", 2)]).await;
+    let names = paths
+        .iter()
+        .filter(|path| path.to_str().is_some_and(|path| !path.starts_with('/')))
+        .cloned()
+        .collect::<Vec<_>>();
+    let deleted = storage
+        .delete_many(label, "delete-many", namespace.clone(), &paths)
+        .await;
+    probe.record("delete_many(every path)".to_string(), deleted);
+    let deleted = storage
+        .delete_many(label, "delete-many", namespace.clone(), &names)
+        .await;
+    probe.record(
+        "delete_many(every relative UTF-8 path)".to_string(),
+        deleted,
+    );
+    probe.read_all("after delete_many", &paths).await;
+
+    probe.namespace = other_namespace.clone();
+    probe.read("the other namespace", Path::new("")).await;
+    probe.read("the other namespace", Path::new("copied")).await;
+
+    probe.answers
+}
+
+/// Runs the agreement probe on one backend, in a namespace of its own and with a second namespace
+/// for `copy_between`.
+async fn probe_the_backend_in_namespaces(
+    test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) -> Vec<(String, String)> {
+    let storage = test.get_blob_storage().await;
+    probe_the_backend(
+        &storage,
+        &in_another_environment(&custom_storage()),
+        &in_another_environment(&custom_storage()),
+    )
+    .await
+}
+
+/// Every backend gives the answer of the in-memory backend at every step of the probe. No
+/// difference is allowed: the name of the object with which S3 records a directory is a reserved
+/// name on every backend, so the probe holds that name too.
+#[test]
+#[test_r::timeout("600s")]
+#[tracing::instrument]
+async fn the_backends_give_the_same_answers(
+    #[tagged_as("in_memory")] in_memory: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fs")] fs: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("s3")] s3: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("s3_prefixed")] s3_prefixed: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("sqlite")] sqlite: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let reference = probe_the_backend_in_namespaces(in_memory).await;
+    let mut differences = Vec::new();
+    for (backend, test) in [
+        ("fs", fs),
+        ("s3", s3),
+        ("s3_prefixed", s3_prefixed),
+        ("sqlite", sqlite),
+    ] {
+        let answers = probe_the_backend_in_namespaces(test).await;
+        assert_eq!(
+            answers.iter().map(|(step, _)| step).collect::<Vec<_>>(),
+            reference.iter().map(|(step, _)| step).collect::<Vec<_>>(),
+            "{backend} ran other steps"
+        );
+        for ((step, expected), (_, answer)) in reference.iter().zip(&answers) {
+            if answer != expected {
+                differences.push(format!(
+                    "{backend}: {step}: {answer} (in_memory: {expected})"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        differences.is_empty(),
+        "the backends disagree:\n{}",
+        differences.join("\n")
+    );
 }

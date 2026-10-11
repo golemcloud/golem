@@ -161,10 +161,15 @@ impl DurableStreamsHandler {
         let mut result = response(created_status(created.replayed));
         result.headers.insert(
             http::header::LOCATION,
-            format!(
-                "{}/invocations/{session}",
-                request.underlying.uri().path().trim_end_matches('/')
-            )
+            super::resource_url(
+                request,
+                route,
+                behaviour,
+                &format!(
+                    "{}/invocations/{session}",
+                    request.underlying.uri().path().trim_end_matches('/')
+                ),
+            )?
             .parse()
             .map_err(anyhow::Error::from)?,
         );
@@ -428,10 +433,12 @@ impl DurableStreamsHandler {
             http::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
-        result.headers.insert(
-            HeaderName::from_static("stream-closed"),
-            HeaderValue::from_static(if closed { "true" } else { "false" }),
-        );
+        if closed {
+            result.headers.insert(
+                HeaderName::from_static("stream-closed"),
+                HeaderValue::from_static("true"),
+            );
+        }
         if request.underlying.method() == Method::HEAD {
             add_expiry_headers(&mut result, &read.expiry_policy);
             result.body = ResponseBody::NoBody;

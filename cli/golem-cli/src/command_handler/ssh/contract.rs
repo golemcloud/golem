@@ -488,47 +488,6 @@ pub fn strip_cursor_reports(line: &str) -> String {
     stripped
 }
 
-/// Removes a terminal's answer about its background colour (`11;rgb:RRRR/GGGG/BBBB`, as the
-/// line editor leaves it after dropping the escape that opens it) from a typed line. A terminal
-/// that answers after the session stopped waiting delivers its answer as input, and it must
-/// not run as a command.
-pub fn strip_background_reply(line: &str) -> String {
-    let mut rest = line;
-    let mut stripped = String::with_capacity(line.len());
-    while let Some(start) = rest.find("11;rgb") {
-        let after = &rest[start + "11;rgb".len()..];
-        let colour = after
-            .strip_prefix("a:")
-            .or_else(|| after.strip_prefix(':'))
-            .map(|colour| {
-                let len = colour
-                    .bytes()
-                    .take_while(|byte| byte.is_ascii_hexdigit() || *byte == b'/')
-                    .count();
-                &colour[..len]
-            })
-            .filter(|colour| {
-                let parts: Vec<_> = colour.split('/').collect();
-                (3..=4).contains(&parts.len())
-                    && parts.iter().all(|part| (1..=4).contains(&part.len()))
-            });
-        match colour {
-            Some(colour) => {
-                stripped.push_str(&rest[..start]);
-                let answer =
-                    after.len() - after.trim_start_matches("a:").trim_start_matches(':').len();
-                rest = &after[answer + colour.len()..];
-            }
-            None => {
-                stripped.push_str(&rest[..start + "11;rgb".len()]);
-                rest = after;
-            }
-        }
-    }
-    stripped.push_str(rest);
-    stripped
-}
-
 /// The length of `row;colR` at the start of `text`, when it is one.
 fn cursor_report_len(text: &str) -> Option<usize> {
     let row = text.bytes().take_while(u8::is_ascii_digit).count();
@@ -544,30 +503,6 @@ pub fn classify_invoke_error(status: Option<u16>, message: String) -> CallFailur
         Some(403) => CallFailure::Denied(message),
         Some(status) if (400..500).contains(&status) => CallFailure::Rpc(message),
         _ => CallFailure::Unknown(message),
-    }
-}
-
-/// A terminal's answer about its background that may still arrive, as input, after the session
-/// stopped waiting for it. It is looked for in the first line read and in no other, so that
-/// nothing a person types later is ever changed.
-pub struct LateAnswer {
-    expected: bool,
-}
-
-impl LateAnswer {
-    /// `expected` when the terminal had not finished answering by the end of the wait.
-    pub fn expected(expected: bool) -> Self {
-        Self { expected }
-    }
-
-    /// The first line read, without the answer when one may have come. Every other line is
-    /// given back as it was typed.
-    pub fn taken_from(&mut self, line: String) -> String {
-        if std::mem::take(&mut self.expected) {
-            strip_background_reply(&line)
-        } else {
-            line
-        }
     }
 }
 
@@ -767,12 +702,12 @@ pub fn dimmed(text: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LateAnswer,
+        BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode,
         LocalCommand, NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract,
         classify_cancel, classify_invoke_error, decode_result, decorated, dimmed, ended, exit_code,
         failed_agent_notice, global_args, help_text, input_mode, interrupted_message,
-        local_command, lookup_command, prompt, run_argv, runs_nothing, strip_background_reply,
-        strip_cursor_reports, time_limit, tools_listing,
+        local_command, lookup_command, prompt, run_argv, runs_nothing, strip_cursor_reports,
+        time_limit, tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
     use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
@@ -1130,40 +1065,6 @@ mod tests {
         assert_eq!(strip_cursor_reports("\x1b[12;1Rpwd"), "pwd");
         assert_eq!(strip_cursor_reports("ec\x1b[3;40Rho x"), "echo x");
         assert_eq!(strip_cursor_reports("ls\x1b[1;1R\x1b[1;1R"), "ls");
-    }
-
-    #[test]
-    fn a_late_answer_about_the_background_is_taken_out_of_a_typed_line() {
-        // The editor drops the escape that opens the answer and types the rest.
-        assert_eq!(strip_background_reply("11;rgb:1414/1313/1b1b"), "");
-        assert_eq!(
-            strip_background_reply("echo 11;rgba:14/13/1b/ff hi"),
-            "echo  hi"
-        );
-        assert_eq!(strip_background_reply("ls11;rgb:f/f/f -la"), "ls -la");
-        // Anything that is not that answer stays as typed.
-        for line in [
-            "echo 11;rgb",
-            "seq 11; echo rgb:1/2",
-            "11;rgb:zz/1/2",
-            "ls -la",
-        ] {
-            assert_eq!(strip_background_reply(line), line);
-        }
-    }
-
-    #[test]
-    fn a_late_answer_is_looked_for_in_the_first_line_only_and_only_when_one_may_come() {
-        let answer = "11;rgb:1414/1313/1b1b";
-        let command = format!("printf '%s\\n' '{answer}'");
-        // The terminal had not finished answering: its answer may be in the first line.
-        let mut late = LateAnswer::expected(true);
-        assert_eq!(late.taken_from(format!("ls{answer}")), "ls");
-        // Every later line is the person's own, whatever it holds.
-        assert_eq!(late.taken_from(command.clone()), command);
-        // A terminal that answered, or that said it has no answer, leaves nothing to take out.
-        let mut none = LateAnswer::expected(false);
-        assert_eq!(none.taken_from(command.clone()), command);
     }
 
     #[test]

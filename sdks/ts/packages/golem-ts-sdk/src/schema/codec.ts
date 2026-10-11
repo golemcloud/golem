@@ -26,7 +26,13 @@ import {
   SchemaValue,
   freezeSchemaValue,
   schemaGraphToWit,
+  schemaValueFromWit,
   numericRestrictionsMatch,
+  preflightWitValueTree,
+  assertSchemaValueRepresentable,
+  assertDenseModelArray,
+  withIsolatedCapabilityAdoptionTransaction,
+  encodeChild,
 } from '../internal/schema-model';
 import {
   GuestSecretHandle,
@@ -77,6 +83,8 @@ export interface SchemaCodec {
   readonly fromValue: (value: SchemaValue) => unknown;
   /** Direct flat-wire conversion. Absent when this codec can contain owned resources. */
   readonly direct?: DirectSchemaCodec;
+  /** Structural invocation conversion, with the ordinary leaf codec semantics. */
+  readonly invocationDirect?: DirectSchemaCodec;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
   /**
@@ -141,10 +149,35 @@ export interface SchemaCodec {
 /** Shared flat-value arena used while directly encoding child codecs. */
 export class SchemaValueWriter {
   readonly valueNodes: WireValueNode[] = [];
+  readonly resources = new Set<unknown>();
 
   add(node: WireValueNode): number {
+    if (node.tag === 'list-value') assertDenseModelArray(node.val, 'list elements');
+    if (node.tag === 'record-value') assertDenseModelArray(node.val, 'record fields');
     this.valueNodes.push(node);
     return this.valueNodes.length - 1;
+  }
+
+  /** Generated guest codecs retain ordinary scalar representability checks. */
+  scalar(
+    tag:
+      | 'bool'
+      | 's8'
+      | 's16'
+      | 's32'
+      | 's64'
+      | 'u8'
+      | 'u16'
+      | 'u32'
+      | 'u64'
+      | 'f32'
+      | 'f64'
+      | 'char'
+      | 'string',
+    value: unknown,
+  ): number {
+    assertSchemaValueRepresentable({ tag, value } as SchemaValue, false, this.resources);
+    return this.add({ tag: `${tag}-value`, val: value } as WireValueNode);
   }
 }
 
@@ -153,7 +186,10 @@ export class SchemaValueReader {
   private readonly active = new Set<number>();
   private readonly read = new Set<number>();
 
-  constructor(readonly valueNodes: readonly WireValueNode[]) {}
+  constructor(
+    readonly valueNodes: readonly WireValueNode[],
+    private readonly invocation = false,
+  ) {}
 
   node<T>(
     index: number | undefined,
@@ -170,8 +206,15 @@ export class SchemaValueReader {
         `value node index out of range: ${index} (nodes: ${this.valueNodes.length})`,
       );
     }
+    if (this.invocation) {
+      const node = this.valueNodes[index]!;
+      if (node.tag !== tag)
+        throw new TypeError(`expected ${tag} at value node index ${index}, got ${node.tag}`);
+      return decode(node);
+    }
     if (this.active.has(index)) throw new TypeError(`cycle at value node index ${index}`);
-    if (this.read.has(index)) throw new TypeError(`aliased value node index ${index}`);
+    if (!this.invocation && this.read.has(index))
+      throw new TypeError(`aliased value node index ${index}`);
     const node = this.valueNodes[index]!;
     if (node.tag !== tag)
       throw new TypeError(`expected ${tag} at value node index ${index}, got ${node.tag}`);
@@ -185,7 +228,7 @@ export class SchemaValueReader {
   }
 
   finish(): void {
-    if (this.read.size !== this.valueNodes.length) {
+    if (!this.invocation && this.read.size !== this.valueNodes.length) {
       throw new TypeError('flat value tree contains unreachable value nodes');
     }
   }
@@ -226,16 +269,52 @@ export function directTypedSchemaValueToWit(codec: SchemaCodec, value: unknown) 
 /** Install direct operations from the explicit child links produced by schema constructors. */
 export function withDirectCodec(codec: SchemaCodec): SchemaCodec {
   const direct = buildDirect(codec);
-  return direct ? { ...codec, direct } : codec;
+  const invocationDirect = buildDirect(codec, true);
+  return {
+    ...codec,
+    ...(direct ? { direct } : {}),
+    ...(invocationDirect
+      ? {
+          invocationDirect: {
+            ...invocationDirect,
+            write: (value: unknown, writer: SchemaValueWriter) =>
+              withIsolatedCapabilityAdoptionTransaction(() =>
+                invocationDirect.write(value, writer),
+              ),
+          },
+        }
+      : {}),
+  };
 }
 
-function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
+/** Preflight the entire arena, including unreachable nodes, before invocation decoding. */
+export function invocationSchemaValueReader(tree: WireValueTree): SchemaValueReader {
+  preflightWitValueTree(tree.valueNodes, tree.root);
+  return new SchemaValueReader(tree.valueNodes, true);
+}
+
+function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec | undefined {
+  const finish = (direct: DirectSchemaCodec, tag: WireValueNode['tag']): DirectSchemaCodec =>
+    !invocation
+      ? direct
+      : {
+          write: direct.write,
+          read: (reader, index) => {
+            if (index !== undefined && reader.valueNodes[index]?.tag !== tag)
+              return codec.fromValue(
+                schemaValueFromWit({ valueNodes: [...reader.valueNodes], root: index }),
+              );
+            return direct.read(reader, index);
+          },
+        };
   const child = (value: SchemaCodec | undefined) => {
     if (!value) return undefined;
-    if (value.direct) return value.direct;
-    return buildDirect(value);
+    if (invocation ? value.invocationDirect : value.direct)
+      return invocation ? value.invocationDirect : value.direct;
+    return buildDirect(value, invocation);
   };
   if (codec.isUnit) {
+    if (invocation) return undefined;
     return {
       write: (value) => {
         if (value !== undefined) throw new TypeError('unit value must be undefined');
@@ -248,48 +327,57 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
     };
   }
   if (codec.fields && !codec.optionInner) {
+    // Other vendors may omit absent optional properties when decoding records.
+    if (invocation && codec.sourceSchema?.['~standard'].vendor !== 'zod') return undefined;
     const fields = codec.fields.map((field) => ({ name: field.name, direct: child(field.codec) }));
     if (fields.some((field) => !field.direct)) return undefined;
-    return {
-      write: (value, writer) =>
-        writer.add({
-          tag: 'record-value',
-          val: fields.map((field) =>
-            requiredIndex(
-              field.direct!.write((value as Record<string, unknown>)[field.name], writer),
-              'record field',
+    return finish(
+      {
+        write: (value, writer) =>
+          writer.add({
+            tag: 'record-value',
+            val: fields.map((field) =>
+              requiredIndex(
+                field.direct!.write((value as Record<string, unknown>)[field.name], writer),
+                'record field',
+              ),
             ),
-          ),
-        }),
-      read: (reader, index) =>
-        reader.node(index, 'record-value', (node) => {
-          const indices = (node as Extract<WireValueNode, { tag: 'record-value' }>).val;
-          if (indices.length !== fields.length)
-            throw new TypeError('record field count does not match schema');
-          return Object.fromEntries(
-            fields.map((field, i) => [field.name, field.direct!.read(reader, indices[i]!)]),
-          );
-        }),
-    };
+          }),
+        read: (reader, index) =>
+          reader.node(index, 'record-value', (node) => {
+            const indices = (node as Extract<WireValueNode, { tag: 'record-value' }>).val;
+            if (invocation ? indices.length < fields.length : indices.length !== fields.length)
+              throw new TypeError('record field count does not match schema');
+            return Object.fromEntries(
+              fields.map((field, i) => [field.name, field.direct!.read(reader, indices[i]!)]),
+            );
+          }),
+      },
+      'record-value',
+    );
   }
   if (codec.listItem) {
     const item = child(codec.listItem);
     if (!item) return undefined;
-    return {
-      write: (value, writer) =>
-        writer.add({
-          tag: 'list-value',
-          val: (value as unknown[]).map((v) => requiredIndex(item.write(v, writer), 'list item')),
-        }),
-      read: (reader, index) =>
-        reader.node(index, 'list-value', (node) =>
-          (node as Extract<WireValueNode, { tag: 'list-value' }>).val.map((i) =>
-            item.read(reader, i),
+    return finish(
+      {
+        write: (value, writer) =>
+          writer.add({
+            tag: 'list-value',
+            val: (value as unknown[]).map((v) => requiredIndex(item.write(v, writer), 'list item')),
+          }),
+        read: (reader, index) =>
+          reader.node(index, 'list-value', (node) =>
+            (node as Extract<WireValueNode, { tag: 'list-value' }>).val.map((i) =>
+              item.read(reader, i),
+            ),
           ),
-        ),
-    };
+      },
+      'list-value',
+    );
   }
   if (codec.optionInner) {
+    if (invocation) return undefined;
     const inner = child(codec.optionInner);
     if (!inner) return undefined;
     const none = codec.optionKind === 'nullable' ? null : undefined;
@@ -310,6 +398,7 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
     };
   }
   if (codec.resultOk && codec.resultErr) {
+    if (invocation) return undefined;
     const ok = child(codec.resultOk);
     const err = child(codec.resultErr);
     if (!ok || !err) return undefined;
@@ -360,6 +449,11 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
         }),
     };
   }
+  if (
+    invocation &&
+    !['zod', 'golem.marker'].includes(codec.sourceSchema?.['~standard'].vendor ?? '')
+  )
+    return undefined;
   const primitive = new Map<SchemaType['body']['tag'], WireValueNode['tag']>([
     ['bool', 'bool-value'],
     ['s8', 's8-value'],
@@ -421,13 +515,25 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
     if (!valid) throw new TypeError('does not match its declared schema');
     return tag === 'f32' ? Math.fround(value as number) : value;
   };
-  return {
-    write: (value, writer) => writer.add({ tag: primitive, val: checked(value) } as WireValueNode),
-    read: (reader, index) =>
-      reader.node(index, primitive, (node) =>
-        checked((node as WireValueNode & { val: unknown }).val),
-      ),
-  };
+  return finish(
+    {
+      write: (value, writer) => {
+        const encoded = invocation ? encodeChild(codec, value) : undefined;
+        if (encoded) assertSchemaValueRepresentable(encoded, false, writer.resources);
+        return writer.add({
+          tag: primitive,
+          val: encoded ? (encoded as SchemaValue & { value: unknown }).value : checked(value),
+        } as WireValueNode);
+      },
+      read: (reader, index) =>
+        reader.node(index, primitive, (node) => {
+          const raw = (node as WireValueNode & { val: unknown }).val;
+          const value = invocation ? raw : checked(raw);
+          return invocation ? codec.fromValue({ tag, value } as SchemaValue) : value;
+        }),
+    },
+    primitive,
+  );
 }
 
 function requiredIndex(index: number | undefined, position: string): number {

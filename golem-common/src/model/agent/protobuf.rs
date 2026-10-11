@@ -4,9 +4,10 @@ use super::{
     DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
     DurableStreamSlotOptions, DurableStreamSlotSource, FileResponseHeader, GolemUserPrincipal,
     HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
-    OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable, ReadOnlyConfig,
-    RegisteredAgentType, RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig,
-    SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
+    OidcPrincipal, PathSegment, PathVariable, PhantomIdBinding, PhantomIdBindingDetails, Principal,
+    QueryVariable, ReadOnlyConfig, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
+    SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::agent::{ExactFileMapping, FileMapping, SubtreeFileMapping};
 use crate::model::Empty;
@@ -205,6 +206,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .collect::<Result<_, _>>()?,
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             phantom_agent: value.phantom_agent,
+            phantom_id_binding: value
+                .phantom_id_binding
+                .map(TryInto::try_into)
+                .transpose()?,
             cors_options: value
                 .cors_options
                 .ok_or_else(|| "Missing field: cors_options".to_string())?
@@ -240,6 +245,7 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
+            phantom_id_binding: value.phantom_id_binding.map(Into::into),
             cors_options: Some(value.cors_options.into()),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -254,6 +260,46 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
                 .map(Into::into)
                 .collect(),
             openapi_provider_method: value.openapi_provider_method,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PhantomIdBinding> for PhantomIdBinding {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PhantomIdBinding,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::phantom_id_binding::Source;
+        match value.source.ok_or("Missing PhantomIdBinding.source")? {
+            Source::Path(value) => Ok(Self::Path(PhantomIdBindingDetails {
+                name: value.name,
+                optional: value.optional,
+            })),
+            Source::Query(value) => Ok(Self::Query(PhantomIdBindingDetails {
+                name: value.name,
+                optional: value.optional,
+            })),
+        }
+    }
+}
+
+impl From<PhantomIdBinding> for golem_api_grpc::proto::golem::component::PhantomIdBinding {
+    fn from(value: PhantomIdBinding) -> Self {
+        use golem_api_grpc::proto::golem::component::{
+            PhantomIdBindingDetails, phantom_id_binding::Source,
+        };
+        Self {
+            source: Some(match value {
+                PhantomIdBinding::Path(value) => Source::Path(PhantomIdBindingDetails {
+                    name: value.name,
+                    optional: value.optional,
+                }),
+                PhantomIdBinding::Query(value) => Source::Query(PhantomIdBindingDetails {
+                    name: value.name,
+                    optional: value.optional,
+                }),
+            }),
         }
     }
 }

@@ -50,6 +50,7 @@ import golem.runtime.http.{
   HttpRouteParser,
   HttpValidation,
   PathSegment,
+  PhantomIdBinding,
   QueryVariable
 }
 
@@ -820,7 +821,7 @@ object AgentDefinitionMacro {
    */
   private def extractAgentDefinitionStringArg(using
     Quotes
-  )(symbol: quotes.reflect.Symbol, argName: String, positionalIndex: Int): Option[String] = {
+  )(symbol: quotes.reflect.Symbol, argName: String, positionalIndex: Int, trim: Boolean = true): Option[String] = {
     import quotes.reflect.*
     symbol.annotations.collectFirst {
       case Apply(Select(New(tpt), _), args)
@@ -831,7 +832,7 @@ object AgentDefinitionMacro {
           if (positionalIndex >= 0) args.lift(positionalIndex).collect { case Literal(StringConstant(v)) => v }
           else None
         }
-    }.flatten.map(_.trim).filter(_.nonEmpty)
+    }.flatten.map(value => if (trim) value.trim else value).filter(_.nonEmpty)
   }
 
   /**
@@ -906,8 +907,19 @@ object AgentDefinitionMacro {
     val filesystem          = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
     val fileResponseHeaders = HttpDeclarationMacro.headerValues(symbol, "agentDefinition", 9)
     val mountPath           = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
+    val selectorPath        = extractAgentDefinitionStringArg(symbol, "phantomIdPath", 10, trim = false)
+    val selectorQuery       = extractAgentDefinitionStringArg(symbol, "phantomIdQuery", 11, trim = false)
+    val selectorOptional    = extractAgentDefinitionBoolArg(symbol, "phantomIdOptional", 12).getOrElse(false)
+    if (
+      (selectorPath.nonEmpty && selectorQuery.nonEmpty) || (selectorOptional && selectorPath.isEmpty && selectorQuery.isEmpty)
+    )
+      report.errorAndAbort("Declare exactly one phantomIdPath or phantomIdQuery source")
+    val selector = selectorPath
+      .map(PhantomIdBinding.Path(_, selectorOptional))
+      .orElse(selectorQuery.map(PhantomIdBinding.Query(_, selectorOptional)))
     mountPath match {
-      case None if filesystem.nonEmpty          => report.errorAndAbort("exposeFiles requires an HTTP mount")
+      case None if filesystem.nonEmpty || selector.nonEmpty =>
+        report.errorAndAbort("exposeFiles and phantom selectors require an HTTP mount")
       case None if fileResponseHeaders.nonEmpty => report.errorAndAbort("fileResponseHeaders requires an HTTP mount")
       case None                                 => None
       case Some(mp)                             =>
@@ -948,7 +960,8 @@ object AgentDefinitionMacro {
           staticBindings = Nil,
           filesystemBindings = filesystem,
           openapiProviderMethod = None,
-          fileResponseHeaders = fileResponseHeaders
+          fileResponseHeaders = fileResponseHeaders,
+          phantomIdBinding = selector
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {
           case Left(err) => report.errorAndAbort(err)

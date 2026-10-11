@@ -163,7 +163,7 @@ fn walk(_into: &std::path::Path, _hooks: Hooks<'_>) -> std::io::Result<()> {
 mod unix {
     use super::{ClearEntry, Hooks, MOST_CLEAR_DEPTH, clear_entry};
     use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
-    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    use rustix::fs::{AtFlags, Dev, FileType, Mode, OFlags, RawMode};
     use std::ffi::{CString, OsStr};
     use std::ops::ControlFlow;
     use std::os::unix::ffi::OsStrExt;
@@ -171,7 +171,7 @@ mod unix {
 
     /// The mode that a directory gets before the clear lists it: read, write and search for the
     /// owner, which a listing, an unlink and an entry need.
-    const CLEAR_MODE: u32 = 0o700;
+    const CLEAR_MODE: RawMode = 0o700;
 
     /// One open directory of the walk: its descriptor, its path for the hooks and the messages,
     /// the names of its entries that the walk did not remove yet, and its own name in the
@@ -213,7 +213,7 @@ mod unix {
     pub(super) fn clear_tree(
         root: OwnedFd,
         path: &Path,
-        device: u64,
+        device: Dev,
         hooks: Hooks<'_>,
     ) -> std::io::Result<()> {
         let stack = vec![Level::new(root, path.to_path_buf(), None)?];
@@ -227,7 +227,7 @@ mod unix {
     /// removes that directory when it has no entry left. Breaks with the end of the walk.
     fn step(
         mut stack: Vec<Level>,
-        device: u64,
+        device: Dev,
         hooks: Hooks<'_>,
     ) -> ControlFlow<std::io::Result<()>, Vec<Level>> {
         let depth = stack.len();
@@ -275,7 +275,7 @@ mod unix {
     fn entered(
         level: &Level,
         name: &CString,
-        device: u64,
+        device: Dev,
         depth: usize,
         hooks: Hooks<'_>,
     ) -> std::io::Result<Option<Level>> {

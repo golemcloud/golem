@@ -1,18 +1,19 @@
 name: 'Restore Test Components'
-description: 'Restore test component WASMs from cache and install them'
+description: 'Download test component WASMs and install them'
 inputs:
   run-id:
-    description: 'GitHub run ID for cache key'
+    description: 'GitHub run ID containing the test component artifact'
     required: true
 runs:
   using: 'composite'
   steps:
     - name: Restore built test component WASMs
-      uses: actions/cache/restore@v5
+      uses: actions/download-artifact@v8
       with:
+        name: golem-test-components
         path: tmp/test-components-wasm
-        key: golem-test-components-${{ inputs.run-id }}
-        fail-on-cache-miss: true
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
     - name: Install test component WASMs
       shell: bash
       run: cp -v tmp/test-components-wasm/*.wasm test-components/
