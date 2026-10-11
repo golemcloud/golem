@@ -252,27 +252,34 @@ async fn localhost_subdomain_http_redirect_url_is_accepted(
 
     let client = deps.registry_service().client(&user.token).await;
 
-    let security_scheme_creation = SecuritySchemeCreation {
-        name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google(Empty {}),
-        client_id: "client_id".to_string(),
-        client_secret: "client_secret".to_string(),
-        redirect_url: "http://example.localhost:9006/auth/callback".to_string(),
-        scopes: vec!["openid".to_string()],
-        login: SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+    let logins = [
+        cookie_login(),
+        SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
             redirect_uris: vec!["http://example.localhost:9006/app/callback".to_string()],
             origins: vec!["http://example.localhost:9006".to_string()],
         }),
-    };
+    ];
 
-    let security_scheme = client
-        .create_security_scheme(&env.id.0, &security_scheme_creation)
-        .await?;
+    for (index, login) in logins.into_iter().enumerate() {
+        let security_scheme_creation = SecuritySchemeCreation {
+            name: SecuritySchemeName(format!("localhost-subdomain-{index}")),
+            provider_type: Provider::Google(Empty {}),
+            client_id: "client_id".to_string(),
+            client_secret: "client_secret".to_string(),
+            redirect_url: "http://example.localhost:9006/auth/callback".to_string(),
+            scopes: vec!["openid".to_string()],
+            login,
+        };
 
-    assert_eq!(
-        security_scheme.redirect_url,
-        security_scheme_creation.redirect_url
-    );
+        let security_scheme = client
+            .create_security_scheme(&env.id.0, &security_scheme_creation)
+            .await?;
+
+        assert_eq!(
+            security_scheme.redirect_url,
+            security_scheme_creation.redirect_url
+        );
+    }
 
     Ok(())
 }
