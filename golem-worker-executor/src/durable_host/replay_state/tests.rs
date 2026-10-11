@@ -4201,6 +4201,259 @@ async fn dropped_replay_delivery_barrier_fails_later_cursor_work() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn claim_rechecks_retention_after_initial_miss_without_losing_its_gate_queue_position() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        start_now(),
+        end_for(4, 43),
+        delivered_for(2),
+        noop(),
+    ])
+    .await;
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let gate = rs.cursor.advance_gate.clone().lock_owned().await;
+    let (missed, observed_miss) = tokio::sync::oneshot::channel();
+    *rs.cursor.retained_claim_miss.lock().unwrap() = Some(missed);
+    let claim_state = rs.clone();
+    let claim = tokio::spawn(async move {
+        claim_state
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+    });
+    observed_miss.await.unwrap();
+    // The claim is already queued, but its Start has not yet become retained. Advancing with
+    // the gate's current owner retains B and transfers that same gate to A's delivery barrier.
+    let mut tx = rs.cursor.tx_with_gate(gate).await.unwrap();
+    let gate = tx
+        .consume_delivery_boundary(Some(OplogIndex::from_u64(2)), OplogIndex::from_u64(6))
+        .await
+        .unwrap()
+        .unwrap();
+    let barrier = ReplayDeliveryBarrier::new(
+        rs.clone(),
+        OplogIndex::from_u64(2),
+        OplogIndex::from_u64(6),
+        gate,
+    );
+    rs.cursor.finish_tx(tx);
+    let b = tokio::time::timeout(Duration::from_secs(2), claim)
+        .await
+        .expect("progress must recheck retained state even though the gate remains held")
+        .unwrap()
+        .unwrap();
+    assert_eq!(b.start_idx(), OplogIndex::from_u64(4));
+    assert!(
+        matches!(rs.await_resolution(b).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5))
+    );
+    let mut fence = Box::pin(rs.fence_owned_cursor_ops());
+    assert_pending(
+        &mut fence,
+        "a cleanup fence cannot bypass the delivery owner",
+    )
+    .await;
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    barrier.acknowledge();
+    fence.await.unwrap();
+    rs.await_resolution(a).await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn completed_retained_start_resolves_while_another_delivery_holds_the_gate() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        start_now(),
+        end_for(4, 43),
+        delivered_for(2),
+        noop(),
+    ])
+    .await;
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(a).await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6))
+        .await
+        .unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+
+    // Acquiring the barrier proves that the delivery owns the gate before B starts its claim.
+    let b = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    )
+    .await
+    .expect("a retained Start claim must not wait for another call's guest boundary")
+    .unwrap();
+    assert_eq!(b.start_idx(), OplogIndex::from_u64(4));
+    let resolution = tokio::time::timeout(Duration::from_secs(2), rs.await_resolution(b))
+        .await
+        .expect("a retained terminal must not wait for another call's guest boundary")
+        .unwrap();
+    assert!(
+        matches!(resolution, Resolution::Completed { end_idx, delivery_marker: None, .. }
+        if end_idx == OplogIndex::from_u64(5))
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    barrier.acknowledge();
+    assert_eq!(
+        rs.get_oplog_entry(None).await.unwrap().0,
+        OplogIndex::from_u64(7)
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn open_retained_start_claims_but_its_later_terminal_waits_for_delivery_acknowledgement() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        start_now(),
+        delivered_for(2),
+        end_for(4, 43),
+        noop(),
+    ])
+    .await;
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(a).await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    let b = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    )
+    .await
+    .expect("an open retained Start claim must not wait for delivery acknowledgement")
+    .unwrap();
+    assert_eq!(b.start_idx(), OplogIndex::from_u64(4));
+    let mut resolution = Box::pin(rs.await_resolution(b));
+    assert_pending(&mut resolution, "the terminal after the delivery marker").await;
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    barrier.acknowledge();
+    assert!(
+        matches!(resolution.await.unwrap(), Resolution::Completed { end_idx, delivery_marker: None, .. }
+        if end_idx == OplogIndex::from_u64(6))
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn unobserved_owned_delivery_barrier_result_latches_delivery_failure() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        noop(),
+    ])
+    .await;
+    let call = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(call).await.unwrap();
+    let gate = rs.cursor.advance_gate.clone().lock_owned().await;
+    let progress = rs.cursor.progress.notified();
+    tokio::pin!(progress);
+    progress.as_mut().enable();
+    let mut delivery =
+        Box::pin(rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4)));
+    assert!(futures::poll!(delivery.as_mut()).is_pending());
+    // The acquired gate prevents the spawned marker operation from completing before its
+    // waiter is cancelled. Progress then proves that operation consumed the marker.
+    drop(delivery);
+    drop(gate);
+    progress.await;
+    let error = rs
+        .fence_owned_cursor_ops()
+        .await
+        .expect_err("discarding an owned delivery result must poison replay");
+    assert!(
+        error
+            .to_string()
+            .contains("dropped before the recorded guest-delivery boundary"),
+        "unexpected error: {error}"
+    );
+    let error = rs
+        .get_oplog_entry(None)
+        .await
+        .expect_err("delivery failure must stay latched");
+    assert!(
+        error
+            .to_string()
+            .contains("dropped before the recorded guest-delivery boundary"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_owned_cursor_waiter_keeps_cleanup_fence_pending_until_transaction_finishes() {
+    let rs = replay_state_over(vec![noop(), noop()]).await;
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let mut operation = Box::pin(rs.run_owned_cursor_op(move |state| async move {
+        state
+            .with_tx(async move |_| {
+                entered.send(()).unwrap();
+                released.await.unwrap();
+                Ok(())
+            })
+            .await
+    }));
+    assert!(futures::poll!(operation.as_mut()).is_pending());
+    ready.await.unwrap();
+    drop(operation);
+    let mut fence = Box::pin(rs.fence_owned_cursor_ops());
+    assert_pending(&mut fence, "cleanup after cancelling the cursor waiter").await;
+    release.send(()).unwrap();
+    fence.await.unwrap();
+    assert_eq!(
+        rs.get_oplog_entry(None).await.unwrap().0,
+        OplogIndex::from_u64(2)
+    );
+}
+
+#[test]
 async fn marker_in_deleted_region_delivers_end_normally() {
     // A CompletionDiscarded marker inside a deleted region belongs to an abandoned timeline:
     // the still-visible End must be delivered normally.

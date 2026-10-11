@@ -324,6 +324,8 @@ struct ReplayCursor {
     #[cfg(test)]
     primary_publication_gate:
         std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,
+    #[cfg(test)]
+    retained_claim_miss: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

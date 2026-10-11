@@ -540,7 +540,10 @@ impl ReplayState {
             let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
-                        .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
+                        .with_claim_tx(&owned_claim, None, |handle, entry| {
+                            on_claim(handle.start_idx(), &entry);
+                            (Some((handle, entry)), None, None)
+                        }, async |tx| match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
                                 on_claim(handle.start_idx(), &entry);
                                 Ok((Some((handle, entry)), None, None))
@@ -816,7 +819,7 @@ impl ReplayState {
             let outcome = self
                 .run_owned_cursor_op(move |state| async move {
                     state
-                        .with_tx(async |tx| {
+                        .with_claim_tx(&owned_claim, None, StartClaimAttempt::Claimed, async |tx| {
                             tx.claim_scope_start_with_missing_recovery(
                                 &owned_claim,
                                 recover_missing,
@@ -943,8 +946,12 @@ impl ReplayState {
             let expected_request = expected_request.clone();
             let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
+                    let claim = match expected_parent_start_index {
+                        Some(parent) => StartClaim::owned_matching_request(&expected_function_name, &expected_function_type, parent, &expected_request),
+                        None => StartClaim::unowned_matching_request(&expected_function_name, &expected_function_type, &expected_request),
+                    };
                     state
-                        .with_tx(async |tx| {
+                        .with_claim_tx(&claim, Some((expected_invocation_id, expected_parent_start_index)), |handle, entry| (Some((handle, entry)), None, None), async |tx| {
                             if tx
                                 .st
                                 .claimed_custom_invocation_ids

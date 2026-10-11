@@ -683,6 +683,16 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching` and
   `claim_start_matching_request`); a `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
+- A delivery barrier blocks physical advancement, not adoption of already-retained history.
+  `with_claim_tx` first polls one gate waiter, then uses the restricted `RetainedClaims`
+  capability under the state mutex while that gate is unavailable. On a miss it keeps the same
+  waiter and rechecks retained state on progress; only a gated transaction may classify absence
+  or enter missing-scope settlement. This preserves the cleanup fence's queue ordering.
+  Resolution likewise prefers a ready gate and completes the ordinary drain, but can return an
+  already-routed host result when the gate remains held. Host readiness is not guest delivery:
+  the actual observer still waits for its exact marker. The marker-consuming owned operation
+  constructs the `ReplayDeliveryBarrier` before returning, so discarding its unobserved result
+  latches failure and releases the gate rather than silently acknowledging delivery.
 - Retaining is not consuming. Retained `Start`s and their attached terminals are committed
   through `commit_retained_entry`, which does not advance `last_replayed_non_hint_index`; the
   position is published by `publish_claimed_position` only when the owner claims the `Start`.
