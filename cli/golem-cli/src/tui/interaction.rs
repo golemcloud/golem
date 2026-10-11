@@ -26,6 +26,7 @@ pub(super) enum InteractionMode {
     AgentFilter,
     AgentDatasetFilter,
     AgentColumns,
+    OplogFilter,
     MetricsRange,
     CommandForm,
     SessionForm,

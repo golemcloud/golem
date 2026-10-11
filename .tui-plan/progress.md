@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-11: Explicit Ops Text Input Ownership
+
+- Promoted palette search, loaded-Agent Find, Agent dataset filtering, and
+  Oplog search to the same visible input contract: shared input surface,
+  Unicode-safe tail fitting, and a native terminal cursor while editing.
+- Added an explicit Oplog filter mode. Enter applies the draft, esc restores
+  the applied query, and modified TUI shortcuts remain available while text is
+  being entered.
+- Kept cursor ownership local to the active control, including when hidden
+  nested terminals continue running in the background.
+- Added focused rendering and interaction coverage for all four search
+  surfaces, long Unicode input, draft cancellation, and the existing bare-key
+  Agent Find behavior.
+
+Ready for visual review with the larger Ops hierarchy checkpoint. The next
+active slice replaces the expensive Overview signal query with a lightweight
+status and routing cockpit.
+
 ## 2026-10-09: Ops Destination Preview Catalogue
 
 - Expanded the feature-gated real-renderer gallery from Overview and Agents to

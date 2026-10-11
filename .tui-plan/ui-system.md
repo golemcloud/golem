@@ -289,6 +289,10 @@ Entering a text-editing mode transfers only bare printable input. Modified
 global and pane shortcuts remain active while the field is being edited, so a
 user can open Commands or Help, change pane focus, resize a split, refresh, or
 apply loaded-match actions without first leaving Find.
+Every active text field uses the shared input surface and owns a visible native
+terminal cursor. Long values keep the insertion end visible without splitting
+Unicode characters. Enter applies a transactional draft and esc restores the
+last applied value unless the field is explicitly documented as live input.
 
 Tab and shift+tab are reserved for pane focus. They do not switch workspaces,
 views, Activity representations, palette scopes, or Find fields. ctrl+arrow is

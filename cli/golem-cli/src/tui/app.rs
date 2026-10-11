@@ -827,6 +827,7 @@ impl TuiApp {
                 self.handle_agent_dataset_filter_key(key, event_tx)
             }
             InteractionMode::AgentColumns => self.handle_agent_columns_key(key),
+            InteractionMode::OplogFilter => self.handle_oplog_filter_key(key, event_tx),
             InteractionMode::MetricsRange => self.handle_metrics_range_key(key, event_tx),
             InteractionMode::TerminalInput => self.handle_terminal_input_key(key),
             InteractionMode::TerminalScrollback => self.handle_terminal_scrollback_key(key),
@@ -1242,6 +1243,7 @@ impl TuiApp {
                     && self.ops.active() == OpsDestination::Oplog
                     && !self.activity.query.is_empty() =>
             {
+                self.mode.replace(InteractionMode::OplogFilter);
                 self.activity.query.pop();
             }
             KeyCode::Char(character)
@@ -1250,6 +1252,7 @@ impl TuiApp {
                     && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
                     && (!character.is_whitespace() || !self.activity.query.is_empty()) =>
             {
+                self.mode.replace(InteractionMode::OplogFilter);
                 self.activity.query.push(character);
             }
             _ => {}
@@ -1622,6 +1625,45 @@ impl TuiApp {
         }
     }
 
+    fn handle_oplog_filter_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if self.handle_modified_shortcut(key, event_tx) {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.activity.query = self.activity.applied_query.text.clone();
+                self.mode.replace(InteractionMode::Normal);
+            }
+            KeyCode::Enter => {
+                self.apply_activity_query(event_tx);
+                self.mode.replace(InteractionMode::Normal);
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.mode.replace(InteractionMode::Normal);
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.activity.query.clear();
+            }
+            KeyCode::Backspace => {
+                self.activity.query.pop();
+            }
+            KeyCode::Up => self.move_activity_selection(false),
+            KeyCode::Down => self.move_activity_selection(true),
+            KeyCode::Left => {
+                self.set_activity_representation(self.activity.representation.previous(), event_tx)
+            }
+            KeyCode::Right => {
+                self.set_activity_representation(self.activity.representation.next(), event_tx)
+            }
+            KeyCode::Char(character)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.activity.query.push(character);
+            }
+            _ => {}
+        }
+    }
+
     fn handle_leader_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
         if key.code == KeyCode::Esc {
             self.close_leader();
@@ -1864,6 +1906,7 @@ impl TuiApp {
             InteractionMode::Normal
             | InteractionMode::Layout
             | InteractionMode::AgentFilter
+            | InteractionMode::OplogFilter
             | InteractionMode::TerminalInput
             | InteractionMode::TerminalScrollback
                 if target != ScrollbarTarget::Help =>
@@ -9699,6 +9742,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         InteractionMode::AgentFilter => {}
         InteractionMode::AgentDatasetFilter => render_agent_dataset_filter(frame, app),
         InteractionMode::AgentColumns => render_agent_columns(frame, app),
+        InteractionMode::OplogFilter => {}
         InteractionMode::MetricsRange => render_metrics_range_form(frame, app),
         InteractionMode::CommandForm => render_command_form(frame, app),
         InteractionMode::SessionForm => render_session_form(frame, app),
@@ -10738,28 +10782,36 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     } else {
         "Enter to apply"
     };
-    let query = if app.activity.query.is_empty() {
-        "type an Oplog text expression".to_string()
-    } else {
-        app.activity.query.clone()
+    let status_width = (UnicodeWidthStr::width(query_state) + 3)
+        .min(query_bar.width.saturating_sub(1) as usize) as u16;
+    let [query_input, query_status] = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(status_width)])
+        .areas(query_bar);
+    let search = SearchInput {
+        query: &app.activity.query,
+        placeholder: "type an Oplog text expression",
     };
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Search  ", Style::default().fg(theme().text_secondary)),
-            Span::styled(
-                fit(&query, query_bar.width.saturating_sub(24) as usize),
-                Style::default()
-                    .fg(theme().input_text)
-                    .bg(theme().input_background),
-            ),
-            Span::styled(
-                format!("  · {query_state}"),
-                Style::default().fg(theme().text_muted),
-            ),
-        ]))
-        .style(surface_style()),
-        query_bar,
+        Paragraph::new(search.line(query_input.width as usize, &theme())).style(surface_style()),
+        query_input,
     );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!("· {query_state}"),
+            Style::default().fg(theme().text_muted),
+        ))
+        .style(surface_style()),
+        query_status,
+    );
+    if app.mode == InteractionMode::OplogFilter && query_input.width > 0 {
+        frame.set_cursor_position(Position::new(
+            query_input
+                .x
+                .saturating_add(search.cursor_column(query_input.width as usize) as u16),
+            query_input.y,
+        ));
+    }
 
     if let Some(error) = &app.activity.error {
         render_metrics_notice(frame, body, NoticeKind::Warning, error);
@@ -12910,10 +12962,22 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         height: table_area.height.min(query_height as u16),
         ..table_area
     };
+    let query_cursor_column = query_bar.cursor_column();
     frame.render_widget(
         Paragraph::new(query_bar.lines(&theme())).style(surface_style()),
         query_area,
     );
+    if let Some(cursor_column) = query_cursor_column
+        && query_area.width > 0
+        && query_area.height > 1
+    {
+        frame.set_cursor_position(Position::new(
+            query_area
+                .x
+                .saturating_add((cursor_column as u16).min(query_area.width - 1)),
+            query_area.y.saturating_add(1),
+        ));
+    }
     table_area.y = table_area.y.saturating_add(query_area.height);
     table_area.height = table_area.height.saturating_sub(query_area.height);
     if let Some(error) = &app.agents.last_error {
@@ -13612,36 +13676,22 @@ fn render_agent_dataset_filter(frame: &mut Frame<'_>, app: &TuiApp) {
     let start = filter
         .selected
         .saturating_sub(visible_count.saturating_sub(1));
-    let query_text = if filter.query.is_empty() {
-        "type component or agent type"
-    } else {
-        &filter.query
+    let search = SearchInput {
+        query: &filter.query,
+        placeholder: "type component or agent type",
     };
+    let summary = format!(
+        "Server-side filter · {}/{} choices",
+        filtered_indices.len(),
+        filter.choices.len()
+    );
     let mut lines = vec![
         Notice {
             kind: NoticeKind::Info,
-            message: "Server-side filter; applied before loading agents",
+            message: &summary,
         }
         .line(&theme()),
-        Line::from(vec![
-            Span::styled("Find     ", Style::default().fg(theme().text_muted)),
-            Span::styled(
-                query_text.to_string(),
-                Style::default().fg(if filter.query.is_empty() {
-                    theme().text_faint
-                } else {
-                    theme().input_text
-                }),
-            ),
-            Span::styled(
-                format!(
-                    "   {}/{} choices",
-                    filtered_indices.len(),
-                    filter.choices.len()
-                ),
-                Style::default().fg(theme().text_muted),
-            ),
-        ]),
+        search.line(content.width as usize, &theme()),
         Line::default(),
         DecisionTableRow {
             cells: &["Component", "Agent type"],
@@ -13733,6 +13783,14 @@ fn render_agent_dataset_filter(frame: &mut Frame<'_>, app: &TuiApp) {
             filtered_indices.len(),
             filter.selected,
         );
+    }
+    if content.width > 0 && content.height > 1 {
+        frame.set_cursor_position(Position::new(
+            content
+                .x
+                .saturating_add(search.cursor_column(content.width as usize) as u16),
+            content.y.saturating_add(1),
+        ));
     }
 }
 
@@ -15896,12 +15954,13 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
             },
         ),
     ]);
+    let search = SearchInput {
+        query: &app.palette.query,
+        placeholder: "type to search commands",
+    };
     let mut lines = vec![
         scope_line,
-        SearchInput {
-            query: &app.palette.query,
-        }
-        .line(content_width, &theme()),
+        search.line(content_width, &theme()),
         Line::default(),
     ];
 
@@ -15979,6 +16038,14 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
             matches.len(),
             selected,
         );
+    }
+    if content_width > 0 && content.height > 1 {
+        frame.set_cursor_position(Position::new(
+            content
+                .x
+                .saturating_add(search.cursor_column(content_width) as u16),
+            content.y.saturating_add(1),
+        ));
     }
 }
 
@@ -19361,7 +19428,7 @@ mod tests {
         assert_eq!(app.mode, InteractionMode::AgentDatasetFilter);
         assert!(frame.contains("Agent dataset"), "{frame}");
         assert!(
-            frame.contains("Server-side filter; applied before loading agents"),
+            frame.contains("Server-side filter · 5/5 choices"),
             "{frame}"
         );
         assert!(frame.contains("cart"), "{frame}");
@@ -20710,11 +20777,13 @@ mod tests {
         for character in "failed invocation".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
+        assert_eq!(app.mode, InteractionMode::OplogFilter);
         assert_eq!(app.activity.query, "failed invocation");
         assert!(app.activity.applied_query.text.is_empty());
 
         app.handle_key(key(KeyCode::Enter));
 
+        assert_eq!(app.mode, InteractionMode::Normal);
         assert_eq!(app.activity.applied_query.text, "failed invocation");
         assert!(
             app.ops
@@ -20724,6 +20793,51 @@ mod tests {
         let frame = render_app_text_at(&app, 120, 28);
         assert!(frame.contains("failed invocation"), "{frame}");
         assert!(frame.contains("applied"), "{frame}");
+    }
+
+    #[test]
+    fn active_search_surfaces_show_a_native_cursor() {
+        let assert_cursor = |app: &TuiApp| {
+            let (_, cursor) = render_app_text_and_cursor(app);
+            let buffer = render_app_buffer_at(app, 100, 24);
+            assert_ne!((cursor.x, cursor.y), (0, 0));
+            assert_eq!(buffer[(cursor.x, cursor.y)].bg, theme().input_background);
+        };
+
+        let mut palette = test_app();
+        palette.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_cursor(&palette);
+
+        let mut agents = test_app();
+        agents.agents.agents = sample_agents();
+        agents.handle_key(key(KeyCode::Char('c')));
+        assert_cursor(&agents);
+
+        let mut dataset = test_app();
+        dataset.agents.agents = sample_agents();
+        dataset.handle_key(modified_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_cursor(&dataset);
+
+        let mut oplog = test_app();
+        oplog.ops.select(OpsDestination::Oplog);
+        oplog.handle_key(key(KeyCode::Char('f')));
+        assert_cursor(&oplog);
+    }
+
+    #[test]
+    fn escape_discards_the_oplog_search_draft() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Oplog);
+        app.activity.applied_query.text = "applied".to_string();
+        app.activity.query = "applied".to_string();
+
+        app.handle_key(key(KeyCode::Char('!')));
+        assert_eq!(app.mode, InteractionMode::OplogFilter);
+        assert_eq!(app.activity.query, "applied!");
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.mode, InteractionMode::Normal);
+        assert_eq!(app.activity.query, "applied");
     }
 
     #[test]
@@ -21678,13 +21792,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_build_key_does_not_take_terminal_cursor() {
+    fn bare_build_key_opens_agent_find_with_a_cursor() {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('b')));
         let (_, cursor) = render_app_text_and_cursor(&app);
 
-        assert_eq!((cursor.x, cursor.y), (0, 0));
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
+        assert_eq!(app.agents.query, "b");
+        assert_ne!((cursor.x, cursor.y), (0, 0));
     }
 
     #[test]
@@ -22712,7 +22828,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_repl_does_not_take_terminal_cursor() {
+    fn inactive_repl_keeps_the_cursor_on_agent_find() {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
 
@@ -22726,7 +22842,9 @@ mod tests {
         );
         let (_, cursor) = render_app_text_and_cursor(&app);
 
-        assert_eq!((cursor.x, cursor.y), (0, 0));
+        assert_eq!(app.mode, InteractionMode::AgentFilter);
+        assert_eq!(app.agents.query, "r");
+        assert_ne!((cursor.x, cursor.y), (0, 0));
     }
 
     #[test]

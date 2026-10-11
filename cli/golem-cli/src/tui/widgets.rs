@@ -2093,11 +2093,21 @@ fn highlighted_fit(
 
 pub(super) struct SearchInput<'a> {
     pub query: &'a str,
+    pub placeholder: &'a str,
 }
 
 impl SearchInput<'_> {
-    pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
-        let used = 2 + self.query.chars().count();
+    pub fn line(&self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
+        let value_width = width.saturating_sub(3);
+        let value = trailing_fit(
+            if self.query.is_empty() {
+                self.placeholder
+            } else {
+                self.query
+            },
+            value_width,
+        );
+        let used = 2 + UnicodeWidthStr::width(value.as_str());
         Line::from(vec![
             Span::styled(
                 "› ",
@@ -2106,9 +2116,13 @@ impl SearchInput<'_> {
                     .bg(visual.input_background),
             ),
             Span::styled(
-                self.query.to_string(),
+                value,
                 Style::default()
-                    .fg(visual.input_text)
+                    .fg(if self.query.is_empty() {
+                        visual.text_faint
+                    } else {
+                        visual.input_text
+                    })
                     .bg(visual.input_background),
             ),
             Span::styled(
@@ -2117,6 +2131,32 @@ impl SearchInput<'_> {
             ),
         ])
     }
+
+    pub fn cursor_column(&self, width: usize) -> usize {
+        if width == 0 {
+            return 0;
+        }
+        let value_width = width.saturating_sub(3);
+        let query = trailing_fit(self.query, value_width);
+        (2 + UnicodeWidthStr::width(query.as_str())).min(width - 1)
+    }
+}
+
+fn trailing_fit(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut characters = Vec::new();
+    let mut used = 0_usize;
+    for character in text.chars().rev() {
+        let character_width = character.width().unwrap_or_default();
+        if used.saturating_add(character_width) > width {
+            break;
+        }
+        characters.push(character);
+        used = used.saturating_add(character_width);
+    }
+    characters.into_iter().rev().collect()
 }
 
 pub(super) struct CollectionQueryBar<'a> {
@@ -2159,16 +2199,25 @@ impl CollectionQueryBar<'_> {
                     Style::default().fg(visual.accent),
                 ),
                 Span::styled(
-                    if self.query.is_empty() {
-                        "type to search".to_string()
-                    } else {
-                        self.query.to_string()
-                    },
-                    Style::default().fg(if self.query.is_empty() {
-                        visual.text_faint
-                    } else {
-                        visual.input_text
-                    }),
+                    format!(
+                        "{} ",
+                        if self.query.is_empty() {
+                            "type to search"
+                        } else {
+                            self.query
+                        }
+                    ),
+                    Style::default()
+                        .fg(if self.query.is_empty() {
+                            visual.text_faint
+                        } else {
+                            visual.input_text
+                        })
+                        .bg(if self.editing {
+                            visual.input_background
+                        } else {
+                            visual.surface
+                        }),
                 ),
                 Span::styled(
                     format!("   {}/{} loaded matches", self.matched, self.loaded),
@@ -2177,6 +2226,15 @@ impl CollectionQueryBar<'_> {
             ]));
         }
         lines
+    }
+
+    pub fn cursor_column(&self) -> Option<usize> {
+        self.editing.then(|| {
+            UnicodeWidthStr::width("Find     ")
+                + UnicodeWidthStr::width(self.scope)
+                + 2
+                + UnicodeWidthStr::width(self.query)
+        })
     }
 }
 
@@ -3014,7 +3072,11 @@ mod tests {
     #[test]
     fn search_rows_share_alignment_and_selection_width() {
         let visual = TuiVisualStyle::production();
-        let input = SearchInput { query: "dep" }.line(20, &visual);
+        let input = SearchInput {
+            query: "dep",
+            placeholder: "search",
+        }
+        .line(20, &visual);
         let selected = SelectableRow {
             label: "Deploy",
             selected: true,
@@ -3030,6 +3092,25 @@ mod tests {
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
         assert_eq!(buffer[(0, 1)].fg, visual.accent);
         assert!((0..20).all(|x| buffer[(x, 1)].bg == visual.selection_background));
+    }
+
+    #[test]
+    fn search_input_keeps_an_end_cursor_visible_for_long_unicode_queries() {
+        let visual = TuiVisualStyle::production();
+        let input = SearchInput {
+            query: "prefix-ávíztűrő",
+            placeholder: "search",
+        };
+        let line = input.line(10, &visual);
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert_eq!(UnicodeWidthStr::width(rendered.as_str()), 10);
+        assert!(input.cursor_column(10) < 10);
+        assert!(rendered.contains("víztűrő"), "{rendered}");
     }
 
     #[test]

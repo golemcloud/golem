@@ -20,7 +20,8 @@ does not retain candidate, comparison, coverage, or Frame Base machinery.
 
 ## Current Focus
 
-- Focus: rebuild and accept stable destination-first Ops (`UX-025`).
+- Focus: consolidate and accept stable destination-first Ops (`UX-025`,
+  `UX-026`).
 - Cases: production-rendered fixtures for every Ops destination at wide,
   medium, narrow, short, and extreme terminal sizes.
 - Decision: the subject/view prototype is retired. The accepted Dev shell,
@@ -666,3 +667,29 @@ renderers are no longer live contracts.
 - Outcome: the ready-state catalogue and size matrix are implemented and
   automated checks are green. Exceptional/nested-route fixtures and manual
   visual acceptance remain open.
+
+### UX-026 — Consolidate Ops hierarchy and interaction
+
+- Status: implemented in slices; awaiting combined visual review
+- Preview: production-rendered Ops catalogue and live terminal
+- Area: Overview, destination hierarchy, cross-view handoffs, Oplog, Metrics,
+  text input, and pointer interaction
+- Theme: navigation | content | interaction | visual-system | performance
+- Problem: the destination model is sound, but Overview performs expensive
+  work for a busy landing page, related views are not visibly connected,
+  Oplog remains a bare data projection, page hierarchy/chrome varies, and
+  several active inputs and pointer targets do not clearly own interaction.
+- Desired outcome: a lightweight routing cockpit, one legible Ops hierarchy,
+  visible investigation handoffs, a useful master/details Oplog explorer, and
+  consistent cursor and mouse behavior without adding a second visual system.
+- Scope: all Ops destinations and the shared search, pane, split, table,
+  scrollbar, and chart primitives they compose.
+- Dependencies: `UX-025` and the accepted shared shell foundation.
+- Acceptance: Overview does not query dashboard metrics merely to render;
+  active inputs have a native cursor; destination nesting and pane boundaries
+  are consistent; scope transfers are discoverable without Commands; Oplog
+  supports readable and forensic navigation; mouse behavior matches keyboard
+  ownership; Metrics receives a final terminal-density review.
+- Outcome: the explicit input-ownership slice is implemented and its focused
+  checks are green. Overview, hierarchy, handoffs, Oplog, pointer parity, and
+  final Metrics review remain tracked in `tasks.md`.

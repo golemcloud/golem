@@ -65,3 +65,19 @@
 - [x] Complete wide/medium/narrow/short/1×1 automated render coverage.
 - [ ] Complete focused tests, checks, generated artifacts, and manual demo run.
 - [ ] Update review ledger and mark the Ops foundation accepted.
+
+## Ops UX consolidation
+
+- [x] Give every active text input explicit mode ownership, shared input
+  styling, a visible terminal cursor, and apply/cancel semantics.
+- [~] Replace the query-heavy Overview dashboard with a cheap status and
+  quick-jump cockpit.
+- [ ] Apply one hierarchy and continuous pane chrome across Ops destinations.
+- [ ] Make Agent, Metrics, Oplog, and Stream scope handoffs visible in-page.
+- [ ] Rebuild Oplog as a navigable master/details journal and forensic viewer.
+- [ ] Bring row selection, pane scrolling, split resizing, and scrollbar
+  interaction to pointer parity on every Ops destination.
+- [ ] Review Metrics chart density, legends, inspection, and empty/error states
+  as a final minimal-Grafana pass.
+- [ ] Complete terminal visual review of each finished checkpoint before Ops
+  acceptance.
