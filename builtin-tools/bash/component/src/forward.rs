@@ -1,5 +1,6 @@
 //! Gives part of the work of a local command to a built-in file tool that is bound to the agent:
-//! `cat` reads a file through `read-file`, and `tee` writes a file through `write-file`.
+//! `cat` reads a file through `read-file`, `tee` writes a file through `write-file`, and `sed -i`
+//! changes a file through `edit-file`.
 //!
 //! A tool does all of that work or nothing. When it does nothing, the command does the work
 //! itself, so a script sees the same result with and without the tool.
@@ -11,6 +12,7 @@ use std::collections::BTreeMap;
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod edit_file;
 mod read_file;
 mod write_file;
 
@@ -23,6 +25,9 @@ pub(crate) fn install(session: &mut bash_shell::session::Session, tools: &BTreeM
     }
     if let Some(writer) = write_file::WriteFileTool::bound(tools) {
         session.forward_file_writes(Arc::new(writer));
+    }
+    if let Some(editor) = edit_file::EditFileTool::bound(tools) {
+        session.forward_file_edits(Arc::new(editor));
     }
 }
 

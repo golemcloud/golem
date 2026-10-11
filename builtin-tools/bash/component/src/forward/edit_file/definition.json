@@ -1,0 +1,378 @@
+{
+ "version": "0.4.1",
+ "requires_filesystem": true,
+ "commands": {
+  "nodes": [
+   {
+    "name": "edit-file",
+    "aliases": [],
+    "doc": {
+     "summary": "Replaces exactly one occurrence of `old_text` in a known UTF-8 text file. The result reports replacement and byte counts. Missing text is stale, repeated text is ambiguous, and binary, missing, unsafe, or non-file paths are errors. File discovery is not performed.",
+     "description": "",
+     "examples": []
+    },
+    "globals": {
+     "options": [],
+     "flags": []
+    },
+    "subcommands": [],
+    "body": {
+     "positionals": {
+      "fixed": [
+       {
+        "name": "path",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        },
+        "value_name": null,
+        "type_": {
+         "kind": "string",
+         "value": {}
+        },
+        "default": null,
+        "required": true,
+        "accepts_stdio": false
+       },
+       {
+        "name": "old-text",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        },
+        "value_name": null,
+        "type_": {
+         "kind": "string",
+         "value": {}
+        },
+        "default": null,
+        "required": true,
+        "accepts_stdio": false
+       },
+       {
+        "name": "new-text",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        },
+        "value_name": null,
+        "type_": {
+         "kind": "string",
+         "value": {}
+        },
+        "default": null,
+        "required": true,
+        "accepts_stdio": false
+       }
+      ],
+      "tail": null
+     },
+     "options": [],
+     "flags": [],
+     "constraints": [],
+     "stdin": null,
+     "stdout": null,
+     "stderr": null,
+     "result": {
+      "type_": {
+       "kind": "ref",
+       "value": {
+        "id": "golem_filesystem_tools.edit_file.EditFileResult"
+       }
+      },
+      "doc": {
+       "summary": "",
+       "description": "",
+       "examples": []
+      },
+      "formatters": [
+       {
+        "name": "default",
+        "doc": {
+         "summary": "",
+         "description": "",
+         "examples": []
+        }
+       }
+      ],
+      "default_formatter": "default"
+     },
+     "errors": [
+      {
+       "name": "unsafe-path",
+       "doc": {
+        "summary": "The path is empty, contains NUL or a parent component, or does not identify a file.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-range",
+       "doc": {
+        "summary": "A line bound or continuation cursor is invalid.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-options",
+       "doc": {
+        "summary": "A discovery option or bound is invalid.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-pattern",
+       "doc": {
+        "summary": "A grep expression is empty, malformed, or exceeds its compile limits.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-glob",
+       "doc": {
+        "summary": "A path filter is malformed or exceeds its limits.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "invalid-cursor",
+       "doc": {
+        "summary": "A continuation does not match the query or no longer identifies valid state.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "empty-old-text",
+       "doc": {
+        "summary": "`old_text` must contain at least one character.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": null
+      },
+      {
+       "name": "stale-edit",
+       "doc": {
+        "summary": "`old_text` was not found, so no edit was made.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "ambiguous-edit",
+       "doc": {
+        "summary": "More than one occurrence matched, so no edit was made.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "usage-error",
+       "exit_code": 2,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "not-found",
+       "doc": {
+        "summary": "The caller-supplied path does not exist.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "not-a-file",
+       "doc": {
+        "summary": "The caller-supplied path exists but is not a regular file.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "not-a-directory",
+       "doc": {
+        "summary": "The caller-supplied path exists but is not a directory.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "unsupported-root",
+       "doc": {
+        "summary": "The selected discovery root is neither a regular file nor a directory.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "symlink-path",
+       "doc": {
+        "summary": "A selected root or ancestor is a symbolic link; discovery never follows links.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "binary-file",
+       "doc": {
+        "summary": "The traversed file bytes contain NUL or invalid UTF-8.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      },
+      {
+       "name": "io",
+       "doc": {
+        "summary": "The underlying filesystem operation failed.",
+        "description": "",
+        "examples": []
+       },
+       "kind": "runtime-error",
+       "exit_code": 1,
+       "payload": {
+        "kind": "string",
+        "value": {}
+       }
+      }
+     ],
+     "annotations": {
+      "read_only": false,
+      "destructive": true,
+      "idempotent": false,
+      "open_world": false
+     }
+    }
+   }
+  ]
+ },
+ "schema": {
+  "defs": [
+   {
+    "id": "golem_filesystem_tools.edit_file.EditFileResult",
+    "name": "EditFileResult",
+    "body": {
+     "kind": "record",
+     "value": {
+      "fields": [
+       {
+        "name": "replacements",
+        "body": {
+         "kind": "u64",
+         "value": {}
+        }
+       },
+       {
+        "name": "bytes_before",
+        "body": {
+         "kind": "u64",
+         "value": {}
+        }
+       },
+       {
+        "name": "bytes_after",
+        "body": {
+         "kind": "u64",
+         "value": {}
+        }
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "root": {
+   "kind": "record",
+   "value": {
+    "fields": []
+   }
+  }
+ }
+}
