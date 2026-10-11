@@ -1361,6 +1361,9 @@ jobs:
           if [[ '${{ matrix.chunk.name }}' == rust-* ]]; then
             export CARGO_TARGET_DIR="${{ github.workspace }}/tmp/rust-fixture-target"
           fi
+          if [[ '${{ matrix.chunk.name }}' == benchmarks ]]; then
+            export GOLEM_RUST_PATH="${{ github.workspace }}/sdks/rust/golem-rust"
+          fi
           ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
