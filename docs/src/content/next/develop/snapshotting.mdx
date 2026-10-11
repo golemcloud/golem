@@ -66,7 +66,7 @@ During a manual update, the source revision saves a snapshot, and the target rev
 
 The target revision must be able to decode the snapshots of the agents you update:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         With Zod, give a new field a `.default(...)` value or make it `.optional()`. A new required field without a decoding default makes loading fail when the saved JSON does not contain it:
 
@@ -96,6 +96,20 @@ The target revision must be able to decode the snapshots of the agents you updat
     </Tabs.Tab>
     <Tabs.Tab>
         The generated loader uses `@json.from_json` to decode the saved JSON into the target revision's agent type. Its `FromJson` implementation must accept missing new fields. When the derived implementation cannot decode the earlier JSON, use a custom `load_snapshot` factory to convert it.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The default loader decodes the saved JSON with `encoding/json` into the zero value of the target revision's state struct. A new field that the saved JSON does not contain keeps its zero value, and a field that the target revision removed is ignored. The constructor does not run, so set a default for a new field in the `OnRestore` hook:
+
+        ```go
+        agent.OnRestore(func(_ *golem.InitContext[ID, state, golem.NoConfig], s *state) error {
+            if s.Label == "" {
+                s.Label = "unnamed"
+            }
+            return nil
+        })
+        ```
+
+        A changed field type makes decoding fail. Implement `golem.Snapshotter` to convert an earlier state format.
     </Tabs.Tab>
 </Tabs>
 

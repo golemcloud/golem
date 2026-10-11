@@ -72,7 +72,8 @@ type ObjectMetadata struct {
 
 // ── Top-level container operations ────────────────────────────────────────────
 
-// CreateContainer creates a new container.
+// CreateContainer creates the named container if it does not exist, or opens
+// the existing one.
 func CreateContainer(name string) (*Container, error) {
 	r := bstore.CreateContainer(name)
 	if r.IsErr() {
@@ -93,26 +94,10 @@ func GetContainer(name string) (*Container, error) {
 // MustGetContainer is [GetContainer] that panics on error.
 func MustGetContainer(name string) *Container { return must(GetContainer(name)) }
 
-// GetOrCreateContainer returns the container, creating it if it does not exist.
-// It tolerates a concurrent create (the create/get race).
-func GetOrCreateContainer(name string) (*Container, error) {
-	exists, err := ContainerExists(name)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return GetContainer(name)
-	}
-	c, err := CreateContainer(name)
-	if err != nil {
-		// Possibly created concurrently between the check and the create.
-		if got, gerr := GetContainer(name); gerr == nil {
-			return got, nil
-		}
-		return nil, err
-	}
-	return c, nil
-}
+// GetOrCreateContainer opens the named container, creating it first if it does
+// not exist. The host's container creation is idempotent, so this is
+// [CreateContainer] under the name that says so.
+func GetOrCreateContainer(name string) (*Container, error) { return CreateContainer(name) }
 
 // MustGetOrCreateContainer is [GetOrCreateContainer] that panics on error.
 func MustGetOrCreateContainer(name string) *Container {
