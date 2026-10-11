@@ -35,7 +35,7 @@ use nested_cli::{NestedCliEvent, NestedCliTarget};
 use ops::activity::ActivityRefreshPayload;
 use ops::deployments::DeploymentsPayload;
 use ops::metrics::MetricsRefreshPayload;
-use ops::overview::{OverviewAgentSignals, OverviewObservability};
+use ops::overview::OverviewObservability;
 use ops::resources::ResourcesRefreshPayload;
 use ops::stream::StreamMessage;
 use tokio::sync::oneshot;
@@ -66,10 +66,6 @@ enum TuiEvent {
     OpsEnvironmentRefreshFinished {
         generation: u64,
         result: TuiContextTaskResult<OpsEnvironmentSnapshot>,
-    },
-    OverviewAgentSignalsFinished {
-        generation: u64,
-        result: TuiContextTaskResult<OverviewAgentSignals>,
     },
     OverviewObservabilityFinished {
         generation: u64,

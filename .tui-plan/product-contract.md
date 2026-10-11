@@ -63,22 +63,18 @@ The permanent destinations are:
 
 ## Overview
 
-Overview is a status-and-routing surface with independently loading cards:
+Overview is a lightweight status-and-routing cockpit. Its status block uses
+only the current environment/deployment identity, TUI-owned local Server state,
+the local observability capability, and retained Stream state. Opening Overview
+must not query a Metrics dashboard, enumerate Agents, or fetch full deployment
+revision composition.
 
-- current deployment revision/version/hash, composition counts, and validation
-  warnings;
-- Agent signals for the last 15 minutes: Invocations started, Error events,
-  Completed duration p95, and Observed Agents;
-- local server and collector reachability, sample freshness, discarded points,
-  exporter version, and retention;
-- active Stream connection, follow state, unread count, and missed events;
-- concise actionable issues.
-
-Cards explicitly transfer scope or time range when opened. Server and collector
-details are nested under Overview rather than adding a Server tab. Loaded Agent
-rows are never presented as a total Agent count. The current deployment read
-contract does not retain deploy-time validation warnings, so Overview labels
-that field unavailable instead of presenting zero warnings.
+A stable quick-jump directory opens Agents, Oplog, Stream, Metrics,
+Deployments, Configuration, nested Server/collector details, and actionable
+Issues. Metrics opens the Agent dashboard at environment scope and 15 minutes;
+other destinations retain their own explicit scope contracts. Oplog and Stream
+may therefore open unscoped and explain that the user must choose an Agent in
+Agents. The Overview never presents loaded Agent rows as a total Agent count.
 
 ## Agents
 

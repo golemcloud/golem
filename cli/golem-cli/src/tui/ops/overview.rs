@@ -12,31 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::metrics::{self, MetricsRange};
-use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::local_observability::LocalObservabilityClient;
-use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
-use crate::model::local_observability::{
-    LocalMetricDashboardRequest, LocalMetricDashboardResponse, LocalMetricScope, LocalMetricSource,
-    LocalObservabilityCapability, LocalObservabilityStatus,
-};
+use crate::model::local_observability::LocalObservabilityCapability;
 use crate::tui::context_executor::TuiContextId;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::tui) enum OverviewCard {
-    Deployment,
-    AgentSignals,
-    ServerCollector,
+pub(in crate::tui) enum OverviewItem {
+    Agents,
+    Oplog,
     Stream,
+    Metrics,
+    Deployments,
+    Configuration,
+    ServerCollector,
     Issues,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum OverviewIssueTarget {
     Deployments,
-    AgentMetrics,
     ServerCollector,
     Stream,
     Agents,
@@ -50,22 +46,41 @@ pub(in crate::tui) struct OverviewIssue {
     pub(in crate::tui) target: OverviewIssueTarget,
 }
 
-impl OverviewCard {
-    pub(in crate::tui) const ALL: [Self; 5] = [
-        Self::Deployment,
-        Self::AgentSignals,
-        Self::ServerCollector,
+impl OverviewItem {
+    pub(in crate::tui) const ALL: [Self; 8] = [
+        Self::Agents,
+        Self::Oplog,
         Self::Stream,
+        Self::Metrics,
+        Self::Deployments,
+        Self::Configuration,
+        Self::ServerCollector,
         Self::Issues,
     ];
 
     pub(in crate::tui) const fn label(self) -> &'static str {
         match self {
-            Self::Deployment => "Deployment",
-            Self::AgentSignals => "Agent signals · last 15 minutes",
-            Self::ServerCollector => "Local server & collector",
+            Self::Agents => "Agents",
+            Self::Oplog => "Oplog",
             Self::Stream => "Stream",
+            Self::Metrics => "Metrics",
+            Self::Deployments => "Deployments",
+            Self::Configuration => "Configuration",
+            Self::ServerCollector => "Server & collector",
             Self::Issues => "Issues",
+        }
+    }
+
+    pub(in crate::tui) const fn description(self) -> &'static str {
+        match self {
+            Self::Agents => "Find Agents and choose investigation scope",
+            Self::Oplog => "Read grouped history or inspect exact entries",
+            Self::Stream => "Follow live events for one exact Agent",
+            Self::Metrics => "Open curated dashboards or metric Explore",
+            Self::Deployments => "Inspect revisions, composition, and compare",
+            Self::Configuration => "Browse environment, account, and server data",
+            Self::ServerCollector => "Inspect the local process and telemetry receiver",
+            Self::Issues => "Review current actionable diagnostics",
         }
     }
 }
@@ -149,36 +164,29 @@ impl<T> Drop for OverviewSnapshotState<T> {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::tui) struct OverviewAgentSignals {
-    pub(in crate::tui) capability: Option<LocalObservabilityCapability>,
-    pub(in crate::tui) dashboard: Option<LocalMetricDashboardResponse>,
-}
-
-#[derive(Clone, Debug)]
 pub(in crate::tui) struct OverviewObservability {
     pub(in crate::tui) capability: Option<LocalObservabilityCapability>,
 }
 
 #[derive(Default)]
 pub(in crate::tui) struct OverviewState {
-    pub(in crate::tui) selected_card: usize,
+    pub(in crate::tui) selected_item: usize,
     pub(in crate::tui) selected_issue: usize,
-    pub(in crate::tui) agent_signals: OverviewSnapshotState<OverviewAgentSignals>,
     pub(in crate::tui) observability: OverviewSnapshotState<OverviewObservability>,
 }
 
 impl OverviewState {
-    pub(in crate::tui) fn selected_card(&self) -> OverviewCard {
-        OverviewCard::ALL[self.selected_card.min(OverviewCard::ALL.len() - 1)]
+    pub(in crate::tui) fn selected_item(&self) -> OverviewItem {
+        OverviewItem::ALL[self.selected_item.min(OverviewItem::ALL.len() - 1)]
     }
 
-    pub(in crate::tui) fn move_card(&mut self, down: bool) {
-        self.selected_card = if down {
-            self.selected_card
+    pub(in crate::tui) fn move_item(&mut self, down: bool) {
+        self.selected_item = if down {
+            self.selected_item
                 .saturating_add(1)
-                .min(OverviewCard::ALL.len() - 1)
+                .min(OverviewItem::ALL.len() - 1)
         } else {
-            self.selected_card.saturating_sub(1)
+            self.selected_item.saturating_sub(1)
         };
     }
 
@@ -193,60 +201,10 @@ impl OverviewState {
     }
 
     pub(in crate::tui) fn reset(&mut self) {
-        self.selected_card = 0;
+        self.selected_item = 0;
         self.selected_issue = 0;
-        self.agent_signals.reset();
         self.observability.reset();
     }
-}
-
-pub(in crate::tui) async fn load_agent_signals(
-    context: Arc<Context>,
-    environment_reference: Option<EnvironmentReference>,
-) -> anyhow::Result<OverviewAgentSignals> {
-    let range = metrics::current_range(MetricsRange::Minutes15);
-    if !context.uses_local_server() {
-        return Ok(OverviewAgentSignals {
-            capability: None,
-            dashboard: None,
-        });
-    }
-    let client = LocalObservabilityClient::new(
-        context.file_download_client().clone(),
-        context.worker_service_url().clone(),
-    );
-    let capability = client.capability().await?;
-    let dashboard = if capability
-        .as_ref()
-        .is_some_and(|capability| capability.status == LocalObservabilityStatus::Ready)
-    {
-        let environment = context
-            .environment_handler()
-            .resolve_opt_environment_reference_read_only(
-                EnvironmentResolveMode::Any,
-                environment_reference.as_ref(),
-            )
-            .await?;
-        Some(
-            client
-                .dashboard(&LocalMetricDashboardRequest {
-                    source: LocalMetricSource::Agents,
-                    scope: LocalMetricScope {
-                        environment_id: Some(environment.environment_id.0),
-                        ..Default::default()
-                    },
-                    range,
-                    max_points: Some(40),
-                })
-                .await?,
-        )
-    } else {
-        None
-    };
-    Ok(OverviewAgentSignals {
-        capability,
-        dashboard,
-    })
 }
 
 pub(in crate::tui) async fn load_observability(
@@ -270,14 +228,14 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn card_selection_is_bounded() {
+    fn item_selection_is_bounded() {
         let mut state = OverviewState::default();
-        state.move_card(false);
-        assert_eq!(state.selected_card(), OverviewCard::Deployment);
+        state.move_item(false);
+        assert_eq!(state.selected_item(), OverviewItem::Agents);
         for _ in 0..10 {
-            state.move_card(true);
+            state.move_item(true);
         }
-        assert_eq!(state.selected_card(), OverviewCard::Issues);
+        assert_eq!(state.selected_item(), OverviewItem::Issues);
     }
 
     #[test]

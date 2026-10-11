@@ -59,7 +59,8 @@
 
 ## Overview and acceptance
 
-- [x] Add deployment, Agent signal, server/collector, Stream, and issue cards.
+- [x] Add lightweight deployment/server/collector/Stream status and a stable
+  quick-jump directory without querying Metrics or full revision composition.
 - [x] Add explicit cross-destination scope/range handoff.
 - [~] Add all page/state preview fixtures behind `tui-preview` (all ready-state destinations complete; exceptional and nested route states remain).
 - [x] Complete wide/medium/narrow/short/1×1 automated render coverage.
@@ -70,9 +71,9 @@
 
 - [x] Give every active text input explicit mode ownership, shared input
   styling, a visible terminal cursor, and apply/cancel semantics.
-- [~] Replace the query-heavy Overview dashboard with a cheap status and
+- [x] Replace the query-heavy Overview dashboard with a cheap status and
   quick-jump cockpit.
-- [ ] Apply one hierarchy and continuous pane chrome across Ops destinations.
+- [~] Apply one hierarchy and continuous pane chrome across Ops destinations.
 - [ ] Make Agent, Metrics, Oplog, and Stream scope handoffs visible in-page.
 - [ ] Rebuild Oplog as a navigable master/details journal and forensic viewer.
 - [ ] Bring row selection, pane scrolling, split resizing, and scrollbar

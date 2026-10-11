@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-10-11: Lightweight Ops Overview Cockpit
+
+- Replaced the dense five-card landing dashboard with one compact status block
+  and a stable quick-jump directory for Agents, Oplog, Stream, Metrics,
+  Deployments, Configuration, Server/collector details, and Issues.
+- Removed the automatic 15-minute Agent dashboard request from Overview. The
+  landing page now reads only current deployment identity, observability
+  capability, and already-retained Server and Stream state.
+- Removed the hidden full deployment-revision/composition lookup from the
+  shared environment refresh. Detailed composition remains in Deployments,
+  where it is explicitly requested.
+- Added the reusable `NavigationRow`, full-row selection, mouse hit regions,
+  short-layout selection windows, and wide/narrow/short/1×1 render coverage.
+
+Ready for visual review with the Ops hierarchy checkpoint. The next active
+slice unifies destination nesting and continuous pane chrome.
+
 ## 2026-10-11: Explicit Ops Text Input Ownership
 
 - Promoted palette search, loaded-Agent Find, Agent dataset filtering, and

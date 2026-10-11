@@ -217,39 +217,7 @@ fn preview_app(case_id: &str) -> TuiApp {
         };
         app.ops_environment.snapshot = Some(preview_environment_snapshot());
         app.overview.observability.value = Some(OverviewObservability {
-            capability: Some(capability.clone()),
-        });
-        app.overview.agent_signals.value = Some(OverviewAgentSignals {
             capability: Some(capability),
-            dashboard: Some(
-                crate::model::local_observability::LocalMetricDashboardResponse {
-                    source: crate::model::local_observability::LocalMetricSource::Agents,
-                    range: crate::model::local_observability::LocalMetricTimeRange {
-                        from_unix_nanos: now.saturating_sub(15 * 60 * 1_000_000_000),
-                        to_unix_nanos: now,
-                    },
-                    generated_at_unix_nanos: now,
-                    freshest_sample_unix_nanos: Some(now.saturating_sub(4_000_000_000)),
-                    stats: [
-                        ("invocations", "Invocations started", 1842.0, "1"),
-                        ("errors", "Error events", 7.0, "1"),
-                        ("duration-p95", "Completed p95", 18_400_000.0, "ns"),
-                        ("observed-agents", "Observed Agents", 326.0, "agents"),
-                    ]
-                    .into_iter()
-                    .map(|(id, label, value, unit)| {
-                        crate::model::local_observability::LocalMetricDashboardStat {
-                            id: id.into(),
-                            label: label.into(),
-                            value: Some(value),
-                            unit: unit.into(),
-                            approximate: id == "duration-p95",
-                        }
-                    })
-                    .collect(),
-                    panels: Vec::new(),
-                },
-            ),
         });
         app.stream.status = StreamStatus::Connected;
         app.stream.target = Some(AgentIdentity {
@@ -273,27 +241,10 @@ fn preview_app(case_id: &str) -> TuiApp {
 
 fn preview_environment_snapshot() -> OpsEnvironmentSnapshot {
     OpsEnvironmentSnapshot {
-        application_name: "preview-app".into(),
-        environment_name: "local".into(),
-        environment_revision: "12".into(),
-        diff_model_version: 2,
-        compatibility_check: true,
-        tool_compatibility_mode: "Strict".into(),
-        version_check: true,
-        security_overrides: false,
         deployment: Some(OpsDeploymentSnapshot {
             deployment_revision: "12".into(),
             version: "demo-12".into(),
             hash: "d933d8d24db984b94aa1".into(),
-            composition: Some(OpsDeploymentComposition {
-                components: 4,
-                agent_types: 12,
-                http_apis: 2,
-                mcp: 1,
-                tools: 6,
-                middleware: 3,
-                bindings: 5,
-            }),
         }),
     }
 }

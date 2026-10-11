@@ -211,6 +211,12 @@ Metrics, Deployments, and Configuration. A destination may own breadcrumbs and
 drill-down routes, but selecting an entity never silently changes another
 destination's scope.
 
+Overview is a single-pane cockpit, not a card dashboard. It uses compact status
+rows followed by shared `NavigationRow` entries with stable label and
+description columns. Short layouts may omit the status block and keep the
+selected quick jump visible; they do not collapse the directory into a new
+navigation language.
+
 Metrics separates curated Dashboard from ad-hoc Explore and keeps Server and
 Agent telemetry explicit. Oplog separates Grouped from exact Entries. Stream
 is an exact-Agent live session. Fake telemetry belongs only to visibly labelled

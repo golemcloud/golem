@@ -556,14 +556,18 @@ mod tests {
     }
 
     #[test]
-    fn overview_fixture_contains_all_status_cards() {
+    fn overview_fixture_contains_status_and_quick_jumps() {
         let text = buffer_text(&render_preview_buffer("ops-overview", 120, 30).unwrap());
-        assert!(text.contains("Deployment"));
-        assert!(text.contains("Agent signals · last 15 minutes"));
-        assert!(text.contains("Local server & collector"));
+        assert!(text.contains("Environment  current state"));
+        assert!(text.contains("revision 12"));
+        assert!(text.contains("Agents"));
+        assert!(text.contains("Oplog"));
         assert!(text.contains("Stream"));
+        assert!(text.contains("Metrics"));
+        assert!(text.contains("Deployments"));
+        assert!(text.contains("Configuration"));
+        assert!(text.contains("Server & collector"));
         assert!(text.contains("Issues"));
-        assert!(text.contains("12 Agent Types"));
     }
 
     #[test]

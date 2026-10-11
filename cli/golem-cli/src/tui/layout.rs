@@ -132,7 +132,7 @@ pub(super) enum RegionKind {
     OpsDetails,
     OpsDetailsSplit,
     OpsStream,
-    OverviewCard(usize),
+    OverviewItem(usize),
     OverviewIssue(usize),
     MetricsPanel(usize),
     MetricsChart,

@@ -59,7 +59,8 @@ Gate: sensitive values cannot render and every unavailable scope explains why.
 
 ## 7. Overview and acceptance
 
-- Wire independently loading status/routing cards and explicit handoffs.
+- Wire the cheap retained-status cockpit, stable quick-jump directory, and
+  explicit handoffs without querying Metrics on entry.
 - Complete command palette, help, mouse, compact, preview, and documentation
   coverage.
 - Install the matching dev-release CLI and exercise the local demo.

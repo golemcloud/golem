@@ -61,8 +61,7 @@ use crate::tui::ops::metrics::{
     MetricsRefreshPayload, MetricsState,
 };
 use crate::tui::ops::overview::{
-    self, OverviewAgentSignals, OverviewCard, OverviewIssue, OverviewIssueTarget,
-    OverviewObservability, OverviewState,
+    self, OverviewIssue, OverviewIssueTarget, OverviewItem, OverviewObservability, OverviewState,
 };
 use crate::tui::ops::resources::{self, ResourceScope, ResourcesRefreshPayload, ResourcesState};
 use crate::tui::ops::stream::{self, StreamState, StreamStatus};
@@ -77,9 +76,9 @@ use crate::tui::visual::{TuiVisualStyle, with_style};
 use crate::tui::widgets::{
     ActionButton, CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandMarker,
     CommandRow, ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow,
-    FooterStatusCluster, FooterStatusItem, HelpRow, JsonDocument, KeyHint, Notice, NoticeKind,
-    OverlayFrame, PaneChrome, PaneEnding, PaneFocus, PaneHeader, PaneHeaderStatus, PaneLayout,
-    PaneScrollbarSlot, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
+    FooterStatusCluster, FooterStatusItem, HelpRow, JsonDocument, KeyHint, NavigationRow, Notice,
+    NoticeKind, OverlayFrame, PaneChrome, PaneEnding, PaneFocus, PaneHeader, PaneHeaderStatus,
+    PaneLayout, PaneScrollbarSlot, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
     PaneTableColumn, PaneTableState, ReviewFieldRow, ScrollableDocument, SearchInput,
     SectionHeading, SelectableRow, ShortcutRow, StatusKind, StatusMarker, WorkspaceItem,
     WorkspaceSelector, fit, pane_table_virtual_width, render_scrollbar, responsive_table_columns,
@@ -693,9 +692,6 @@ impl TuiApp {
             TuiEvent::OpsEnvironmentRefreshFinished { generation, result } => {
                 self.finish_ops_environment_refresh(generation, result)
             }
-            TuiEvent::OverviewAgentSignalsFinished { generation, result } => {
-                self.finish_overview_agent_signals(generation, result)
-            }
             TuiEvent::OverviewObservabilityFinished { generation, result } => {
                 self.finish_overview_observability(generation, result)
             }
@@ -844,21 +840,21 @@ impl TuiApp {
                     && self.ops.active() == OpsDestination::Overview
                     && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
-                self.overview.move_card(false)
+                self.overview.move_item(false)
             }
             KeyCode::Down
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Overview
                     && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
-                self.overview.move_card(true)
+                self.overview.move_item(true)
             }
             KeyCode::Enter
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Overview
                     && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
-                self.open_selected_overview_card(event_tx)
+                self.open_selected_overview_item(event_tx)
             }
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
@@ -2238,13 +2234,13 @@ impl TuiApp {
             Some(RegionKind::OpsDetails) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::Details
             }
-            Some(RegionKind::OverviewCard(index))
+            Some(RegionKind::OverviewItem(index))
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Overview
                     && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
-                self.overview.selected_card = index.min(OverviewCard::ALL.len() - 1);
-                self.open_selected_overview_card(event_tx);
+                self.overview.selected_item = index.min(OverviewItem::ALL.len() - 1);
+                self.open_selected_overview_item(event_tx);
             }
             Some(RegionKind::OverviewIssue(index))
                 if self.active_workspace == Workspace::Ops
@@ -3781,40 +3777,7 @@ impl TuiApp {
         if force || (self.ops_environment.snapshot.is_none() && !self.ops_environment.loading) {
             self.refresh_ops_environment(event_tx);
         }
-        self.refresh_overview_agent_signals(event_tx, force);
         self.refresh_overview_observability(event_tx, force);
-    }
-
-    fn refresh_overview_agent_signals(&mut self, event_tx: Option<&TuiEventSender>, force: bool) {
-        if self.overview.agent_signals.loading
-            || (!force && self.overview.agent_signals.value.is_some())
-        {
-            return;
-        }
-        let Some(event_tx) = event_tx.cloned() else {
-            return;
-        };
-        let Some(context_executor) = self.context_executor.clone() else {
-            self.overview.agent_signals.error =
-                Some("TUI context executor is not available".to_string());
-            return;
-        };
-        let generation = self
-            .overview
-            .agent_signals
-            .begin(context_executor.current_context_id());
-        let environment_reference = self.selected_target.environment_reference.clone();
-        let auth_presenter = Some(tui_auth_presenter(&event_tx));
-        let task = context_executor.spawn(
-            event_tx.control(),
-            auth_presenter,
-            move |launch_context| async move {
-                overview::load_agent_signals(launch_context.into_context(), environment_reference)
-                    .await
-            },
-            move |result| TuiEvent::OverviewAgentSignalsFinished { generation, result },
-        );
-        self.overview.agent_signals.attach_task(task);
     }
 
     fn refresh_overview_observability(&mut self, event_tx: Option<&TuiEventSender>, force: bool) {
@@ -3847,19 +3810,6 @@ impl TuiApp {
         self.overview.observability.attach_task(task);
     }
 
-    fn finish_overview_agent_signals(
-        &mut self,
-        generation: u64,
-        result: TuiContextTaskResult<OverviewAgentSignals>,
-    ) {
-        let (context_id, result, logs) = result.into_parts();
-        self.overview.agent_signals.finish(
-            generation,
-            context_id,
-            result.map_err(|error| agent_refresh_error(error, logs)),
-        );
-    }
-
     fn finish_overview_observability(
         &mut self,
         generation: u64,
@@ -3873,19 +3823,23 @@ impl TuiApp {
         );
     }
 
-    fn open_selected_overview_card(&mut self, event_tx: Option<&TuiEventSender>) {
-        match self.overview.selected_card() {
-            OverviewCard::Deployment => {
-                self.ops.open_deployment_history();
-                self.refresh_deployments(event_tx);
+    fn open_selected_overview_item(&mut self, event_tx: Option<&TuiEventSender>) {
+        match self.overview.selected_item() {
+            OverviewItem::Agents => self.select_ops_destination(OpsDestination::Agents, event_tx),
+            OverviewItem::Oplog => self.select_ops_destination(OpsDestination::Oplog, event_tx),
+            OverviewItem::Stream => self.select_ops_destination(OpsDestination::Stream, event_tx),
+            OverviewItem::Metrics => self.open_overview_metrics(event_tx),
+            OverviewItem::Deployments => {
+                self.select_ops_destination(OpsDestination::Deployments, event_tx)
             }
-            OverviewCard::AgentSignals => self.open_overview_metrics(event_tx),
-            OverviewCard::ServerCollector => {
+            OverviewItem::Configuration => {
+                self.select_ops_destination(OpsDestination::Configuration, event_tx)
+            }
+            OverviewItem::ServerCollector => {
                 self.ops.open_overview_server();
                 self.refresh_overview_observability(event_tx, false);
             }
-            OverviewCard::Stream => self.select_ops_destination(OpsDestination::Stream, event_tx),
-            OverviewCard::Issues => {
+            OverviewItem::Issues => {
                 if !self.overview_issues().is_empty() {
                     self.overview.selected_issue = self
                         .overview
@@ -3920,7 +3874,6 @@ impl TuiApp {
                 self.ops.open_deployment_history();
                 self.refresh_deployments(event_tx);
             }
-            OverviewIssueTarget::AgentMetrics => self.open_overview_metrics(event_tx),
             OverviewIssueTarget::ServerCollector => self.ops.open_overview_server(),
             OverviewIssueTarget::Stream => {
                 self.select_ops_destination(OpsDestination::Stream, event_tx)
@@ -3950,16 +3903,9 @@ impl TuiApp {
         {
             issues.push(OverviewIssue {
                 title: "No active deployment".to_string(),
-                detail: "Deploy the application environment before inspecting Agent signals"
+                detail: "Deploy the application environment before inspecting Agents or telemetry"
                     .to_string(),
                 target: OverviewIssueTarget::Deployments,
-            });
-        }
-        if let Some(error) = &self.overview.agent_signals.error {
-            issues.push(OverviewIssue {
-                title: "Agent signals unavailable".to_string(),
-                detail: error.clone(),
-                target: OverviewIssueTarget::AgentMetrics,
             });
         }
         if let Some(error) = &self.overview.observability.error {
@@ -5574,23 +5520,7 @@ impl TuiApp {
                         environment_reference.as_ref(),
                     )
                     .await?;
-                let current_revision = environment
-                    .current_deployment()
-                    .map(|deployment| deployment.deployment_revision);
-                let mut snapshot = ops_environment_snapshot(environment);
-                if let Some(revision) = current_revision
-                    && let Ok(Some((summary, agent_types))) = context
-                        .app_handler()
-                        .get_deployment_revision(environment_reference.as_ref(), revision)
-                        .await
-                {
-                    snapshot
-                        .deployment
-                        .as_mut()
-                        .expect("current deployment")
-                        .composition = Some(deployment_composition(summary, &agent_types));
-                }
-                Ok(snapshot)
+                Ok(ops_environment_snapshot(environment))
             },
             move |result| TuiEvent::OpsEnvironmentRefreshFinished { generation, result },
         );
@@ -8087,14 +8017,6 @@ pub(super) struct AgentRefreshPayload {
 
 #[derive(Clone, Debug)]
 pub(super) struct OpsEnvironmentSnapshot {
-    application_name: String,
-    environment_name: String,
-    environment_revision: String,
-    diff_model_version: u32,
-    compatibility_check: bool,
-    tool_compatibility_mode: String,
-    version_check: bool,
-    security_overrides: bool,
     deployment: Option<OpsDeploymentSnapshot>,
 }
 
@@ -8103,18 +8025,6 @@ struct OpsDeploymentSnapshot {
     deployment_revision: String,
     version: String,
     hash: String,
-    composition: Option<OpsDeploymentComposition>,
-}
-
-#[derive(Clone, Debug)]
-struct OpsDeploymentComposition {
-    components: usize,
-    agent_types: usize,
-    http_apis: usize,
-    mcp: usize,
-    tools: usize,
-    middleware: usize,
-    bindings: usize,
 }
 
 #[derive(Default)]
@@ -8137,41 +8047,8 @@ fn ops_environment_snapshot(
                 deployment_revision: deployment.deployment_revision.to_string(),
                 version: deployment.deployment_version.0,
                 hash: deployment.deployment_hash.to_string(),
-                composition: None,
             });
-    OpsEnvironmentSnapshot {
-        application_name: environment.application_name.0,
-        environment_name: environment.environment_name.0,
-        environment_revision: server_environment.revision.to_string(),
-        diff_model_version: server_environment.diff_model_version,
-        compatibility_check: server_environment.compatibility_check,
-        tool_compatibility_mode: format!("{:?}", server_environment.tool_compatibility_mode),
-        version_check: server_environment.version_check,
-        security_overrides: server_environment.security_overrides,
-        deployment,
-    }
-}
-
-fn deployment_composition(
-    summary: golem_common::model::deployment::DeploymentSummary,
-    agent_types: &[DeployedRegisteredAgentType],
-) -> OpsDeploymentComposition {
-    OpsDeploymentComposition {
-        components: summary.components.len(),
-        agent_types: agent_types.len(),
-        http_apis: summary.http_api_deployments.len(),
-        mcp: summary.mcp_deployments.len(),
-        tools: summary.remote_tools.len() + summary.published_tools.len(),
-        middleware: summary.remote_tool_middlewares.len()
-            + summary.published_tool_middlewares.len()
-            + summary.universal_tool_middlewares.len(),
-        bindings: summary.environment_tool_middleware_bindings.len()
-            + summary
-                .agent_tool_middleware_bindings
-                .values()
-                .map(BTreeMap::len)
-                .sum::<usize>(),
-    }
+    OpsEnvironmentSnapshot { deployment }
 }
 
 impl LocalServerService {
@@ -9882,362 +9759,203 @@ fn render_ops_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     match app.ops.current_route() {
         OpsRoute::OverviewServer => render_overview_server(frame, area, app),
         OpsRoute::OverviewIssues => render_overview_issues(frame, area, app),
-        _ => render_overview_cards(frame, area, app),
+        _ => render_overview_cockpit(frame, area, app),
     }
 }
 
-fn render_overview_cards(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let [header, body] = Layout::default()
+fn render_overview_cockpit(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let chrome = PaneChrome { area };
+    chrome.render_header(frame, area, "Overview", PaneFocus::Active, &theme());
+    let body = chrome.body_area(area);
+    let content = chrome.content_area(body);
+    if content.width == 0 || content.height == 0 {
+        chrome.render_body_boundary(frame, body, &theme());
+        return;
+    }
+
+    let show_status = content.height >= 9;
+    let status_height = if show_status { 5 } else { 0 };
+    let [status_area, links_area] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .areas(area);
-    let refreshing = if app.ops_environment.loading
-        || app.overview.agent_signals.loading
-        || app.overview.observability.loading
-    {
-        " · refreshing…"
-    } else {
-        ""
-    };
-    PaneHeader {
-        title: &format!("Overview · environment status & routing{refreshing}"),
-        focus: PaneFocus::Active,
-        left_connector: Some("├"),
-        ending: PaneEnding::Top,
-    }
-    .render(frame, header, &theme());
-    if body.width == 0 || body.height == 0 {
-        return;
-    }
-
-    let selected = app.overview.selected_card;
-    let visible = if body.height < 15 || body.width < 34 {
-        vec![(selected, body)]
-    } else if body.width >= 88 {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-                Constraint::Ratio(1, 3),
-            ])
-            .split(body);
-        let mut areas = Vec::with_capacity(5);
-        for (row_index, row) in rows.iter().enumerate() {
-            let columns = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                .split(*row);
-            for (column_index, column) in columns.iter().enumerate() {
-                let card_index = row_index * 2 + column_index;
-                if card_index < OverviewCard::ALL.len() {
-                    areas.push((card_index, *column));
-                }
+        .constraints([Constraint::Length(status_height), Constraint::Min(1)])
+        .areas(content);
+    if show_status {
+        let mut lines = vec![
+            SectionHeading {
+                title: "Environment",
+                detail: Some("current state"),
             }
-        }
-        areas
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(
-                OverviewCard::ALL
-                    .iter()
-                    .map(|_| Constraint::Ratio(1, OverviewCard::ALL.len() as u32)),
+            .line(&theme()),
+        ];
+        lines.extend(overview_status_lines(app));
+        frame.render_widget(Paragraph::new(lines).style(surface_style()), status_area);
+    }
+
+    if links_area.height > 0 {
+        let title_height = 1;
+        let list_area = Rect {
+            y: links_area.y.saturating_add(title_height),
+            height: links_area.height.saturating_sub(title_height),
+            ..links_area
+        };
+        frame.render_widget(
+            Paragraph::new(
+                SectionHeading {
+                    title: "Open",
+                    detail: Some("enter or click"),
+                }
+                .line(&theme()),
             )
-            .split(body)
+            .style(surface_style()),
+            Rect {
+                height: links_area.height.min(title_height),
+                ..links_area
+            },
+        );
+        let visible = list_area.height.max(1) as usize;
+        let selected = app
+            .overview
+            .selected_item
+            .min(OverviewItem::ALL.len().saturating_sub(1));
+        let start = selected
+            .saturating_sub(visible.saturating_sub(1) / 2)
+            .min(OverviewItem::ALL.len().saturating_sub(visible));
+        let issues = app.overview_issues();
+        let lines = OverviewItem::ALL
             .iter()
-            .copied()
             .enumerate()
-            .collect()
-    };
-    for (index, card_area) in visible {
-        let card = OverviewCard::ALL[index];
-        app.geometry
-            .add_region(RegionKind::OverviewCard(index), card_area);
-        render_overview_card(frame, card_area, app, card, index == selected);
-    }
-}
-
-fn render_overview_card(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    app: &TuiApp,
-    card: OverviewCard,
-    selected: bool,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let border = if selected {
-        theme().accent
-    } else {
-        theme().border_subtle
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border).bg(theme().surface))
-        .title(Span::styled(
-            format!(" {} ", card.label()),
-            Style::default()
-                .fg(if selected {
-                    theme().accent_hover
+            .skip(start)
+            .take(visible)
+            .enumerate()
+            .map(|(visible_index, (index, item))| {
+                let row = Rect::new(
+                    list_area.x,
+                    list_area.y.saturating_add(visible_index as u16),
+                    list_area.width,
+                    1,
+                );
+                app.geometry
+                    .add_region(RegionKind::OverviewItem(index), row);
+                let description = if *item == OverviewItem::Issues {
+                    if issues.is_empty() {
+                        "No actionable diagnostics".to_string()
+                    } else {
+                        format!(
+                            "{} actionable diagnostic{}",
+                            issues.len(),
+                            if issues.len() == 1 { "" } else { "s" }
+                        )
+                    }
                 } else {
-                    theme().text_secondary
-                })
-                .add_modifier(Modifier::BOLD),
-        ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let lines = match card {
-        OverviewCard::Deployment => overview_deployment_lines(app),
-        OverviewCard::AgentSignals => overview_agent_signal_lines(app),
-        OverviewCard::ServerCollector => overview_server_collector_lines(app),
-        OverviewCard::Stream => overview_stream_lines(app),
-        OverviewCard::Issues => overview_issue_card_lines(app),
-    };
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(surface_style())
-            .wrap(Wrap { trim: true }),
-        inner,
-    );
+                    item.description().to_string()
+                };
+                NavigationRow {
+                    label: item.label(),
+                    description: &description,
+                    selected: index == selected,
+                }
+                .line(list_area.width as usize, &theme())
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(Paragraph::new(lines).style(surface_style()), list_area);
+    }
+    chrome.render_body_boundary(frame, body, &theme());
 }
 
-fn overview_deployment_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    if app.ops_environment.loading && app.ops_environment.snapshot.is_none() {
-        return overview_loading_lines("Loading deployment identity");
-    }
-    if let Some(error) = &app.ops_environment.error {
-        return vec![overview_error_line(error)];
-    }
-    let Some(snapshot) = &app.ops_environment.snapshot else {
-        return vec![overview_muted_line("Deployment state has not been loaded")];
-    };
-    let mut lines = vec![overview_value_line(
-        "Environment",
-        format!(
-            "{}/{}",
-            snapshot.application_name, snapshot.environment_name
-        ),
-    )];
-    if let Some(deployment) = &snapshot.deployment {
-        lines.push(overview_value_line(
-            "Current",
+fn overview_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
+    let deployment = if let Some(error) = &app.ops_environment.error {
+        (
+            StatusKind::Failed,
+            format!("unavailable · {}", fit(error, 48)),
+        )
+    } else if let Some(deployment) = app
+        .ops_environment
+        .snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.deployment.as_ref())
+    {
+        (
+            StatusKind::Running,
             format!(
                 "revision {} · {}",
                 deployment.deployment_revision, deployment.version
             ),
-        ));
-        lines.push(overview_value_line("Hash", fit(&deployment.hash, 20)));
-        if let Some(composition) = &deployment.composition {
-            lines.push(overview_value_line(
-                "Composition",
-                format!(
-                    "{} components · {} Agent Types · {} HTTP · {} MCP",
-                    composition.components,
-                    composition.agent_types,
-                    composition.http_apis,
-                    composition.mcp
-                ),
-            ));
-            lines.push(overview_value_line(
-                "Extensions",
-                format!(
-                    "{} tools · {} middleware · {} bindings",
-                    composition.tools, composition.middleware, composition.bindings
-                ),
-            ));
-        } else {
-            lines.push(overview_muted_line("Composition detail unavailable"));
-        }
-        lines.push(overview_muted_line(
-            "Validation warnings are not retained by the current read API",
-        ));
+        )
+    } else if app.ops_environment.loading {
+        (StatusKind::Idle, "loading…".to_string())
     } else {
-        lines.push(overview_warning_line("No active deployment"));
-    }
-    lines.push(overview_muted_line("Enter: history, composition, compare"));
-    lines.push(overview_muted_line(format!(
-        "environment revision {} · diff v{}",
-        snapshot.environment_revision, snapshot.diff_model_version
-    )));
-    lines.push(overview_muted_line(format!(
-        "compatibility {} · tools {} · version {} · security {}",
-        flag_state(snapshot.compatibility_check),
-        snapshot.tool_compatibility_mode,
-        flag_state(snapshot.version_check),
-        flag_state(snapshot.security_overrides)
-    )));
-    lines
-}
-
-fn overview_agent_signal_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let state = &app.overview.agent_signals;
-    if state.loading && state.value.is_none() {
-        return overview_loading_lines("Loading Agent dashboard");
-    }
-    if let Some(error) = &state.error {
-        return vec![overview_error_line(error)];
-    }
-    let Some(snapshot) = &state.value else {
-        return vec![overview_muted_line("Agent signals have not been loaded")];
+        (StatusKind::Idle, "not deployed".to_string())
     };
-    let Some(capability) = &snapshot.capability else {
-        return vec![overview_warning_line(
-            "Local observability is unavailable for this target",
-        )];
-    };
-    if capability.status != crate::model::local_observability::LocalObservabilityStatus::Ready {
-        return vec![overview_warning_line(
-            capability
-                .message
-                .as_deref()
-                .unwrap_or("Local observability is not ready"),
-        )];
-    }
-    let Some(dashboard) = &snapshot.dashboard else {
-        return vec![overview_muted_line("No Agent dashboard snapshot")];
-    };
-    let mut lines = Vec::new();
-    for stats in dashboard.stats.chunks(2) {
-        let values = stats
-            .iter()
-            .map(|stat| {
-                let value = stat
-                    .value
-                    .map(format_metric_value)
-                    .unwrap_or_else(|| "—".to_string());
-                let prefix = if stat.approximate { "≈" } else { "" };
-                let unit = if stat.unit == "1" {
-                    "".to_string()
-                } else {
-                    format!(" {}", stat.unit)
-                };
-                format!("{} {prefix}{value}{unit}", stat.label)
-            })
-            .collect::<Vec<_>>()
-            .join(" · ");
-        lines.push(Line::from(Span::styled(
-            values,
-            Style::default().fg(theme().text),
-        )));
-    }
-    lines.push(overview_muted_line(
-        dashboard
-            .freshest_sample_unix_nanos
-            .map(metric_freshness_label)
-            .unwrap_or_else(|| "No samples in range".to_string()),
-    ));
-    lines
-}
-
-fn overview_server_collector_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let state = &app.overview.observability;
-    let mut lines = vec![overview_value_line(
-        "Nested server",
-        app.server.run.status.title(),
-    )];
-    if state.loading && state.value.is_none() {
-        lines.extend(overview_loading_lines("Checking collector capability"));
-        return lines;
-    }
-    if let Some(error) = &state.error {
-        lines.push(overview_error_line(error));
-        return lines;
-    }
-    let Some(capability) = state
+    let collector = if let Some(error) = &app.overview.observability.error {
+        (
+            StatusKind::Failed,
+            format!("unavailable · {}", fit(error, 48)),
+        )
+    } else if let Some(capability) = app
+        .overview
+        .observability
         .value
         .as_ref()
         .and_then(|snapshot| snapshot.capability.as_ref())
-    else {
-        lines.push(overview_warning_line(
-            "Local observability capability unavailable",
-        ));
-        return lines;
-    };
-    lines.push(overview_value_line(
-        "Collector",
-        format!("{:?}", capability.status),
-    ));
-    lines.push(overview_value_line(
-        "Exporter",
-        format!(
-            "{} {}",
-            capability.exporter_name, capability.exporter_version
-        ),
-    ));
-    lines.push(overview_value_line(
-        "Freshness",
-        overview_capability_freshness(capability),
-    ));
-    lines.push(overview_value_line(
-        "Retention",
-        format!(
-            "{}d · {} · {} discarded",
-            capability.retention_days,
-            overview_bytes(capability.retention_bytes),
-            capability.discarded_points
-        ),
-    ));
-    lines
-}
-
-fn overview_stream_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let mut lines = vec![overview_value_line("Connection", app.stream.status.label())];
-    lines.push(overview_value_line(
-        "Target",
-        app.stream
-            .target
-            .as_ref()
-            .map(|target| format!("{}/{}", target.component, target.agent_id))
-            .unwrap_or_else(|| "No exact Agent selected".to_string()),
-    ));
-    lines.push(overview_value_line(
-        "Buffer",
-        format!(
-            "{} events · {} unread",
-            app.stream.events.len(),
-            app.stream.unread
-        ),
-    ));
-    lines.push(overview_value_line(
-        "Follow",
-        if app.stream.follow {
-            "latest"
+    {
+        let kind = if capability.status
+            == crate::model::local_observability::LocalObservabilityStatus::Ready
+        {
+            StatusKind::Running
         } else {
-            "paused"
-        },
-    ));
-    if app.stream.server_missed > 0 || app.stream.locally_dropped > 0 {
-        lines.push(overview_warning_line(format!(
-            "{} server-missed · {} locally dropped",
-            app.stream.server_missed, app.stream.locally_dropped
-        )));
-    }
-    lines
+            StatusKind::Failed
+        };
+        (kind, format!("{:?}", capability.status).to_lowercase())
+    } else if app.overview.observability.loading {
+        (StatusKind::Idle, "checking…".to_string())
+    } else {
+        (StatusKind::Idle, "unavailable".to_string())
+    };
+    let stream_kind = match app.stream.status {
+        StreamStatus::Connected | StreamStatus::Connecting | StreamStatus::Reconnecting { .. } => {
+            StatusKind::Running
+        }
+        StreamStatus::Failed(_) => StatusKind::Failed,
+        StreamStatus::Disconnected => StatusKind::Idle,
+    };
+    vec![
+        overview_status_line("Deployment", deployment.0, deployment.1),
+        overview_status_line(
+            "Local server",
+            server_status_kind(app.server.run.status),
+            app.server.run.status.title(),
+        ),
+        overview_status_line("Collector", collector.0, collector.1),
+        overview_status_line(
+            "Stream",
+            stream_kind,
+            format!(
+                "{} · {} unread",
+                app.stream.status.label(),
+                app.stream.unread
+            ),
+        ),
+    ]
 }
 
-fn overview_issue_card_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let issues = app.overview_issues();
-    if issues.is_empty() {
-        return vec![Line::from(Span::styled(
-            "No actionable issues detected",
-            Style::default().fg(theme().success),
-        ))];
-    }
-    let mut lines = vec![overview_warning_line(format!(
-        "{} actionable issue{}",
-        issues.len(),
-        if issues.len() == 1 { "" } else { "s" }
-    ))];
-    lines.extend(
-        issues
-            .iter()
-            .take(3)
-            .map(|issue| overview_muted_line(format!("· {}", issue.title))),
+fn overview_status_line(
+    label: impl Into<String>,
+    kind: StatusKind,
+    value: impl Into<String>,
+) -> Line<'static> {
+    let value = value.into();
+    let mut spans = vec![Span::styled(
+        fit(&label.into(), 14),
+        Style::default().fg(theme().text_muted),
+    )];
+    spans.extend(
+        StatusMarker {
+            kind,
+            label: &value,
+        }
+        .spans(&theme()),
     );
-    lines.push(overview_muted_line("Enter: inspect and route"));
-    lines
+    Line::from(spans)
 }
 
 fn render_overview_server(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -14096,14 +13814,14 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
                 "enter / click",
                 "Open owning destination",
             );
-            push_raw_help(&mut lines, width, "esc", "Return to cards");
+            push_raw_help(&mut lines, width, "esc", "Return to Overview");
         } else if matches!(app.ops.current_route(), OpsRoute::OverviewServer) {
-            push_raw_help(&mut lines, width, "ctrl+r", "Refresh all Overview cards");
-            push_raw_help(&mut lines, width, "esc", "Return to cards");
+            push_raw_help(&mut lines, width, "ctrl+r", "Refresh Overview status");
+            push_raw_help(&mut lines, width, "esc", "Return to Overview");
         } else {
-            push_raw_help(&mut lines, width, "up / down", "Select a status card");
-            push_raw_help(&mut lines, width, "enter / click", "Open card destination");
-            push_raw_help(&mut lines, width, "ctrl+r", "Refresh all cards");
+            push_raw_help(&mut lines, width, "up / down", "Select a destination");
+            push_raw_help(&mut lines, width, "enter / click", "Open destination");
+            push_raw_help(&mut lines, width, "ctrl+r", "Refresh Overview status");
         }
     } else if app.ops.active() == OpsDestination::Oplog {
         push_section_break(&mut lines, width, "Oplog");
@@ -19782,7 +19500,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_cards_render_responsively_and_handoff_explicit_scope() {
+    fn overview_cockpit_is_lightweight_responsive_and_routes_explicitly() {
         let mut app = test_app();
         app.ops.select(OpsDestination::Overview);
         app.metrics.agent_scope = vec![AgentIdentity {
@@ -19794,52 +19512,30 @@ mod tests {
             deployment_revision: "12".to_string(),
             version: "demo-12".to_string(),
             hash: "d933d8d24db984b94aa1".to_string(),
-            composition: Some(OpsDeploymentComposition {
-                components: 4,
-                agent_types: 12,
-                http_apis: 2,
-                mcp: 1,
-                tools: 6,
-                middleware: 3,
-                bindings: 5,
-            }),
         });
         app.ops_environment.snapshot = Some(environment);
         let capability = sample_overview_capability(1_000_000_000_000);
         app.overview.observability.value = Some(OverviewObservability {
-            capability: Some(capability.clone()),
-        });
-        app.overview.agent_signals.value = Some(OverviewAgentSignals {
             capability: Some(capability),
-            dashboard: Some(LocalMetricDashboardResponse {
-                source: LocalMetricSource::Agents,
-                range: LocalMetricTimeRange {
-                    from_unix_nanos: 10,
-                    to_unix_nanos: 20,
-                },
-                generated_at_unix_nanos: 20,
-                freshest_sample_unix_nanos: Some(20),
-                stats: vec![LocalMetricDashboardStat {
-                    id: "invocations".to_string(),
-                    label: "Invocations started".to_string(),
-                    value: Some(42.0),
-                    unit: "1".to_string(),
-                    approximate: false,
-                }],
-                panels: Vec::new(),
-            }),
         });
 
         let frame = render_app_text_at(&app, 120, 30);
-        assert!(frame.contains("Agent signals · last 15 minutes"), "{frame}");
-        assert!(frame.contains("4 components · 12 Agent Types"), "{frame}");
-        assert!(frame.contains("Invocations started 42"), "{frame}");
-        assert!(frame.contains("Local server & collector"), "{frame}");
+        assert!(frame.contains("Environment  current state"), "{frame}");
+        assert!(frame.contains("revision 12 · demo-12"), "{frame}");
+        assert!(
+            frame.contains("Find Agents and choose investigation scope"),
+            "{frame}"
+        );
+        assert!(
+            frame.contains("Open curated dashboards or metric Explore"),
+            "{frame}"
+        );
+        assert!(!frame.contains("Invocations started"), "{frame}");
         for (width, height) in [(100, 18), (60, 18), (24, 8), (1, 1)] {
             render_app_text_at(&app, width, height);
         }
 
-        app.handle_key(key(KeyCode::Down));
+        app.overview.selected_item = 3;
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.ops.active(), OpsDestination::Metrics);
         assert_eq!(app.metrics.source, LocalMetricSource::Agents);
@@ -19852,7 +19548,7 @@ mod tests {
     fn overview_server_and_issue_routes_are_retained_and_actionable() {
         let mut app = test_app();
         app.ops.select(OpsDestination::Overview);
-        app.overview.selected_card = 2;
+        app.overview.selected_item = 6;
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.ops.current_route(), &OpsRoute::OverviewServer);
         let frame = render_app_text_at(&app, 80, 20);
@@ -19861,7 +19557,7 @@ mod tests {
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.ops.current_route(), &OpsRoute::Root);
         app.overview.observability.value = Some(OverviewObservability { capability: None });
-        app.overview.selected_card = 4;
+        app.overview.selected_item = 7;
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.ops.current_route(), &OpsRoute::OverviewIssues);
         let frame = render_app_text_at(&app, 80, 20);
@@ -21148,7 +20844,10 @@ mod tests {
                 .snapshot
                 .as_ref()
                 .expect("retained snapshot")
-                .environment_revision,
+                .deployment
+                .as_ref()
+                .expect("retained deployment")
+                .deployment_revision,
             "current"
         );
     }
@@ -21176,7 +20875,10 @@ mod tests {
                 .snapshot
                 .as_ref()
                 .expect("retained snapshot")
-                .environment_revision,
+                .deployment
+                .as_ref()
+                .expect("retained deployment")
+                .deployment_revision,
             "current"
         );
         let error = app.ops_environment.error.as_deref().expect("refresh error");
@@ -23087,17 +22789,13 @@ environments:
         )
     }
 
-    fn sample_ops_environment_snapshot(environment_revision: &str) -> OpsEnvironmentSnapshot {
+    fn sample_ops_environment_snapshot(deployment_revision: &str) -> OpsEnvironmentSnapshot {
         OpsEnvironmentSnapshot {
-            application_name: "sample-app".to_string(),
-            environment_name: "local".to_string(),
-            environment_revision: environment_revision.to_string(),
-            diff_model_version: 1,
-            compatibility_check: true,
-            tool_compatibility_mode: "None".to_string(),
-            version_check: true,
-            security_overrides: false,
-            deployment: None,
+            deployment: Some(OpsDeploymentSnapshot {
+                deployment_revision: deployment_revision.to_string(),
+                version: format!("demo-{deployment_revision}"),
+                hash: format!("hash-{deployment_revision}"),
+            }),
         }
     }
 

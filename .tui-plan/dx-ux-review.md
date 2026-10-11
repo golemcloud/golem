@@ -690,6 +690,6 @@ renderers are no longer live contracts.
   are consistent; scope transfers are discoverable without Commands; Oplog
   supports readable and forensic navigation; mouse behavior matches keyboard
   ownership; Metrics receives a final terminal-density review.
-- Outcome: the explicit input-ownership slice is implemented and its focused
-  checks are green. Overview, hierarchy, handoffs, Oplog, pointer parity, and
-  final Metrics review remain tracked in `tasks.md`.
+- Outcome: explicit input ownership and the lightweight Overview cockpit are
+  implemented and their focused checks are green. Hierarchy, handoffs, Oplog,
+  pointer parity, and final Metrics review remain tracked in `tasks.md`.

@@ -2494,6 +2494,58 @@ pub(super) struct SelectableRow<'a> {
     pub unavailable: bool,
 }
 
+pub(super) struct NavigationRow<'a> {
+    pub label: &'a str,
+    pub description: &'a str,
+    pub selected: bool,
+}
+
+impl NavigationRow<'_> {
+    pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
+        let marker_width = width.min(2);
+        let available = width.saturating_sub(marker_width);
+        let selected_style = Style::default()
+            .fg(visual.selection_text)
+            .bg(visual.selection_background);
+        let base_style = if self.selected {
+            selected_style
+        } else {
+            Style::default().fg(visual.text)
+        };
+        let mut spans = vec![Span::styled(
+            fit(if self.selected { "▌" } else { "" }, marker_width),
+            if self.selected {
+                selected_marker_style(visual)
+            } else {
+                base_style
+            },
+        )];
+        if available < 30 {
+            spans.push(Span::styled(
+                fit(self.label, available),
+                base_style.add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            let label_width = (available / 3).clamp(14, 24);
+            let description_width = available.saturating_sub(label_width + 1);
+            spans.push(Span::styled(
+                fit(self.label, label_width),
+                base_style.add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(" ", base_style));
+            spans.push(Span::styled(
+                fit(self.description, description_width),
+                if self.selected {
+                    selected_style
+                } else {
+                    Style::default().fg(visual.text_muted)
+                },
+            ));
+        }
+        Line::from(spans).alignment(Alignment::Left)
+    }
+}
+
 impl SelectableRow<'_> {
     pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
         let marker = if self.selected { "▌ " } else { "  " };
@@ -3092,6 +3144,33 @@ mod tests {
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
         assert_eq!(buffer[(0, 1)].fg, visual.accent);
         assert!((0..20).all(|x| buffer[(x, 1)].bg == visual.selection_background));
+    }
+
+    #[test]
+    fn navigation_rows_keep_label_and_description_columns_stable() {
+        let visual = TuiVisualStyle::production();
+        let selected = NavigationRow {
+            label: "Metrics",
+            description: "Open curated dashboards",
+            selected: true,
+        }
+        .line(52, &visual);
+        let idle = NavigationRow {
+            label: "Configuration",
+            description: "Browse environment and server data",
+            selected: false,
+        }
+        .line(52, &visual);
+        let buffer = render(52, 2, |frame| {
+            frame.render_widget(Paragraph::new(selected), Rect::new(0, 0, 52, 1));
+            frame.render_widget(Paragraph::new(idle), Rect::new(0, 1, 52, 1));
+        });
+        let rendered = text(&buffer);
+
+        assert!(rendered.contains("Metrics"), "{rendered}");
+        assert!(rendered.contains("Open curated dashboards"), "{rendered}");
+        assert!(rendered.contains("Configuration"), "{rendered}");
+        assert!((0..52).all(|x| buffer[(x, 0)].bg == visual.selection_background));
     }
 
     #[test]
