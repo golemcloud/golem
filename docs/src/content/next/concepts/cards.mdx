@@ -1,0 +1,122 @@
+import { Callout } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
+
+# Authority: cards
+
+An agent may do exactly what the **permission cards** in its wallet allow, whatever its code, prompt, or model output asks for.
+
+## Authority comes from cards, not text
+
+Agents read text written by strangers, and that text can steer the model, so a rule in a prompt is not a security boundary. Golem enforces authority in the runtime.
+
+A **card** (a capability token, in security terms) is an unforgeable handle minted by the runtime. It carries **grants**, and the set of cards an agent holds is its **wallet**. The host checks the wallet before every gated effect: files, network connections, environment variables, config, secrets, storage, and calls to agents and tools.
+
+<ThemedImage
+  lightSrc="/images/getting-started/card-check-light.webp"
+  darkSrc="/images/getting-started/card-check-dark.webp"
+  alt="Agent code calls fetch on an external host. The host checks the agent's wallet for a network connect grant covering that host and port. If no card covers it, the request is denied before it leaves the agent and the denial is recorded in the oplog. If a card covers it, the request is sent and the response is journaled."
+  caption="The host checks the wallet before a gated effect happens."
+  width={1536}
+  height={1024}
+/>
+
+When no card covers a request, the host denies it before it leaves the agent and records the denial in the oplog. An empty wallet denies every gated effect. Each invocation pins its wallet version, so recovery reproduces the original authorization decisions.
+
+## Read a grant
+
+A grant has the form `class(owner) @ recipient : verb : resource`, spaced exactly like that:
+
+```text
+filesystem(?agent) @ ?agent : read : /data/**
+```
+
+In words: the agent holding this card (`@ ?agent`) may `read` anything under `/data` on its own filesystem (`filesystem(?agent)`). `?agent`, `?component`, and `?env` stand for the holding agent, its component, and its environment, so one grant works for every agent of a type.
+
+Filesystem grants match path segments: `*` is one segment and `**` is any depth. Network grants match host and port, not URL paths or HTTP methods. Tool grants match any invocation of a tool (`*`) or one exact invocation.
+
+A card holds grants at two levels, and each level has positive and negative grants:
+
+- The **lower bound** is what the holder may do now. A request is allowed when some card has a lower-bound positive grant that covers it and none of that same card's lower-bound negative grants covers it.
+- The **upper bound** is a ceiling that every card imposes on the whole wallet. If a card has upper-bound positive grants, every request must fall under one of them. An upper-bound negative grant in any card denies the request, including requests allowed by cards the agent receives later.
+
+## Start with explicit authority
+
+If an agent type has no `initialCard` in the manifest, deployment installs a **broad default card** so a first deployment works unconfigured. It covers the agent's own filesystem, environment variables, config, and oplog; any network destination; the environment's secrets, including the right to reveal them; the environment's key-value, blob, and relational storage; invoking any agent and tool in the environment; management operations on the environment and the agent's own component; and card operations.
+
+<Callout type="warning">
+  The default card is not least privilege: it allows connecting to any host and revealing every
+  secret in the environment.
+</Callout>
+
+Writing an `initialCard` **replaces** the default card rather than adding to it. The agent receives exactly the grants you list, plus filesystem grants for files the manifest seeds, so list every effect it needs.
+
+```yaml
+# Partial golem.yaml excerpt; `fs` must also be declared under top-level `tools`.
+agents:
+  ReportAgent:
+    tools:
+      fs:
+        filesystemAccess: allowed
+        secretKeysRevealable: []
+    initialCard:
+      lowerBound:
+        positive:
+          - 'tool(?component/fs) @ ?agent : invoke : *'
+          - 'filesystem(?agent) @ ?agent : read : /workspace/**'
+          - 'filesystem(?agent) @ ?agent : list : /workspace/**'
+          - 'filesystem(?agent) @ ?agent : delete : /workspace/*'
+          - 'network() @ ?agent : connect : registry.npmjs.org:443'
+      upperBound:
+        negative:
+          - 'secret(?env) @ ?agent : reveal : billing.*'
+```
+
+This card allows the `fs` tool, reading and listing `/workspace`, deleting its direct children, and one network host. The upper-bound negative blocks revealing `billing.*` secrets, whatever cards arrive later.
+
+An initial card must fall within the deployer's own authority. `golem card list --agent <agent-reference>` shows what an agent holds.
+
+## Derive, limit, expire, and revoke
+
+<ThemedImage
+  lightSrc="/images/getting-started/card-derivation-light.webp"
+  darkSrc="/images/getting-started/card-derivation-dark.webp"
+  alt="An account root card leads to permission shares, environment default cards, and initial cards created at deploy for each agent type. Initial cards must fall within the deployer's authority. An agent derives a narrower card at runtime, and that card can be derived again, narrower still. Revoking a card also revokes every card derived from it."
+  caption="Every derivation narrows; revocation follows the derivation chain."
+  width={1536}
+  height={1024}
+/>
+
+Cards come from an account's root card, permission shares, environment defaults, initial cards created at deployment, and runtime derivation.
+
+A derived card can only narrow its parent. An agent can cut a smaller card for a helper, such as read-only access to one folder for thirty minutes, and pass it to another agent or tool as a typed value; passing it consumes the sender's handle. A lifespan such as `P30D` makes a card expire.
+
+Revoking a card revokes every card derived from it, from the agent's next invocation boundary onward: admitted operations keep their recorded result, and new work is denied. Revocation does not stop a running invocation; to halt one, [interrupt the agent](/next/concepts/living-with-agents).
+
+## Keep secrets away from generated code
+
+A secret is an opaque handle that an agent can pass on without seeing the plaintext. Revealing plaintext requires the component's reveal import, a binding policy that permits it, and a `reveal` grant. Each reveal is audited and pinned to a secret revision.
+
+The agent's card decides what the agent may reveal: the default card allows every environment secret; an `initialCard` allows only the paths it lists. A tool binding's `secretKeysRevealable` narrows what that tool may reveal; if omitted, the tool may reveal everything the agent may. Set `secretKeysRevealable: []` for tools that run generated code.
+
+A key sent in an HTTP header must be revealed, and is journaled with that request; treat oplog access like secret access.
+
+## What cards prevent and what they do not
+
+Cards remove legs of the _lethal trifecta_ (private data, untrusted input, a way to send data out). With network grants only for named hosts, data has nowhere else to go, and `secretKeysRevealable: []` keeps plaintext keys from tools.
+
+Consider a coding agent that must never delete outside its workspace. Tools act with the calling agent's cards, narrowed by their binding, so if the card grants `delete` only on `/workspace/*`, no tool can delete elsewhere. A filesystem grant applies to every tool and every command it runs, including `rm` in a `bash` script. A negative tool grant for `fs rm "/" --recursive --force` matches only that exact canonical invocation; cards do not parse shell programs or distinguish commands inside a `bash` script.
+
+Marking a seeded file read-only adds read grants but removes nothing: under the default card, an agent can delete or replace it. Keep trusted state in memory or on paths where the card grants no write or delete.
+
+**A card bounds the blast radius, not the behavior.** An agent can misuse authority it legitimately holds; cards do not detect prompt injection or inspect intentions. Irreversible effects such as payments and deletions need approval, and approval gates belong in middleware, which the agent cannot bypass.
+
+## Next
+
+[Agents working together](/next/concepts/agents-working-together): how agents coordinate work and wait for people.
+
+Implementation references:
+
+- [Cards reference](/next/develop/cards)
+- [Configuration and secrets](/next/develop/config-and-secrets)
+- [Application manifest](/next/app-manifest)
+- [Permissions CLI](/next/cli/permissions)

@@ -1,0 +1,108 @@
+import { ThemedImage } from "@/components/themed-image"
+
+# Tools
+
+A **tool** is a typed operation that an agent calls through the runtime. Each call runs in an isolated instance with the calling agent's authority, narrowed by a binding, and passes through middleware the agent cannot bypass. An agent gets a shell, files, Node, TypeScript, git, and the web without unrestricted execution privileges.
+
+## A typed, CLI-shaped operation
+
+A tool is described like a command-line program with a type system: commands and subcommands, positional arguments, options and flags, stdin, stdout, and stderr streams, a typed result, and declared errors with exit codes. Writing to stderr does not by itself fail the call; failure is a declared error with an exit code. The command tree describes an operation; Golem does not spawn a host process for it.
+
+From one definition, Golem produces typed clients for every SDK, CLI help text, a REST endpoint, and an MCP tool. An LLM harness reads each bound tool's schema through reflection, offers it to the model, and runs the model's choice through the typed client.
+
+Use a tool rather than an agent method when the operation is stateless and should run in a fresh instance, on the caller's files, under the caller's authority. Use an agent for something with its own identity and durable state.
+
+## Each component-tool call runs in a fresh instance
+
+Every call to a component tool runs in a fresh WebAssembly instance, separate from the agent running the harness. The instance is destroyed when the call ends. Generated code run through the tool cannot read the harness's memory. Bindings narrow the tool's authority; `secretKeysRevealable: []` prevents it from revealing secret plaintext.
+
+Every tool call executes exactly once. A component tool records its durable host calls in the **calling agent's oplog**. During recovery, even a completed tool's body re-runs to reconstruct its filesystem changes; its completed durable host calls receive recorded results. An interrupted call continues under its original invocation identity. [Durable by default](/next/concepts/durable-by-default#execution-guarantees) explains recovery and the guarantees for HTTP requests a tool makes.
+
+<ThemedImage
+  lightSrc="/images/getting-started/tool-boundary-light.webp"
+  darkSrc="/images/getting-started/tool-boundary-dark.webp"
+  alt={`What a tool call shares with the agent ReportAgent("acme", "q3"). Memory: never; the tool instance has its own memory, discarded after the call. Filesystem: shared only when the binding sets filesystemAccess: allowed. Cards: the tool acts with the agent's cards, narrowed by the binding. Environment variables: filtered by the agent's cards. Config and secrets: only the keys the binding lists. Oplog: the tool's durable host calls are recorded in the agent's oplog.`}
+  caption="A tool call borrows the agent's files and authority, narrowed by the binding, and never its memory."
+  width={1536}
+  height={1024}
+/>
+
+With `filesystemAccess: allowed`, a tool works directly on the agent's own filesystem, not a copy. The agent can write a source file, call `tsc`, and read the compiled output from the same disk. A tool that declares `requiresFilesystem` fails deployment without that setting.
+
+## Bindings narrow access
+
+A **binding** exposes a tool to an agent. Bindings are set on a component (inherited by its agents) or an agent type; environment bindings can narrow them further. Declaring a tool or selecting a release does not bind it.
+
+A binding is not authority. A call needs both a binding and a [card](/next/concepts/cards) that authorizes it; neither creates the other. A tool acts with the calling agent's cards, and the binding's `filesystemAccess`, `configKeysReadable`, `secretKeysReadable`, and `secretKeysRevealable` can only narrow them. The tool sees the agent's environment variables, filtered by those cards. The effective capability is the intersection of the tool component's imports, the agent's cards, and the binding.
+
+```yaml
+# Partial golem.yaml excerpt
+tools:
+  bash:
+    release: { account: builtin-tool-owner@golem.cloud, name: bash, version: "0.2.1" }
+agents:
+  ReportAgent:
+    tools:
+      bash:
+        filesystemAccess: allowed
+        secretKeysRevealable: []
+```
+
+This binding lets `bash` work on the agent's disk and reveal no secret plaintext. Without `secretKeysRevealable`, a tool may reveal every secret the agent may.
+
+The built-in tools are WebAssembly components published as immutable releases by `builtin-tool-owner@golem.cloud`:
+
+| Tool | What it does |
+|---|---|
+| `bash` | A bash-compatible shell with coreutils, `curl`, and `wget`; bound tools are callable as commands. Only the working directory carries between calls. |
+| `read-file`, `write-file`, `edit-file`, `ls`, `grep` | Read, write, edit, list, and search files |
+| `node` | A Node-compatible JavaScript runtime |
+| `npm`, `npx` | Upstream npm, installing packages over durable HTTP |
+| `tsc` | The upstream TypeScript compiler |
+| `git` | Local repositories only: no remotes, merge, rebase, stash, or reset |
+| `web-fetch` | A bounded, read-only HTTP GET |
+| `path-policy` (middleware) | Per-directory read, write, and delete rules for the file tools above |
+
+`path-policy` constrains the named file tools only; it is not a sandbox for `bash` or `node`. To bound those, use cards.
+
+## Middleware the caller cannot bypass
+
+**Middleware** wraps a tool and runs on every call. The operator configures it in the manifest and the runtime enforces it; agent code cannot list, reorder, remove, or call around it.
+
+The order is fixed: environment-wide middleware, then per-tool middleware, then the tool. Approval gates, audit hooks, redaction, and rate limits are middleware you write; `path-policy` is the only built-in. Middleware runs inside a durable agent's execution, so an approval gate can wait hours for a person and survive restarts.
+
+## Choose an execution environment
+
+<ThemedImage
+  lightSrc="/images/getting-started/execution-ladder-light.webp"
+  darkSrc="/images/getting-started/execution-ladder-dark.webp"
+  alt="Three rungs for running code, from the bottom. Rung 1: the agent's own code, in TypeScript, Effect, Rust, Scala, MoonBit, or Go, durable and under the agent's cards. Rung 2: tools in WebAssembly, such as bash, node, npm, tsc, git, web-fetch, and your own tools, a fresh instance per call on the agent's disk when allowed, with durable host calls recorded in the agent's oplog. Rung 3: a VM or remote sandbox driven as a tool through an MCP import or HTTP, for Python, apt, Docker, real browsers, GPUs, and native binaries; egress limited by cards; state inside the remote machine not journaled. An arrow says to move up a rung only when needed."
+  caption="Move up a rung only when the work needs it."
+  width={1536}
+  height={1024}
+/>
+
+Use the agent's own code for logic, model calls, and state. Use WebAssembly tools for shell scripts, files, Node, npm, TypeScript, and git: the workspace stays on the agent's durable filesystem, tool calls share its oplog, and no separate machine must stay alive between calls.
+
+Use a remote sandbox or VM when the work needs native binaries, Python, system packages, Docker, real browsers, or GPUs. The agent drives it through MCP or HTTP, with its cards allowing the connection. Golem journals the calls and results, not the remote machine's state.
+
+## Publishing and MCP
+
+| Feature | Behavior |
+|---|---|
+| Publishing | A deployment publishes a tool as an immutable release. Other environments and accounts consume it by exact version and see only its definition. |
+| Direct invocation | `golem tool invoke --agent <agent> <tool> -- <args>` calls a tool as an existing agent. |
+| MCP export | The manifest can export a tool's commands as an MCP server. Each call runs under a fresh, throwaway owner, with middleware applied. |
+| MCP import | `mcp.imports` turns an upstream MCP server's tools into Golem tools with typed clients. Each call executes upstream. |
+| `golem ssh` | For an agent with `bash` bound, opens a prompt where each line is one `bash` tool call under that agent's bindings, middleware, and cards. There is no daemon and no full terminal: output arrives when each command finishes. |
+
+## Next
+
+[Authority: cards](/next/concepts/cards): what determines which tool calls and effects are allowed.
+
+Implementation references:
+
+- [Tool authoring and lifecycle](/next/develop/tool-authoring)
+- [Tool security model](/next/develop/tool-security)
+- [Application manifest: system-provided tools](/next/app-manifest#system-provided-tools)
+- [MCP server](/next/invoke/mcp)

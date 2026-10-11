@@ -1,4 +1,4 @@
-# Introduction
+# Oplog processor plugins
 
 Golem Plugins provide ways to extend the functionality of Golem without having to modify the core codebase. Plugins can be installed to both the open-source and the hosted versions of Golem.
 
@@ -20,7 +20,7 @@ Plugins can have **configuration** in the form of key-value pairs, which are cus
 
 ## Plugin lifecycle
 
-Plugins are first **registered** through the REST API, CLI, or Console. Each registered plugin has a globally unique ID and an account-scoped _name_ and _version_.
+Plugins are first **registered** through the REST API or the [CLI](/next/cli/plugins). Each registered plugin has a globally unique ID and an account-scoped _name_ and _version_.
 
 Registering a plugin does not make it active. Before installation, the plugin must be granted to the target environment, even when the plugin and environment belong to the same account. Declare plugin installations on components or agent types in `golem.yaml`; `golem deploy` reconciles those installations.
 

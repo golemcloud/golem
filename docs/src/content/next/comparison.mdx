@@ -1,0 +1,114 @@
+import { Cards } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
+
+# How Golem compares
+
+Golem is one durable runtime for agents, their tools, and their artifacts. This page shows what changes against the systems teams evaluate alongside it, and when another system, or a combination, is the better choice.
+
+## The short answer
+
+- **Choose Golem** when agents run tools, keep a workspace, or wait for approvals, and you want recovery, authority, and delivery managed by one runtime.
+- **Choose another system** for an established ecosystem, existing integrations, a Python-first stack, full Linux, or a harness someone else operates.
+- **Combine them** when a Golem harness needs native tools remotely, or an external harness needs durable Golem agents and artifacts.
+
+## Compare the layer you need
+
+The **model** chooses responses. A **harness or framework** drives the loop. A **runtime** manages execution, state, and authority. An **execution environment** runs commands and generated code. Products span these layers, so compare responsibilities rather than labels.
+
+<ThemedImage
+  lightSrc="/images/getting-started/stack-comparison-light.webp"
+  darkSrc="/images/getting-started/stack-comparison-dark.webp"
+  alt="Four horizontal layers: models, harnesses and frameworks, runtimes, and execution environments. Golem's highlighted scope spans three of them: the harness runs inside a Golem agent, Golem is the runtime, and WebAssembly tools run on the agent's durable filesystem. Models stay outside. Other products appear as labels spanning the layers they cover, such as Cloudflare and Rivet across harness, runtime, and execution environments and Flue across harness and runtime. A remote VM sits in the execution layer outside Golem's scope, reached by a tool call."
+  caption="Golem hosts the harness, provides the runtime, and runs tools on the agent's durable workspace."
+  width={1536}
+  height={1024}
+/>
+
+Each part of Golem has counterparts elsewhere. The distinction is their combination:
+
+- **Automatic journaling.** Golem records nondeterministic inputs and durable calls at the host boundary, without step annotations or determinism rules.
+- **State and execution together.** Recovery rebuilds memory, files, and the method the agent was running.
+- **Exactly-once calls without per-call wrappers.** Every tool call executes exactly once. Agent-to-agent calls execute exactly once. Completed model calls are recovered from the oplog rather than requested again.
+- **Separate tool instances, shared durable workspace.** Component tools run outside the harness's memory, on the agent's files when allowed, with authority narrowed by bindings. `secretKeysRevealable: []` disables secret reveal for the tool.
+- **Authority and delivery in the same runtime.** Cards and tool middleware govern effects. Each invocation pins its wallet version, so replay reproduces its authorization decisions. HTTP endpoints, files, streams, and MCP are served from the same deployment.
+
+## Durable execution engines
+
+### Restate
+
+- **Provides:** Journaled service handlers, keyed Virtual Objects, durable promises and timers, and broad SDK support.
+- **On Golem:** Model calls need no `durableCalls(ctx)` middleware and tools need no `ctx.run` wrappers. Golem also runs component tools on the agent's durable filesystem, checks their authority with cards, and serves artifacts from the same deployment.
+- **Choose or combine when:** Services must remain on your own compute or serverless platform, or you need Python, Java, or an orchestration server in front of existing code.
+
+### Temporal
+
+- **Provides:** Deterministic Workflows, including long-lived entity workflows, with I/O in Activities, signals, timers, and mature operations.
+- **On Golem:** The entity is a named agent with ordinary memory, files, and cards. Golem records nondeterministic inputs throughout its code without a Workflow/Activity split; tools and artifact delivery belong to the same runtime. [Automatic updates](/next/concepts/living-with-agents#deploy-code-update-existing-agents-deliberately) keep the old revision if replay diverges; manual updates move state through a snapshot.
+- **Choose or combine when:** Temporal is your organization's standard, or its integrations, SDK languages, and existing workers are decisive.
+
+## Actor platforms
+
+### Rivet
+
+- **Provides:** Actors with persisted state, SQLite, queues, and realtime connections; replayed Workflows; agentOS VMs with files and a shell; durable Pi agents.
+- **On Golem:** Agent-to-agent calls execute exactly once. Every tool call executes exactly once. An interrupted tool call continues as the same call, without replay flags. Cards support narrower delegated authority and cascading revocation.
+- **Choose or combine when:** Realtime multiplayer, Node.js on V8, unmodified CLI harnesses, or actors embedded in an existing backend are central.
+
+### Cloudflare
+
+- **Provides:** Durable Objects, the Agents SDK and Think harness, checkpointed fibers, Workflows, capability-style bindings, and Sandbox containers.
+- **On Golem:** Host-boundary replay recovers in-progress code without `stash()` or recovery hooks. Cards form a durable per-agent wallet: derivation narrows authority, revocation cascades at invocation boundaries, and replay preserves recorded authorization decisions.
+- **Choose or combine when:** Cloudflare's global network, integrated services, V8 runtime, or Python Workflows fit your application.
+
+## Frameworks and harnesses
+
+The Vercel AI SDK and TanStack AI are tested inside Golem agents. A framework must work on Golem's QuickJS-based runtime; Node.js internals and native addons are not available.
+
+### Vercel AI SDK, Workflow, and Sandbox
+
+- **Provides:** A model/tool loop and UI hooks; `WorkflowAgent` adds durable execution and approvals with `"use step"` tools; Vercel Sandbox supplies persistent Linux workspaces.
+- **On Golem:** The plain AI SDK loop runs durably without step directives. Every tool call executes exactly once. Interrupted tool calls continue as the same calls. Component tools share the agent's recovery and filesystem; cards and bindings narrow tool authority, and host-enforced middleware runs on every tool call.
+- **Choose or combine when:** You want the AI SDK's loop inside Golem, or prefer the Vercel stack for its application integration or Linux workspaces.
+
+### LangGraph
+
+- **Provides:** Graph-based agents, checkpointed state, interrupts, and the LangSmith ecosystem.
+- **On Golem:** There is no Python SDK in 1.6; LangGraph is not a tested in-agent integration.
+- **Choose or combine when:** Your team is Python-first or depends on that ecosystem.
+
+### Flue
+
+- **Provides:** A hooks-based TypeScript harness with persistent agent state, durable conversation recovery and message settlement, opt-in durable tools (`durable: true` and `step.do`), and virtual, local, or remote workspaces.
+- **On Golem:** Every tool call executes exactly once. No durable flag or step wrapper is required; an interrupted call continues as the same call. Recovery reconstructs ordinary agent memory and files, with component tools sharing the same recovery mechanism.
+- **Choose or combine when:** You prefer Flue's harness conventions and deployment targets. Flue is not a tested in-agent integration; connect an external harness to Golem over MCP or HTTP.
+
+An external harness can call Golem agents through MCP, REST, or HTTP endpoints. Those calls receive the agents' guarantees; the external harness remains outside Golem's durability boundary.
+
+## Sandboxes and managed platforms
+
+E2B, Daytona, Modal, Cloudflare Sandbox, and Vercel Sandbox provide Linux environments for native binaries. Their persistence mechanisms differ: E2B pause/resume preserves memory and files; Vercel's persistent sandboxes save filesystem snapshots when stopped.
+
+Golem recovers from an unplanned crash using the agent's oplog and finishes an interrupted tool call as the same call. Its WebAssembly tools cover shell scripts, files, Node, npm, TypeScript, and local git, rather than arbitrary native binaries.
+
+Use both when native tooling is required: a Golem harness drives the remote machine through MCP or HTTP. Golem journals calls and responses, not the remote machine's state.
+
+Choose a managed agent platform when you want its operator to run the harness, sessions, and sandboxes for you. Golem instead offers the same runtime locally, self-hosted, or through Golem Cloud's Developer Preview.
+
+## Translate familiar terms
+
+| Term elsewhere | Closest Golem term |
+|---|---|
+| Journal, event history | Oplog |
+| Step, activity, `ctx.run` | Durable host call, journaled automatically |
+| Checkpoint | Optional snapshot; the oplog remains the durability mechanism |
+| Actor, Durable Object, Virtual Object, entity workflow, session, thread | Agent, addressed by type and constructor parameters |
+| Signal, awakeable | Promise or webhook |
+| Permission policy, guardrail | Card and host-enforced middleware |
+
+## Next
+
+<Cards num={3}>
+  <Cards.Card title="Prove durability: Quickstart" href="/next/quickstart" />
+  <Cards.Card title="Build with your coding agent" href="/next/build-with-ai" />
+  <Cards.Card title="Implementation guides: Develop" href="/next/develop" />
+</Cards>

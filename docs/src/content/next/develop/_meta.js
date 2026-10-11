@@ -1,17 +1,18 @@
 export default {
-  "-- getting-started": {
+  "-- application-development": {
     type: "separator",
-    title: "Getting Started",
+    title: "Application development",
   },
   setup: "Setup",
-  "defining-components": "Defining Components",
-  "building-components": "Building Components",
-  "next-steps": "Next Steps",
+  "defining-components": "Defining Agents and Components",
   "-- golem-sdk": {
     type: "separator",
     title: "Golem SDK",
   },
   "tool-authoring": "Tool Authoring and Lifecycle",
+  "tool-security": "Tool Security Model",
+  cards: "Cards Reference",
+  reflection: "Agent Reflection",
   "durable-streams": "External Durable Streams",
   http: "HTTP client",
   websocket: "WebSocket client",

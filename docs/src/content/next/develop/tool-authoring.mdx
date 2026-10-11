@@ -2,7 +2,7 @@ import { Callout, Tabs } from "nextra/components"
 
 # Tool Authoring and Lifecycle
 
-This page shows how to define, test, bind, publish, and consume a [Golem-native tool](/next/concepts/golem-native-tools). A tool is stateless metadata plus handlers. Its identity is scoped to the owning agent and tool name, and each component-tool invocation runs in a fresh isolated instance under the owner's execution.
+This page shows how to define, test, bind, publish, and consume a [Golem tool](/next/concepts/tools). A tool is stateless metadata plus handlers. Its identity is scoped to the owning agent and tool name, and each component-tool invocation runs in a fresh isolated instance under the owner's execution.
 
 ## Define a tool
 
@@ -254,4 +254,4 @@ Deployment reconciles the environment's release grant before reading metadata or
 4. Deploy with the intended binding and permission cards. Test both missing-binding and missing-permission cases.
 5. For durable middleware, restart while a call or approval is pending and verify logical recovery without repeating recorded effects. External effects still require an appropriate idempotency policy across an ambiguous crash window.
 
-Build and deploy with the normal [component workflow](/next/develop/building-components). Tool and middleware publication is committed with deployment, but release de-publication and grant administration are explicit lifecycle operations.
+Build and deploy with the normal [component workflow](/next/develop#build-and-deploy). Tool and middleware publication is committed with deployment, but release de-publication and grant administration are explicit lifecycle operations.

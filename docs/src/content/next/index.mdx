@@ -1,46 +1,42 @@
-import { Callout } from "nextra/components"
 import { Cards } from "nextra/components"
-import {
-  Code,
-  Cog,
-  Gamepad,
-  LibraryBig,
-  Terminal,
-  ArrowUpDown,
-  SquareFunction,
-  HardHat,
-  CircleHelp,
-  Rocket,
-} from "lucide-react"
+import { Bot, Code, LibraryBig, Rocket, SquareFunction, Terminal } from "lucide-react"
 import { GolemIcon } from "@/components/golem-logo"
+import { ThemedImage } from "@/components/themed-image"
 
-# Golem Developer Documentation
+# Golem documentation
 
-Welcome to the Golem developer documentation portal! Here you will find comprehensive documentation on how to build, deploy, and manage applications on Golem.
+Golem is an open-source durable runtime for agents, their tools, and their artifacts. Agents keep their memory, files, and in-progress work through crashes, restarts, and deployments. Tools run in isolated sandboxes that can work on an agent's durable filesystem. Artifacts, such as web pages, reports, and live streams, are served from the same deployment. Permission cards limit what each agent may do.
 
-<Callout type="info">
-  <div>
-    Golem is available in both an open source version that you can deploy yourself and a hosted
-    version that we manage for you. This documentation covers both versions, and we will discuss any
-    differences between the two.
-  </div>
-</Callout>
+<ThemedImage
+  lightSrc="/images/getting-started/runtime-overview-light.webp"
+  darkSrc="/images/getting-started/runtime-overview-dark.webp"
+  alt="The Golem runtime: durable agents, each with its own memory, files, cards, and oplog, run a harness that calls model providers outside the runtime; the agents use tools behind host-enforced middleware and serve artifacts such as HTTP routes, web pages, live files, and streams from the same runtime."
+  caption="Agents, their tools, and their artifacts run on one runtime."
+  width={1536}
+  height={1024}
+/>
 
-### Getting Started
+The **Golem runtime** runs on your machine or on your own servers. **Golem Cloud** is the hosted service that runs it for you; it is in Developer Preview, for building and trying things out. This documentation covers both and notes where they differ.
+
+## Start here
+
+Read what Golem takes responsibility for, then watch a counter agent keep its state through a crash and a server restart on your machine.
 
 <Cards num={3}>
-  <Cards.Card title="Why Golem?" href="/next/why-golem" icon={<GolemIcon />} />
-  <Cards.Card title="Fundamentals" href="/next/fundamentals" icon={<HardHat />} />
-  <Cards.Card title="Quickstart" href="/next/quickstart" icon={<Rocket />} />
+  <Cards.Card title="Understand Golem" href="/next/what-is-golem" icon={<GolemIcon />} />
+  <Cards.Card title="Test durability locally" href="/next/quickstart" icon={<Rocket />} />
+  <Cards.Card title="Build with your coding agent" href="/next/build-with-ai" icon={<Bot />} />
 </Cards>
 
-### Quick Links
+If you are evaluating Golem against durable execution engines, actor platforms, agent frameworks, or sandboxes, read [How Golem compares](/next/comparison).
+
+## Find an implementation guide
+
+Develop covers defining, building, and deploying agents. Invoke covers calling them over HTTP, MCP, bridges, and the CLI. The CLI and REST API sections are command and endpoint references.
 
 <Cards num={2}>
   <Cards.Card title="Develop" href="/next/develop" icon={<Code />} />
-  <Cards.Card title="Deploy" href="/next/deploy" icon={<ArrowUpDown />} />
-  <Cards.Card title="Invoke" href="/next/invoke/http" icon={<SquareFunction />} />
-  <Cards.Card title="Operate" href="/next/operate/persistence" icon={<Cog />} />
+  <Cards.Card title="Invoke" href="/next/invoke" icon={<SquareFunction />} />
   <Cards.Card title="CLI" href="/next/cli" icon={<Terminal />} />
   <Cards.Card title="REST API" href="/next/rest-api" icon={<LibraryBig />} />
 </Cards>

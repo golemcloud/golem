@@ -1,6 +1,6 @@
 import { Callout } from "nextra/components"
 
-# HTTP routers and file serving
+# Router and file semantics
 
 Use a custom HTTP router when an application needs to own HTTP routing, status codes,
 headers, or streaming bodies. Use [code-first endpoints](/next/invoke/making-custom-apis)
@@ -9,7 +9,7 @@ a domain. This page describes the behavior and guarantees of routers and file
 serving. For SDK examples and deployment instructions, see
 [Using HTTP routers and files](/next/invoke/http-routers).
 
-The [API Gateway](/next/concepts/worker-gateway) (`golem-worker-service`) can serve
+The [HTTP gateway](/next/operate/architecture#the-gateway) (`golem-worker-service`) can serve
 these requests in three ways:
 
 | Behavior | Owner | What runs on a request |
