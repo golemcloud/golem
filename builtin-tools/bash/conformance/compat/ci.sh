@@ -45,3 +45,8 @@ python3 "$here/baseline.py" check "$out"
 python3 "$bash_dir/conformance/conformance.py" check --tier all \
   --wasm "$target/wasm32-wasip2/release/examples/cooperative.wasm" \
   --known-failures "$bash_dir/conformance/sweep-known-failures.json"
+
+# Every case that uses `cat`, sweep tier included, without and with a file reader: a script must
+# not see where `cat` gets the content of a file.
+python3 "$bash_dir/conformance/conformance.py" forward --tier all \
+  --wasm "$target/wasm32-wasip2/release/examples/cooperative.wasm"

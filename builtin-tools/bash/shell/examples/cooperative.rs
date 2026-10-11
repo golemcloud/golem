@@ -1,10 +1,12 @@
 //! Standalone acceptance driver for cooperative WASM pipelines.
 //!
-//! `cooperative [--status-file PATH] [--time-limit SECONDS] [--calls] SCRIPT...` runs SCRIPT in a
-//! fresh shell. With `--calls`, each SCRIPT is a separate call, as the bash tool's `run` makes
-//! them: a fresh shell with its own `$$`, started in the directory the previous call ended in, and
-//! nothing else kept. Output is concatenated and the status is the last call's. `--time-limit`
-//! gives each call the limit the tool's `timeout` argument gives it.
+//! `cooperative [--status-file PATH] [--forward-file-reads PATH] [--time-limit SECONDS] [--calls]
+//! SCRIPT...` runs SCRIPT in a fresh shell. With `--calls`, each SCRIPT is a separate call, as the
+//! bash tool's `run` makes them: a fresh shell with its own `$$`, started in the directory the
+//! previous call ended in, and nothing else kept. Output is concatenated and the status is the
+//! last call's. `--time-limit` gives each call the limit the tool's `timeout` argument gives it.
+//! `--forward-file-reads` gives each shell a file reader, as the tool gives it one when the
+//! `read-file` tool is bound, and writes the number of reads that the reader served to PATH.
 use std::io::Write;
 #[cfg(all(target_arch = "wasm32", feature = "test-support"))]
 #[path = "support/probe_tools.rs"]
@@ -108,16 +110,18 @@ async fn call(
     Ok((result.stdout, result.stderr, result.exit_code, result.cwd))
 }
 
-/// The command line: where to report the status, the per-call time limit, and the scripts.
+/// The command line: where to report the status, where to report the reads of the file reader
+/// (which also installs the reader), the per-call time limit, and the scripts.
 struct Invocation {
     status_file: Option<String>,
+    forwarded_reads_file: Option<String>,
     time_limit: Option<std::time::Duration>,
     scripts: Vec<String>,
 }
 
 fn parse_args() -> Result<Invocation, Box<dyn std::error::Error>> {
-    const USAGE: &str =
-        "usage: cooperative [--status-file PATH] [--time-limit SECONDS] [--calls] SCRIPT...";
+    const USAGE: &str = "usage: cooperative [--status-file PATH] [--forward-file-reads PATH] \
+                         [--time-limit SECONDS] [--calls] SCRIPT...";
     // WASI's exit status only says success or failure, so the shell's own status is written to a
     // file for the harness. It is an argument, not a variable, so scripts never see it.
     let mut args = std::env::args().skip(1).peekable();
@@ -125,6 +129,15 @@ fn parse_args() -> Result<Invocation, Box<dyn std::error::Error>> {
     if args.peek().map(String::as_str) == Some("--status-file") {
         args.next();
         status_file = Some(args.next().ok_or(USAGE)?);
+    }
+    let mut forwarded_reads_file = None;
+    if args.peek().map(String::as_str) == Some("--forward-file-reads") {
+        args.next();
+        forwarded_reads_file = Some(args.next().ok_or(USAGE)?);
+    }
+    #[cfg(not(all(target_arch = "wasm32", feature = "test-support")))]
+    if forwarded_reads_file.is_some() {
+        return Err("--forward-file-reads needs the wasm32 build with `test-support`".into());
     }
     let mut time_limit = None;
     if args.peek().map(String::as_str) == Some("--time-limit") {
@@ -142,6 +155,7 @@ fn parse_args() -> Result<Invocation, Box<dyn std::error::Error>> {
     }
     Ok(Invocation {
         status_file,
+        forwarded_reads_file,
         time_limit,
         scripts,
     })
@@ -181,6 +195,11 @@ fn finish(invocation: &Invocation, stdout: &[u8], stderr: &[u8], status: u8) -> 
         .and_then(|()| match &invocation.status_file {
             Some(path) => std::fs::write(path, status.to_string()),
             None => Ok(()),
+        })
+        .and_then(|()| match &invocation.forwarded_reads_file {
+            #[cfg(all(target_arch = "wasm32", feature = "test-support"))]
+            Some(path) => std::fs::write(path, probe_tools::forwarded_reads().to_string()),
+            _ => Ok(()),
         });
     if let Err(error) = written {
         eprintln!("cooperative: {error}");
@@ -204,6 +223,10 @@ impl wcurl::wasip3::exports::wasi::cli::run::Guest for Command {
                 let mut shell = Session::new_with_execution_services(services()).await?;
                 #[cfg(feature = "test-support")]
                 probe_tools::install(&mut shell);
+                #[cfg(feature = "test-support")]
+                if invocation.forwarded_reads_file.is_some() {
+                    probe_tools::forward_file_reads(&mut shell);
+                }
                 Ok(shell)
             }))
             .await

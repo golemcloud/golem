@@ -191,5 +191,36 @@ class CallTests(unittest.TestCase):
         self.assertEqual([("/", script)], HARNESS.split_calls(script))
 
 
+class ForwardTests(unittest.TestCase):
+    PLAIN = (0, b"a\n", b"")
+
+    def test_a_script_uses_cat_only_as_a_whole_word(self):
+        for script in ["cat f", "x=$(cat f)", "seq 3 | cat", "/bin/cat f", "cat<f"]:
+            self.assertTrue(HARNESS.uses_cat(script), script)
+        for script in ["concatenate", "catalog f", "echo bobcat", "zcat f"]:
+            self.assertFalse(HARNESS.uses_cat(script), script)
+
+    def test_equal_outcomes_are_the_same(self):
+        self.assertEqual("same", HARNESS.forwarding_verdict(self.PLAIN, self.PLAIN, None))
+
+    def test_a_difference_that_a_second_plain_run_confirms_is_a_difference(self):
+        for forwarded in [(1, b"a\n", b""), (0, b"A\n", b""), (0, b"a\n", b"note\n")]:
+            self.assertEqual(
+                "different", HARNESS.forwarding_verdict(self.PLAIN, forwarded, self.PLAIN)
+            )
+
+    def test_a_case_whose_plain_runs_differ_is_unstable(self):
+        self.assertEqual(
+            "unstable",
+            HARNESS.forwarding_verdict((0, b"1\n", b""), (0, b"2\n", b""), (0, b"3\n", b"")),
+        )
+
+    def test_a_run_passes_only_without_differences_and_with_reads(self):
+        self.assertTrue(HARNESS.forwarding_passes(cases=3, different=0, reads=5))
+        self.assertFalse(HARNESS.forwarding_passes(cases=3, different=1, reads=5))
+        self.assertFalse(HARNESS.forwarding_passes(cases=3, different=0, reads=0))
+        self.assertTrue(HARNESS.forwarding_passes(cases=0, different=0, reads=0))
+
+
 if __name__ == "__main__":
     unittest.main()

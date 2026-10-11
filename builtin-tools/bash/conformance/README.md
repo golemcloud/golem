@@ -19,6 +19,7 @@ cargo build --manifest-path builtin-tools/bash/Cargo.toml \
   -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
 W=builtin-tools/bash/target/wasm32-wasip2/release/examples/cooperative.wasm
 python3 builtin-tools/bash/conformance/conformance.py check --wasm $W     # against goldens
+python3 builtin-tools/bash/conformance/conformance.py forward --wasm $W   # cat with a file reader
 python3 builtin-tools/bash/conformance/conformance.py coverage --wasm $W  # checklist gate
 python3 builtin-tools/bash/conformance/test_conformance.py              # harness tests
 # After adding or changing cases (needs Docker; builds oracle.Dockerfile):
@@ -30,6 +31,16 @@ match. Each case gets a fresh filesystem and a 15-second timeout; cases run in p
 CPU by default (`--jobs N`). `--case '<name>'` selects one case and `--prefix '<text>'` every case
 whose name starts with it; repeat either to select more. `--report FILE` writes the failures as
 JSON. The matrix needs Wasmtime with WASI 0.3/component-model async support.
+
+`forward` checks that a script cannot see where `cat` gets the content of a file. When the
+`read-file` tool is bound, the bash tool gives the shell a file reader, and `cat` takes the content
+of a regular file from that reader. `forward` runs each case whose script uses `cat` two times,
+without a file reader and with the example's probe file reader (`--forward-file-reads`), and fails
+when status, stdout or stderr differ. The probe answers as the tool's reader does: all bytes of a
+text file, and nothing for a path with `..`, a file above 1 MiB and content that is not UTF-8
+text. `forward` needs no golden. It also fails when the probe served no read, because such a run
+compares nothing. A case whose own output changes from run to run is reported as `UNSTABLE` and
+does not fail the run. `--tier all` takes the sweep-tier cases too.
 
 `record` runs the oracle **twice** per case by default, each run in its own fresh container, and
 refuses to write a golden the two runs disagree on -- printing which case and which field (status,

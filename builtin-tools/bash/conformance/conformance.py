@@ -7,6 +7,9 @@ Golem's GOLEM_* variables, and a fresh `/tmp`. The oracle's answers are recorded
 
     conformance.py check --wasm W     compare our shell with the recorded goldens (the default);
                                       `--tier all` adds the sweep-tier corpora the slow job checks
+    conformance.py forward --wasm W   run each case that uses `cat` without and with a file
+                                      reader, and fail if the two outcomes differ; needs no
+                                      golden; `--tier all` as for `check`
     conformance.py record             run the oracle twice per case (`--runs 1` for one) and
                                       rewrite goldens for the selected cases; refuses a case its
                                       runs disagree on
@@ -283,6 +286,16 @@ def golden_for(case, loaded, fingerprint):
 
 def run_ours(case, wasm, wasmtime, base, cache):
     """Run one case in the wasm shell with a fresh root; return its outcome."""
+    return run_shell(case, wasm, wasmtime, base, cache)[0]
+
+
+def run_shell(case, wasm, wasmtime, base, cache, forward_file_reads=False):
+    """Run one case in the wasm shell with a fresh root.
+
+    Returns its outcome and, with `forward_file_reads`, the number of reads that the example's
+    probe file reader served (otherwise None). The reader is switched on with an argument, not
+    with a variable, so scripts never see it.
+    """
     root = pathlib.Path(tempfile.mkdtemp(dir=base))
     if not case.options.get("no_tmp"):
         (root / "tmp").mkdir()
@@ -295,6 +308,8 @@ def run_ours(case, wasm, wasmtime, base, cache):
     for key, value in GOLEM_ENV.items():
         command += ["--env", f"{key}={value}"]
     command += [str(wasm), "--status-file", "/.conformance/status"]
+    if forward_file_reads:
+        command += ["--forward-file-reads", "/.conformance/forwarded-reads"]
     calls = split_calls(case.script)
     if len(calls) > 1:
         # The example carries each call's final directory itself; the markers' are the oracle's.
@@ -302,7 +317,14 @@ def run_ours(case, wasm, wasmtime, base, cache):
     else:
         command.append(case.script)
     result = subprocess.run(command, capture_output=True, timeout=case.timeout)
-    return wasm_outcome(result, report)
+    outcome = wasm_outcome(result, report)
+    if not forward_file_reads:
+        return outcome, None
+    try:
+        reads = int(report.with_name("forwarded-reads").read_text(encoding="ascii"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"missing or invalid report of forwarded reads: {error}") from error
+    return outcome, reads
 
 
 # --- The oracle ---------------------------------------------------------------------------------
@@ -599,6 +621,88 @@ def command_check(args, cases):
     return compare_ours(args, cases, expectation)
 
 
+def uses_cat(script):
+    """Whether a script names the command `cat`. A match inside a longer word does not count."""
+    return re.search(r"(?<![\w-])cat(?![\w-])", script) is not None
+
+
+def forwarding_verdict(plain, forwarded, plain_again):
+    """Judge one case of `forward` from its outcome without a file reader and with one.
+
+    When the two differ, the case ran once more without the reader (`plain_again`). A case whose
+    two plain runs differ answers differently from run to run by itself, so it says nothing about
+    the reader: it is `unstable`, not `different`.
+    """
+    if forwarded == plain:
+        return "same"
+    return "different" if plain_again == plain else "unstable"
+
+
+def forwarding_passes(cases, different, reads):
+    """`forward` passes when no case differs and, if any case ran, the reader served a read: a run
+    in which the reader was never asked compares nothing."""
+    return different == 0 and (reads > 0 or cases == 0)
+
+
+def command_forward(args, cases):
+    """Run each case that uses `cat` without and with the example's probe file reader.
+
+    With the reader, `cat` takes the content of a regular file from it and no longer reads the
+    file itself. A script must not see that: status, stdout and stderr must be equal to the run
+    without the reader. This needs no golden and no oracle.
+    """
+    cases = [case for case in cases if uses_cat(case.script)]
+    wasm = args.wasm.resolve()
+    counts = {"same": 0, "different": 0, "unstable": 0, "skipped": 0}
+    reads = 0
+    with tempfile.TemporaryDirectory(prefix="golem-conformance-") as directory:
+        base = pathlib.Path(directory)
+        cache = base / "cache.toml"
+        cache.write_text('[cache]\ndirectory = "' + str(base / "cache") + '"\n')
+
+        def run(case, forward_file_reads=False):
+            return run_shell(case, wasm, args.wasmtime, base, cache, forward_file_reads)
+
+        def one(case):
+            """The verdict for a case, the line to print for it, and the reads that were served."""
+            try:
+                plain, _ = run(case)
+            except (subprocess.TimeoutExpired, ValueError) as error:
+                return "skipped", f"SKIP {case.name}: no outcome without the reader: {error}", 0
+            try:
+                forwarded, served = run(case, forward_file_reads=True)
+            except (subprocess.TimeoutExpired, ValueError) as error:
+                return "different", f"FAIL {case.name}: no outcome with the reader: {error}", 0
+            again = None
+            if forwarded != plain:
+                try:
+                    again, _ = run(case)
+                except (subprocess.TimeoutExpired, ValueError):
+                    again = None
+            verdict = forwarding_verdict(plain, forwarded, again)
+            line = {
+                "same": f"PASS {case.name}",
+                "unstable": f"UNSTABLE {case.name}: its outcome without the reader differs between runs",
+                "different": f"FAIL {case.name} without the reader {plain!r} with the reader {forwarded!r}",
+            }[verdict]
+            return verdict, line, served
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+            for verdict, line, served in pool.map(one, cases):
+                counts[verdict] += 1
+                reads += served
+                print(line, flush=True)
+    print(
+        f"{counts['different']} differences of {len(cases)} cases that use cat "
+        f"({counts['unstable']} unstable, {counts['skipped']} skipped); "
+        f"the file reader served {reads} reads",
+        flush=True,
+    )
+    if cases and reads == 0:
+        print("the file reader served no read, so the run compared nothing", flush=True)
+    return forwarding_passes(len(cases), counts["different"], reads)
+
+
 def command_live(args, cases):
     build_oracle(args.oracle_image)
     oracle = {}
@@ -744,7 +848,10 @@ def command_coverage(args, cases):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", nargs="?", default="check", choices=["check", "record", "live", "stale", "coverage"])
+    parser.add_argument(
+        "command", nargs="?", default="check",
+        choices=["check", "forward", "record", "live", "stale", "coverage"],
+    )
     parser.add_argument("--wasm", type=pathlib.Path)
     parser.add_argument("--wasmtime", default="wasmtime")
     parser.add_argument("--oracle-image", default=ORACLE_IMAGE)
@@ -754,7 +861,7 @@ def main(argv=None):
     parser.add_argument("--report", type=pathlib.Path, help="write failures as JSON, for triage")
     parser.add_argument(
         "--tier", choices=["pr", "all"], default="pr",
-        help='check: `pr` skips corpora marked TIER = "sweep"; `all` checks every case',
+        help='check, forward: `pr` skips corpora marked TIER = "sweep"; `all` takes every case',
     )
     parser.add_argument(
         "--known-failures", type=pathlib.Path,
@@ -773,15 +880,15 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     cases = select(load_cases(), args)
-    if args.command == "check" and args.tier == "pr":
+    if args.command in ("check", "forward") and args.tier == "pr":
         skipped = sum(case.tier == "sweep" for case in cases)
         cases = [case for case in cases if case.tier != "sweep"]
         if skipped:
             print(f"skipping {skipped} sweep-tier cases; `--tier all` checks them", flush=True)
-    if args.command in ("check", "live", "coverage") and args.wasm is None:
+    if args.command in ("check", "forward", "live", "coverage") and args.wasm is None:
         parser.error(f"{args.command} needs --wasm")
     handler = {
-        "check": command_check, "record": command_record,
+        "check": command_check, "forward": command_forward, "record": command_record,
         "live": command_live, "stale": command_stale, "coverage": command_coverage,
     }[args.command]
     return 0 if handler(args, cases) else 1
