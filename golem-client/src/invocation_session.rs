@@ -18,10 +18,10 @@ use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
     MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole,
-    PublicClientCancelReason, PublicClientMessage, PublicConfigEntry, PublicInvocationOutcome,
-    PublicInvocationResult, PublicOutputStreamOutcome, PublicResumeOperation, PublicServerMessage,
-    PublicStreamDirection, PublicStreamMapping, decode_binary_message, decode_server_text,
-    encode_binary_message, encode_text,
+    PublicClientCancelReason, PublicClientMessage, PublicConfigEntry, PublicErrorCode,
+    PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
+    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamMapping,
+    decode_binary_message, decode_server_text, encode_binary_message, encode_text,
 };
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -97,6 +97,11 @@ pub enum SessionTransportError {
     MissingSessionToken,
     #[error("invocation session attachment is terminal")]
     AttachmentTerminated,
+    #[error("the server rejected the invocation ({}): {message}", .code.as_str())]
+    Rejected {
+        code: PublicErrorCode,
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1473,6 +1478,8 @@ pub struct InvocationSession {
     deliveries: DeliveryTracker,
     inputs: Vec<RegisteredInput>,
     attachment_state: AttachmentState,
+    /// How many times the session has left a connection for a new one.
+    reconnects: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1523,6 +1530,7 @@ impl InvocationSession {
             attachment_state: AttachmentState::Pending {
                 exact_retry: pending_operation_is_retry,
             },
+            reconnects: 0,
         })
     }
 
@@ -1864,6 +1872,7 @@ impl InvocationSession {
         for input in &mut self.inputs {
             input.channel = None;
         }
+        self.reconnects += 1;
         self.transport = connect_for_pending_operation(
             &self.request_provider,
             self.connector.clone(),
@@ -1954,7 +1963,7 @@ where
 
 /// Drives a native tool session until completion or explicit client cancellation.
 pub async fn drive_native_tool_session_until<R, W, E, C>(
-    mut session: InvocationSession,
+    session: InvocationSession,
     input: Option<R>,
     stdout: &mut W,
     stderr: &mut E,
@@ -1965,6 +1974,35 @@ where
     W: tokio::io::AsyncWrite + Unpin,
     E: tokio::io::AsyncWrite + Unpin,
     C: std::future::Future<Output = ()>,
+{
+    drive_native_tool_session_with_stop(
+        session,
+        input,
+        stdout,
+        stderr,
+        cancelled,
+        std::future::pending::<()>(),
+    )
+    .await
+}
+
+/// Drives a native tool session until completion. `stop_input` cancels only the tool's stdin
+/// and the session then still waits for the result; `cancelled` cancels every open stream and
+/// returns at once.
+pub async fn drive_native_tool_session_with_stop<R, W, E, C, S>(
+    mut session: InvocationSession,
+    input: Option<R>,
+    stdout: &mut W,
+    stderr: &mut E,
+    cancelled: C,
+    stop_input: S,
+) -> Result<PublicInvocationResult, SessionTransportError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+    E: tokio::io::AsyncWrite + Unpin,
+    C: std::future::Future<Output = ()>,
+    S: std::future::Future<Output = ()>,
 {
     use tokio::io::AsyncReadExt;
 
@@ -2036,6 +2074,7 @@ where
     };
     tokio::pin!(producer);
     tokio::pin!(cancelled);
+    tokio::pin!(stop_input);
     let mut producer_done = false;
     let (cancel_output, output_cancelled) = tokio::sync::watch::channel(false);
     let (stdout_tx, stdout_rx) = mpsc::channel(PIPELINE_ITEMS);
@@ -2068,6 +2107,12 @@ where
         let mut result = None;
         let mut finished = false;
         let mut completion_failure = None;
+        // `stop_input` completed; it is never polled again.
+        let mut stop_requested = false;
+        // The connection the cancel for stdin was sent on. One sent on a connection that is then
+        // lost may not have arrived, so it counts for that connection only.
+        let mut input_stopped_on = None;
+        let mut input_cancelled_by_server = false;
         loop {
             if finished
                 && admitted_frames == 0
@@ -2109,13 +2154,24 @@ where
             let unsent = buffer.next_unsent();
             let sender = session.sender();
             let binding = session.input_binding(&buffer);
+            // A stop has nothing to do on this connection once its cancel was sent on it, or when
+            // the input is closed: it ended, or the server cancelled it. The service rejects a
+            // cancel for an input that is already cancelled or closed.
+            let stop_done = input_stopped_on == Some(session.reconnects)
+                || buffer.is_terminal()
+                || input_cancelled_by_server;
+            // Without a stop, giving up cancels stdin as it did before there was one.
+            let input_channel_to_cancel = binding
+                .as_ref()
+                .map(|binding| binding.0)
+                .filter(|_| !(stop_requested && stop_done));
             tokio::select! {
                 result = &mut producer, if !producer_done => {
                     producer_done = true;
                     if let Err(error) = result {
                         cancel_native_streams(
                             &session,
-                            binding.as_ref().map(|binding| binding.0),
+                            input_channel_to_cancel,
                             [
                                 stdout_channel.filter(|_| !stdout_terminal),
                                 stderr_channel.filter(|_| !stderr_terminal),
@@ -2129,7 +2185,7 @@ where
                     let _ = cancel_input.send(true);
                     cancel_native_streams(
                         &session,
-                        binding.as_ref().map(|binding| binding.0),
+                        input_channel_to_cancel,
                         [
                             stdout_channel.filter(|_| !stdout_terminal),
                             stderr_channel.filter(|_| !stderr_terminal),
@@ -2141,6 +2197,30 @@ where
                         "native tool invocation cancelled",
                     )));
                 }
+                _ = &mut stop_input, if !stop_requested => {
+                    stop_requested = true;
+                }
+                // A tool that has returned its result has nothing left to stop.
+                stopped = async {
+                    sender.send_message(&PublicClientMessage::StreamCancel {
+                        channel: binding.as_ref().unwrap().0,
+                        reason: PublicClientCancelReason::Cancelled,
+                        version: INVOCATION_SESSION_VERSION,
+                    }).await
+                }, if stop_requested && !stop_done && result.is_none() && !finished && pending_recovery.is_none() && binding.is_some() => {
+                    match stopped {
+                        Ok(()) => {
+                            let _ = cancel_input.send(true);
+                            input_open = false;
+                            input_stopped_on = Some(session.reconnects);
+                        }
+                        // As the send arm does: recover, then the cancel is sent again.
+                        Err(error) if is_transport_detach(&error) => {
+                            pending_recovery = Some(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 admitted = input_rx.recv(), if input_open && session.is_accepted() => {
                     match admitted {
                         Some(admitted) => buffer.push(admitted),
@@ -2151,7 +2231,7 @@ where
                     let (index, request, offset) = unsent.as_ref().unwrap();
                     send_replayable_input(&sender, request, binding.as_ref().unwrap().0, *offset).await?;
                     Ok::<_, SessionTransportError>(*index)
-                }, if pending_recovery.is_none() && session.is_accepted() && binding.is_some() && unsent.is_some() && !*cancel_input.borrow() => {
+                }, if pending_recovery.is_none() && session.is_accepted() && binding.is_some() && unsent.is_some() && !*cancel_input.borrow() && !stop_requested => {
                     match sent {
                         Ok(index) => buffer.mark_sent(index)?,
                         Err(error) if is_transport_detach(&error) => {
@@ -2172,7 +2252,7 @@ where
                             let _ = cancel_output.send(true);
                             cancel_native_streams(
                                 &session,
-                                binding.as_ref().map(|binding| binding.0),
+                                input_channel_to_cancel,
                                 [stdout_channel, stderr_channel.filter(|_| !stderr_terminal)],
                                 PublicClientCancelReason::ConsumerDrop,
                             ).await;
@@ -2192,7 +2272,7 @@ where
                             let _ = cancel_output.send(true);
                             cancel_native_streams(
                                 &session,
-                                binding.as_ref().map(|binding| binding.0),
+                                input_channel_to_cancel,
                                 [stdout_channel.filter(|_| !stdout_terminal), stderr_channel],
                                 PublicClientCancelReason::ConsumerDrop,
                             ).await;
@@ -2313,6 +2393,7 @@ where
                         ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
                             input_open = false;
                             let _ = cancel_input.send(true);
+                            input_cancelled_by_server = true;
                         }
                         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
                             match outcome {
@@ -2334,6 +2415,9 @@ where
                                 }
                             }
                             finished = true;
+                        }
+                        ServerFrame::Message(PublicServerMessage::InvocationRejected { code, message, .. }) => {
+                            return Err(SessionTransportError::Rejected { code: *code, message: message.clone() });
                         }
                         other => return Err(SessionTransportError::Protocol(format!("unexpected native tool response: {other:?}"))),
                     }
@@ -4733,6 +4817,759 @@ mod tests {
     #[test]
     async fn native_tool_session_cancels_streams_on_output_io_failure() {
         verify_native_tool_session_cancels_open_streams(true).await;
+    }
+
+    /// Accepts an attempt with the stdin and stdout of a tool on the given channels.
+    /// `stdin_terminal` is whether the server holds the input as closed.
+    async fn send_native_acceptance(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+        attempt_id: uuid::Uuid,
+        stdin_channel: u32,
+        stdin_terminal: bool,
+        stdout_channel: u32,
+    ) {
+        socket
+            .send(Message::Text(
+                encode_text(&PublicServerMessage::InvocationAccepted {
+                    attempt_id,
+                    idempotency_key: "tool-invocation-key".to_string(),
+                    mappings: vec![
+                        PublicStreamMapping {
+                            channel: stdin_channel,
+                            direction: PublicStreamDirection::Input,
+                            byte_role: Some(PublicByteStreamRole::Stdin),
+                            input_high_water: Some(PublicInputHighWater {
+                                sequence: DecimalU64(0),
+                                terminal: stdin_terminal,
+                            }),
+                            provisional_ref: None,
+                            stream_token: "native-stdin".to_string(),
+                        },
+                        native_output_mapping(
+                            stdout_channel,
+                            PublicByteStreamRole::Stdout,
+                            "native-stdout",
+                        ),
+                    ],
+                    session_token: "native-session".to_string(),
+                    version: 1,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    /// Accepts a tool start after `acceptance_delay`, with stdin on channel 11 and stdout on
+    /// channel 12.
+    async fn accept_native_tool_with_stdin(
+        listener: &TcpListener,
+        initial: PublicClientMessage,
+        attempt_id: uuid::Uuid,
+        acceptance_delay: Duration,
+    ) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+            Ok(select_session_subprotocol(request, response))
+        })
+        .await
+        .unwrap();
+        assert_eq!(receive_client_message(&mut socket).await, initial);
+        tokio::time::sleep(acceptance_delay).await;
+        send_native_acceptance(&mut socket, attempt_id, 11, false, 12).await;
+        socket
+    }
+
+    /// Accepts the client's return after a lost connection, with stdin on channel 21 and stdout
+    /// on channel 22.
+    async fn accept_native_tool_resume(
+        listener: &TcpListener,
+        stdin_terminal: bool,
+    ) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+            Ok(select_session_subprotocol(request, response))
+        })
+        .await
+        .unwrap();
+        let PublicClientMessage::ResumeAttach {
+            attempt_id,
+            operation: PublicResumeOperation::Resume,
+            session_token,
+            ..
+        } = receive_client_message(&mut socket).await
+        else {
+            panic!("expected resume attachment")
+        };
+        assert_eq!(session_token, "native-session");
+        send_native_acceptance(&mut socket, attempt_id, 21, stdin_terminal, 22).await;
+        socket
+    }
+
+    async fn send_native_tool_result(socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>) {
+        socket
+            .send(Message::Text(
+                encode_text(&PublicServerMessage::InvocationResult {
+                    mappings: Vec::new(),
+                    result: Box::new(PublicInvocationResult::ToolSuccess { result: None }),
+                    version: 1,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    /// Sends the end of stdout after `stdout_length` bytes and the successful completion.
+    async fn send_native_stdout_end_and_finish(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+        stdout_channel: u32,
+        stdout_length: u64,
+    ) {
+        send_native_end(socket, stdout_channel, stdout_length, "stdout-end").await;
+        socket
+            .send(Message::Text(
+                encode_text(&PublicServerMessage::InvocationFinished {
+                    outcome: PublicInvocationOutcome::Success,
+                    version: 1,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    /// Sends a successful tool result, the end of stdout after `stdout_length` bytes, and the
+    /// successful completion.
+    async fn send_native_tool_success(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+        stdout_channel: u32,
+        stdout_length: u64,
+    ) {
+        send_native_tool_result(socket).await;
+        send_native_stdout_end_and_finish(socket, stdout_channel, stdout_length).await;
+    }
+
+    /// Returns the messages the client sends before it closes the socket.
+    async fn receive_client_messages_until_close(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    ) -> Vec<PublicClientMessage> {
+        let mut messages = Vec::new();
+        while let Some(Ok(message)) = socket.next().await {
+            match message {
+                Message::Text(text) => {
+                    messages.push(decode_client_text(text.as_bytes()).unwrap());
+                }
+                Message::Close(_) => break,
+                other => panic!("unexpected client frame: {other:?}"),
+            }
+        }
+        messages
+    }
+
+    /// Expects the cancel of stdin as the only message from the client, and answers it with a
+    /// successful result.
+    async fn expect_stdin_cancel_and_send_success(
+        socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    ) {
+        assert!(matches!(
+            receive_client_message(socket).await,
+            PublicClientMessage::StreamCancel {
+                channel: 11,
+                reason: PublicClientCancelReason::Cancelled,
+                ..
+            }
+        ));
+        send_native_tool_success(socket, 12, 0).await;
+        assert_eq!(
+            receive_client_messages_until_close(socket).await,
+            Vec::new()
+        );
+    }
+
+    /// Opens a tool session and drives it with the two signals.
+    async fn open_and_drive_native_tool_session<R, W, C, S>(
+        address: std::net::SocketAddr,
+        initial: PublicClientMessage,
+        input: R,
+        stdout: &mut W,
+        cancelled: C,
+        stop_input: S,
+    ) -> Result<PublicInvocationResult, SessionTransportError>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+        C: std::future::Future<Output = ()>,
+        S: std::future::Future<Output = ()>,
+    {
+        let session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let mut stderr = tokio::io::sink();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            drive_native_tool_session_with_stop(
+                session,
+                Some(input),
+                stdout,
+                &mut stderr,
+                cancelled,
+                stop_input,
+            ),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[test]
+    async fn stopping_the_input_cancels_only_stdin_and_returns_the_result() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            stop_tx.send(()).unwrap();
+            expect_stdin_cancel_and_send_success(&mut socket).await;
+        });
+
+        // The writer stays alive, so the input stays open and carries no data.
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let result = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut tokio::io::sink(),
+            std::future::pending(),
+            async {
+                let _ = stop_rx.await;
+            },
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            PublicInvocationResult::ToolSuccess { result: None }
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_stop_before_acceptance_is_sent_after_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::from_millis(50),
+            )
+            .await;
+            expect_stdin_cancel_and_send_success(&mut socket).await;
+        });
+
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let result = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut tokio::io::sink(),
+            std::future::pending(),
+            std::future::ready(()),
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            PublicInvocationResult::ToolSuccess { result: None }
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_result_with_the_input_still_open_is_returned() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            send_native_tool_success(&mut socket, 12, 0).await;
+            assert_eq!(
+                receive_client_messages_until_close(&mut socket).await,
+                Vec::new()
+            );
+        });
+
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let result = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut tokio::io::sink(),
+            std::future::pending(),
+            std::future::pending(),
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            PublicInvocationResult::ToolSuccess { result: None }
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn giving_up_after_a_stop_does_not_cancel_stdin_twice() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            stop_tx.send(()).unwrap();
+            assert!(matches!(
+                receive_client_message(&mut socket).await,
+                PublicClientMessage::StreamCancel {
+                    channel: 11,
+                    reason: PublicClientCancelReason::Cancelled,
+                    ..
+                }
+            ));
+            cancel_tx.send(()).unwrap();
+            assert_eq!(
+                receive_client_messages_until_close(&mut socket).await,
+                vec![PublicClientMessage::StreamCancel {
+                    channel: 12,
+                    reason: PublicClientCancelReason::Cancelled,
+                    version: INVOCATION_SESSION_VERSION,
+                }]
+            );
+        });
+
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let error = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut tokio::io::sink(),
+            async {
+                let _ = cancel_rx.await;
+            },
+            async {
+                let _ = stop_rx.await;
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, SessionTransportError::Io(ref error) if error.kind() == std::io::ErrorKind::Interrupted)
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_stop_after_the_input_ended_sends_nothing() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            assert!(matches!(
+                receive_client_message(&mut socket).await,
+                PublicClientMessage::InputStreamEnd {
+                    channel: 11,
+                    sequence: DecimalU64(0),
+                    ..
+                }
+            ));
+            stop_tx.send(()).unwrap();
+            // Leaves the client time to act on the stop before the result ends the session.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            send_native_tool_success(&mut socket, 12, 0).await;
+            assert_eq!(
+                receive_client_messages_until_close(&mut socket).await,
+                Vec::new()
+            );
+        });
+
+        let result = open_and_drive_native_tool_session(
+            address,
+            initial,
+            tokio::io::empty(),
+            &mut tokio::io::sink(),
+            std::future::pending(),
+            async {
+                let _ = stop_rx.await;
+            },
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            PublicInvocationResult::ToolSuccess { result: None }
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_stop_after_the_server_closed_the_input_sends_nothing() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            send_native_cancel(&mut socket, 11, PublicServerCancelReason::ConsumerDrop).await;
+            send_native_binary(&mut socket, 12, 0, "stdout-marker", b"A").await;
+            // Leaves the client time to act on the stop before the result ends the session.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            send_native_tool_success(&mut socket, 12, 1).await;
+            assert_eq!(
+                receive_client_messages_until_close(&mut socket).await,
+                Vec::new()
+            );
+        });
+
+        let (mut stdout_reader, mut stdout_writer) = tokio::io::duplex(1);
+        // The byte follows the cancel, so the stop fires after the client has seen the cancel.
+        let stop_input = async {
+            let mut byte = [0];
+            stdout_reader.read_exact(&mut byte).await.unwrap();
+        };
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let result = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut stdout_writer,
+            std::future::pending(),
+            stop_input,
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            PublicInvocationResult::ToolSuccess { result: None }
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_rejected_tool_invocation_is_returned_with_the_code_and_message_of_the_rejection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationRejected {
+                        attempt_id: Some(attempt_id),
+                        code: PublicErrorCode::Unauthorized,
+                        message: "invocation is not authorized".to_string(),
+                        retryable: false,
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        });
+
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let error = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut tokio::io::sink(),
+            std::future::pending(),
+            std::future::pending(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                SessionTransportError::Rejected {
+                    code: PublicErrorCode::Unauthorized,
+                    ref message,
+                } if message == "invocation is not authorized"
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "the server rejected the invocation (unauthorized): invocation is not authorized"
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_stop_after_the_result_sends_nothing() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            send_native_tool_result(&mut socket).await;
+            send_native_binary(&mut socket, 12, 0, "stdout-marker", b"A").await;
+            // Leaves the client time to act on the stop before the session finishes.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            send_native_stdout_end_and_finish(&mut socket, 12, 1).await;
+            assert_eq!(
+                receive_client_messages_until_close(&mut socket).await,
+                Vec::new()
+            );
+        });
+
+        let (mut stdout_reader, mut stdout_writer) = tokio::io::duplex(1);
+        // The byte follows the result, so the stop fires after the client has the result.
+        let stop_input = async {
+            let mut byte = [0];
+            stdout_reader.read_exact(&mut byte).await.unwrap();
+        };
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let result = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut stdout_writer,
+            std::future::pending(),
+            stop_input,
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            PublicInvocationResult::ToolSuccess { result: None }
+        );
+        server.await.unwrap();
+    }
+
+    /// The server reads the stop, loses the connection, and on the client's return holds the
+    /// input as closed or as open. It gives the result once the input is closed.
+    async fn verify_a_stop_across_a_reconnect(stop_arrived: bool) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            assert!(matches!(
+                receive_client_message(&mut socket).await,
+                PublicClientMessage::StreamCancel {
+                    channel: 11,
+                    reason: PublicClientCancelReason::Cancelled,
+                    ..
+                }
+            ));
+            drop(socket);
+
+            let mut socket = accept_native_tool_resume(&listener, stop_arrived).await;
+            if stop_arrived {
+                // Leaves the client time to send the stop again before the result arrives.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            } else {
+                assert!(matches!(
+                    receive_client_message(&mut socket).await,
+                    PublicClientMessage::StreamCancel {
+                        channel: 21,
+                        reason: PublicClientCancelReason::Cancelled,
+                        ..
+                    }
+                ));
+            }
+            send_native_tool_success(&mut socket, 22, 0).await;
+            assert_eq!(
+                receive_client_messages_until_close(&mut socket).await,
+                Vec::new()
+            );
+        });
+
+        let (input, _input_writer) = tokio::io::duplex(1);
+        let result = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut tokio::io::sink(),
+            std::future::pending(),
+            std::future::ready(()),
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            PublicInvocationResult::ToolSuccess { result: None }
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn a_stop_lost_with_the_connection_is_sent_again() {
+        verify_a_stop_across_a_reconnect(false).await;
+    }
+
+    #[test]
+    async fn a_stop_that_arrived_is_not_sent_again_after_a_reconnect() {
+        verify_a_stop_across_a_reconnect(true).await;
+    }
+
+    #[test]
+    async fn giving_up_ends_a_stop_that_cannot_be_sent() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let initial = tool_start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_native_tool_with_stdin(
+                &listener,
+                server_initial,
+                attempt_id,
+                Duration::ZERO,
+            )
+            .await;
+            // More output than the client holds while its stdout takes none: it then stops
+            // reading from the connection, and with that stops writing to it.
+            for sequence in 0..(4 * PIPELINE_ITEMS as u64) {
+                send_native_binary(
+                    &mut socket,
+                    12,
+                    sequence,
+                    &format!("stdout-{sequence}"),
+                    &[0],
+                )
+                .await;
+            }
+            // The connection stays until the client leaves it.
+            while let Some(Ok(_)) = socket.next().await {}
+        });
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let mut stdout = BlockingWriter {
+            started: Some(started_tx),
+        };
+        let (input, mut input_writer) = tokio::io::duplex(1);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let coordinate = tokio::spawn(async move {
+            started_rx.await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            // As many chunks as the client may send unacknowledged. Nothing takes them off its
+            // outbound queue now, and they fill it.
+            for _ in 0..PIPELINE_ITEMS {
+                input_writer.write_all(&[0]).await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            stop_tx.send(()).unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            cancel_tx.send(()).unwrap();
+            // The input stays open.
+            input_writer
+        });
+
+        let error = open_and_drive_native_tool_session(
+            address,
+            initial,
+            input,
+            &mut stdout,
+            async {
+                let _ = cancel_rx.await;
+            },
+            async {
+                let _ = stop_rx.await;
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, SessionTransportError::Io(ref error) if error.kind() == std::io::ErrorKind::Interrupted)
+        );
+        let _input_writer = coordinate.await.unwrap();
+        server.await.unwrap();
     }
 
     #[test]
