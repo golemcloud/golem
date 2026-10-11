@@ -1894,7 +1894,7 @@ exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
 '''
 
 [tasks.test-builtin-bash-pipelines]
-description = "Checks the Bash shell's exact WASM outputs against recorded Bash goldens, that `cat` prints the same with a file reader, and the feature checklist"
+description = "Checks the Bash shell's exact WASM outputs against recorded Bash goldens, that a script sees the same with stand-ins for the bound file tools, and the feature checklist"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build --manifest-path builtin-tools/bash/Cargo.toml --locked --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2

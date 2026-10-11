@@ -46,7 +46,7 @@ python3 "$bash_dir/conformance/conformance.py" check --tier all \
   --wasm "$target/wasm32-wasip2/release/examples/cooperative.wasm" \
   --known-failures "$bash_dir/conformance/sweep-known-failures.json"
 
-# Every case that uses `cat`, sweep tier included, without and with a file reader: a script must
-# not see where `cat` gets the content of a file.
+# Every case that uses `cat`, `tee` or `sed -i`, sweep tier included, without and with stand-ins
+# for the bound file tools: a script must not see which part of its work a command gives to a tool.
 python3 "$bash_dir/conformance/conformance.py" forward --tier all \
   --wasm "$target/wasm32-wasip2/release/examples/cooperative.wasm"
