@@ -1252,8 +1252,9 @@ func passThroughToolError(err error) types.ToolError {
 // returns any other error or panics. The wire accepts exactly one terminal and
 // treats a dropped writer as abandoned, so choosing one here keeps a failing
 // handler from looking like an abandoned transfer. Every output gets its
-// terminal even when finishing an earlier one failed; the first such failure
-// fails a successful result, and a declared error is kept.
+// terminal even when finishing an earlier one failed. A failure to finish does
+// not change the result, as in the other SDKs: it usually means the caller
+// stopped reading the output, which is the caller's choice.
 func runWithOutputs(label string, outputs []*Output, run func() (reflect.Value, error)) (out reflect.Value, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1270,8 +1271,8 @@ func runWithOutputs(label string, outputs []*Output, run func() (reflect.Value, 
 			}
 			if failed {
 				o.fail(OutputFailed(err.Error()))
-			} else if ferr := o.finish(); ferr != nil && err == nil {
-				err = ferr
+			} else {
+				_ = o.finish()
 			}
 		}
 	}()

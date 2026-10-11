@@ -147,6 +147,13 @@ func (r *byteReader) close() {
 	}
 }
 
+// Close stops reading the stream and releases it.
+func (r *byteReader) Close() error {
+	r.pending = nil
+	r.close()
+	return nil
+}
+
 // emptyChunkError reports a producer that sent an empty chunk, which the
 // stream protocol forbids since it would be indistinguishable from no data.
 type emptyChunkError struct{ stream string }

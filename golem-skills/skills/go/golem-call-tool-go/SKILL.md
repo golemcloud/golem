@@ -108,10 +108,10 @@ if err != nil {
 out := inv.Collect() // out.Result/out.Err, out.Stdout/out.StdoutErr, out.Stderr/out.StderrErr
 ```
 
-- `inv.Stdout()` and `inv.Stderr()` take an output to read while the command runs; then `inv.Wait()` returns the result. Bytes on stderr do not mean the command failed.
+- `inv.Stdout()` and `inv.Stderr()` take an output (an `io.ReadCloser`) to read while the command runs; then `inv.Wait()` returns the result. Bytes on stderr do not mean the command failed.
 - `Wait` drains and discards every output not taken before it, so a command never stalls on output nobody reads; taking one afterwards reads `tool.ErrOutputDrained`. An output you took is yours: read it while waiting, or a command writing more than the stream buffers stalls.
 - `Collect` reads both outputs concurrently while awaiting the result. Each keeps its own outcome: `Err` for the result, `StdoutErr` and `StderrErr` for the outputs (a `*tool.OutputError` when the command failed one), so a failed output does not hide the result and a failed result does not hide what the outputs carried. `Stdout`/`Stderr` are nil for a command without that output.
-- `inv.Cancel()` asks the runtime to cancel the call.
+- `inv.Cancel()` asks the runtime to cancel the call. To stop reading only one output, `Close` it: the command sees that output closed by its consumer, and the call, its result and the other output go on.
 
 ## Errors
 

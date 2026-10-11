@@ -590,6 +590,35 @@ func TestWaitDrainsTheOutputsNotTaken(t *testing.T) {
 	}
 }
 
+// TestClosingAnOutputKeepsTheCallAndTheOtherOutput — closing a taken output
+// stops reading it, without cancelling the call or its other output.
+func TestClosingAnOutputKeepsTheCallAndTheOtherOutput(t *testing.T) {
+	v, r, d := newVcs(t)
+	loopback(t, r, d, golem.AnonymousPrincipal{})
+
+	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "origin"; a.In = strings.NewReader("abc") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr := inv.Stdout(), inv.Stderr()
+	first := make([]byte, 1)
+	if n, err := stdout.Read(first); n != 1 || err != nil || first[0] != 'A' {
+		t.Fatalf("first stdout byte %q, %v", first[:n], err)
+	}
+	if err := stdout.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := io.ReadAll(stdout); err != nil || len(data) != 0 {
+		t.Errorf("a closed stdout read %q, %v", data, err)
+	}
+	if data, err := io.ReadAll(stderr); err != nil || string(data) != "pushing origin" {
+		t.Errorf("stderr read %q, %v", data, err)
+	}
+	if n, err := inv.Wait(); err != nil || n != 3+30 {
+		t.Errorf("wait gave %d, %v", n, err)
+	}
+}
+
 type Echo struct{}
 
 type EchoArgs struct{ Text string }

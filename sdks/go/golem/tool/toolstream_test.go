@@ -402,14 +402,14 @@ func TestDeclaredErrorEndsOutputsNormally(t *testing.T) {
 }
 
 // TestEveryOutputGetsATerminal — one output failing to finish neither leaves
-// the other without a terminal nor hides a declared error.
+// the other without a terminal nor changes the result.
 func TestEveryOutputGetsATerminal(t *testing.T) {
 	closed := streams.MakeStreamWriteErrorClosed(streams.MakeByteStreamCloseCauseConsumerCancelled())
 
 	stdout, stderr := &fakeSink{finishErr: &closed}, &fakeSink{}
 	res := invokeGate(t, "pass", stdout, stderr)
-	if res.IsOk() {
-		t.Error("a successful result survived its stdout failing to finish")
+	if !res.IsOk() {
+		t.Errorf("a successful result failed when its stdout could not finish: %v", res.Err())
 	}
 	if !stderr.finished {
 		t.Error("stderr was left without a terminal")

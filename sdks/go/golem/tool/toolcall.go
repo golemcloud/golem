@@ -361,12 +361,12 @@ type invocationOutput struct {
 	drained bool
 }
 
-func (o *invocationOutput) take() io.Reader {
+func (o *invocationOutput) take() io.ReadCloser {
 	switch {
 	case o.drained:
-		return errReader{ErrOutputDrained}
+		return io.NopCloser(errReader{ErrOutputDrained})
 	case o.r == nil:
-		return strings.NewReader("")
+		return io.NopCloser(strings.NewReader(""))
 	}
 	o.taken = true
 	return o.r
@@ -400,12 +400,13 @@ func newInvocation[O any](call toolCall, finish func(toolCall) (O, error)) *Invo
 // Stdout takes the command's standard output. It ends with io.EOF when the
 // command finishes it and with a [OutputError] when the command fails it; it
 // is empty for a command without one, and fails with [ErrOutputDrained] after
-// Wait drained it.
-func (i *Invocation[O]) Stdout() io.Reader { return i.stdout.take() }
+// Wait drained it. Close stops reading it: the command sees the output closed
+// by its consumer, and the call and its other output go on.
+func (i *Invocation[O]) Stdout() io.ReadCloser { return i.stdout.take() }
 
 // Stderr takes the command's standard error, like Stdout. Bytes on it do not
 // mean the command failed.
-func (i *Invocation[O]) Stderr() io.Reader { return i.stderr.take() }
+func (i *Invocation[O]) Stderr() io.ReadCloser { return i.stderr.take() }
 
 // Wait awaits the command's result, draining every output that was not taken
 // meanwhile (see [Invocation]).
