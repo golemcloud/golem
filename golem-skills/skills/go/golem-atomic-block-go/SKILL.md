@@ -103,14 +103,14 @@ Failure has two distinct channels:
   an `Err` is a *recorded durable failure* — persisted and replayed like any other
   value, so the operation is **not** retried. There is no separate fallible API:
   the general schema codec already encodes `golem.Result` as a WIT `result<ok,err>`.
-- **Panic** for a transient defect: the unfinished invocation is dropped without an
-  `End`, so recovery **re-executes** the whole body. Use `panic` / `golem.Must`
-  when the effect should be retried rather than recorded.
+- **Panic** to record nothing: the unfinished invocation is dropped without an
+  `End`, and the panic traps the component, which fails the agent. Inside
+  `durability.Atomically` the region is retried, and the retry runs the body again.
 
 `Type` (`durability.FunctionType`) picks the commit/replay policy: `ReadLocal`,
 `WriteLocal`, `ReadRemote`, `WriteRemote` (the usual choice for an external side
 effect), or `WriteRemoteBatched(begin...)` / `WriteRemoteTransaction(begin...)` to
-group writes. Set `DurableSpec.ForcedCommit` to force an efficient oplog commit at
+group writes. Set `durability.Spec.ForcedCommit` to force an efficient oplog commit at
 the end. There is no async variant — a blocking body already suspends the fiber.
 
 Make repeated attempts safe: choose the correct `Type` classification, use external

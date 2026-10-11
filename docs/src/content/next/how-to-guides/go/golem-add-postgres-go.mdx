@@ -128,7 +128,7 @@ at := golem.Must(row.Time(2))
 
 ## Transactions
 
-`db.Transaction` runs a closure inside a transaction, committing if it returns `nil` and rolling back (returning the error) otherwise:
+`db.Transaction` runs a closure inside a transaction, committing if it returns `nil` and rolling back otherwise. The error is the closure's, joined with the rollback's when that fails too:
 
 ```go
 golem.Must0(db.Transaction(func(tx *postgres.Tx) error {
@@ -143,7 +143,7 @@ For manual control use `db.Begin()` then `tx.Exec` / `tx.Query` and `tx.Commit()
 
 ## Returning Host Errors to the Caller
 
-`golem.Must*` treats a host error as a crash (retry). To let the caller *observe* a failure as a value instead, keep the fallible call's `error` and model the method output as `golem.Result[Ok, Err]`:
+`golem.Must*` turns a host error into a panic, which traps the component: the agent fails, or the invocation is retried inside `durability.Atomically`. To let the caller *observe* a failure as a value instead, keep the fallible call's `error` and model the method output as `golem.Result[Ok, Err]`:
 
 ```go
 db, err := postgres.Open(in.Addr)

@@ -122,11 +122,11 @@ A failed call returns a `*tool.CallError` (`errors.As`): its `Kind` separates th
 A tool with no Go declaration is called through **discovery**: `reflection.DiscoverTool` returns a snapshot of the deployed tool, and the client bound from it validates and packs every call against it, with canonical JSON arguments and results.
 
 ```go
-tool, found := reflection.DiscoverTool("greeter")
+greeter, found := reflection.DiscoverTool("greeter")
 if !found {
 	return fmt.Errorf("the greeter tool is not available to this agent")
 }
-client := tool.Bind()
+client := greeter.Bind()
 out, err := client.Call([]string{"greet"}, map[string]any{
 	"name": "ada", "loud": false, "times": 2, "title": nil,
 })

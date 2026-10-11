@@ -199,7 +199,7 @@ It is also possible to manually implement a pair of functions for saving and loa
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the agent's state type in the implementation package. This fragment assumes the complete state is an unexported `value uint32`. On restore, the SDK first creates the state with the `Implement` factory from the agent's identity, then calls `Load` on it:
+        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the agent's state type in the implementation package. This fragment assumes the complete state is an unexported `value uint32`. On restore, the SDK does not run the `Implement` factory. It calls `Load` on the zero value of the state, then the optional `OnRestore` hook:
 
         ```go
         import (

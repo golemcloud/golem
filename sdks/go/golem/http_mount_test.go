@@ -251,6 +251,11 @@ func TestBuildHTTPValidations(t *testing.T) {
 			"only scalar fields",
 		},
 		{
+			"catch-all in the mount",
+			agent("A", &Mount{Path: "/a/{id}/{*rest}"}, fields("id", "rest")),
+			"cannot contain the catch-all {*rest}",
+		},
+		{
 			"webhook suffix must be literal",
 			agent("A", &Mount{Path: "/a/{id}", WebhookSuffix: "/{oops}"}, fields("id")),
 			"only literal segments",

@@ -41,7 +41,7 @@ import (
 //	    Greeting string
 //	    APIKey   golem.Secret[string] // a secret field, at any depth
 //	}
-//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopConfig](spec)
+//	var Shop = golem.DefineConfiguredAgent[ShopID, ShopConfig](spec)
 //
 // and read it from inside a method via [Config] (or, in the constructor,
 // [InitContext.Config]):

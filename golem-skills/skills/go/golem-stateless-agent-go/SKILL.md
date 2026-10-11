@@ -88,13 +88,13 @@ Each invocation of an ephemeral agent:
 
 ## Combining with HTTP endpoints
 
-Ephemeral agents are a natural fit for HTTP request handlers — declare an HTTP mount alongside `Mode: golem.Ephemeral`:
+Ephemeral agents are a natural fit for HTTP request handlers — declare an HTTP mount alongside `Mode: golem.Ephemeral`. Every mount `{var}` must be an `ID` field, so a singleton `ID struct{}` mounts at a path with no variables:
 
 ```go
 var Agent = golem.DefineAgent[ID](golem.Spec{
     Name: "ConverterAgent",
     Mode: golem.Ephemeral,
-    HTTP: &golem.Mount{Path: "/api/convert/{name}"},
+    HTTP: &golem.Mount{Path: "/api/convert"},
 })
 
 var (

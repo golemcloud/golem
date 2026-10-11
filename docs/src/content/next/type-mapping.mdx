@@ -502,12 +502,12 @@ Unstructured binary data is similar to unstructured text, but it is annotated (a
     </Tabs.Tab>
     <Tabs.Tab>
     ```go
-    type JsonOrPng struct{}
+    type JSONOrPNG struct{}
 
-    func (JsonOrPng) MimeTypes() []string { return []string{"application/json", "image/png"} }
+    func (JSONOrPNG) MimeTypes() []string { return []string{"application/json", "image/png"} }
 
     type ExampleMethodIn struct {
-        Binary golem.UnstructuredBinary[JsonOrPng]
+        Binary golem.UnstructuredBinary[JSONOrPNG]
     }
 
     var ExampleMethod = Agent.Method[ExampleMethodIn, golem.Unit]("exampleMethod")

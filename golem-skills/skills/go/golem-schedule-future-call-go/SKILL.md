@@ -79,10 +79,10 @@ func init() {
 
 ## Scheduling a future call to itself
 
-To message its own instance an agent needs a client for its own `ID`. `Context` exposes only the id string, so capture the typed `ID` in state at construction (see `golem-recurring-task-go` for the full pattern):
+To message its own instance an agent binds a client to its own id (see `golem-recurring-task-go` for the full pattern):
 
 ```go
-self := counter.Agent.Get(ctx.State.self) // ctx.State.self captured in the constructor
+self := golem.Must(counter.Agent.Bind(ctx.AgentID()))
 counter.Increment.MustSchedule(self, time.Now().Add(time.Minute), golem.Unit{})
 ```
 

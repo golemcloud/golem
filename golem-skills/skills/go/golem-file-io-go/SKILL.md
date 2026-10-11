@@ -25,7 +25,7 @@ import "os"
 // Text (or any) file → []byte
 data, err := os.ReadFile("/data/config.json")
 if err != nil {
-	// handle: with golem.Must this would abort+retry the invocation
+	// handle: with golem.Must this would trap the component and fail the agent
 }
 text := string(data)
 ```

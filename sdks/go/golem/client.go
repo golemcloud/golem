@@ -30,7 +30,7 @@ import (
 // [AgentDefinition.Get] and consumed by the call methods on [MethodDef].
 //
 // The Id type parameter is what makes cross-agent calls type-safe: a
-// MethodDef[PaymentId, …] only accepts a Client[PaymentId], so aiming a method
+// MethodDef[PaymentID, …] only accepts a Client[PaymentID], so aiming a method
 // at the wrong agent is a compile error rather than a runtime not-found.
 //
 // Client carries no type parameter for state: the caller does not know, and

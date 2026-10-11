@@ -13,14 +13,14 @@ Binding is **metadata only** and declared on the definition: the mount `Path` on
 
 ## Steps
 
-1. **Name fields to match wire names.** A path/query/header variable refers to an input field by its **lower-first** name: Go field `Sku` is `sku` on the wire, `MaxResults` is `maxResults`.
+1. **Name fields to match wire names.** A path/query/header variable refers to an input field by its schema name: the Go field name with its leading word lower-cased whole, so `MaxResults` is `maxResults`, `SKU` is `sku`, `UserID` is `userID` and `APIKey` is `apiKey`.
 2. **Bind path variables** by putting `{name}` in the mount path (binds `ID` fields) or an endpoint path suffix (binds method input fields).
 3. **Bind query and header values** inline (`?name={field}`) or with `golem.Query` / `golem.Header`.
 4. **Leave body fields unbound** on body-carrying verbs; they arrive as JSON.
 
 ## Path variables
 
-`{var}` segments bind by (lower-first) field name.
+`{var}` segments bind by schema name.
 
 - **Mount path** `{var}`s bind the agent's constructor (`ID`) fields. **Every `ID` field must appear as a `{var}`** so a request selects one instance.
 - **Endpoint path** `{var}`s bind the method's input fields.
@@ -29,7 +29,7 @@ Binding is **metadata only** and declared on the definition: the mount `Path` on
 type ID struct{ Name string } // bound by {name} in the mount
 
 type LookupIn struct {
-	Sku      string
+	SKU      string
 	Detailed bool
 }
 
@@ -38,7 +38,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 	HTTP: &golem.Mount{Path: "/catalog/{name}"}, // {name} → ID.Name
 })
 
-// GET /catalog/{name}/items/{sku}  — {sku} → LookupIn.Sku
+// GET /catalog/{name}/items/{sku}  — {sku} → LookupIn.SKU
 var Lookup = Agent.Method[LookupIn, ItemInfo]("lookup", golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
 ```
 
@@ -74,7 +74,7 @@ type DataIn struct {
 }
 
 var GetData = Agent.Method[DataIn, Data]("getData", golem.HTTP(golem.GET("/data",
-		golem.Header("X-Request-Id", "requestId"),
+		golem.Header("X-Request-Id", "requestID"),
 		golem.Header("Authorization", "token"),
 	)))
 ```
@@ -103,7 +103,7 @@ For body-carrying verbs (`POST`, `PUT`, `DELETE`, `PATCH`, …), any input field
 
 ```go
 type UpdateIn struct {
-	Sku   string // from the path
+	SKU   string // from the path
 	Name  string // from the body
 	Count uint64 // from the body
 }
@@ -112,7 +112,7 @@ type UpdateIn struct {
 var Update = Agent.Method[UpdateIn, Item]("update", golem.HTTP(golem.POST("/items/{sku}")))
 ```
 
-Each unbound field becomes a top-level key in the JSON body object (field names lower-first / camelCase, as elsewhere in the SDK).
+Each unbound field becomes a top-level key in the JSON body object (keyed by schema name, as elsewhere in the SDK).
 
 `GET` and `HEAD` are **bodyless**: they carry no request body, so they must bind **every** input field from path/query/header. An unbound field on a bodyless verb is a definition error.
 
@@ -138,7 +138,7 @@ Handlers return their output value; the platform maps it to a response. In Go:
 | `float32`, `float64` | number |
 | `bool` | boolean |
 | `[]T` | array |
-| struct | object (lower-first / camelCase field names) |
+| struct | object keyed by schema names (`MaxResults` → `maxResults`, `UserID` → `userID`) |
 | `*T` | value or `null` |
 | `map[K]V` | object / WIT map |
 
@@ -147,8 +147,8 @@ Handlers return their output value; the platform maps it to a response. In Go:
 - A variable can bind an input field from **exactly one** of path/query/header — binding it more than once is a definition error.
 - Bindable path/query/header fields must be scalar; non-scalars go in the body.
 - Bodyless verbs (`GET`, `HEAD`) must bind every input field.
-- Field references on the wire use the **lower-first** field name (`Sku` → `sku`).
-- A raw (non-JSON) body is a single body field of type `golem.UnstructuredBinary[M]` or `golem.UnstructuredText[L]`; `M`/`L` is `golem.AnyMimeType`/`golem.AnyLanguage` or a marker type whose `MimeTypes()`/`Languages()` lists what is accepted. Any other body is a JSON object keyed by the lower-first field names.
+- Field references on the wire use the schema name, whose leading word is lower-cased whole (`SKU` → `sku`, `RequestID` → `requestID`).
+- A raw (non-JSON) body is a single body field of type `golem.UnstructuredBinary[M]` or `golem.UnstructuredText[L]`; `M`/`L` is `golem.AnyMimeType`/`golem.AnyLanguage` or a marker type whose `MimeTypes()`/`Languages()` lists what is accepted. Any other body is a JSON object keyed by the schema names.
 
 ### Related Skills
 

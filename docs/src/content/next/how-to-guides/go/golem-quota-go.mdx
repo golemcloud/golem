@@ -43,6 +43,11 @@ var agent = assistant.Agent.Implement(func(assistant.ID) *state {
 })
 
 func init() {
+	// A snapshot restore does not run the constructor: acquire the token again.
+	agent.OnRestore(func(_ *golem.InitContext[assistant.ID, state, golem.NoConfig], s *state) error {
+		s.calls = golem.NewQuotaToken("api-calls", 1)
+		return nil
+	})
 	agent.Handle(assistant.Ask, func(ctx *golem.Context[state], in assistant.AskIn) string {
 		answer, err := golem.WithReservation(ctx.State.calls, 1, func(*golem.Reservation) (uint64, string) {
 			return 1, callModel(in.Question)

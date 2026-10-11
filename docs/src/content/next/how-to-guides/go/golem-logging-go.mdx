@@ -71,7 +71,7 @@ func init() {
 
 ## Building a handler yourself
 
-`logging.NewHandler(opts)` returns an `*slog.Handler` you can pass to `slog.New` (for a scoped logger, or to compose):
+`logging.NewHandler(opts)` returns a `*logging.Handler`, an `slog.Handler` you can pass to `slog.New` (for a scoped logger, or to compose):
 
 ```go
 handler := logging.NewHandler(&logging.Options{Context: "worker"})

@@ -51,7 +51,7 @@ The returned `InvocationID` is an opaque handle to the enqueued invocation; you 
 ## Key Constraints
 
 - `Trigger` delivers a value-less enqueue: there is no way to read a return value from it. If you need the result, use `Call`/`CallAsync`.
-- As with all RPC, `Trigger` is called on the **method descriptor** (`Worker.Dispatch.Trigger(client, in)`), and the client comes from the callee's **definition** (`worker.Agent.Get(id)`).
+- As with all RPC, `Trigger` is called on the **method descriptor** (`worker.Dispatch.Trigger(client, in)`), and the client comes from the callee's **definition** (`worker.Agent.Get(id)`).
 
 ### Related Guides
 | Guide | Description |

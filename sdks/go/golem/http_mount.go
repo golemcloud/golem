@@ -43,8 +43,9 @@ import (
 //
 // The prefix's {var} segments bind the agent's constructor (Id) fields, so the
 // platform can tell which instance a request addresses — every Id field must
-// appear as a {var}. Segments may also be literals, the catch-all {*rest} (last
-// only), or the system tokens {agent-type} / {agent-version}.
+// appear as a {var}. Segments may also be literals or the system tokens
+// {agent-type} / {agent-version}; a catch-all {*rest} belongs to an endpoint,
+// not to the mount.
 type Mount struct {
 	// Path is the mount prefix, e.g. "/counters/{name}". Required.
 	Path string
@@ -384,10 +385,14 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	}
 	mountVars := map[string]bool{}
 	for _, s := range mp.segs {
-		if (s.kind == varSeg || s.kind == restSeg) && s.value == pathSelector {
+		if s.kind == restSeg {
+			rec("", "HTTP mount path cannot contain the catch-all {*%s}; put it in an endpoint path", s.value)
 			continue
 		}
-		if s.kind == varSeg || s.kind == restSeg {
+		if s.kind == varSeg && s.value == pathSelector {
+			continue
+		}
+		if s.kind == varSeg {
 			mountVars[s.value] = true
 			if idPrincipals[s.value] {
 				rec("", "HTTP mount path variable {%s} names the principal, which the host fills; it cannot be bound", s.value)

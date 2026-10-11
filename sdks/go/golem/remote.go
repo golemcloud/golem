@@ -38,10 +38,10 @@ import (
 // lifecycle, so it creates and addresses instances like the agent's own
 // definition. Generated guest clients use it:
 //
-//	var Counter = golem.DefineFullAgentClient[CounterId]("CounterAgent", golem.AgentClientSpec{})
+//	var Counter = golem.DefineFullAgentClient[CounterID]("CounterAgent", golem.AgentClientSpec{})
 //	var Add     = Counter.Method[AddIn, int64]("add")
 //
-//	c, err := Counter.Get(CounterId{Name: "c1"})
+//	c, err := Counter.Get(CounterID{Name: "c1"})
 //	total, err := Add.Call(c, AddIn{By: 3})
 //
 // Neither is published by the component: [DefineAgent] declares an agent the

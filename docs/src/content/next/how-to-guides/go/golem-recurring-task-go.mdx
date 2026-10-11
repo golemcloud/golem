@@ -4,7 +4,7 @@
 
 A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a cancelable `*golem.ScheduledInvocation` (and an error if the host refuses it; `MustSchedule` panics instead).
 
-To message itself an agent needs a client for its **own** instance, which needs its own `ID`. `Context` only exposes the raw id string, so **capture the typed `ID` in state at construction** — the constructor passed to `Agent.Implement` receives it.
+To message itself an agent needs a client for its **own** instance. `Agent.Bind(ctx.AgentID())` returns one: `ctx.AgentID()` is the running instance's id, read from the host on each call, so it is also right after a snapshot restore or a fork.
 
 ## Steps
 
@@ -46,15 +46,13 @@ import (
 
 const interval = time.Minute
 
-// state stashes the agent's own ID so it can build a client to itself.
-type state struct{ self poller.ID }
+type state struct{}
 
-// The constructor receives this instance's ID — capture it.
-var agent = poller.Agent.Implement(func(id poller.ID) *state { return &state{self: id} })
+var agent = poller.Agent.Implement(func(poller.ID) *state { return &state{} })
 
 func init() {
 	agent.Handle(poller.Start, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
-		self := poller.Agent.Get(ctx.State.self)
+		self := golem.Must(poller.Agent.Bind(ctx.AgentID()))
 		poller.Tick.MustSchedule(self, time.Now().Add(interval), golem.Unit{})
 		return golem.Unit{}
 	})
@@ -63,7 +61,7 @@ func init() {
 		// ... do the periodic work ...
 
 		// schedule the next iteration
-		self := poller.Agent.Get(ctx.State.self)
+		self := golem.Must(poller.Agent.Bind(ctx.AgentID()))
 		poller.Tick.MustSchedule(self, time.Now().Add(interval), golem.Unit{})
 		return golem.Unit{}
 	})
@@ -80,7 +78,7 @@ Kick off the loop by invoking `start` once (from the CLI, an HTTP endpoint, or a
 
 ## Key Constraints
 
-- The self `ID` must come from the constructor (or be reconstructable) — `Context` exposes only `AgentID() string`, not the typed `ID`.
+- Build the self client from `ctx.AgentID()`, not from an `ID` kept in state: a snapshot restore does not run the constructor, so state set only there is empty after a restore.
 - The reschedule must live in the tick handler itself (a package-level descriptor referencing its own handler in an `init()` is fine; there is no var-initialization cycle because the handler is registered in `init`, not in a `var` initializer).
 - Compute the next time with `time.Now().Add(interval)`; the scheduled time is recorded durably.
 

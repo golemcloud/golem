@@ -159,9 +159,9 @@ type Spec struct {
 //   - Returning a value carries the outcome. If Out is a [golem.Result], an err Result
 //     is a RECORDED durable failure — it is persisted and replayed like any other
 //     value, so the operation is not retried.
-//   - Panicking is a transient defect: the unfinished invocation is dropped and
-//     normal recovery re-executes body. Panic (or [golem.Must]) when the effect
-//     should be retried rather than recorded.
+//   - Panicking records nothing: the unfinished invocation is dropped and the
+//     panic traps the component, which fails the agent. Inside [Atomically] the
+//     region is retried, and the retry runs body again.
 //
 // There is no async variant: a blocking body already suspends the fiber at its
 // await points, so one function covers both cases.
@@ -181,7 +181,7 @@ func Run[In any, Out any](spec Spec, request In, body func() Out) Out {
 	}
 
 	// Live: run the body, persist its result, and finish. If body panics the
-	// invocation is left unfinished (dropped below) so recovery re-executes it.
+	// invocation is left unfinished (dropped below), so nothing is recorded.
 	live := invocation.Live()
 	committed := false
 	defer func() {

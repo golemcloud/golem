@@ -112,7 +112,7 @@ Each metric includes `service.name`, `golem.agent.id`, `golem.component.id`, and
 - Stream summaries use bounded event/outcome metric labels and aggregate item counts; they do not emit a span per item. Active resource and memory values are gauges, and metric labels avoid resource IDs and payload values.
 - In `agent-type` service-name mode, `service.name` excludes constructor parameters and phantom instance IDs; `golem.agent.id` remains the full identity.
 - Collector export is best effort. Accepted source state advances when a send fails, and traces, logs, and metrics are still attempted independently. Exactly-once plugin batch delivery is not exactly-once collector delivery.
-- Fork/revert cannot retract telemetry already accepted by a collector. Source deletion does not provide a terminal signal, so no successful close is invented. Switching plugin instances can lose open-span state; continuity is deferred to GOL-667.
+- Fork/revert cannot retract telemetry already accepted by a collector. Source deletion does not provide a terminal signal, so no successful close is invented. Switching plugin instances can lose open-span state.
 
 ## Local Observability Stack
 
@@ -163,7 +163,6 @@ Parameter values support Jinja-style `{{ VAR_NAME }}` substitution resolved agai
 - **Built-in** — no `golem plugin register` needed, just add to `golem.yaml`.
 - **Deploy required** — run `golem deploy` after adding the plugin configuration.
 - Trace context propagates automatically through HTTP routes and RPC calls.
-- **Custom spans are not available from the Go SDK yet** — Go agents get automatic spans (invocation, RPC, outgoing HTTP) only.
 - Plugin can be activated/deactivated per agent with `golem agent activate-plugin` / `golem agent deactivate-plugin`.
 
 ### Related Guides

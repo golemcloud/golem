@@ -76,7 +76,7 @@ When a promise is completed, an arbitrary byte array can be attached to it as a 
         ```go
         import "github.com/golemcloud/golem/sdks/go/golem"
 
-        type MyPayload struct{ Id string }
+        type MyPayload struct{ ID string }
 
         func createPromiseID() golem.PromiseID {
             promise := golem.NewPromise[MyPayload]()

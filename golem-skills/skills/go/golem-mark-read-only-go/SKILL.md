@@ -75,10 +75,10 @@ import "time"
 
 var (
 	// Cached until the next write.
-	Catalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly())
+	GetCatalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly())
 
 	// Cached for a minute regardless of writes.
-	Rates = Agent.Method[golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
+	GetRates = Agent.Method[golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
 
 	// Never cached, but still trapped against remote side effects.
 	Compute = Agent.Method[ComputeIn, int64]("compute", golem.ReadOnly(golem.NoCache()))
@@ -125,7 +125,7 @@ Read-only methods are the natural fit for HTTP `GET`/`HEAD` endpoints. Combine
 `golem-add-http-endpoint-go`):
 
 ```go
-var Catalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly(), golem.HTTP(golem.GET("/catalog")))
+var GetCatalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly(), golem.HTTP(golem.GET("/catalog")))
 ```
 
 ## Per-principal caching

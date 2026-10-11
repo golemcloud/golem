@@ -52,7 +52,7 @@ The handlers are ordinary handlers (see `golem-add-agent-go`) — nothing HTTP-s
 
 ## Binding request data to input fields
 
-- **Path variables** — `{sku}` in a route suffix binds the input field `Sku`: `golem.GET("/items/{sku}")`.
+- **Path variables** — `{sku}` in a route suffix binds the input field `SKU`: `golem.GET("/items/{sku}")`.
 - **Query parameters** — `golem.Query("detailed", "detailed")` binds `?detailed=` to the `Detailed` field:
   ```go
   Lookup = Agent.Method[LookupIn, ItemInfo]("lookup", golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
@@ -66,7 +66,7 @@ The handlers are ordinary handlers (see `golem-add-agent-go`) — nothing HTTP-s
   ```go
   golem.HTTP(golem.GET("/items/{sku}", golem.EndpointAuth(true)))
   ```
-- `Mount{CORS: []string{"*"}}` sets allowed origins for the agent; `golem.EndpointCORS(patterns...)` overrides per route.
+- `Mount{CORS: []string{"*"}}` sets allowed origins for the agent; `golem.EndpointCORS(patterns...)` adds patterns for one route.
 
 ## Verbs
 

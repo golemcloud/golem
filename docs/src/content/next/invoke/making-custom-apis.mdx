@@ -77,7 +77,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 ```
 
-Mount path variables bind the `ID` fields by their lower-first name (`Name` is `{name}`).
+Mount path variables bind the `ID` fields by their schema name (`Name` is `{name}`, `UserID` is `{userID}`).
 </Tabs.Tab>
 </Tabs>
 
@@ -168,7 +168,7 @@ pub fn Tasks::complete_task(self : Self, id : UInt32) -> Option[Task] {
 ```go
 type CreateTaskIn struct{ Request CreateTaskRequest }
 
-type CompleteTaskIn struct{ Id uint32 }
+type CompleteTaskIn struct{ ID uint32 }
 
 var (
 	CreateTask = Agent.Method[CreateTaskIn, Task]("createTask", golem.HTTP(golem.POST("/tasks")))
@@ -179,7 +179,7 @@ var (
 )
 ```
 
-Path variables bind input-struct fields by their lower-first name (`Id` is `{id}`). The handlers registered with `impl.Handle` contain nothing HTTP-specific. Verb constructors are `golem.GET`, `golem.HEAD`, `golem.POST`, `golem.PUT`, `golem.DELETE`, `golem.PATCH`, `golem.OPTIONS`, `golem.CONNECT`, `golem.TRACE`, and `golem.Custom("VERB", path)`.
+Path variables bind input-struct fields by their schema name, whose leading word is lower-cased whole (`ID` is `{id}`). The handlers registered with `impl.Handle` contain nothing HTTP-specific. Verb constructors are `golem.GET`, `golem.HEAD`, `golem.POST`, `golem.PUT`, `golem.DELETE`, `golem.PATCH`, `golem.OPTIONS`, `golem.CONNECT`, `golem.TRACE`, and `golem.Custom("VERB", path)`.
 </Tabs.Tab>
 </Tabs>
 

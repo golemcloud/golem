@@ -220,7 +220,7 @@ You can customize the webhook URL suffix using the `webhookSuffix` annotation on
         In the Go SDK the suffix is the `WebhookSuffix` field of the agent's `golem.Mount`. It must consist of literal path segments only:
 
         ```go
-        type ID struct{ Id string }
+        type ID struct{ ID string }
 
         var Agent = golem.DefineAgent[ID](golem.Spec{
             Name: "WorkflowAgent",

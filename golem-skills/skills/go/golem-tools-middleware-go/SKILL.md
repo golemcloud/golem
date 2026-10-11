@@ -70,7 +70,7 @@ An adapter presents one tool over another — for example a new version of a too
 var Compat = invv2.Tool.Adapter[golem.Unit]("inventory-v2-on-v1", invv1.Tool, tool.MiddlewareSpec{Version: "1.0.0"})
 
 var _ = Compat.Handle(invv2.Show, func(ctx *tool.MiddlewareContext[golem.Unit], a invv2.ShowArgs) (string, error) {
-	return Compat.Underlying(ctx, invv1.Get).Call(func(b *invv1.GetArgs) { b.Sku = a.Sku })
+	return Compat.Underlying(ctx, invv1.Get).Call(func(b *invv1.GetArgs) { b.SKU = a.SKU })
 })
 ```
 

@@ -698,7 +698,7 @@ It is possible to trigger the remote execution of an agent method without awaiti
     To trigger an agent method and return immediately, use the `Trigger` method of the method descriptor. It returns the `golem.InvocationID` of the enqueued invocation, and an error if the invocation could not be enqueued (`MustTrigger` panics instead):
 
     ```go
-    remoteAgent := backgroundtask.Agent.Get(backgroundtask.ID{JobId: backgroundJobID})
+    remoteAgent := backgroundtask.Agent.Get(backgroundtask.ID{JobID: backgroundJobID})
     backgroundtask.RunTask.MustTrigger(remoteAgent, backgroundtask.RunTaskIn{Message: "hello", Count: 1234})
     ```
     </Tabs.Tab>
@@ -793,7 +793,7 @@ An advanced case of triggering the execution of an agent method is to **schedule
         Similar to `Trigger`, there is a `Schedule` method on each method descriptor:
 
         ```go
-        remoteAgent := backgroundtask.Agent.Get(backgroundtask.ID{JobId: backgroundJobID})
+        remoteAgent := backgroundtask.Agent.Get(backgroundtask.ID{JobID: backgroundJobID})
         scheduled := backgroundtask.RunTask.MustSchedule(
           remoteAgent,
           time.Now().Add(60*time.Second),
