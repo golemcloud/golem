@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:git-library": "node scripts/build-isomorphic-git.mjs && node scripts/build-xdiff.mjs",
     "compliance:generate": "node scripts/generate-compliance.mjs",
     "compliance:check": "node scripts/generate-compliance.mjs --check",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
@@ -14,6 +13,7 @@
   "dependencies": {
     "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk",
     "diff": "8.0.2",
+    "diff3": "0.0.3",
     "isomorphic-git": "1.42.2",
     "zod": "4.4.3"
   },
@@ -23,7 +23,6 @@
     "@rollup/plugin-node-resolve": "16.0.1",
     "@rollup/plugin-typescript": "12.1.4",
     "@types/node": "24.3.1",
-    "binaryen": "125.0.0",
     "rollup": "4.50.1",
     "tslib": "2.8.1",
     "typescript": "5.9.2"

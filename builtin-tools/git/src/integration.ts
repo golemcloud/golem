@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as git from "../golem-temp/isomorphic-git/index.js";
-import { GitIndex } from "../golem-temp/isomorphic-git/models/index.js";
+import * as git from "isomorphic-git";
+import diff3Merge from "diff3";
 import {
   MAX_DIFF_INPUT_BYTES,
   MAX_DIFF_LINES,
@@ -17,6 +17,7 @@ import {
   text,
   treeSnapshotMap,
   worktreeSnapshot,
+  withIndex,
 } from "./git.ts";
 import type { MutationResult, Repository, Snapshot } from "./git.ts";
 import { fetchCommand, publishRefs, validRef } from "./transfer.ts";
@@ -127,21 +128,33 @@ export async function mergeTrees(
             throw new Error(
               `merge input exceeds the ${MAX_DIFF_LINES}-line computation limit: ${file}`,
             );
-          const merged = git.mergeFile({
-            branches: ["base", "HEAD", theirName],
-            contents: [
-              text(baseBytes.bytes),
-              text(ourBytes.bytes),
-              text(theirBytes.bytes),
-            ],
-          });
-          const bytes = new TextEncoder().encode(merged.mergedText);
+          const lines = (bytes: Uint8Array | undefined) =>
+            text(bytes).match(/[^\n]*\n|[^\n]+$/g) ?? [];
+          const merged = diff3Merge(
+            lines(ourBytes.bytes),
+            lines(baseBytes.bytes),
+            lines(theirBytes.bytes),
+          );
+          const terminated = (lines: string[]) => {
+            const value = lines.join("");
+            return value && !value.endsWith("\n") ? `${value}\n` : value;
+          };
+          const bytes = new TextEncoder().encode(
+            merged
+              .map((block) =>
+                block.ok
+                  ? block.ok.join("")
+                  : `<<<<<<< HEAD\n${terminated(block.conflict.a)}=======\n${terminated(block.conflict.b)}>>>>>>> ${theirName}\n`,
+              )
+              .join(""),
+          );
           result = {
             mode,
             oid: await git.writeBlob({ fs, ...repo, blob: bytes }),
             bytes,
           };
-          if (!merged.cleanMerge) conflicts.set(file, conflict);
+          if (merged.some((block) => "conflict" in block))
+            conflicts.set(file, conflict);
         } else {
           result = o;
           conflicts.set(file, conflict);
@@ -495,155 +508,159 @@ export async function prepareIndexAndWorktree(
   hardReset = false,
 ) {
   const original = await optionalBytes(path.join(repo.gitdir, "index"));
-  const index = await GitIndex.from(original ?? null);
-  if (index.unmergedPaths.length && !hardReset)
-    throw new Error("resolve the existing unmerged index first");
-  const indexed = new Map<string, Snapshot>(
-    index.entries.map((entry: { path: string; oid: string; mode: number }) => [
-      entry.path,
-      { oid: entry.oid, mode: entry.mode },
-    ]),
-  );
-  const changes: Change[] = [];
-  const resetAncestors = new Set<string>();
-  for (const file of new Set([
-    ...head.keys(),
-    ...indexed.keys(),
-    ...merged.files.keys(),
-    ...merged.conflicts.keys(),
-  ])) {
-    safePath(file);
-    const h = head.get(file) ?? {},
-      i = indexed.get(file) ?? {},
-      target = merged.files.get(file) ?? {};
-    if (
-      !hardReset &&
-      fastForward &&
-      sameSnapshot(h, target) &&
-      !merged.conflicts.has(file)
-    )
-      continue;
-    const worktree = await worktreeSnapshot(repo, file);
-    if (
-      !hardReset &&
-      !i.oid &&
-      worktree.oid &&
-      target.oid &&
-      !(await git.isIgnored({ fs, ...repo, filepath: file }))
-    )
-      throw new Error(`untracked file would be overwritten: ${file}`);
-    if (!hardReset && !fastForward && !sameSnapshot(h, i))
-      throw new Error(
-        `local index changes would be overwritten by merge: ${file}`,
-      );
-    if (!hardReset && !sameSnapshot(h, i) && !sameSnapshot(i, target))
-      throw new Error(`local index changes would be overwritten: ${file}`);
-    if (
-      !hardReset &&
-      !sameSnapshot(i, target) &&
-      i.oid &&
-      !sameSnapshot(i, worktree)
-    )
-      throw new Error(`local worktree changes would be overwritten: ${file}`);
-    if (!hardReset && sameSnapshot(i, target) && !merged.conflicts.has(file))
-      continue;
-    let ancestor = "";
-    for (const segment of file.split("/").slice(0, -1)) {
-      ancestor = ancestor ? `${ancestor}/${segment}` : segment;
+  return withIndex(repo, original, async (index) => {
+    if (index.unmergedPaths.length && !hardReset)
+      throw new Error("resolve the existing unmerged index first");
+    const indexed = new Map<string, Snapshot>(
+      index.entries.map(
+        (entry: { path: string; oid: string; mode: number }) => [
+          entry.path,
+          { oid: entry.oid, mode: entry.mode },
+        ],
+      ),
+    );
+    const changes: Change[] = [];
+    const resetAncestors = new Set<string>();
+    for (const file of new Set([
+      ...head.keys(),
+      ...indexed.keys(),
+      ...merged.files.keys(),
+      ...merged.conflicts.keys(),
+    ])) {
+      safePath(file);
+      const h = head.get(file) ?? {},
+        i = indexed.get(file) ?? {},
+        target = merged.files.get(file) ?? {};
+      if (
+        !hardReset &&
+        fastForward &&
+        sameSnapshot(h, target) &&
+        !merged.conflicts.has(file)
+      )
+        continue;
+      const worktree = await worktreeSnapshot(repo, file);
+      if (
+        !hardReset &&
+        !i.oid &&
+        worktree.oid &&
+        target.oid &&
+        !(await git.isIgnored({ fs, ...repo, filepath: file }))
+      )
+        throw new Error(`untracked file would be overwritten: ${file}`);
+      if (!hardReset && !fastForward && !sameSnapshot(h, i))
+        throw new Error(
+          `local index changes would be overwritten by merge: ${file}`,
+        );
+      if (!hardReset && !sameSnapshot(h, i) && !sameSnapshot(i, target))
+        throw new Error(`local index changes would be overwritten: ${file}`);
+      if (
+        !hardReset &&
+        !sameSnapshot(i, target) &&
+        i.oid &&
+        !sameSnapshot(i, worktree)
+      )
+        throw new Error(`local worktree changes would be overwritten: ${file}`);
+      if (!hardReset && sameSnapshot(i, target) && !merged.conflicts.has(file))
+        continue;
+      let ancestor = "";
+      for (const segment of file.split("/").slice(0, -1)) {
+        ancestor = ancestor ? `${ancestor}/${segment}` : segment;
+        const metadata = await fs.promises
+          .lstat(path.join(repo.dir, ancestor))
+          .catch((error) => {
+            if (error.code === "ENOENT") return undefined;
+            throw error;
+          });
+        if (!metadata) break;
+        if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+          if (hardReset && !merged.files.has(ancestor)) {
+            resetAncestors.add(ancestor);
+            break;
+          }
+          if (head.has(ancestor) && !merged.files.has(ancestor)) break;
+          throw new Error(
+            `untracked or symbolic-link ancestor would be overwritten: ${file}`,
+          );
+        }
+      }
       const metadata = await fs.promises
-        .lstat(path.join(repo.dir, ancestor))
+        .lstat(path.join(repo.dir, file))
         .catch((error) => {
-          if (error.code === "ENOENT") return undefined;
+          if (["ENOENT", "ENOTDIR"].includes(error.code)) return undefined;
           throw error;
         });
-      if (!metadata) break;
-      if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
-        if (hardReset && !merged.files.has(ancestor)) {
-          resetAncestors.add(ancestor);
-          break;
-        }
-        if (head.has(ancestor) && !merged.files.has(ancestor)) break;
-        throw new Error(
-          `untracked or symbolic-link ancestor would be overwritten: ${file}`,
-        );
+      if (!hardReset && metadata?.isDirectory() && target.oid) {
+        const visit = async (dir: string): Promise<void> => {
+          for (const name of await fs.promises.readdir(
+            path.join(repo.dir, dir),
+          )) {
+            const entry = `${dir}/${name}`;
+            const stat = await fs.promises.lstat(path.join(repo.dir, entry));
+            if (stat.isDirectory() && !stat.isSymbolicLink())
+              await visit(entry);
+            else if (!indexed.has(entry))
+              throw new Error(`untracked file would be overwritten: ${entry}`);
+          }
+        };
+        await visit(file);
       }
-    }
-    const metadata = await fs.promises
-      .lstat(path.join(repo.dir, file))
-      .catch((error) => {
-        if (["ENOENT", "ENOTDIR"].includes(error.code)) return undefined;
-        throw error;
+      changes.push({
+        path: file,
+        before: await saved(repo, h),
+        after: await saved(repo, target),
+        write: hardReset || !sameSnapshot(i, target),
       });
-    if (!hardReset && metadata?.isDirectory() && target.oid) {
-      const visit = async (dir: string): Promise<void> => {
-        for (const name of await fs.promises.readdir(
-          path.join(repo.dir, dir),
-        )) {
-          const entry = `${dir}/${name}`;
-          const stat = await fs.promises.lstat(path.join(repo.dir, entry));
-          if (stat.isDirectory() && !stat.isSymbolicLink()) await visit(entry);
-          else if (!indexed.has(entry))
-            throw new Error(`untracked file would be overwritten: ${entry}`);
+      index.delete({ filepath: file });
+      const conflict = merged.conflicts.get(file);
+      if (conflict) {
+        for (const [stage, snapshot] of [
+          [1, conflict.base],
+          [2, conflict.ours],
+          [3, conflict.theirs],
+        ] as const) {
+          if (snapshot?.oid)
+            index.insert({
+              filepath: file,
+              oid: snapshot.oid,
+              stage,
+              stats: {
+                mode: snapshot.mode,
+                ctimeMs: 0,
+                mtimeMs: 0,
+                dev: 0,
+                ino: 0,
+                uid: 0,
+                gid: 0,
+                size: 0,
+              },
+            });
         }
-      };
-      await visit(file);
+      } else if (target.oid)
+        index.insert({
+          filepath: file,
+          oid: target.oid,
+          stats: {
+            mode: target.mode,
+            ctimeMs: 0,
+            mtimeMs: 0,
+            dev: 0,
+            ino: 0,
+            uid: 0,
+            gid: 0,
+            size: 0,
+          },
+        });
     }
-    changes.push({
-      path: file,
-      before: await saved(repo, h),
-      after: await saved(repo, target),
-      write: hardReset || !sameSnapshot(i, target),
-    });
-    index.delete({ filepath: file });
-    const conflict = merged.conflicts.get(file);
-    if (conflict) {
-      for (const [stage, snapshot] of [
-        [1, conflict.base],
-        [2, conflict.ours],
-        [3, conflict.theirs],
-      ] as const) {
-        if (snapshot?.oid)
-          index.insert({
-            filepath: file,
-            oid: snapshot.oid,
-            stage,
-            stats: {
-              mode: snapshot.mode,
-              ctimeMs: 0,
-              mtimeMs: 0,
-              dev: 0,
-              ino: 0,
-              uid: 0,
-              gid: 0,
-              size: 0,
-            },
-          });
-      }
-    } else if (target.oid)
-      index.insert({
-        filepath: file,
-        oid: target.oid,
-        stats: {
-          mode: target.mode,
-          ctimeMs: 0,
-          mtimeMs: 0,
-          dev: 0,
-          ino: 0,
-          uid: 0,
-          gid: 0,
-          size: 0,
-        },
-      });
-  }
-  for (const ancestor of resetAncestors) {
-    if (!changes.some((change) => change.path === ancestor))
-      changes.push({ path: ancestor, before: {}, after: {}, write: true });
-  }
-  return {
-    originalIndex: original?.toString("base64") ?? "",
-    nextIndex: (await index.toObject()).toString("base64"),
-    changes,
-  };
+    for (const ancestor of resetAncestors) {
+      if (!changes.some((change) => change.path === ancestor))
+        changes.push({ path: ancestor, before: {}, after: {}, write: true });
+    }
+    return {
+      originalIndex: original?.toString("base64") ?? "",
+      nextIndex: (await index.toObject()).toString("base64"),
+      changes,
+    };
+  });
 }
 
 export type MergeOptions = {
@@ -832,18 +849,37 @@ export async function abortMerge(repo: Repository): Promise<MutationResult> {
   if (!state || state.phase !== "conflict")
     throw new Error("no merge is in progress");
   await verifyHead(repo, state);
-  const index = await GitIndex.from(
-    (await optionalBytes(path.join(repo.gitdir, "index"))) ?? null,
+  const indexed = await withIndex(
+    repo,
+    await optionalBytes(path.join(repo.gitdir, "index")),
+    async (index) => ({
+      unmerged: new Set(index.unmergedPaths),
+      files: new Map<string, Snapshot>(
+        index.entries.map((entry) => [
+          entry.path,
+          { oid: entry.oid, mode: entry.mode },
+        ]),
+      ),
+    }),
   );
-  const original = await GitIndex.from(
-    state.originalIndex ? Buffer.from(state.originalIndex, "base64") : null,
+  const original = await withIndex(
+    repo,
+    state.originalIndex
+      ? Buffer.from(state.originalIndex, "base64")
+      : undefined,
+    async (index) =>
+      new Map<string, Snapshot>(
+        index.entries.map((entry) => [
+          entry.path,
+          { oid: entry.oid, mode: entry.mode },
+        ]),
+      ),
   );
-  const unmerged = new Set(index.unmergedPaths);
   for (const change of state.changes) {
-    if (unmerged.has(change.path)) continue;
-    const current = index.entriesMap.get(change.path) ?? {};
+    if (indexed.unmerged.has(change.path)) continue;
+    const current = indexed.files.get(change.path) ?? {};
     const worktree = await worktreeSnapshot(repo, change.path);
-    if (sameSnapshot(current, original.entriesMap.get(change.path) ?? {})) {
+    if (sameSnapshot(current, original.get(change.path) ?? {})) {
       change.before = await saved(repo, worktree);
       continue;
     }

@@ -1,25 +1,9 @@
 {
   "schemaVersion": 1,
-  "xdiff": {
-    "name": "Git xdiff",
-    "version": "2.55.0",
-    "sourceTag": "https://github.com/git/git/tree/v2.55.0/xdiff",
-    "sourceArchive": "https://www.kernel.org/pub/software/scm/git/git-2.55.0.tar.xz",
-    "sourceArchiveSha256": "457fdb04dc8728e007d4688695e6912e6f680727920f2a40bf11eacc17505357",
-    "compiler": "clang version 19.1.5-wasi-sdk",
-    "binaryenVersion": "125.0.0",
-    "generatedJavaScriptSha256": "29ace23fcde6eaf1d5cc22b4e4abe98b9c739eef1d4000ee6f7016f00271d03f",
-    "license": "LGPL-2.1-or-later AND EDL-1.0"
-  },
   "isomorphicGit": {
     "name": "isomorphic-git",
     "version": "1.42.2",
     "sourceTag": "https://github.com/isomorphic-git/isomorphic-git/tree/v1.42.2",
-    "sourceCommit": "66ae89c3ae33ab4932d75c0e19fd2c45c8ee2630",
-    "sourceArchive": "https://codeload.github.com/isomorphic-git/isomorphic-git/tar.gz/66ae89c3ae33ab4932d75c0e19fd2c45c8ee2630",
-    "sourceArchiveSha256": "0d03805c63412be7f560ef23096430cfb0a29cd0cbbd36473a8ee5315c10a3c6",
-    "patch": "patches/isomorphic-git-1.42.2-transfer.patch",
-    "patchSha256": "a9d11c0a186bd17d47e832ef76a774b9d4e55ed731aa75f24f31f5fbacc164a1",
     "registryTarball": "https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.42.2.tgz",
     "registryIntegrity": "sha512-Rb7czWhLO4JYqmg4an01nNomuAgFbWWK2CVfkHGBOvK5t7hrGTKOXPx/csscJ1j9o3uXFzNcC6njgvCafSmIPw==",
     "artifactSha256": "9b01a8490da9a95175e595653d69a159de54e09d2814e2ea5c867c8dc12983b0"
@@ -31,6 +15,14 @@
     "registryTarball": "https://registry.npmjs.org/diff/-/diff-8.0.2.tgz",
     "registryIntegrity": "sha512-sSuxWU5j5SR9QQji/o2qMvqRNYRDOcBTgsJ/DeCf4iSN4gW+gNMXM7wFIP+fdXZxoNiAnHUTGjCr+TSWXdRDKg==",
     "artifactSha256": "7bdbefb2df0f28dc9280e39e2399f2e6e84d13e9ccb098469b32ad0372c0f5e3"
+  },
+  "diff3": {
+    "name": "diff3",
+    "version": "0.0.3",
+    "sourceTag": "https://github.com/axosoft/diff3",
+    "registryTarball": "https://registry.npmjs.org/diff3/-/diff3-0.0.3.tgz",
+    "registryIntegrity": "sha512-iSq8ngPOt0K53A6eVr4d5Kn6GNrM2nQZtC740pzIriHtn4pOQ2lyzEXQMBeVcWERN0ye7fhBsk9PbLLQOnUx/g==",
+    "artifactSha256": "7095b10b8dd5e160dbf9593f202c97b515886dc775ae7cc67b38a8624251c282"
   },
   "zod": {
     "name": "zod",

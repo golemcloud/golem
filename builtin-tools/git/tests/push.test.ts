@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -37,12 +37,12 @@ async function fixture(t: test.TestContext) {
   let atomic = true;
   let reject = false;
   let report: string | undefined;
-  let holdOpen = false;
-  let disposed = 0;
+  let discoveries = 0;
   const requests: Buffer[] = [];
   const send: typeof fetch = async (_input, options) => {
     if (options?.method !== "POST") {
-      const capabilities = `report-status delete-refs${atomic ? " atomic" : ""}`;
+      discoveries++;
+      const capabilities = `report-status delete-refs side-band-64k${atomic ? " atomic" : ""}`;
       const advertisement =
         pkt("# service=git-receive-pack\n") +
         "0000" +
@@ -88,13 +88,12 @@ async function fixture(t: test.TestContext) {
       start(controller) {
         controller.enqueue(
           Buffer.from(
-            report ?? pkt("unpack ok\n") + statuses.join("") + "0000",
+            pkt(
+              `\x01${report ?? pkt("unpack ok\n") + statuses.join("") + "0000"}`,
+            ) + "0000",
           ),
         );
-        if (!holdOpen) controller.close();
-      },
-      cancel() {
-        disposed++;
+        controller.close();
       },
     });
     return new Response(body, {
@@ -114,11 +113,10 @@ async function fixture(t: test.TestContext) {
     reject: () => {
       reject = true;
     },
-    report: (value?: string, open = false) => {
+    report: (value?: string) => {
       report = value;
-      holdOpen = open;
     },
-    disposed: () => disposed,
+    discoveries: () => discoveries,
   };
 }
 
@@ -164,7 +162,7 @@ test("server rejection and unsupported atomic push never set upstream or advance
       { atomic: true, setUpstream: true },
       f.send,
     ),
-    /does not support atomic/,
+    /atomic push is unsupported/,
   );
   assert.equal(f.requests.length, 0);
   f.reject();
@@ -210,9 +208,9 @@ test("successful and up-to-date pushes set upstream and explicit force remains a
   assert.equal(f.refs.get("refs/heads/main"), f.first);
 });
 
-test("invalid receive-pack reports never publish tracking or upstream and leave the repository usable", async (t) => {
+test("released receive-pack report parsing rejects missing status but tolerates malformed trailing records", async (t) => {
   const success = pkt("unpack ok\n") + pkt("ok refs/heads/main\n");
-  for (const report of [
+  for (const [index, report] of [
     success + "00",
     success + "0010abc",
     success,
@@ -221,43 +219,292 @@ test("invalid receive-pack reports never publish tracking or upstream and leave 
     success + pkt("ok refs/heads/main\n") + "0000",
     pkt("unpack ok\n") + pkt("what refs/heads/main\n") + "0000",
     success + "0000" + pkt("ok refs/heads/main\n"),
-  ]) {
-    const f = await fixture(t);
-    f.report(report);
-    await assert.rejects(
-      pushCommand(f.repo, "origin", ["main"], { setUpstream: true }, f.send),
-    );
-    assert.equal(
-      await git.resolveRef({ fs, ...f.repo, ref: "refs/remotes/origin/main" }),
-      f.first,
-    );
-    assert.equal(
-      await git.getConfig({ fs, ...f.repo, path: "branch.main.remote" }),
-      undefined,
-    );
-    f.report();
-    const result = await pushCommand(
-      f.repo,
-      "origin",
-      ["main"],
-      { setUpstream: true },
-      f.send,
-    );
-    assert.ok(result.refs[0]!.ok);
-    assert.equal(
-      await git.resolveRef({ fs, ...f.repo, ref: "refs/remotes/origin/main" }),
-      f.second,
-    );
+  ].entries()) {
+    await t.test(`report ${index}`, async () => {
+      const f = await fixture(t);
+      f.report(report);
+      if (index !== 6 && index !== 1) {
+        const result = await pushCommand(
+          f.repo,
+          "origin",
+          ["main"],
+          { setUpstream: true },
+          f.send,
+        );
+        assert.ok(result.refs[0]!.ok);
+        assert.equal(
+          await git.resolveRef({
+            fs,
+            ...f.repo,
+            ref: "refs/remotes/origin/main",
+          }),
+          f.second,
+        );
+        assert.equal(
+          await git.getConfig({ fs, ...f.repo, path: "branch.main.merge" }),
+          "refs/heads/main",
+        );
+        return;
+      }
+      await assert.rejects(
+        pushCommand(f.repo, "origin", ["main"], { setUpstream: true }, f.send),
+      );
+      assert.equal(
+        await git.resolveRef({
+          fs,
+          ...f.repo,
+          ref: "refs/remotes/origin/main",
+        }),
+        f.first,
+      );
+      assert.equal(
+        await git.getConfig({ fs, ...f.repo, path: "branch.main.remote" }),
+        undefined,
+      );
+      f.report();
+      const result = await pushCommand(
+        f.repo,
+        "origin",
+        ["main"],
+        { setUpstream: true },
+        f.send,
+      );
+      assert.ok(result.refs[0]!.ok);
+      assert.equal(
+        await git.resolveRef({
+          fs,
+          ...f.repo,
+          ref: "refs/remotes/origin/main",
+        }),
+        f.second,
+      );
+    });
   }
   const f = await fixture(t);
-  f.report(pkt("unpack ok\0invalid\n"), true);
+  f.report(pkt("unpack ok\0invalid\n"));
   await assert.rejects(
     pushCommand(f.repo, "origin", ["main"], {}, f.send),
-    /Invalid receive-pack/,
+    /not updated/,
+  );
+});
+
+test("push isolates upstream tracking writes, honors custom/excluded mappings and records the published reflog", async (t) => {
+  for (const remote of ["other", url]) {
+    await t.test(remote, async (t) => {
+      const f = await fixture(t);
+      await remoteAdd(f.repo, "other", url);
+      await git.setConfig({
+        fs,
+        ...f.repo,
+        path: "remote.other.fetch",
+        value: "+refs/heads/*:refs/remotes/custom/*",
+      });
+      await pushCommand(f.repo, remote, ["main"], {}, f.send);
+      assert.equal(
+        await git.resolveRef({
+          fs,
+          ...f.repo,
+          ref: "refs/remotes/origin/main",
+        }),
+        f.first,
+      );
+      await assert.rejects(
+        git.resolveRef({ fs, ...f.repo, ref: "refs/remotes/other/main" }),
+      );
+      if (remote === "other") {
+        assert.equal(
+          await git.resolveRef({
+            fs,
+            ...f.repo,
+            ref: "refs/remotes/custom/main",
+          }),
+          f.second,
+        );
+        assert.match(
+          await readFile(
+            path.join(f.repo.gitdir, "logs/refs/remotes/custom/main"),
+            "utf8",
+          ),
+          new RegExp(`${zero} ${f.second} `),
+        );
+      } else
+        await assert.rejects(
+          git.resolveRef({ fs, ...f.repo, ref: "refs/remotes/custom/main" }),
+        );
+      await pushCommand(
+        f.repo,
+        remote,
+        ["refs/heads/main"],
+        { delete: true },
+        f.send,
+      );
+      assert.equal(
+        await git.resolveRef({
+          fs,
+          ...f.repo,
+          ref: "refs/remotes/origin/main",
+        }),
+        f.first,
+      );
+    });
+  }
+  const f = await fixture(t);
+  await git.setConfig({
+    fs,
+    ...f.repo,
+    path: "remote.origin.fetch",
+    value: "^refs/heads/main",
+    append: true,
+  });
+  await pushCommand(f.repo, "origin", ["main"], {}, f.send);
+  assert.equal(
+    await git.resolveRef({ fs, ...f.repo, ref: "refs/remotes/origin/main" }),
+    f.first,
+  );
+});
+
+test("unexpected successful status refs never publish tracking or upstream", async (t) => {
+  const f = await fixture(t);
+  f.report(
+    pkt("unpack ok\n") +
+      pkt("ok refs/heads/main\n") +
+      pkt("ok refs/heads/unexpected\n") +
+      "0000",
+  );
+  await assert.rejects(
+    pushCommand(f.repo, "origin", ["main"], { setUpstream: true }, f.send),
+    /invalid or incomplete/,
   );
   assert.equal(
-    f.disposed(),
-    1,
-    "invalid report must dispose the still-open response body",
+    await git.resolveRef({ fs, ...f.repo, ref: "refs/remotes/origin/main" }),
+    f.first,
   );
+  assert.equal(
+    await git.getConfig({ fs, ...f.repo, path: "branch.main.remote" }),
+    undefined,
+  );
+  await assert.rejects(
+    readFile(path.join(f.repo.gitdir, "logs/refs/remotes/origin/main")),
+  );
+});
+
+test("short destination ambiguity is non-destructive; existing tags require force for branch and OID sources", async (t) => {
+  const f = await fixture(t);
+  f.refs.set("refs/heads/release", f.first);
+  f.refs.set("refs/tags/release", f.first);
+  await assert.rejects(
+    pushCommand(f.repo, "origin", ["release"], { delete: true }, f.send),
+    /matches more than one remote/,
+  );
+  assert.equal(f.requests.length, 0);
+  await pushCommand(
+    f.repo,
+    "origin",
+    ["refs/heads/release"],
+    { delete: true },
+    f.send,
+  );
+  assert.equal(f.refs.get("refs/tags/release"), f.first);
+  for (const source of ["main", f.second]) {
+    await assert.rejects(
+      pushCommand(
+        f.repo,
+        "origin",
+        [`${source}:refs/tags/release`],
+        {},
+        f.send,
+      ),
+      /tag requires force/,
+    );
+  }
+  await assert.rejects(
+    pushCommand(f.repo, "origin", ["main:release"], {}, f.send),
+    /tag requires force/,
+  );
+  const posts = f.requests.length;
+  await assert.rejects(
+    pushCommand(
+      f.repo,
+      "origin",
+      ["main:release"],
+      { forceWithLease: true, lease: `refs/tags/release:${f.second}` },
+      f.send,
+    ),
+    /stale force-with-lease/,
+  );
+  assert.equal(f.requests.length, posts);
+  await pushCommand(
+    f.repo,
+    "origin",
+    ["main:release"],
+    { forceWithLease: true, lease: `refs/tags/release:${f.first}` },
+    f.send,
+  );
+  assert.equal(f.refs.get("refs/tags/release"), f.second);
+  assert.equal(f.refs.has("refs/heads/release"), false);
+  await pushCommand(
+    f.repo,
+    "origin",
+    [`${f.first}:refs/tags/release`],
+    { force: true },
+    f.send,
+  );
+  assert.equal(f.refs.get("refs/tags/release"), f.first);
+});
+
+test("atomic and multi-ref push reject before any HTTP discovery or transfer", async (t) => {
+  const f = await fixture(t);
+  for (const [specs, options] of [
+    [["main"], { atomic: true }],
+    [["main:one", "main:two"], {}],
+  ] as const)
+    await assert.rejects(
+      pushCommand(f.repo, "origin", [...specs], options, f.send),
+      /push is unsupported/,
+    );
+  assert.equal(f.discoveries(), 0);
+  assert.equal(f.requests.length, 0);
+});
+
+test("qualified destinations never expand to a nested lookalike or bypass an absent-reference lease", async (t) => {
+  for (const deleting of [true, false]) {
+    await t.test(
+      deleting ? "delete" : "create with absent lease",
+      async (t) => {
+        const f = await fixture(t);
+        const nested = "refs/heads/refs/heads/release";
+        f.refs.set(nested, f.first);
+        await assert.rejects(
+          pushCommand(
+            f.repo,
+            "origin",
+            deleting ? ["refs/heads/release"] : ["main:refs/heads/release"],
+            deleting
+              ? { delete: true }
+              : {
+                  forceWithLease: true,
+                  lease: "refs/heads/release:",
+                  setUpstream: true,
+                },
+            f.send,
+          ),
+        );
+        assert.equal(f.requests.length, 0);
+        assert.equal(f.refs.get(nested), f.first);
+        assert.equal(f.refs.has("refs/heads/release"), false);
+        assert.equal(
+          await git.resolveRef({
+            fs,
+            ...f.repo,
+            ref: "refs/remotes/origin/main",
+          }),
+          f.first,
+        );
+        assert.equal(
+          await git.getConfig({ fs, ...f.repo, path: "branch.main.remote" }),
+          undefined,
+        );
+      },
+    );
+  }
 });

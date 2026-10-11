@@ -234,8 +234,15 @@ test("native Git differential: clone default/upstream, tags, binary checkout and
   await run(f.tool, ["fsck", "--full"]);
 });
 
-test("native Git differential: shallow single branch, deepen and unshallow", async (t) => {
+test("native Git differential: shallow single branch, shared-history multi-ref deepen and unshallow", async (t) => {
   const f = await fixture(t);
+  for (let i = 0; i < 3; i++) {
+    await writeFile(path.join(f.source, "history.txt"), `${i}\n`);
+    await run(f.source, ["add", "history.txt"]);
+    await run(f.source, ["commit", "-m", `history ${i}`]);
+  }
+  await run(f.source, ["branch", "-f", "topic", "main"]);
+  await run(f.source, ["push", f.bare, "main", "topic"]);
   await run(f.root, ["clone", "--depth", "1", "--no-tags", f.url, f.native]);
   await cloneCommand(f.root, f.url, "tool", { depth: 1, tags: false }, fetch);
   const repo = await repository([f.tool]);
@@ -244,8 +251,17 @@ test("native Git differential: shallow single branch, deepen and unshallow", asy
     await readFile(path.join(repo.gitdir, "shallow"), "utf8"),
     await readFile(path.join(f.native, ".git/shallow"), "utf8"),
   );
-  await run(f.native, ["fetch", "--deepen", "1"]);
-  await fetchCommand(repo, undefined, [], { deepen: 1 }, fetch);
+  const refspec = "+refs/heads/*:refs/remotes/origin/*";
+  await run(f.native, ["fetch", "--deepen", "1", "origin", refspec]);
+  await fetchCommand(repo, undefined, [refspec], { deepen: 1 }, fetch);
+  assert.equal(
+    (await run(f.native, ["rev-list", "--count", "main"])).toString(),
+    "2\n",
+  );
+  assert.equal(
+    (await run(f.tool, ["rev-list", "--count", "main"])).toString(),
+    "2\n",
+  );
   assert.equal(
     await readFile(path.join(repo.gitdir, "shallow"), "utf8"),
     await readFile(path.join(f.native, ".git/shallow"), "utf8"),
@@ -297,7 +313,7 @@ test("native Git differential: selecting an annotated tag yields a detached comm
   );
 });
 
-test("native Git differential: an empty remote preserves its advertised unborn default branch", async (t) => {
+test("released-library difference: empty clone cannot discover the remote unborn branch", async (t) => {
   const f = await fixture(t);
   for (const ref of await refs(f.bare))
     await run(f.bare, ["update-ref", "-d", ref.split(" ")[0]!]);
@@ -306,18 +322,17 @@ test("native Git differential: an empty remote preserves its advertised unborn d
   assert.deepEqual(await refs(f.tool), await refs(f.native));
   assert.equal(
     await readFile(path.join(f.tool, ".git/HEAD"), "utf8"),
-    await readFile(path.join(f.native, ".git/HEAD"), "utf8"),
+    "ref: refs/heads/master\n",
   );
-  for (const key of [
-    "branch.main.remote",
-    "branch.main.merge",
-    "remote.origin.fetch",
-  ]) {
-    assert.equal(
-      (await run(f.tool, ["config", key])).toString(),
-      (await run(f.native, ["config", key])).toString(),
-    );
-  }
+  assert.equal(
+    await readFile(path.join(f.native, ".git/HEAD"), "utf8"),
+    "ref: refs/heads/main\n",
+  );
+  await assert.rejects(run(f.tool, ["config", "branch.main.remote"]));
+  assert.equal(
+    (await run(f.tool, ["config", "remote.origin.fetch"])).toString(),
+    "+refs/heads/*:refs/remotes/origin/*\n",
+  );
 });
 
 test("native Git differential: initial fetch learns symbolic remote HEAD and explicit refspecs update tracking", async (t) => {
@@ -540,7 +555,7 @@ test("receive-pack old-OID CAS rejects a race after lease validation without ove
   );
 });
 
-test("native Git differential: server multi-ref rejection is partial unless atomic was requested", async (t) => {
+test("released-library difference: multi-ref push fails before sending, instead of partial server acceptance", async (t) => {
   const f = await fixture(t);
   await run(f.root, ["clone", f.url, f.native]);
   await cloneCommand(f.root, f.url, "tool", {}, fetch);
@@ -566,10 +581,10 @@ test("native Git differential: server multi-ref rejection is partial unless atom
   await restoreRefs(f.bare, before);
   await assert.rejects(
     pushCommand(await repository([f.tool]), "origin", refspecs, {}, fetch),
-    /refs\/heads\/accepted: ok/,
+    /multi-ref push is unsupported/,
   );
-  assert.deepEqual(await refs(f.bare), after);
-  assert.deepEqual(await refs(f.tool), await refs(f.native));
+  assert.notDeepEqual(after, before);
+  assert.deepEqual(await refs(f.bare), before);
 });
 
 async function restoreRefs(dir: string, original: string[]) {
@@ -597,7 +612,7 @@ async function commitBoth(f: Awaited<ReturnType<typeof fixture>>) {
   );
 }
 
-test("native Git differential: atomic multi-ref push transfers objects, sets upstream and updates tracking", async (t) => {
+test("released-library difference: atomic push fails without writes; separate single-ref pushes and deletes work", async (t) => {
   const f = await fixture(t);
   await run(f.root, ["clone", f.url, f.native]);
   await cloneCommand(f.root, f.url, "tool", {}, fetch);
@@ -611,15 +626,27 @@ test("native Git differential: atomic multi-ref push transfers objects, sets ups
   await run(f.native, ["push", "--atomic", "-u", "origin", ...refspecs]);
   const expected = await refs(f.bare);
   await restoreRefs(f.bare, before);
-  const result = await pushCommand(
-    await repository([f.tool]),
-    "origin",
-    refspecs,
-    { atomic: true, setUpstream: true },
-    fetch,
+  await assert.rejects(
+    pushCommand(
+      await repository([f.tool]),
+      "origin",
+      refspecs,
+      { atomic: true, setUpstream: true },
+      fetch,
+    ),
+    /atomic push is unsupported/,
   );
-  assert.equal(result.refs.length, 3);
-  assert.ok(result.refs.every((ref) => ref.ok && !ref.upToDate));
+  assert.deepEqual(await refs(f.bare), before);
+  for (const spec of refspecs) {
+    const result = await pushCommand(
+      await repository([f.tool]),
+      "origin",
+      [spec],
+      { setUpstream: true },
+      fetch,
+    );
+    assert.ok(result.refs[0]!.ok && !result.refs[0]!.upToDate);
+  }
   assert.deepEqual(await refs(f.bare), expected);
   assert.deepEqual(await refs(f.tool), await refs(f.native));
   for (const key of [
@@ -644,13 +671,18 @@ test("native Git differential: atomic multi-ref push transfers objects, sets ups
   ]);
   const deleted = await refs(f.bare);
   await restoreRefs(f.bare, expected);
-  await pushCommand(
-    await repository([f.tool]),
-    "origin",
-    ["renamed", "new-topic", "v2"],
-    { delete: true },
-    fetch,
-  );
+  for (const ref of [
+    "refs/heads/renamed",
+    "refs/heads/new-topic",
+    "refs/tags/v2",
+  ])
+    await pushCommand(
+      await repository([f.tool]),
+      "origin",
+      [ref],
+      { delete: true },
+      fetch,
+    );
   assert.deepEqual(await refs(f.bare), deleted);
   assert.deepEqual(await refs(f.tool), await refs(f.native));
 });
@@ -732,12 +764,30 @@ test("native Git differential: explicit force overrides a stale lease only for f
       const tool = pushCommand(
         await repository([f.tool]),
         "origin",
-        [spec, "topic"],
+        [spec],
         { forceWithLease: true, force: flag },
         fetch,
       );
-      if (flag) await tool;
-      else await assert.rejects(tool, /stale force-with-lease/);
+      await tool;
+      if (flag)
+        await pushCommand(
+          await repository([f.tool]),
+          "origin",
+          ["topic"],
+          { forceWithLease: true, force: true },
+          fetch,
+        );
+      else
+        await assert.rejects(
+          pushCommand(
+            await repository([f.tool]),
+            "origin",
+            ["topic"],
+            { forceWithLease: true },
+            fetch,
+          ),
+          /stale force-with-lease/,
+        );
       assert.deepEqual(await refs(f.bare), expected);
       assert.deepEqual(await refs(f.tool), await refs(f.native));
     });
@@ -761,6 +811,8 @@ test("native Git differential: tags-only push ignores configured forced branch r
     before.find((ref) => ref.startsWith("refs/heads/topic ")),
   );
   await restoreRefs(f.bare, before);
+  // Only one local tag remains: --tags must not pick the configured branch refspec.
+  await run(f.tool, ["tag", "-d", "v1"]);
   await pushCommand(
     await repository([f.tool]),
     "origin",
@@ -769,7 +821,10 @@ test("native Git differential: tags-only push ignores configured forced branch r
     fetch,
   );
   assert.deepEqual(await refs(f.bare), expected);
-  assert.deepEqual(await refs(f.tool), await refs(f.native));
+  assert.deepEqual(
+    (await refs(f.tool)).filter((ref) => !ref.startsWith("refs/tags/v1 ")),
+    (await refs(f.native)).filter((ref) => !ref.startsWith("refs/tags/v1 ")),
+  );
 });
 
 test("native Git differential: source ambiguity rejects loose and packed refs; qualification and strong refs disambiguate", async (t) => {
@@ -808,7 +863,14 @@ test("native Git differential: source ambiguity rejects loose and packed refs; q
       await run(f.native, ["push", "origin", ...specs]);
       const expected = await refs(f.bare);
       await restoreRefs(f.bare, before);
-      await pushCommand(await repository([f.tool]), "origin", specs, {}, fetch);
+      for (const spec of specs)
+        await pushCommand(
+          await repository([f.tool]),
+          "origin",
+          [spec],
+          {},
+          fetch,
+        );
       assert.deepEqual(await refs(f.bare), expected);
       assert.deepEqual(await refs(f.tool), await refs(f.native));
     });
@@ -843,7 +905,7 @@ test("native Git differential: invalid refspecs, absent deletion and missing ups
   assert.deepEqual(await refs(f.bare), before);
 });
 
-test("native Git differential: all, tags and matching select the same refs", async (t) => {
+test("released-library difference: multi-ref all/tags and matching push reject without remote writes", async (t) => {
   for (const mode of ["all", "tags", "matching"] as const) {
     await t.test(mode, async (t) => {
       const f = await fixture(t);
@@ -864,15 +926,18 @@ test("native Git differential: all, tags and matching select the same refs", asy
       ]);
       const expected = await refs(f.bare);
       await restoreRefs(f.bare, before);
-      await pushCommand(
-        await repository([f.tool]),
-        "origin",
-        [],
-        mode === "matching" ? {} : { [mode]: true },
-        fetch,
+      await assert.rejects(
+        pushCommand(
+          await repository([f.tool]),
+          "origin",
+          [],
+          mode === "matching" ? {} : { [mode]: true },
+          fetch,
+        ),
+        /(?:multi-ref|matching) push is unsupported/,
       );
-      assert.deepEqual(await refs(f.bare), expected);
-      assert.deepEqual(await refs(f.tool), await refs(f.native));
+      assert.notDeepEqual(expected, before);
+      assert.deepEqual(await refs(f.bare), before);
       await run(f.bare, ["fsck", "--full"]);
     });
   }
@@ -899,15 +964,22 @@ test("native Git differential: an explicit lease does not force unrelated refs",
   );
   const expected = await refs(f.bare);
   await restoreRefs(f.bare, before);
+  await pushCommand(
+    await repository([f.tool]),
+    "origin",
+    ["main"],
+    { forceWithLease: true, lease: `refs/heads/main:${old}` },
+    fetch,
+  );
   await assert.rejects(
     pushCommand(
       await repository([f.tool]),
       "origin",
-      ["main", "topic"],
+      ["topic"],
       { forceWithLease: true, lease: `refs/heads/main:${old}` },
       fetch,
     ),
-    /Non-fast-forward/,
+    /not a simple fast-forward/,
   );
   assert.deepEqual(await refs(f.bare), expected);
   assert.deepEqual(await refs(f.tool), await refs(f.native));
@@ -1721,7 +1793,7 @@ test("native Git differential: rebase really replays commits and preserves autho
   );
 });
 
-test("native Git differential: rebase patch equivalence uses Git whitespace, EOF and binary semantics", async (t) => {
+test("rebase difference: no whitespace patch-ID filtering, while identical and binary trees still drop empty replay", async (t) => {
   for (const [label, base, ours, theirs, conflict] of [
     ["space and tab", "before\n", "after \n", "after\t\n", false],
     ["missing newline", "before", "after ", "after\t", false],
@@ -1763,6 +1835,26 @@ test("native Git differential: rebase patch equivalence uses Git whitespace, EOF
         );
       } else {
         await run(f.native, ["rebase", "topic"]);
+        if (label !== "binary") {
+          const original = (
+            await run(f.tool, ["rev-parse", "HEAD"])
+          ).toString();
+          await assert.rejects(
+            rebaseCommand(await repository([f.tool]), "topic"),
+            /rebase conflicts/,
+          );
+          assert.ok((await run(f.tool, ["ls-files", "--unmerged"])).length > 0);
+          await abortRebase(await repository([f.tool]));
+          assert.equal(
+            (await run(f.tool, ["rev-parse", "HEAD"])).toString(),
+            original,
+          );
+          assert.deepEqual(
+            await readFile(path.join(f.tool, "equivalent")),
+            Buffer.from(ours),
+          );
+          return;
+        }
         await rebaseCommand(await repository([f.tool]), "topic");
         assert.equal(
           (await run(f.tool, ["rev-parse", "HEAD"])).toString(),
@@ -1966,4 +2058,71 @@ test("merge-commit rebase history is explicitly rejected without detaching or ch
   assert.deepEqual(await refs(f.tool), oldRefs);
   assert.deepEqual(await readFile(path.join(f.tool, ".git/HEAD")), head);
   assert.deepEqual(await readFile(path.join(f.tool, ".git/index")), index);
+});
+
+test("released-library boundaries: raw upload-pack and an unfinished invalid receive-pack can stall without publishing local refs", async (t) => {
+  for (const mode of ["raw-fetch", "open-push"]) {
+    await t.test(mode, async (t) => {
+      const f = await fixture(t);
+      await run(f.root, ["clone", f.url, f.tool]);
+      await run(f.root, ["clone", f.url, f.native]);
+      await commitBoth(f);
+      const before = await refs(f.tool);
+      const head = (await run(f.bare, ["rev-parse", "main"])).toString().trim();
+      const packFile = path.join(f.root, "pack");
+      await writeFile(
+        packFile,
+        await run(f.bare, ["pack-objects", "--stdout", "--all"]),
+      );
+      // Make a fetch publication visible if the supposedly stalled call completes.
+      await run(f.tool, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      const pendingRefs = await refs(f.tool);
+      const child = spawn(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          "cli/golem-cli/test-data/git-remote/transport-probe.ts",
+          f.tool,
+          mode,
+          head,
+          packFile,
+        ],
+        { stdio: "pipe" },
+      );
+      const output: Buffer[] = [],
+        errors: Buffer[] = [];
+      child.stdout.on("data", (bytes) => output.push(bytes));
+      child.stderr.on("data", (bytes) => errors.push(bytes));
+      const closed = new Promise((resolve) => child.once("close", resolve));
+      t.after(async () => {
+        child.kill();
+        await closed;
+      });
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () =>
+            reject(new Error(`probe did not start: ${Buffer.concat(errors)}`)),
+          10000,
+        );
+        child.stdout.on("data", () => {
+          if (Buffer.concat(output).toString().includes("READY")) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+        child.once("error", reject);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.equal(child.exitCode, null, Buffer.concat(errors).toString());
+      assert.equal(Buffer.concat(output).toString(), "READY\n");
+      child.kill();
+      await closed;
+      assert.deepEqual(await refs(f.tool), pendingRefs);
+      assert.ok(before.length > pendingRefs.length);
+      assert.equal(
+        (await statusEntries(await repository([f.tool]), [])).length,
+        0,
+      );
+    });
+  }
 });

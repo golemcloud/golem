@@ -705,8 +705,6 @@ pub(crate) enum SandboxOpenOptions {
         access: SandboxAccessMode,
         disposition: SandboxFileDisposition,
         follow: SandboxFollow,
-        /// Native creation permissions; ignored when the target already exists.
-        creation_mode: Option<u32>,
     },
 }
 
@@ -769,7 +767,6 @@ fn open_request(options: SandboxOpenOptions) -> OpenRequest {
             access,
             disposition,
             follow,
-            ..
         } => OpenRequest {
             expected: SandboxObjectKind::File,
             access,
@@ -1102,49 +1099,6 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
         follow: SandboxFollow,
     ) -> impl Future<Output = Result<SandboxAttributes, FilesystemStorageError>> + Send;
 
-    fn get_node_permissions(
-        &self,
-        node: SandboxNode,
-    ) -> impl Future<Output = Result<u32, FilesystemStorageError>> + Send {
-        async move {
-            Err(FilesystemStorageError::io(
-                "read sandbox permissions",
-                &node_path(&node),
-                std::io::Error::from(std::io::ErrorKind::Unsupported),
-            ))
-        }
-    }
-
-    fn get_path_permissions(
-        &self,
-        target: SandboxPath,
-        _follow: SandboxFollow,
-    ) -> impl Future<Output = Result<u32, FilesystemStorageError>> + Send {
-        async move {
-            Err(FilesystemStorageError::io(
-                "read sandbox permissions",
-                &target.path,
-                std::io::Error::from(std::io::ErrorKind::Unsupported),
-            ))
-        }
-    }
-
-    /// Changes permissions on the retained file, never by reopening its path.
-    fn set_file_permissions(
-        &self,
-        file: &SandboxFile,
-        _mode: u32,
-    ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
-        let path = file.path.clone();
-        async move {
-            Err(FilesystemStorageError::io(
-                "set sandbox permissions",
-                &path,
-                std::io::Error::from(std::io::ErrorKind::Unsupported),
-            ))
-        }
-    }
-
     /// Reports whether two handles returned by `open` refer to the same filesystem object.
     ///
     /// This deliberately accepts handles rather than paths: paths can be renamed or unlinked after
@@ -1363,22 +1317,6 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                     .create(flags.create)
                     .create_new(flags.create_new)
                     .truncate(flags.truncate);
-                if let SandboxOpenOptions::File {
-                    creation_mode: Some(mode),
-                    ..
-                } = options
-                {
-                    #[cfg(unix)]
-                    {
-                        use cap_std::fs::OpenOptionsExt as _;
-                        native_options.mode(mode);
-                    }
-                    #[cfg(not(unix))]
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Unsupported,
-                        "native creation permissions are unavailable on this platform",
-                    ));
-                }
                 native_options.follow(if flags.follow {
                     FollowSymlinks::Yes
                 } else {
@@ -1712,73 +1650,6 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                     error,
                 )
             })
-        }
-    }
-
-    fn get_node_permissions(
-        &self,
-        node: SandboxNode,
-    ) -> impl Future<Output = Result<u32, FilesystemStorageError>> + Send {
-        let path = node_path(&node);
-        let node = into_host_node(node);
-        let storage_profile = storage_profile(&self.volume);
-        async move {
-            let node = node.map_err(|error| {
-                FilesystemStorageError::io("read sandbox permissions", &path, error)
-            })?;
-            execute_native(storage_profile, NativeOperation::Metadata, move || {
-                permission_mode(&node.metadata()?)
-            })
-            .await
-            .map_err(|error| task_error("read sandbox permissions", &path, error))?
-            .map_err(|error| FilesystemStorageError::io("read sandbox permissions", &path, error))
-        }
-    }
-
-    fn get_path_permissions(
-        &self,
-        target: SandboxPath,
-        follow: SandboxFollow,
-    ) -> impl Future<Output = Result<u32, FilesystemStorageError>> + Send {
-        let path = target.operation_path(self.root());
-        let root_directory = self.root_directory_state();
-        let storage_profile = storage_profile(&self.volume);
-        async move {
-            execute_native(storage_profile, NativeOperation::Metadata, move || {
-                let directory = directory_for(&root_directory, &target)?;
-                permission_mode(&path_metadata(&directory, &target.path, follow)?)
-            })
-            .await
-            .map_err(|error| task_error("read sandbox permissions", &path, error))?
-            .map_err(|error| FilesystemStorageError::io("read sandbox permissions", &path, error))
-        }
-    }
-
-    fn set_file_permissions(
-        &self,
-        file: &SandboxFile,
-        mode: u32,
-    ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
-        let host = file.host().cloned();
-        let path = file.path.clone();
-        let storage_profile = storage_profile(&self.volume);
-        async move {
-            let file = host?;
-            execute_native(storage_profile, NativeOperation::Metadata, move || {
-                #[cfg(unix)]
-                {
-                    use cap_std::fs::PermissionsExt as _;
-                    file.set_permissions(cap_std::fs::Permissions::from_mode(mode))
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = (file, mode);
-                    Err(std::io::ErrorKind::Unsupported.into())
-                }
-            })
-            .await
-            .map_err(|error| task_error("set sandbox permissions", &path, error))?
-            .map_err(|error| FilesystemStorageError::io("set sandbox permissions", &path, error))
         }
     }
 
@@ -2563,19 +2434,6 @@ fn attributes(metadata: cap_std::fs::Metadata) -> std::io::Result<SandboxAttribu
         read_only: metadata.permissions().readonly(),
         object: SandboxObjectId(native_file_identity(&metadata)?),
     })
-}
-
-fn permission_mode(metadata: &cap_std::fs::Metadata) -> std::io::Result<u32> {
-    #[cfg(unix)]
-    {
-        use cap_std::fs::PermissionsExt as _;
-        Ok(metadata.permissions().mode() & 0o7777)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        Err(std::io::ErrorKind::Unsupported.into())
-    }
 }
 
 fn time_spec(change: SandboxTimeChange, now: SystemTime) -> Option<SystemTimeSpec> {
@@ -3586,7 +3444,6 @@ mod tests {
                 access: SandboxAccessMode::ReadWrite,
                 disposition: SandboxFileDisposition::CreateExclusive,
                 follow: SandboxFollow::No,
-                creation_mode: None,
             }),
             OpenRequest {
                 expected: SandboxObjectKind::File,
@@ -3637,7 +3494,6 @@ mod tests {
             access,
             disposition,
             follow: SandboxFollow::No,
-            creation_mode: None,
         }
     }
 
@@ -5560,7 +5416,6 @@ mod tests {
                 access: SandboxAccessMode::ReadWrite,
                 disposition: SandboxFileDisposition::CreateOrTruncate,
                 follow: SandboxFollow::Yes,
-                creation_mode: None,
             },
         )
         .await
@@ -5727,172 +5582,6 @@ mod tests {
             .await
             .unwrap();
         assert!(!root.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    async fn creation_permissions_apply_only_to_new_inodes_and_return_the_opened_object() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let parent = tempfile::tempdir().unwrap();
-        let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
-            unmanaged_provisioning(parent.path().to_path_buf()),
-            name(),
-            None,
-        )
-        .await
-        .unwrap();
-        for (path, mode) in [("executable", 0o700), ("ordinary", 0o600)] {
-            let opened = filesystem
-                .open(
-                    SandboxPath::at_root(path),
-                    SandboxOpenOptions::File {
-                        access: SandboxAccessMode::ReadWrite,
-                        disposition: SandboxFileDisposition::CreateExclusive,
-                        follow: SandboxFollow::Yes,
-                        creation_mode: Some(mode),
-                    },
-                )
-                .await
-                .unwrap();
-            let SandboxNode::File(file) = opened.into_node() else {
-                panic!("expected file");
-            };
-            filesystem
-                .write(
-                    &file,
-                    SandboxWritePlacement::At(0),
-                    Bytes::from_static(b"original"),
-                )
-                .await
-                .unwrap()
-                .result
-                .unwrap();
-            assert_eq!(
-                std::fs::metadata(filesystem.root().join(path))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                mode
-            );
-            filesystem.close(SandboxNode::File(file)).await.unwrap();
-        }
-        let executable = filesystem.root().join("executable");
-        for disposition in [
-            SandboxFileDisposition::CreateIfMissing,
-            SandboxFileDisposition::CreateOrTruncate,
-        ] {
-            let opened = filesystem
-                .open(
-                    SandboxPath::at_root("executable"),
-                    SandboxOpenOptions::File {
-                        access: SandboxAccessMode::ReadWrite,
-                        disposition,
-                        follow: SandboxFollow::Yes,
-                        creation_mode: Some(0o600),
-                    },
-                )
-                .await
-                .unwrap();
-            assert_eq!(
-                std::fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
-                0o700
-            );
-            filesystem.close(opened.into_node()).await.unwrap();
-        }
-        let opened = filesystem
-            .open(
-                SandboxPath::at_root("ordinary"),
-                SandboxOpenOptions::File {
-                    access: SandboxAccessMode::ReadWrite,
-                    disposition: SandboxFileDisposition::CreateIfMissing,
-                    follow: SandboxFollow::Yes,
-                    creation_mode: Some(0o700),
-                },
-            )
-            .await
-            .unwrap();
-        let SandboxNode::File(file) = opened.into_node() else {
-            panic!("expected file");
-        };
-        assert_eq!(
-            std::fs::metadata(filesystem.root().join("ordinary"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-        std::fs::rename(
-            filesystem.root().join("ordinary"),
-            filesystem.root().join("moved"),
-        )
-        .unwrap();
-        std::fs::write(filesystem.root().join("ordinary"), b"replacement").unwrap();
-        assert_eq!(
-            filesystem
-                .read(
-                    &file,
-                    SandboxReadRange {
-                        offset: 0,
-                        length: 20
-                    }
-                )
-                .await
-                .unwrap(),
-            Bytes::from_static(b"original")
-        );
-        let replacement_mode = std::fs::metadata(filesystem.root().join("ordinary"))
-            .unwrap()
-            .permissions()
-            .mode();
-        filesystem.set_file_permissions(&file, 0o700).await.unwrap();
-        assert_eq!(
-            filesystem
-                .get_node_permissions(SandboxNode::File(file.clone()))
-                .await
-                .unwrap(),
-            0o700
-        );
-        assert_eq!(
-            filesystem
-                .get_path_permissions(SandboxPath::at_root("moved"), SandboxFollow::Yes)
-                .await
-                .unwrap(),
-            0o700
-        );
-        assert_eq!(
-            std::fs::metadata(filesystem.root().join("ordinary"))
-                .unwrap()
-                .permissions()
-                .mode(),
-            replacement_mode
-        );
-        filesystem.close(SandboxNode::File(file)).await.unwrap();
-        std::os::unix::fs::symlink("absent", filesystem.root().join("dangling")).unwrap();
-        for path in ["executable", "dangling"] {
-            let error = filesystem
-                .open(
-                    SandboxPath::at_root(path),
-                    SandboxOpenOptions::File {
-                        access: SandboxAccessMode::ReadWrite,
-                        disposition: SandboxFileDisposition::CreateExclusive,
-                        follow: SandboxFollow::Yes,
-                        creation_mode: Some(0o600),
-                    },
-                )
-                .await
-                .err()
-                .expect("exclusive creation must fail for an existing entry");
-            assert_eq!(error.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        }
-        assert!(!filesystem.root().join("absent").exists());
-        assert_eq!(
-            std::fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        filesystem.delete_and_verify().await.unwrap();
     }
 
     #[test]
@@ -6532,7 +6221,6 @@ mod tests {
                 access: SandboxAccessMode::ReadWrite,
                 disposition: SandboxFileDisposition::CreateOrTruncate,
                 follow: SandboxFollow::Yes,
-                creation_mode: None,
             },
         )
         .await

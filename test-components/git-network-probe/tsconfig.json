@@ -15,6 +15,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "../../builtin-tools/git/src/diff3.d.ts",
     "../../builtin-tools/git/src/remote.ts",
     "../../builtin-tools/git/src/wasi-http.ts"
   ]

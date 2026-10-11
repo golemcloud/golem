@@ -1848,13 +1848,12 @@ cd ../..
 '''
 
 [tasks.prepare-git-differential-tests]
-description = "Builds the pinned native Git reference and patched Git library for differential tests"
+description = "Builds the pinned native Git reference and installs released JavaScript dependencies for differential tests"
 script_runner = "@duckscript"
 script = '''
 cd builtin-tools/git
 exec --fail-on-error node scripts/prepare-native-tests.mjs
 exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
-exec --fail-on-error npm run build:git-library
 cd ../..
 '''
 
@@ -1872,7 +1871,6 @@ exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/git
 exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
-exec --fail-on-error npm run build:git-library
 exec --fail-on-error npm run verify:release
 exec --fail-on-error npm test
 exec --fail-on-error npm run typecheck

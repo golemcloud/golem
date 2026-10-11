@@ -10,9 +10,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import * as git from "../golem-temp/isomorphic-git/index.js";
-import { GitRefManager } from "../golem-temp/isomorphic-git/managers/index.js";
-import { FileSystem } from "../golem-temp/isomorphic-git/models/index.js";
+import * as git from "isomorphic-git";
+import { GitRefManager } from "isomorphic-git/managers";
+import { FileSystem } from "isomorphic-git/models";
 import type { MutationResult, Repository } from "./git.ts";
 import { assertRefSupportedModes, initializeRepository } from "./git.ts";
 import {
@@ -362,7 +362,25 @@ async function validateGraph(
     const { oid: current, type } = queue.pop()!;
     if (!/^[0-9a-f]{40}$/.test(current))
       throw new Error("invalid object ID in fetched graph");
-    const object = await git.readObject({ fs, ...repo, oid: current, cache });
+    const object = await git.readObject({
+      fs,
+      ...repo,
+      oid: current,
+      cache,
+      format: "content",
+    });
+    if (!["commit", "tree", "blob", "tag"].includes(object.type))
+      throw new Error("invalid fetched object type");
+    if (
+      (await git.writeObject({
+        fs,
+        ...repo,
+        type: object.type as ObjectType,
+        object: object.object,
+        format: "content",
+      })) !== current
+    )
+      throw new Error("fetched object checksum mismatch");
     if (type && object.type !== type)
       throw new Error(
         `invalid fetched object type: expected ${type}, got ${object.type}`,
@@ -406,6 +424,112 @@ async function validateGraph(
     }
   }
   return seen;
+}
+
+export async function copyObjects(
+  source: string,
+  target: string,
+): Promise<void> {
+  await mkdir(target, { recursive: true });
+  for (const name of await readdir(source).catch((error) => {
+    if (error.code === "ENOENT") return [] as string[];
+    throw error;
+  })) {
+    const from = path.join(source, name),
+      to = path.join(target, name);
+    const metadata = await lstat(from);
+    if (metadata.isSymbolicLink())
+      throw new Error("symbolic links in the object database are unsupported");
+    if (metadata.isDirectory()) await copyObjects(from, to);
+    else if (metadata.isFile()) {
+      await writeFile(`${to}.lock`, await readFile(from));
+      await rename(`${to}.lock`, to);
+    } else throw new Error("non-regular object database entry");
+  }
+}
+
+// Upstream fetch publishes its refs before finishing the pack. Keep those effects
+// in a disposable repository, then import objects before publishing application refs.
+async function download(
+  repo: Repository,
+  http: git.HttpClient,
+  url: string,
+  roots: { source: string; oid: string }[],
+  shallow: Set<string>,
+  options: FetchOptions,
+): Promise<void> {
+  const gitdir = await fs.promises.mkdtemp(
+    path.join(repo.gitdir, "golem-download-"),
+  );
+  const staged = { ...repo, gitdir };
+  try {
+    await git.init({ fs, ...staged });
+    await copyObjects(
+      path.join(repo.gitdir, "objects"),
+      path.join(gitdir, "objects"),
+    );
+    const boundaries = new Set(shallow);
+    await git.setConfig({
+      fs,
+      ...staged,
+      path: "remote.download.fetch",
+      value: "+refs/*:refs/golem-download/*",
+    });
+    for (const root of new Map(
+      roots.map((root) => [root.source, root]),
+    ).values()) {
+      // Relative depth is measured from the caller's boundaries, not from an
+      // earlier selected ref's download. Combine additions/removals afterwards.
+      if (shallow.size)
+        await writeFile(
+          path.join(gitdir, "shallow"),
+          [...shallow].join("\n") + "\n",
+        );
+      else await rm(path.join(gitdir, "shallow"), { force: true });
+      const result = await git.fetch({
+        fs,
+        ...staged,
+        http,
+        url,
+        remote: "download",
+        ref: root.source,
+        remoteRef: root.source,
+        singleBranch: true,
+        tags: false,
+        depth: options.unshallow
+          ? 2147483647
+          : (options.deepen ?? options.depth),
+        relative: options.deepen !== undefined,
+      });
+      if (result.fetchHead !== root.oid)
+        throw new Error(
+          "remote reference changed during fetch; application refs were not published",
+        );
+      const fetched = new Set(
+        ((await optionalFile(path.join(gitdir, "shallow"))) ?? "")
+          .trim()
+          .split("\n")
+          .filter(Boolean),
+      );
+      for (const original of shallow)
+        if (!fetched.has(original)) boundaries.delete(original);
+      for (const added of fetched)
+        if (!shallow.has(added)) boundaries.add(added);
+    }
+    await validateGraph(
+      staged,
+      roots.map((root) => root.oid),
+      boundaries,
+    );
+    await copyObjects(
+      path.join(gitdir, "objects"),
+      path.join(repo.gitdir, "objects"),
+    );
+    shallow.clear();
+    for (const boundary of boundaries) shallow.add(boundary);
+  } finally {
+    await rm(gitdir, { recursive: true, force: true });
+  }
 }
 
 export async function fetchCommand(
@@ -579,20 +703,7 @@ export async function fetchCommand(
       }
       const shallow = new Set(shallowFile.trim().split("\n").filter(Boolean));
       if (selection.length) {
-        const fetched = await git.fetch({
-          fs,
-          ...repo,
-          http,
-          url,
-          objectsOnly: true,
-          wantRefs: [...new Set(selection.map((entry) => entry.oid))],
-          depth: options.unshallow
-            ? 2147483647
-            : (options.deepen ?? options.depth),
-          relative: options.deepen !== undefined,
-        });
-        for (const boundary of fetched.shallows) shallow.add(boundary);
-        for (const boundary of fetched.unshallows) shallow.delete(boundary);
+        await download(repo, http, url, selection, shallow, options);
       }
       const reachable = await validateGraph(
         repo,
@@ -616,14 +727,14 @@ export async function fetchCommand(
         }
         const missing = following.filter((ref) => !reachable.has(ref.oid));
         if (missing.length)
-          await git.fetch({
-            fs,
-            ...repo,
+          await download(
+            repo,
             http,
             url,
-            objectsOnly: true,
-            wantRefs: missing.map((ref) => ref.oid),
-          });
+            missing.map((ref) => ({ source: ref.ref, oid: ref.oid })),
+            shallow,
+            {},
+          );
         await validateGraph(
           repo,
           following.map((ref) => ref.oid),
@@ -825,7 +936,6 @@ export async function cloneCommand(
       url,
       symrefs: true,
       peelTags: true,
-      unborn: true,
     }),
   );
   for (const ref of refs) {

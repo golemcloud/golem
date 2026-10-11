@@ -677,7 +677,9 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
   .command("push", (node) =>
     node
       .doc({
-        summary: "Push branches and tags in a single receive-pack exchange.",
+        summary: "Push one branch or tag through released isomorphic-git.",
+        description:
+          "Multi-ref, matching and atomic pushes are unsupported and fail before sending. --all and --tags work only when selecting at most one ref. Deletion requires an existing local HEAD. A lost response has an uncertain remote outcome; reconcile before retrying. Released upstream parsing tolerates some malformed trailing status records and can wait for an unfinished response.",
       })
       .annotations({
         readOnly: false,
@@ -695,8 +697,12 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
             short: "d",
             doc: "Delete the named remote references.",
           })
-          .flag("tags", { doc: "Push all local tags." })
-          .flag("all", { doc: "Push all local branches." })
+          .flag("tags", {
+            doc: "Push local tags; rejects selections containing more than one ref.",
+          })
+          .flag("all", {
+            doc: "Push local branches; rejects selections containing more than one ref.",
+          })
           .flag("force", {
             short: "f",
             doc: "Allow non-fast-forward updates and override lease expectations, like Git. A +refspec forces only that reference.",
@@ -708,7 +714,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
             doc: "Explicit force-with-lease expectation: refs/heads/BRANCH:OID, or refs/heads/BRANCH: for absence. Requires --force-with-lease.",
           })
           .flag("atomic", {
-            doc: "Require the server to update all references atomically.",
+            doc: "Unsupported by the released library; always rejects without sending.",
           })
           .positional("remote", z.string(), {
             required: false,
@@ -742,6 +748,8 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
     node
       .doc({
         summary: "Clone an HTTP(S) repository into a new or empty directory.",
+        description:
+          "Uses released isomorphic-git with isolated per-ref downloads. An empty remote uses master without an upstream because its unborn branch is not discoverable. Executable-file worktrees fail closed; no mode persistence workaround is supplied. Servers without sideband upload-pack can stall in the released parser.",
       })
       .annotations({
         readOnly: false,
@@ -794,6 +802,8 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       .doc({
         summary:
           "Fetch validated objects and update mapped references and FETCH_HEAD.",
+        description:
+          "Copies existing objects to a disposable repository and fetches selected refs separately. Validates reachable objects before publication. Unsolicited shallow lines without a depth request are ignored. Raw non-sideband upload-pack can stall; partial-download replay and active cancellation still depend on unresolved runtime work.",
       })
       .annotations({
         readOnly: false,
@@ -887,7 +897,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         summary:
           "Replay local commits on an upstream, or continue, skip or abort a stopped replay.",
         description:
-          "Supports linear commit replay. Merge-commit histories and attribute-dependent diff, merge, filtering or encoding are rejected explicitly before replay.",
+          "Supports linear commit replay using released JavaScript diff3. Unlike Git, no patch-ID filtering is performed: whitespace-equivalent upstream changes can stop with conflicts. Non-empty commits whose replay leaves the tree unchanged are dropped; originally empty commits are preserved. Rename-sensitive replay can stop after rebase has started; use --abort to restore the original branch. Merge-commit histories and attribute-dependent diff, merge, filtering or encoding are rejected explicitly before replay.",
       })
       .annotations({
         readOnly: false,

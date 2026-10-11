@@ -213,7 +213,6 @@ async fn create_file(
             access: AccessMode::ReadWrite,
             disposition: FileDisposition::CreateExclusive,
             follow: Follow::Yes,
-            creation_mode: None,
         },
     )
     .unwrap()

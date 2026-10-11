@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as git from "../golem-temp/isomorphic-git/index.js";
-import { GitIndex } from "../golem-temp/isomorphic-git/models/index.js";
+import * as git from "isomorphic-git";
 import {
   assertRefSupportedModes,
   assertSupportedModes,
@@ -12,6 +11,7 @@ import {
   sameSnapshot,
   statusEntries,
   treeSnapshotMap,
+  withIndex,
 } from "./git.ts";
 import type { MutationResult, Repository, Snapshot } from "./git.ts";
 import {
@@ -26,7 +26,7 @@ import {
 import type { Change } from "./integration.ts";
 import { upstream } from "./remote.ts";
 import { publishRefs, validRef } from "./transfer.ts";
-import { assertRebaseAttributes, patchIds } from "./patch-id.ts";
+import { assertRebaseAttributes } from "./rebase-attributes.ts";
 
 type Action = {
   before: string;
@@ -116,10 +116,11 @@ async function stateFor(repo: Repository): Promise<State | undefined> {
       throw new Error("invalid rebase publication state");
     if (action.index !== undefined) {
       const bytes = recoveryBytes(action.index);
-      const index = await GitIndex.from(bytes);
-      if (!(await index.toObject()).equals(bytes))
-        throw new Error("invalid rebase recovery index");
-      for (const entry of index.entries) safePath(entry.path);
+      await withIndex(repo, bytes, async (index) => {
+        if (!(await index.toObject()).equals(bytes))
+          throw new Error("invalid rebase recovery index");
+        for (const entry of index.entriesFlat) safePath(entry.path);
+      });
     }
     for (const change of action.changes) {
       safePath(change.path);
@@ -463,35 +464,9 @@ export async function rebaseCommand(
     throw new Error(
       "rebasing merge commits is not supported; no index or worktree changes were made",
     );
-  const opposite = remote
-    .filter((entry) => !localOids.has(entry.oid))
-    .map((entry) => entry.oid);
-  const localHeaders = await patchIds(
-    repo,
-    candidates.map((entry) => entry.oid),
-    true,
-  );
-  const remoteHeaders = await patchIds(repo, opposite, true);
-  const wantedHeaders = new Set(localHeaders.values());
-  const possibleHeaders = new Set(remoteHeaders.values());
-  const upstreamPatches = new Set(
-    (
-      await patchIds(
-        repo,
-        opposite.filter((oid) => wantedHeaders.has(remoteHeaders.get(oid)!)),
-      )
-    ).values(),
-  );
-  const localPatches = await patchIds(
-    repo,
-    candidates
-      .map((entry) => entry.oid)
-      .filter((oid) => possibleHeaders.has(localHeaders.get(oid)!)),
-  );
-  const todo = candidates
-    .reverse()
-    .filter((entry) => !upstreamPatches.has(localPatches.get(entry.oid)!))
-    .map((entry) => entry.oid);
+  // Replay non-ancestor commits. Only an exactly empty replay is dropped;
+  // this does not implement native Git's patch-ID cherry-pick detection.
+  const todo = candidates.reverse().map((entry) => entry.oid);
   // Validate every replay before creating persistent state or detaching HEAD.
   for (const oid of todo) await assertRefSupportedModes(repo, oid);
   if (todo.length) await localIdentity(repo);

@@ -317,6 +317,28 @@ async function indexEntries(repo: Repository): Promise<IndexEntry[]> {
   );
 }
 
+// Prepare or inspect an index through the released manager without changing the live index.
+export async function withIndex<T>(
+  repo: Repository,
+  bytes: Uint8Array | undefined,
+  action: (
+    index: Parameters<Parameters<typeof GitIndexManager.acquire>[1]>[0],
+  ) => T | Promise<T>,
+): Promise<T> {
+  const gitdir = await fs.promises.mkdtemp(
+    path.join(repo.gitdir, "golem-index-"),
+  );
+  try {
+    if (bytes) await fs.promises.writeFile(path.join(gitdir, "index"), bytes);
+    return await GitIndexManager.acquire(
+      { fs: gitFs, gitdir, cache: {}, allowUnmerged: true },
+      action,
+    );
+  } finally {
+    await fs.promises.rm(gitdir, { recursive: true, force: true });
+  }
+}
+
 export async function conflictEntries(
   repo: Repository,
 ): Promise<Map<string, Map<number, Snapshot>>> {
@@ -327,9 +349,11 @@ export async function conflictEntries(
         index.unmergedPaths.map((file: string) => [
           file,
           new Map(
-            index.entriesMap
-              .get(file)!
-              .stages.filter(Boolean)
+            index.entriesFlat
+              .filter(
+                (entry: { path: string; flags: { stage: number } }) =>
+                  entry.path === file && entry.flags.stage !== 0,
+              )
               .map(
                 (entry: {
                   flags: { stage: number };

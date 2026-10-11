@@ -62,4 +62,3 @@ Generated from the pinned production package tree. Every production package has 
 | which-typed-array | 1.1.24 | MIT | https://registry.npmjs.org/which-typed-array/-/which-typed-array-1.1.24.tgz | `dependencies/which-typed-array@1.1.24/LICENSE` |
 | wrappy | 1.0.2 | ISC | https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz | `dependencies/wrappy@1.0.2/LICENSE` |
 | zod | 4.4.3 | MIT | https://registry.npmjs.org/zod/-/zod-4.4.3.tgz | `dependencies/zod@4.4.3/LICENSE` |
-| Git xdiff | 2.55.0 | LGPL-2.1-or-later AND EDL-1.0 | https://www.kernel.org/pub/software/scm/git/git-2.55.0.tar.xz | `xdiff/` (preferred source, license texts, notices and rebuild instructions) |
