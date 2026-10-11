@@ -48,6 +48,8 @@ mod read {
     enum Answer {
         /// The content of the file in upper case, so that a test can tell it from a local read.
         UpperCase,
+        /// The content of the file as it is.
+        Exact,
         /// Nothing: the command must read the file itself.
         Nothing,
         /// One byte less than the file has.
@@ -65,6 +67,7 @@ mod read {
             let content = std::fs::read(path).ok()?;
             match self.answer {
                 Answer::UpperCase => Some(content.to_ascii_uppercase()),
+                Answer::Exact => Some(content),
                 Answer::Nothing => None,
                 Answer::TooShort => Some(content[..content.len() - 1].to_vec()),
             }
@@ -205,6 +208,60 @@ mod read {
         );
     }
 
+    /// Runs `script` two times in a new directory `name` that has the text file `big` of
+    /// 204,800 bytes, which is more than a pipe holds: with no file reader, and with one that
+    /// gives a file as it is. Asserts that the status and the output are the same, and that
+    /// the file reader was asked one time. Returns the standard output.
+    fn same_as_without_a_file_reader(name: &str, script: &str) -> String {
+        let run_in_new_directory = |answer: Option<Answer>| {
+            let directory = directory(name);
+            std::fs::write(directory.join("big"), "0123456789abcde\n".repeat(12_800)).unwrap();
+            let script = format!("cd {}; {script}", directory.display());
+            match answer {
+                Some(answer) => run(&script, answer),
+                None => {
+                    let (status, stdout, stderr) = super::run(&script, |_| ());
+                    (status, stdout, stderr, Vec::new())
+                }
+            }
+        };
+        let (status, stdout, stderr, _) = run_in_new_directory(None);
+        let forwarded = run_in_new_directory(Some(Answer::Exact));
+        assert_eq!(
+            (forwarded.0, &forwarded.1, &forwarded.2),
+            (status, &stdout, &stderr),
+            "{script}"
+        );
+        assert_eq!(forwarded.3.len(), 1, "{script}");
+        stdout
+    }
+
+    /// `cat` reads a file piece by piece, and it waits when its reader does not take the
+    /// bytes. Another part of the script can change the file in that time, and `cat` then
+    /// reads what the file has. Here the next stage empties the file while `cat` waits.
+    #[test]
+    fn cat_reads_the_rest_of_the_file_itself_after_it_waits() {
+        let stdout =
+            same_as_without_a_file_reader("wait", "cat big | tee big | wc -c; wc -c < big");
+        assert_ne!(stdout, "204800\n204800\n");
+    }
+
+    /// After a wait, `cat` goes on in the file at the byte after the last one that it took.
+    /// Here another part of the script puts other content of the same size in the file while
+    /// `cat` waits. `cat` then writes the size of the file only if it goes on at that byte.
+    #[test]
+    fn cat_goes_on_at_its_place_in_the_file_after_it_waits() {
+        let stdout = same_as_without_a_file_reader(
+            "place",
+            "cksum < big; cat big | { sleep 0.05; printf '%204799s\\n' '' > big; cksum; }",
+        );
+        let sums = stdout.lines().collect::<Vec<_>>();
+        assert!(
+            matches!(sums[..], [before, written] if before != written && written.ends_with(" 204800")),
+            "{stdout}"
+        );
+    }
+
     /// A read through the file reader is not a wait: the stage ends before its reader exits.
     #[test]
     fn cat_with_a_file_reader_ends_before_a_reader_that_exits_early() {
@@ -234,6 +291,8 @@ mod write {
     enum Answer {
         /// Writes the content in upper case, so that a test can tell it from a local write.
         UpperCase,
+        /// Writes the content as it is.
+        Exact,
         /// Writes nothing and refuses: the command must write the file itself.
         Refuse,
         /// Writes other bytes and then refuses, as a write that failed part of the way.
@@ -260,6 +319,7 @@ mod write {
             ));
             match self.answer {
                 Answer::UpperCase => std::fs::write(path, content.to_ascii_uppercase()).is_ok(),
+                Answer::Exact => std::fs::write(path, content).is_ok(),
                 Answer::Refuse => false,
                 Answer::Spoil => {
                     let _ = std::fs::write(path, "other content, and more of it");
@@ -536,6 +596,90 @@ mod write {
             [(directory.join("out"), "late\n".to_owned())]
         );
         assert_eq!(content(&directory.join("out")), "LATE\n");
+    }
+
+    /// Runs `script` in a new directory `name` two times: with no file writer, and with one
+    /// that writes the content as it is. Asserts that the status and the output are the same.
+    /// Returns what the file writer was asked for.
+    fn same_as_without_a_file_writer(name: &str, script: &str) -> Vec<(PathBuf, String)> {
+        let script = |directory: &Path| format!("cd {}; {script}", directory.display());
+        let local = super::run(&script(&directory(name)), |_| ());
+        let outcome = run(&script(&directory(name)), Answer::Exact);
+        assert_eq!(
+            (outcome.status, outcome.stdout, outcome.stderr),
+            local,
+            "{}",
+            script(Path::new(name))
+        );
+        outcome.asked
+    }
+
+    /// The file writer makes the content of the file at a path. `tee` writes to the file that
+    /// it has opened, at the start of that file. The two are the same only while the path
+    /// names that file and the file is empty. Another part of the script can change that
+    /// while `tee` waits with no bytes for the file.
+    #[test]
+    fn tee_writes_the_file_itself_when_the_file_changed_before_its_input_came() {
+        for change in [
+            "printf 'xxxxxxxxxx\\n' > out",
+            "echo more >> out",
+            "rm out",
+            // Another file at the same path, which is also empty.
+            "rm out; : > out",
+            // The same, with the modification time of the first file: a host can give such a
+            // file the identity of the first one.
+            "touch -r out time; rm out; : > out; touch -r time out",
+            // The same, and the file of `tee` keeps a name.
+            "ln out kept; rm out; : > out",
+            "rm out; echo other > out",
+            // Another file at the same path, with one byte.
+            "rm out; printf x > out",
+        ] {
+            let asked = same_as_without_a_file_writer(
+                "changed",
+                &format!(
+                    "{{ sleep 0.05; {change}; echo late; }} | tee out > /dev/null; \
+                     cat out; echo $?; ls; cat ./* | cksum"
+                ),
+            );
+            assert_eq!(asked, [], "{change}");
+        }
+    }
+
+    /// `tee` itself can write to the file through another descriptor. Here its message goes
+    /// to the end of the file before its input comes.
+    #[test]
+    fn tee_writes_the_file_itself_when_its_own_message_is_in_the_file() {
+        let asked = same_as_without_a_file_writer(
+            "own-message",
+            "echo hi | tee out missing/x 2>> out; cat out",
+        );
+        assert_eq!(asked, []);
+    }
+
+    /// `tee` can also write to the file through another descriptor after it has taken bytes
+    /// for it: another operand, or a message on a standard error that adds to the same file.
+    /// Such a write must come after those bytes. So `tee` writes them to the file first.
+    #[test]
+    fn tee_writes_the_file_itself_before_it_writes_to_it_through_another_descriptor() {
+        for script in [
+            "echo hi | tee out /dev/stderr 2>> out; cat out",
+            "echo hi | tee out /dev/fd/3 3< f 2>> out; cat out",
+            // The standard input is not a regular file, and a write to it fails.
+            "echo hi | tee out /dev/fd/0 2>> out; cat out",
+        ] {
+            let asked = same_as_without_a_file_writer("own-write", script);
+            assert_eq!(asked, [], "{script}");
+        }
+    }
+
+    /// A standard output that is a regular file does not stop the use of the file writer for
+    /// input that comes in one piece: `tee` has taken nothing when it writes that piece.
+    #[test]
+    fn tee_gives_one_piece_to_the_file_writer_when_its_standard_output_is_a_file() {
+        let asked =
+            same_as_without_a_file_writer("to-file", "echo hi | tee out > copy; cat out copy");
+        assert_eq!(asked.len(), 1);
     }
 
     /// A write through the file writer is not a wait: the next stage sees the file as written.
@@ -972,6 +1116,27 @@ mod edit {
             SHOW,
         );
         assert_eq!(asked.len(), 1);
+    }
+
+    /// A script can write to a file (`w`) or read lines from a file (`R`) that `sed` also
+    /// edits in place. `sed` has such a file open, so it replaces the file itself.
+    #[test]
+    fn sed_does_not_ask_the_file_editor_for_a_file_that_its_script_has_open() {
+        for script in [
+            "sed -i 'w g' f g",
+            "sed -i 'R g' g f",
+            "sed -i -e 's/one/1/w g' f g",
+        ] {
+            let asked = same_as_without_a_file_editor(
+                "script-file",
+                &format!("printf 'p\\nq\\n' > g; {script}; echo $?"),
+                SHOW,
+            );
+            assert!(
+                asked.iter().all(|(path, _, _)| !path.ends_with("g")),
+                "{script}: {asked:?}"
+            );
+        }
     }
 
     #[test]

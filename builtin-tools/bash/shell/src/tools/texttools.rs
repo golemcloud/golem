@@ -226,7 +226,9 @@ impl SimpleCommand for Sed {
                 let args = argv
                     .iter()
                     .map(|arg| crate::tools::shell_bytes::to_os_string(arg));
-                // The file editor of the call makes an edit in place that keeps no copy.
+                // The file editor of the call makes an edit in place that keeps no copy. It
+                // leaves a file that is open to `sed`, and `engine` keeps the files of the `w`
+                // and `R` commands of the script open from before the run.
                 #[cfg(target_arch = "wasm32")]
                 let _editing = super::sed::edits_without_copy(&argv)
                     .then(|| {

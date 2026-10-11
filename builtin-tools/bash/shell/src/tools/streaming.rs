@@ -21,7 +21,7 @@ use std::{
     ffi::OsString,
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 type EventLog = Vec<(bool, Vec<u8>)>;
@@ -1131,10 +1131,15 @@ fn cat_impl<SE: ShellExtensions>(
                 continue;
             }
             // The bytes become a stream that is ready at once, so the loop below reads them as
-            // it reads the file: with no wait before the first write.
+            // it reads the file: with no wait before the first write. `opened` is the file
+            // while the loop reads the bytes of the file reader in its place.
+            let mut opened = None;
+            let mut taken = 0;
             if let Some(location) = &location
                 && let Some(bytes) = forwarded(&context, location, &source)
+                && let OpenFile::File(file) = &source
             {
+                opened = Some(Arc::clone(file));
                 source = brush_core::openfiles::from_bytes(bytes);
             }
             loop {
@@ -1143,7 +1148,42 @@ fn cat_impl<SE: ShellExtensions>(
                     Ok(n) => {
                         rendered.clear();
                         state.push(&buffer[..n], &mut rendered);
-                        stdout.async_io().write_all(&rendered).await?;
+                        taken += n as u64;
+                        // The file reader gave the bytes that the file had when `cat` opened
+                        // it. Another part of the script can change the file while `cat`
+                        // waits, and a `cat` that reads the file itself then reads what the
+                        // file has. So after a wait `cat` reads the rest from the file.
+                        //
+                        // The host can give a file to a reader in blocks. A `cat` that reads
+                        // the file itself then has, at a wait, the rest of a block from
+                        // before the wait. So before `cat` gives way, it reads from the file
+                        // the part that it has taken, and the host is at the same place for
+                        // it. That needs blocks of a whole number of the pieces of one read.
+                        let read = OnceLock::new();
+                        before_each_wait(stdout.async_io().write_all(&rendered), || {
+                            if let Some(file) = &opened {
+                                read.get_or_init(|| read_past(file, taken));
+                            }
+                        })
+                        .await?;
+                        if let Some(read) = read.into_inner()
+                            && let Some(file) = opened.take()
+                        {
+                            match read {
+                                Ok(()) => source = OpenFile::File(file),
+                                Err(error) => {
+                                    stderr
+                                        .async_io()
+                                        .write_all(
+                                            format!("cat: {path}: {}\n", super::io_message(&error))
+                                                .as_bytes(),
+                                        )
+                                        .await?;
+                                    failed = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => (),
                     Err(error) => {
@@ -1865,6 +1905,22 @@ pub(crate) fn sleep<SE: ShellExtensions>(
     })
 }
 
+/// Reads the first `count` bytes that `file` has left to read, and drops them.
+fn read_past(file: &std::fs::File, count: u64) -> io::Result<()> {
+    let mut dropped = [0; 16 * 1024];
+    let mut left = count;
+    while left > 0 {
+        let most = usize::try_from(left).map_or(dropped.len(), |left| left.min(dropped.len()));
+        match io::Read::read(&mut &*file, &mut dropped[..most]) {
+            Ok(0) => break,
+            Ok(n) => left -= n as u64,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => (),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 /// Runs `before_wait` each time `future` is not ready, before the task gives way to another part
 /// of the script.
 async fn before_each_wait<T>(future: impl Future<Output = T>, mut before_wait: impl FnMut()) -> T {
@@ -1960,6 +2016,19 @@ impl HeldFiles {
         Ok(file.held)
     }
 
+    /// Writes what `tee` holds to each file, before `tee` writes to `stream`, when `stream` is
+    /// a regular file. Such a file can be a held file that `tee` has open a second time, and
+    /// the write must come after the bytes that `tee` holds for it.
+    fn write_out_before(&self, stream: &OpenFile) {
+        let holds = self
+            .files()
+            .iter()
+            .any(|file| file.held && !file.bytes.is_empty());
+        if holds && is_regular_file(stream) {
+            self.write_out();
+        }
+    }
+
     /// Writes what `tee` holds to each file, before another part of the script can run.
     fn write_out(&self) {
         for file in self.files().iter_mut() {
@@ -1969,8 +2038,9 @@ impl HeldFiles {
         }
     }
 
-    /// Gives the content of the held file `number` to the file writer at the end of the input.
-    /// When the file writer does not leave the file with that content, `tee` writes the file.
+    /// Ends the held file `number` at the end of the input. The file writer gets its content
+    /// when the path still names the empty file that `tee` opened. In each other case, and
+    /// when the file writer does not leave the file with that content, `tee` writes the file.
     fn finish(&self, number: usize) -> io::Result<()> {
         let (path, file, bytes) = {
             let mut files = self.files();
@@ -1987,6 +2057,25 @@ impl HeldFiles {
                 std::mem::take(&mut file.bytes),
             )
         };
+        // The file writer makes the content of the file at the path. `tee` writes to the file
+        // that it has opened, at the start of that file. The two are the same only while the
+        // path names that file and the file is empty. Another part of the script can change
+        // that while `tee` waits with no bytes for the file, and `tee` itself can write to the
+        // file through another descriptor before it takes bytes for it (`2>> file`).
+        let named = || std::fs::metadata(&path).map(|metadata| metadata.len());
+        if !file.metadata().is_ok_and(|metadata| metadata.len() == 0)
+            || !named().is_ok_and(|length| length == 0)
+        {
+            return io::Write::write_all(&mut &*file, &bytes);
+        }
+        // An empty file is at the path. It is the file of `tee` if it gets the first byte that
+        // `tee` writes. A host does not give each file an identity of its own, so the device
+        // and the inode do not tell that.
+        let (first, rest) = bytes.split_at(1);
+        io::Write::write_all(&mut &*file, first)?;
+        if !named().is_ok_and(|length| length == 1) {
+            return io::Write::write_all(&mut &*file, rest);
+        }
         let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         if self
             .writer
@@ -1996,9 +2085,19 @@ impl HeldFiles {
         {
             return Ok(());
         }
-        // `tee` has written nothing to the file, so its descriptor is at the start of the file.
+        // The file can have any content after such a call, and the descriptor of `tee` is
+        // after the first byte.
         file.set_len(0)?;
+        io::Seek::rewind(&mut &*file)?;
         io::Write::write_all(&mut &*file, &bytes)
+    }
+}
+
+/// Whether `stream` is a regular file.
+fn is_regular_file(stream: &OpenFile) -> bool {
+    match stream {
+        OpenFile::File(file) => file.metadata().is_ok_and(|metadata| metadata.is_file()),
+        _ => false,
     }
 }
 
@@ -2113,6 +2212,7 @@ fn tee_impl<SE: ShellExtensions>(
                             Some(Ok(true)) => Ok(()),
                             Some(Err(error)) => Err(error),
                             Some(Ok(false)) | None => {
+                                held.write_out_before(&output.stream);
                                 output.stream.async_io().write_all(bytes).await
                             }
                         },
@@ -2135,6 +2235,7 @@ fn tee_impl<SE: ShellExtensions>(
                                 } else {
                                     format!("tee: {name}: {}\n", super::io_message(&error))
                                 };
+                                held.write_out_before(&stderr);
                                 if let Err(error) =
                                     stderr.async_io().write_all(message.as_bytes()).await
                                     && error.kind() != io::ErrorKind::BrokenPipe
