@@ -1,5 +1,6 @@
 // Package user is the Go tool consumer driven by go_tools.rs: it calls the
-// provider's tool through the generated guest tool client.
+// provider's tool through the generated guest tool client, and the same
+// command through reflection.
 package user
 
 import (
@@ -10,6 +11,7 @@ import (
 	vcs "golem.local/bridge/vcs-tool-guest-client"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/reflection"
 	"github.com/golemcloud/golem/sdks/go/golem/tool"
 )
 
@@ -37,6 +39,17 @@ func init() {
 		})
 		check(err == nil, "commit: %v", err)
 		check(res.Files == 2, "files: %d", res.Files)
+
+		// The reflected path sends the same call and gets the same result.
+		discovered, found := reflection.DiscoverTool("vcs")
+		check(found, "the vcs tool was not discovered")
+		reflected, err := discovered.Bind().Call([]string{"commit"}, map[string]any{
+			"dir": ".", "paths": []any{"a.go", "b.go"}, "message": "fix", "author": "ada", "priority": nil, "amend": false,
+		})
+		check(err == nil, "reflected commit: %v", err)
+		fields, _ := reflected.(map[string]any)
+		check(fields["summary"] == res.Summary && fmt.Sprint(fields["files"]) == "2",
+			"the reflected commit gave %v, the generated one %+v", reflected, res)
 
 		// A restricted argument is checked before the command runs.
 		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) {
