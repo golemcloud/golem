@@ -4,8 +4,8 @@
     reason = "acceptance fixture metadata is fixed and validated"
 )]
 use bash_shell::commands::{
-    CommandDescriptor, CommandFuture, CommandInvoker, CommandOutput, FileReader, FileWriter,
-    PreparedCommand,
+    CommandDescriptor, CommandFuture, CommandInvoker, CommandOutput, FileEditor, FileReader,
+    FileWriter, PreparedCommand,
 };
 use brush_core::builtins::{ContentOptions, ContentType, SimpleCommand};
 use brush_core::commands::ExecutionContext;
@@ -24,6 +24,7 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static LEGACY_EXECUTIONS: AtomicUsize = AtomicUsize::new(0);
 static FORWARDED_READS: AtomicUsize = AtomicUsize::new(0);
 static FORWARDED_WRITES: AtomicUsize = AtomicUsize::new(0);
+static FORWARDED_EDITS: AtomicUsize = AtomicUsize::new(0);
 /// The largest file that a stand-in for a file tool takes, as for the tool's own limit.
 const MAX_FORWARDED_BYTES: usize = 1024 * 1024;
 const COMPLETION_MARKER: &str = "/tmp/probe-completed";
@@ -186,18 +187,46 @@ impl FileWriter for ProbeFileWriter {
     }
 }
 
+/// A file editor that answers as one that asks the `edit-file` tool: it changes the content of
+/// a text file in place, and it refuses a path with a parent component, content above the size
+/// limit, a file that has no content or has a NUL byte, and content that is not UTF-8.
+struct ProbeFileEditor;
+
+impl FileEditor for ProbeFileEditor {
+    fn max_len(&self) -> usize {
+        MAX_FORWARDED_BYTES
+    }
+
+    fn edit(&self, path: &Path, old: &[u8], new: &[u8]) -> bool {
+        if old.is_empty()
+            || old.len().max(new.len()) > MAX_FORWARDED_BYTES
+            || !tool_path(path)
+            || old.contains(&0)
+            || std::str::from_utf8(old).is_err()
+            || std::str::from_utf8(new).is_err()
+            || std::fs::write(path, new).is_err()
+        {
+            return false;
+        }
+        FORWARDED_EDITS.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+}
+
 /// Gives the session a stand-in for each bound file tool that a local command uses.
 pub(super) fn use_file_tools(session: &mut bash_shell::session::Session) {
     session.forward_file_reads(Arc::new(ProbeFileReader));
     session.forward_file_writes(Arc::new(ProbeFileWriter));
+    session.forward_file_edits(Arc::new(ProbeFileEditor));
 }
 
 /// How many times each stand-in did its work: one line `KIND COUNT` for each kind of work.
 pub(super) fn file_tool_report() -> String {
     format!(
-        "reads {}\nwrites {}\n",
+        "reads {}\nwrites {}\nedits {}\n",
         FORWARDED_READS.load(Ordering::SeqCst),
-        FORWARDED_WRITES.load(Ordering::SeqCst)
+        FORWARDED_WRITES.load(Ordering::SeqCst),
+        FORWARDED_EDITS.load(Ordering::SeqCst)
     )
 }
 

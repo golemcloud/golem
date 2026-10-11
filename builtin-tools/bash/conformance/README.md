@@ -39,6 +39,7 @@ file tool. When the tool is bound, the command does this part of its work throug
 |---|---|---|
 | `cat` | takes the content of a regular file from a file reader | `read-file` |
 | `tee` | gives the content of a regular file to a file writer | `write-file` |
+| `sed -i` | gives the change of a regular file to a file editor | `edit-file` |
 
 The example has a stand-in for each of these tools (`--file-tools`). `forward` runs each case
 whose script names one of these commands two times, without the stand-ins and with them, and

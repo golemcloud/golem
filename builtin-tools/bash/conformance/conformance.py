@@ -7,10 +7,10 @@ Golem's GOLEM_* variables, and a fresh `/tmp`. The oracle's answers are recorded
 
     conformance.py check --wasm W     compare our shell with the recorded goldens (the default);
                                       `--tier all` adds the sweep-tier corpora the slow job checks
-    conformance.py forward --wasm W   run each case that uses `cat` or `tee` without and with
-                                      stand-ins for the bound file tools, and fail if the two
-                                      outcomes differ; needs no golden; `--tier all` as for
-                                      `check`
+    conformance.py forward --wasm W   run each case that uses `cat`, `tee` or `sed -i` without
+                                      and with stand-ins for the bound file tools, and fail if
+                                      the two outcomes differ; needs no golden; `--tier all` as
+                                      for `check`
     conformance.py record             run the oracle twice per case (`--runs 1` for one) and
                                       rewrite goldens for the selected cases; refuses a case its
                                       runs disagree on
@@ -623,17 +623,20 @@ def command_check(args, cases):
 
 
 # The local commands that give part of their work to a bound file tool: for each kind of work
-# that the example's stand-ins count, the command that does it.
-FILE_TOOL_COMMANDS = {"reads": "cat", "writes": "tee"}
+# that the example's stand-ins count, the command that does it and the pattern of a script that
+# names it. A match inside a longer word does not count.
+FILE_TOOL_COMMANDS = {
+    "reads": ("cat", r"(?<![\w-])cat(?![\w-])"),
+    "writes": ("tee", r"(?<![\w-])tee(?![\w-])"),
+    "edits": ("sed -i", r"(?<![\w-])sed(?![\w-])[^|;&\n]*?\s(?:-[A-Za-z]*i|--in-place)"),
+}
 
 
 def forwarded_work(script):
     """The kinds of work that a script can give to a file tool: those whose command the script
-    names. A match inside a longer word does not count."""
+    names."""
     return {
-        kind
-        for kind, command in FILE_TOOL_COMMANDS.items()
-        if re.search(rf"(?<![\w-]){re.escape(command)}(?![\w-])", script)
+        kind for kind, (_, pattern) in FILE_TOOL_COMMANDS.items() if re.search(pattern, script)
     }
 
 
@@ -668,12 +671,13 @@ def forwarding_passes(different, cases, served):
 
 
 def command_forward(args, cases):
-    """Run each case that uses `cat` or `tee` without and with the example's stand-ins for the
-    bound file tools.
+    """Run each case that uses `cat`, `tee` or `sed -i` without and with the example's stand-ins
+    for the bound file tools.
 
-    With the stand-ins, `cat` takes the content of a regular file from a file reader, and `tee`
-    gives the content of a file to a file writer. A script must not see that: status, stdout and
-    stderr must be equal to the run without the stand-ins. This needs no golden and no oracle.
+    With the stand-ins, `cat` takes the content of a regular file from a file reader, `tee` gives
+    the content of a file to a file writer, and `sed -i` gives the change of a file to a file
+    editor. A script must not see that: status, stdout and stderr must be equal to the run
+    without the stand-ins. This needs no golden and no oracle.
     """
     cases = [case for case in cases if forwarded_work(case.script)]
     using = {
@@ -726,7 +730,7 @@ def command_forward(args, cases):
         f"({counts['unstable']} unstable, {counts['skipped']} skipped)",
         flush=True,
     )
-    for kind, command in FILE_TOOL_COMMANDS.items():
+    for kind, (command, _) in FILE_TOOL_COMMANDS.items():
         print(f"{command}: {using[kind]} cases, the stand-in served {served[kind]} {kind}", flush=True)
         if using[kind] and not served[kind]:
             print(f"the stand-in served no {kind}, so the run compared nothing for {command}", flush=True)

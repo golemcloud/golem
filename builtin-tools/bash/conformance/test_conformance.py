@@ -203,6 +203,15 @@ class ForwardTests(unittest.TestCase):
             self.assertEqual(set(), HARNESS.forwarded_work(script), script)
         self.assertEqual({"reads", "writes"}, HARNESS.forwarded_work("cat f | tee g"))
 
+    def test_a_script_gives_an_edit_only_with_sed_in_place(self):
+        for script in [
+            "sed -i s/a/b/ f", "sed -n -i p f", "sed -ni p f", "sed --in-place s/a/b/ f",
+            "sed -E -i.bak s/a/b/ f", "x=$(sed -i s/a/b/ f)", "sed -e s/a/b/ -i f",
+        ]:
+            self.assertEqual({"edits"}, HARNESS.forwarded_work(script), script)
+        for script in ["sed s/a/b/ f", "sed -n p f", "used -i f", "sed s/-i/x/ f", "sed p f; ls -i"]:
+            self.assertNotIn("edits", HARNESS.forwarded_work(script), script)
+
     def test_the_report_of_the_stand_ins_is_one_count_for_each_kind_of_work(self):
         self.assertEqual(
             {"reads": 3, "writes": 0}, HARNESS.parse_file_tool_report("reads 3\nwrites 0\n")
