@@ -3288,6 +3288,7 @@ mod tests {
                 super::FilesystemStorageMode::Directory { root: root() },
                 super::FilesystemStorageMode::ManagedXfs { root: root() },
                 super::FilesystemStorageMode::ReflinkXfs { root: root() },
+                super::FilesystemStorageMode::Apfs { root: root() },
             ]
             .map(|storage| storage.to_safe_string()),
             [
@@ -3295,6 +3296,7 @@ mod tests {
                 "directory at /var/lib/golem/agents",
                 "managed XFS at /var/lib/golem/agents",
                 "reflink XFS at /var/lib/golem/agents",
+                "APFS for local development at /var/lib/golem/agents",
             ]
         );
     }

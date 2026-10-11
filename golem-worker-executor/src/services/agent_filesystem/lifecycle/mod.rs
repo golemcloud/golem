@@ -3807,22 +3807,18 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        if matches!(
+        if hard_link_source_proof_needed(
             error.io_kind(),
-            Some(std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AlreadyExists)
-        ) && !error.is_sandbox_escape()
-            && !error.cleanup_failed()
-        {
-            match namespace_path_state(&generation, source.clone()).await {
-                Ok(NamespacePathState::Present(attributes))
-                    if attributes.kind == SandboxObjectKind::Directory =>
-                {
-                    return Err(Error::Access(AccessError::NotPermitted));
-                }
-                Err(probe_error) if invalidates_generation(&probe_error) => {
+            error.is_sandbox_escape(),
+            error.cleanup_failed(),
+        ) {
+            match hard_link_source_outcome(namespace_path_state(&generation, source.clone()).await)
+            {
+                Ok(Some(error)) => return Err(Error::Access(error)),
+                Ok(None) => {}
+                Err(probe_error) => {
                     return Err(classify_query_error(&generation, probe_error));
                 }
-                _ => {}
             }
         }
         let evidence = if error_proves_no_effect(&error) {
@@ -4031,6 +4027,32 @@ async fn symlink_postcondition<Adapter: SandboxFilesystemAdapter>(
 enum NamespacePathState {
     Absent,
     Present(SandboxAttributes),
+}
+
+fn hard_link_source_proof_needed(
+    kind: Option<std::io::ErrorKind>,
+    sandbox_escape: bool,
+    cleanup_failed: bool,
+) -> bool {
+    matches!(
+        kind,
+        Some(std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AlreadyExists)
+    ) && !sandbox_escape
+        && !cleanup_failed
+}
+
+fn hard_link_source_outcome(
+    proof: Result<NamespacePathState, FilesystemStorageError>,
+) -> Result<Option<AccessError>, FilesystemStorageError> {
+    match proof {
+        Ok(NamespacePathState::Present(attributes))
+            if attributes.kind == SandboxObjectKind::Directory =>
+        {
+            Ok(Some(AccessError::NotPermitted))
+        }
+        Err(probe_error) if invalidates_generation(&probe_error) => Err(probe_error),
+        _ => Ok(None),
+    }
 }
 
 fn insert_postcondition_evidence(

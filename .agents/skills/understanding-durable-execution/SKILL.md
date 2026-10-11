@@ -1088,6 +1088,14 @@ lookup behavior. Users do not normalize names. Case sensitivity does not prove b
 because both APFS variants alias Unicode normalization forms. No special volume, disk image or
 privilege is required. The mode logs that it is for local development and tests only.
 
+The current development `Apfs` mode is not suitable for trees with thousands of small files.
+Native cloning and the existing durability policy remain in place, with per-file `sync_all`
+and immediate directory `fsync`. Linux XFS remains the supported production path. The shared
+native seed code was fast on XFS for the same measured 10,000-file tree. These measurements
+cover native seed work, not complete snapshot capture, blob upload or worker recovery.
+See [APFS performance limits](../../../docs/src/content/next/operate/filesystem_snapshots.mdx#apfs-performance-limits)
+for the measurements and the Rust file-flush distinction.
+
 `Apfs` states `AgentAccounting::Unaccounted`, as `ReflinkXfs` does. All disk limits resolve to
 `Unlimited`; the mode has no project quotas or per-agent usage reports, and filesystem metering
 is refused at startup. It reads volume space with `fstatvfs`, so startup capacity checks, capture

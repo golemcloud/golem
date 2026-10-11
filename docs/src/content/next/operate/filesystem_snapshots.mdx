@@ -67,6 +67,18 @@ The snapshots use the executor's blob storage. On the local server, this is file
 - The executor reads volume free space with `fstatvfs`. Startup capacity checks, capture admission and write pressure recovery use these values. APFS volumes in one container share free bytes, so byte targets are approximate. The filesystem object counts are synthetic and very large, so the object targets always pass.
 - The executor uses `Conservative` filename coordination on both case-sensitive and case-insensitive APFS volumes. A directory entry edit waits for conflicting operations in the same parent directory. Two observations can run together. macOS keeps its native filename spelling, case sensitivity and lookup behavior. Users do not need to normalize names. The executor does not read the root's case sensitivity to select coordination.
 
+### APFS performance limits
+
+<Callout type="warning">
+  The current development `Apfs` mode is not suitable for trees with thousands of small files, such as repository or `node_modules` trees. It retains native file cloning and the existing durability policy. Linux XFS remains the supported production path. The shared native seed code was fast on XFS for the same measured tree, so the APFS result does not show a general filesystem snapshot performance limit.
+</Callout>
+
+A native seed measurement for a tree of 10,000 regular files, 503 subdirectories and 200 symlinks took a median of 51.84 s across three APFS runs. One XFS run in the existing managed Linux VM took 1.16 s for the same tree shape. The environments and sample counts differ. These values apply to that workload shape, not every host or tree. They are neither a universal speedup nor a service-level guarantee. They do not measure complete snapshot capture, blob upload, SQL queries, git or npm execution, or worker recovery.
+
+File `sync_all` dominated the APFS diagnostic seed time. The installed Rust 1.99 standard library uses `F_FULLFSYNC` for it on Apple platforms and native `fsync` on Linux. Golem does not explicitly request `F_FULLFSYNC`. Its `rustix` directory `fsync` is ordinary directory synchronization, not that full file flush.
+
+APFS keeps per-file `sync_all` and immediate directory synchronization. The completed 10,000-file directory-batching comparison showed no consistent benefit. The 50,000-file comparison was incomplete, and the large SQLite cases were not measured.
+
 ## Enable filesystem snapshots
 
 The steps below describe production on XFS. The key and snapshot settings also apply to a standalone executor on `Apfs`. The local server supplies its own key when none is configured.

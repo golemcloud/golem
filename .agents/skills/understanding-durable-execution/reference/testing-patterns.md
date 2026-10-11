@@ -224,6 +224,10 @@ entity shutdown cases in `src/services/active_agents/tests.rs` and
 
 ## Filesystem snapshots on APFS
 
+For native seed timing limits and the fast Linux XFS comparison, see
+[APFS performance limits](../../../../docs/src/content/next/operate/filesystem_snapshots.mdx#apfs-performance-limits).
+These measurements are separate from the correctness checks below.
+
 The `apfs-tests` CI job builds the executor test binaries on a macOS runner and runs them on the
 runner's existing volume. It restores portable test-component and built-in artifact WASMs, not
 Linux binaries. It needs no Lima VM, disk image or special volume. The tests use normal registration, not

@@ -1204,9 +1204,10 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// brings all that is under it, and a symlink becomes a symlink. Directories and symlinks are
     /// made again, and permissions and modification times are copied. `access` sets the write
     /// permission of seeded files, or keeps the permissions of the source. `placement` decides
-    /// what happens to a target path that is already there. On XFS each file is one reflink. With
-    /// project quotas the reflink goes into the project of this filesystem, so the quota is charged
-    /// here, and EDQUOT and ENOSPC appear here. On development storage each file is copied.
+    /// what happens to a target path that is already there. Each file is a copy-on-write copy on
+    /// XFS or Apfs storage, and a byte copy on other storage. With project quotas the reflink goes
+    /// into the project of this filesystem, so the quota is charged here, and EDQUOT and ENOSPC
+    /// appear here.
     /// Nothing is written outside the sandbox root. The first entry that fails stops the call. The
     /// entries before it stay. On XFS, what the call wrote is on stable storage when the call
     /// returns, also when an entry fails.
@@ -1240,8 +1241,8 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// symlinks are made again. Permissions and modification times are copied, and `target` gets
     /// the permissions and the modification time of `source`. On XFS, with or without project
     /// quotas, each file is one reflink: the cost follows the number of files, not the bytes, and
-    /// the copy adds nothing to any quota, because a HostPath is outside every agent project. On
-    /// development storage each file is copied.
+    /// the copy adds nothing to any quota, because a HostPath is outside every agent project.
+    /// Apfs also makes copy-on-write copies. Other storage makes byte copies.
     ///
     /// A regular file or a symlink with more than one name under `source` is copied once, at the
     /// first name that the copy meets, and the result gives its names as one [`LinkGroup`].
@@ -1956,15 +1957,15 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                             )
                         })
                 });
-                let synced =
+                tree_copy::finish_seed(seeded, || {
                     tree_copy::sync_after_reflink(mode, &materialization_root).map_err(|error| {
                         FilesystemStorageError::io(
                             "sync seeded sandbox filesystem",
                             &materialization_root,
                             error,
                         )
-                    });
-                seeded.and(synced)
+                    })
+                })
             })
             .await
             .map_err(|error| task_error("seed sandbox filesystem", &error_path, error))?
@@ -5906,6 +5907,25 @@ mod tests {
     async fn external_seed_keeps_the_pinned_destination_after_directory_rename() {
         let parent = tempfile::tempdir().unwrap();
         let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
+        assert_pinned_seed_after_directory_rename(parent.path(), provisioning).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    async fn apfs_seed_keeps_the_pinned_destination_after_directory_rename() {
+        let parent = tempfile::tempdir().unwrap();
+        let storage = FilesystemStorageMode::Apfs {
+            root: parent.path().join("agents").into_boxed_path(),
+        };
+        let provisioning =
+            SandboxFilesystemProvisioning::new(&storage, RetryConfig::default()).unwrap();
+        assert_pinned_seed_after_directory_rename(parent.path(), provisioning).await;
+    }
+
+    async fn assert_pinned_seed_after_directory_rename(
+        parent: &Path,
+        provisioning: SandboxFilesystemProvisioning,
+    ) {
         let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
             provisioning,
             name(),
@@ -5919,7 +5939,7 @@ mod tests {
         std::fs::rename(root.join("pinned"), root.join("renamed")).unwrap();
         std::fs::create_dir(root.join("pinned")).unwrap();
 
-        let host_source = host_directory_at(parent.path()).await;
+        let host_source = host_directory_at(parent).await;
         std::fs::write(host_source.path().as_path().join("source"), b"seeded").unwrap();
         let source = host_child(&host_source, "source");
         seed_one(

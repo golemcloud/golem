@@ -23,6 +23,45 @@ use std::io::Write as _;
 use std::path::Path;
 
 const KEY_FILE: &str = "filesystem-snapshots.repository-key";
+const VALIDATION_ONLY_REPOSITORY_KEY: &str = concat!(
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+);
+
+#[derive(Clone, Copy)]
+enum LocalPlatform {
+    MacOs,
+    Other,
+}
+
+struct LocalDefaults {
+    storage_mode: &'static str,
+    snapshots_mode: &'static str,
+    root: Option<Box<Path>>,
+}
+
+fn local_defaults(
+    platform: LocalPlatform,
+    agent_root: Option<&Path>,
+    data_dir: &Path,
+) -> LocalDefaults {
+    let (storage_mode, snapshots_mode) = match platform {
+        LocalPlatform::MacOs => ("Apfs", "Managed"),
+        LocalPlatform::Other if agent_root.is_some() => ("Directory", "Disabled"),
+        LocalPlatform::Other => ("Temporary", "Disabled"),
+    };
+    let root = agent_root
+        .map(Box::<Path>::from)
+        .or_else(|| match platform {
+            LocalPlatform::MacOs => Some(data_dir.join("agents").into_boxed_path()),
+            LocalPlatform::Other => None,
+        });
+    LocalDefaults {
+        storage_mode,
+        snapshots_mode,
+        root,
+    }
+}
 
 /// Reads local filesystem settings and supplies the retained key only when none is configured.
 pub(crate) fn prepare(
@@ -31,25 +70,32 @@ pub(crate) fn prepare(
     agent_root: Option<&Path>,
     environment: impl figment::Provider,
 ) -> anyhow::Result<(FilesystemStorageConfig, FilesystemSnapshotsConfig)> {
-    let storage_mode = if cfg!(target_os = "macos") {
-        "Apfs"
-    } else if agent_root.is_some() {
-        "Directory"
+    let platform = if cfg!(target_os = "macos") {
+        LocalPlatform::MacOs
     } else {
-        "Temporary"
+        LocalPlatform::Other
     };
-    let snapshots_mode = if cfg!(target_os = "macos") {
-        "Managed"
-    } else {
-        "Disabled"
-    };
+    prepare_with_defaults(
+        data_dir,
+        config_file,
+        local_defaults(platform, agent_root, data_dir),
+        environment,
+    )
+}
+
+fn prepare_with_defaults(
+    data_dir: &Path,
+    config_file: &Path,
+    defaults: LocalDefaults,
+    environment: impl figment::Provider,
+) -> anyhow::Result<(FilesystemStorageConfig, FilesystemSnapshotsConfig)> {
     let mut figment = Figment::from(Serialized::defaults(serde_json::json!({
         "filesystem_storage": FilesystemStorageConfig::default(),
         "filesystem_snapshots": FilesystemSnapshotsConfig::default(),
     })))
     .merge(Serialized::defaults(serde_json::json!({
-        "filesystem_storage": { "mode": { "type": storage_mode } },
-        "filesystem_snapshots": { "type": snapshots_mode },
+        "filesystem_storage": { "mode": { "type": defaults.storage_mode } },
+        "filesystem_snapshots": { "type": defaults.snapshots_mode },
     })));
     match std::fs::symlink_metadata(config_file) {
         Ok(_) => figment = figment.merge(Toml::file_exact(config_file)),
@@ -64,16 +110,13 @@ pub(crate) fn prepare(
         }
     }
     figment = figment.merge(environment);
-    if figment.extract_inner::<String>("filesystem_storage.mode.type")? != "Temporary" {
-        let root = agent_root.map(Box::<Path>::from).or_else(|| {
-            cfg!(target_os = "macos").then(|| data_dir.join("agents").into_boxed_path())
-        });
-        if let Some(root) = root {
-            // Root defaults must not introduce a config table for Temporary storage.
-            figment = figment.join(Serialized::defaults(serde_json::json!({
-                "filesystem_storage": { "mode": { "config": { "root": root } } }
-            })));
-        }
+    if figment.extract_inner::<String>("filesystem_storage.mode.type")? != "Temporary"
+        && let Some(root) = defaults.root
+    {
+        // Root defaults must not introduce a config table for Temporary storage.
+        figment = figment.join(Serialized::defaults(serde_json::json!({
+            "filesystem_storage": { "mode": { "config": { "root": root } } }
+        })));
     }
     let storage = figment.extract_inner("filesystem_storage")?;
     if figment.extract_inner::<String>("filesystem_snapshots.type")? == "Managed"
@@ -88,7 +131,8 @@ pub(crate) fn prepare(
         {
             anyhow::bail!("filesystem_snapshots.config must be a table");
         }
-        with_key(figment.clone(), &"00".repeat(64))
+        // Validate Managed settings on a disposable clone before retained-key I/O.
+        with_key(figment.clone(), VALIDATION_ONLY_REPOSITORY_KEY)
             .extract_inner::<FilesystemSnapshotsConfig>("filesystem_snapshots")?;
         figment = with_key(figment, &local_key(data_dir)?);
     }
@@ -154,6 +198,7 @@ fn local_key(data_dir: &Path) -> anyhow::Result<Box<str>> {
 
 #[cfg(test)]
 mod tests {
+    use super::LocalPlatform;
     use golem_worker_executor::services::golem_config::{
         FilesystemSnapshotsConfig, FilesystemStorageMode,
     };
@@ -170,57 +215,134 @@ mod tests {
     }
 
     #[test]
+    fn local_server_default_policy_matches_the_platform_and_requested_root() {
+        let data_dir = std::path::Path::new("local-data");
+        let requested_root = std::path::Path::new("cli-agents");
+        [
+            (
+                LocalPlatform::MacOs,
+                None,
+                "Apfs",
+                "Managed",
+                Some(std::path::Path::new("local-data/agents")),
+            ),
+            (
+                LocalPlatform::MacOs,
+                Some(requested_root),
+                "Apfs",
+                "Managed",
+                Some(std::path::Path::new("cli-agents")),
+            ),
+            (LocalPlatform::Other, None, "Temporary", "Disabled", None),
+            (
+                LocalPlatform::Other,
+                Some(requested_root),
+                "Directory",
+                "Disabled",
+                Some(std::path::Path::new("cli-agents")),
+            ),
+        ]
+        .into_iter()
+        .for_each(
+            |(platform, requested, storage_mode, snapshots_mode, root)| {
+                let defaults = super::local_defaults(platform, requested, data_dir);
+                assert_eq!(
+                    (
+                        defaults.storage_mode,
+                        defaults.snapshots_mode,
+                        defaults.root.as_deref(),
+                    ),
+                    (storage_mode, snapshots_mode, root),
+                );
+            },
+        );
+    }
+
+    #[test]
     fn local_server_environment_root_overrides_toml_and_the_requested_root() {
-        let data = tempfile::tempdir().unwrap();
         let config = config_file(
             "[filesystem_storage.mode]\ntype = \"Directory\"\n\
              [filesystem_storage.mode.config]\nroot = \"toml-agents\"\n\
              [filesystem_snapshots]\ntype = \"Disabled\"",
         );
-        let environment = figment::providers::Serialized::defaults(serde_json::json!({
-            "filesystem_storage": { "mode": { "config": { "root": "env-agents" } } }
-        }));
-        let (storage, snapshots) = super::prepare(
-            data.path(),
-            config.path(),
-            Some(std::path::Path::new("cli-agents")),
-            environment,
-        )
-        .unwrap();
-        assert_eq!(
-            storage.mode,
-            FilesystemStorageMode::Directory {
-                root: std::path::Path::new("env-agents").into(),
-            }
-        );
-        assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
-        assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
+        [LocalPlatform::MacOs, LocalPlatform::Other]
+            .into_iter()
+            .for_each(|platform| {
+                let data = tempfile::tempdir().unwrap();
+                let (storage, snapshots) = super::prepare_with_defaults(
+                    data.path(),
+                    config.path(),
+                    super::local_defaults(
+                        platform,
+                        Some(std::path::Path::new("cli-agents")),
+                        data.path(),
+                    ),
+                    no_environment(),
+                )
+                .unwrap();
+                assert_eq!(
+                    storage.mode,
+                    FilesystemStorageMode::Directory {
+                        root: std::path::Path::new("toml-agents").into(),
+                    }
+                );
+                assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
+                let environment = figment::providers::Serialized::defaults(serde_json::json!({
+                    "filesystem_storage": { "mode": { "config": { "root": "env-agents" } } }
+                }));
+                let (storage, snapshots) = super::prepare_with_defaults(
+                    data.path(),
+                    config.path(),
+                    super::local_defaults(
+                        platform,
+                        Some(std::path::Path::new("cli-agents")),
+                        data.path(),
+                    ),
+                    environment,
+                )
+                .unwrap();
+                assert_eq!(
+                    storage.mode,
+                    FilesystemStorageMode::Directory {
+                        root: std::path::Path::new("env-agents").into(),
+                    }
+                );
+                assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
+                assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
+            });
     }
 
     #[test]
     fn local_server_environment_can_disable_storage_and_snapshots_without_a_root_payload() {
-        let data = tempfile::tempdir().unwrap();
         let config = config_file(
             "[filesystem_storage.mode]\ntype = \"Apfs\"\n\
              [filesystem_snapshots]\ntype = \"Managed\"",
         );
-        let environment = figment::providers::Serialized::defaults(serde_json::json!({
-            "filesystem_storage": { "mode": { "type": "Temporary" } },
-            "filesystem_snapshots": { "type": "Disabled" }
-        }));
-        let (storage, snapshots) = super::prepare(
-            data.path(),
-            config.path(),
-            Some(std::path::Path::new("cli-agents")),
-            environment,
-        )
-        .unwrap();
-        assert_eq!(storage.mode, FilesystemStorageMode::Temporary);
-        assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
-        assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
+        [LocalPlatform::MacOs, LocalPlatform::Other]
+            .into_iter()
+            .for_each(|platform| {
+                let data = tempfile::tempdir().unwrap();
+                let environment = figment::providers::Serialized::defaults(serde_json::json!({
+                    "filesystem_storage": { "mode": { "type": "Temporary" } },
+                    "filesystem_snapshots": { "type": "Disabled" }
+                }));
+                let (storage, snapshots) = super::prepare_with_defaults(
+                    data.path(),
+                    config.path(),
+                    super::local_defaults(
+                        platform,
+                        Some(std::path::Path::new("cli-agents")),
+                        data.path(),
+                    ),
+                    environment,
+                )
+                .unwrap();
+                assert_eq!(storage.mode, FilesystemStorageMode::Temporary);
+                assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
+                assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
+            });
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn local_server_uses_defaults_when_config_file_is_absent() {
         let data = tempfile::tempdir().unwrap();
@@ -228,14 +350,18 @@ mod tests {
             .path()
             .join("absent-worker-executor.toml")
             .into_boxed_path();
-        let (storage, snapshots) =
-            super::prepare(data.path(), &config, None, no_environment()).unwrap();
+        let (storage, snapshots) = super::prepare_with_defaults(
+            data.path(),
+            &config,
+            super::local_defaults(LocalPlatform::Other, None, data.path()),
+            no_environment(),
+        )
+        .unwrap();
         assert_eq!(storage.mode, FilesystemStorageMode::Temporary);
         assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
         assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn local_server_mac_defaults_enable_apfs_and_keep_the_key() {
         let data = tempfile::tempdir().unwrap();
@@ -243,8 +369,13 @@ mod tests {
             .path()
             .join("absent-worker-executor.toml")
             .into_boxed_path();
-        let (storage, first) =
-            super::prepare(data.path(), &config, None, no_environment()).unwrap();
+        let (storage, first) = super::prepare_with_defaults(
+            data.path(),
+            &config,
+            super::local_defaults(LocalPlatform::MacOs, None, data.path()),
+            no_environment(),
+        )
+        .unwrap();
         assert_eq!(
             storage.mode,
             FilesystemStorageMode::Apfs {
@@ -254,7 +385,13 @@ mod tests {
         let FilesystemSnapshotsConfig::Managed(first) = first else {
             panic!("macOS local defaults must enable filesystem snapshots")
         };
-        let (_, second) = super::prepare(data.path(), &config, None, no_environment()).unwrap();
+        let (_, second) = super::prepare_with_defaults(
+            data.path(),
+            &config,
+            super::local_defaults(LocalPlatform::MacOs, None, data.path()),
+            no_environment(),
+        )
+        .unwrap();
         let FilesystemSnapshotsConfig::Managed(second) = second else {
             panic!("later starts must keep filesystem snapshots enabled")
         };
@@ -269,24 +406,123 @@ mod tests {
 
     #[test]
     fn local_server_uses_the_requested_agent_root() {
+        [LocalPlatform::MacOs, LocalPlatform::Other]
+            .into_iter()
+            .for_each(|platform| {
+                let data = tempfile::tempdir().unwrap();
+                let config = data
+                    .path()
+                    .join("absent-worker-executor.toml")
+                    .into_boxed_path();
+                let root = data.path().join("custom-agents").into_boxed_path();
+                let (storage, snapshots) = super::prepare_with_defaults(
+                    data.path(),
+                    &config,
+                    super::local_defaults(platform, Some(&root), data.path()),
+                    no_environment(),
+                )
+                .unwrap();
+                match platform {
+                    LocalPlatform::MacOs => {
+                        assert_eq!(storage.mode, FilesystemStorageMode::Apfs { root });
+                        assert!(matches!(snapshots, FilesystemSnapshotsConfig::Managed(_)));
+                    }
+                    LocalPlatform::Other => {
+                        assert_eq!(storage.mode, FilesystemStorageMode::Directory { root });
+                        assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
+                    }
+                }
+            });
+    }
+
+    #[test]
+    fn local_server_temporary_mode_rejects_an_explicit_root_payload() {
+        let config = config_file(
+            "[filesystem_storage.mode]\ntype = \"Apfs\"\n\
+             [filesystem_storage.mode.config]\nroot = \"toml-agents\"\n\
+             [filesystem_snapshots]\ntype = \"Managed\"",
+        );
+        [LocalPlatform::MacOs, LocalPlatform::Other]
+            .into_iter()
+            .for_each(|platform| {
+                let data = tempfile::tempdir().unwrap();
+                let environment = figment::providers::Serialized::defaults(serde_json::json!({
+                    "filesystem_storage": { "mode": { "type": "Temporary" } },
+                    "filesystem_snapshots": { "type": "Disabled" }
+                }));
+                let error = super::prepare_with_defaults(
+                    data.path(),
+                    config.path(),
+                    super::local_defaults(
+                        platform,
+                        Some(std::path::Path::new("cli-agents")),
+                        data.path(),
+                    ),
+                    environment,
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains("filesystem_storage"));
+                assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
+            });
+    }
+
+    #[test]
+    fn local_server_mac_root_default_applies_to_an_explicit_rooted_mode() {
         let data = tempfile::tempdir().unwrap();
-        let config = data
-            .path()
-            .join("absent-worker-executor.toml")
-            .into_boxed_path();
-        let root = data.path().join("custom-agents").into_boxed_path();
-        let (storage, snapshots) =
-            super::prepare(data.path(), &config, Some(&root), no_environment()).unwrap();
-        #[cfg(target_os = "macos")]
-        {
-            assert_eq!(storage.mode, FilesystemStorageMode::Apfs { root });
-            assert!(matches!(snapshots, FilesystemSnapshotsConfig::Managed(_)));
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            assert_eq!(storage.mode, FilesystemStorageMode::Directory { root });
-            assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
-        }
+        let config = config_file(
+            "[filesystem_storage.mode]\ntype = \"Directory\"\n\
+             [filesystem_snapshots]\ntype = \"Disabled\"",
+        );
+        let (storage, snapshots) = super::prepare_with_defaults(
+            data.path(),
+            config.path(),
+            super::local_defaults(LocalPlatform::MacOs, None, data.path()),
+            no_environment(),
+        )
+        .unwrap();
+        assert_eq!(
+            storage.mode,
+            FilesystemStorageMode::Directory {
+                root: data.path().join("agents").into_boxed_path(),
+            }
+        );
+        assert!(matches!(snapshots, FilesystemSnapshotsConfig::Disabled(_)));
+        assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn local_server_other_rooted_mode_requires_a_root_before_snapshot_validation() {
+        let config = config_file(
+            "[filesystem_storage.mode]\ntype = \"Directory\"\n\
+             [filesystem_storage.mode.config]\n\
+             [filesystem_snapshots]\ntype = \"Managed\"\n\
+             [filesystem_snapshots.config]\nsave_threads = 0",
+        );
+        [false, true].into_iter().for_each(|has_kept_key| {
+            let root = tempfile::tempdir().unwrap();
+            let data = root.path().join("data").into_boxed_path();
+            let key = data.join(super::KEY_FILE).into_boxed_path();
+            if has_kept_key {
+                std::fs::create_dir(&data).unwrap();
+                std::fs::write(&key, b"corrupt retained key").unwrap();
+            }
+            let error = super::prepare_with_defaults(
+                &data,
+                config.path(),
+                super::local_defaults(LocalPlatform::Other, None, &data),
+                no_environment(),
+            )
+            .unwrap_err();
+            let message = error.to_string().into_boxed_str();
+            assert!(message.contains("filesystem_storage"));
+            assert!(message.contains("root"));
+            assert!(!message.contains("save_threads"));
+            if has_kept_key {
+                assert!(std::fs::read(&key).unwrap() == b"corrupt retained key");
+            } else {
+                assert!(!data.exists());
+            }
+        });
     }
 
     #[test]

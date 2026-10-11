@@ -1490,14 +1490,12 @@ fn create_capability_copy_parent<'a>(
                 let child = parent
                     .as_dir()
                     .create_dir(component)
-                    .and_then(|()| parent.as_dir().open_dir_nofollow(component))
-                    .and_then(|child| {
-                        tree_copy::sync_seed_directory(transfer, &child).map(|()| child)
-                    });
-                // The parent may have changed even if opening or syncing the new child failed.
-                let synced = tree_copy::sync_seed_directory(transfer, parent.as_dir());
-                parent =
-                    CapabilityCopyParent::Owned(child.and_then(|child| synced.map(|()| child))?);
+                    .and_then(|()| parent.as_dir().open_dir_nofollow(component));
+                parent = CapabilityCopyParent::Owned(tree_copy::finish_seed_ancestor(
+                    transfer,
+                    child,
+                    parent.as_dir(),
+                )?);
             }
             Err(error) => return Err(error),
         }
@@ -1608,17 +1606,12 @@ impl<'a> CapabilityTempFile<'a> {
             Err(error) => Some(Err(error)),
         })
         .expect("an unbounded clone-name iterator must return a result")?;
-        match directory.open(&name) {
-            Ok(file) => Ok(Self {
-                directory,
-                name: Some(name),
-                file,
-            }),
-            Err(error) => {
-                directory.remove_file(&name)?;
-                Err(error)
-            }
-        }
+        let file = open_cloned_file(|| directory.open(&name), || directory.remove_file(&name))?;
+        Ok(Self {
+            directory,
+            name: Some(name),
+            file,
+        })
     }
 
     fn as_file(&self) -> &cap_std::fs::File {
@@ -1629,7 +1622,13 @@ impl<'a> CapabilityTempFile<'a> {
         &mut self.file
     }
 
-    fn persist_noclobber(mut self, destination: &Path) -> std::io::Result<()> {
+    fn cleanup(&mut self) -> std::io::Result<()> {
+        self.name
+            .take()
+            .map_or(Ok(()), |name| self.directory.remove_file(name))
+    }
+
+    fn persist_noclobber(&mut self, destination: &Path) -> std::io::Result<()> {
         let name = self
             .name
             .as_ref()
@@ -1643,7 +1642,7 @@ impl<'a> CapabilityTempFile<'a> {
 
     /// Gives the file the name `destination`, in place of what is at that name, as
     /// [`tree_copy::clear_for_replacement`] decides.
-    fn persist_replacing(mut self, destination: &Path) -> std::io::Result<()> {
+    fn persist_replacing(&mut self, destination: &Path) -> std::io::Result<()> {
         let name = self
             .name
             .as_ref()
@@ -1655,11 +1654,14 @@ impl<'a> CapabilityTempFile<'a> {
     }
 }
 
-impl Drop for CapabilityTempFile<'_> {
-    fn drop(&mut self) {
-        if let Some(name) = self.name.take() {
-            let _ = self.directory.remove_file(name);
-        }
+#[cfg(any(target_os = "macos", test))]
+fn open_cloned_file(
+    open: impl FnOnce() -> std::io::Result<cap_std::fs::File>,
+    remove: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<cap_std::fs::File> {
+    match open() {
+        Ok(file) => Ok(file),
+        Err(error) => tree_copy::finish_seed(Err(error), remove),
     }
 }
 
@@ -1821,6 +1823,28 @@ mod tests {
     use super::*;
     use test_r::test;
 
+    #[test]
+    fn a_clone_open_error_precedes_a_temporary_removal_error() {
+        let removed = std::cell::Cell::new(false);
+        let result = open_cloned_file(
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "open cloned file",
+                ))
+            },
+            || {
+                removed.set(true);
+                Err(std::io::Error::other("remove cloned file"))
+            },
+        );
+
+        assert!(removed.get(), "the failed clone open must attempt cleanup");
+        let error = result.expect_err("opening the clone failed");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "open cloned file");
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn unix_storage_errors_are_terminal_only_when_the_storage_is_unavailable() {
@@ -1848,7 +1872,8 @@ mod tests {
                 FilesystemStorageMode::Temporary,
                 FilesystemStorageMode::Directory { root: root.clone() },
                 FilesystemStorageMode::ManagedXfs { root: root.clone() },
-                FilesystemStorageMode::ReflinkXfs { root },
+                FilesystemStorageMode::ReflinkXfs { root: root.clone() },
+                FilesystemStorageMode::Apfs { root },
             ]
             .iter()
             .map(storage_facts)
@@ -1864,6 +1889,7 @@ mod tests {
                     AgentAccounting::Unaccounted,
                     HostDirectoryCheck::NoXfsProject
                 ),
+                (AgentAccounting::Unaccounted, HostDirectoryCheck::None),
             ]
         );
     }
@@ -1966,12 +1992,16 @@ mod tests {
         });
     }
 
-    /// A volume on a copy-on-write root, for the rules that read only the mode of the volume.
-    #[cfg(target_os = "linux")]
+    /// A synthetic copy-on-write volume for the rules that read only its mode.
     fn copy_on_write_volume() -> FilesystemVolume {
-        let directory = tempfile::tempdir().unwrap();
-        let root = File::open(directory.path()).unwrap();
-        FilesystemVolume::copy_on_write(Arc::new(root), FilesystemIdentity { device: 1 })
+        let file = tempfile::NamedTempFile::new().unwrap();
+        FilesystemVolume {
+            mode: FilesystemVolumeMode::CopyOnWrite {
+                root: Arc::new(file.reopen().unwrap()),
+                #[cfg(target_os = "linux")]
+                identity: FilesystemIdentity { device: 1 },
+            },
+        }
     }
 
     #[test]
@@ -1986,7 +2016,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_copy_on_write_volume_mode_states_its_facts() {
         assert_eq!(
@@ -1999,7 +2028,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn storage_profile_follows_the_volume() {
         assert_eq!(
@@ -2017,13 +2045,11 @@ mod tests {
         assert!(!FilesystemVolume::unmanaged_development().copies_on_write());
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_copy_on_write_volume_makes_copy_on_write_copies() {
         assert!(copy_on_write_volume().copies_on_write());
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn file_copy_mode_follows_the_volume() {
         assert_eq!(
