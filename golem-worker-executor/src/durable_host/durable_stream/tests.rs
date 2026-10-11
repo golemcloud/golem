@@ -25,7 +25,7 @@ use super::{
     StreamAttachmentState, StreamSegmentSource, StreamStoreError,
 };
 use crate::services::oplog::{
-    CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
+    CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogOps, OplogReadSource,
     OrderedOplogStart, PendingUpload, RawDurableStreamSessionStatus, checked_range_end,
     exact_from_source, fail_stop,
 };
@@ -1464,7 +1464,10 @@ fn consumer_item_record(
     packed_u8: bool,
 ) -> StreamSessionRecord {
     StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        reobserves: None,
+        format_version:
+            golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
         session_key,
         reader_id,
         source_offset,
@@ -1618,6 +1621,140 @@ fn consumer_journal_validates_terminal_order_and_duplicate_overlay_ordinal() {
         ),
         Err(StreamStoreError::ConsumerJournalAdvanced)
     );
+}
+
+#[test]
+async fn consumer_reobservation_retains_progress_and_nested_reader_identity() {
+    use crate::durable_host::durable_session::StreamSession;
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+
+    let owner = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let live = producer(oplog.clone(), &owner, None).await;
+    let handle = registered_stream(
+        OplogIndex::from_u64(5),
+        owner.environment_id,
+        owner.agent_id.clone(),
+        owner.fingerprint,
+        root_registration(&owner),
+    )
+    .handle;
+    let root = StreamBindingRecord::foreign(&StreamSessionMappingRecord {
+        transport_stream_id: 7,
+        handle: handle.clone(),
+        role: SessionStreamRole::Input,
+    });
+    let nested = StreamBindingRecord::foreign(&StreamSessionMappingRecord {
+        transport_stream_id: 19,
+        handle,
+        role: SessionStreamRole::Input,
+    });
+    let reference = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key.clone());
+    live.append_session_record(
+        None,
+        StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: reference.clone(),
+            mapping: root,
+        }),
+    )
+    .await
+    .unwrap();
+    let reader = LocalStreamReaderId {
+        introducing_oplog_index: oplog.current_oplog_index().await,
+        binding_slot: 0,
+    };
+    let mut original = consumer_item_record(
+        reference.clone(),
+        reader,
+        StreamOffset::new(OplogIndex::from_u64(31), 0),
+        0,
+        vec![173],
+        false,
+    );
+    let StreamSessionRecord::ConsumerItemValue(item) = &mut original else {
+        unreachable!()
+    };
+    item.observation = StreamConsumerObservation::Guest {
+        parent_start_index: None,
+    };
+    item.recursive_mappings.push(nested.clone());
+    live.append_session_record(None, original.clone())
+        .await
+        .unwrap();
+    let original_index = oplog.current_oplog_index().await;
+    let mut replacement = original.clone();
+    let StreamSessionRecord::ConsumerItemValue(item) = &mut replacement else {
+        unreachable!()
+    };
+    item.reobserves = Some(original_index);
+    item.observation = StreamConsumerObservation::Guest {
+        parent_start_index: Some(OplogIndex::from_u64(42)),
+    };
+    live.append_session_record(None, replacement.clone())
+        .await
+        .unwrap();
+    let horizon = oplog.current_oplog_index().await;
+    let mut mismatch = replacement.clone();
+    let StreamSessionRecord::ConsumerItemValue(item) = &mut mismatch else {
+        unreachable!()
+    };
+    item.value = vec![29];
+    assert!(matches!(
+        live.append_session_record(None, mismatch.clone()).await,
+        Err(StreamStoreError::CorruptHistory(_))
+    ));
+    assert_eq!(oplog.current_oplog_index().await, horizon);
+    drop(live);
+
+    let recovered = producer(oplog.clone(), &owner, None).await;
+    let streams = StreamSession::new(recovered.clone(), oplog.clone(), reference, []);
+    let control = streams.current_control_metadata().await.unwrap();
+    assert_eq!(
+        control.reader_id(&nested).unwrap(),
+        LocalStreamReaderId {
+            introducing_oplog_index: original_index,
+            binding_slot: 0,
+        }
+    );
+    drop(control);
+    let keys = ProducerMetadataKey::session_record(
+        &replacement,
+        owner.environment_id,
+        &owner.agent_id,
+        owner.fingerprint,
+    );
+    let index = recovered.index_for(keys).await.unwrap();
+    let progress = &index.consumer_journals[&(owner.invocation.clone(), reader)];
+    assert_eq!(progress.next_read_ordinal, 1);
+    assert_eq!(
+        progress.last_source_offset,
+        Some(StreamOffset::new(OplogIndex::from_u64(31), 0))
+    );
+    drop(index);
+
+    let payload = oplog.upload_payload(&mismatch).await.unwrap();
+    oplog
+        .add(OplogEntry::stream_session(
+            None,
+            payload,
+            golem_common::model::oplog::DurableStreamEventSummary::session(&mismatch),
+        ))
+        .await
+        .unwrap();
+    drop(streams);
+    drop(recovered);
+    assert!(matches!(
+        DurableStreamStore::load(
+            oplog,
+            owner.environment_id,
+            owner.agent_id,
+            owner.fingerprint,
+            None
+        )
+        .await,
+        Err(StreamStoreError::CorruptHistory(_))
+    ));
 }
 
 #[test]
@@ -3350,6 +3487,99 @@ async fn cascade_retries_after_overlay_commit_before_outbox_commit() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn reobserved_input_allows_source_loss_overlay() {
+    let source_identity = identity();
+    let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
+    let handle = source
+        .register(None, root_registration(&source_identity))
+        .await
+        .unwrap()
+        .value;
+    let offsets = source
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7, 8]),
+        )
+        .await
+        .unwrap()
+        .value;
+    let key = attachment_key(&source_identity, handle.stream_id);
+    let consumer_identity = TestIdentity {
+        environment_id: key.consumer_environment_id,
+        agent_id: key.consumer.clone(),
+        fingerprint: key.expected_consumer_fingerprint,
+        invocation: key.consumer_invocation.clone(),
+    };
+    let consumer = producer(Arc::new(TestOplog::default()), &consumer_identity, None).await;
+    let reference = StreamRegistrationInvocation::Local(key.session_key.idempotency_key.clone());
+    consumer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: reference.clone(),
+                mapping: StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: StreamRecordReference::Foreign(handle),
+                    role: SessionStreamRole::Input,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+    let reader_id = LocalStreamReaderId {
+        introducing_oplog_index: consumer.oplog.current_oplog_index().await,
+        binding_slot: 0,
+    };
+    let mut record = consumer_item_record(reference, reader_id, offsets[0], 0, vec![7], true);
+    let StreamSessionRecord::ConsumerItemValue(item) = &mut record else {
+        unreachable!()
+    };
+    item.observation = golem_common::model::durable_stream::StreamConsumerObservation::Guest {
+        parent_start_index: None,
+    };
+    consumer
+        .append_session_record(None, record.clone())
+        .await
+        .unwrap();
+    let original_index = consumer.oplog.current_oplog_index().await;
+    consumer
+        .oplog
+        .add(OplogEntry::Jump {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            jump: golem_common::model::regions::OplogRegion::from_range(
+                original_index.as_u64()..=original_index.as_u64(),
+            ),
+        })
+        .await
+        .unwrap();
+    let StreamSessionRecord::ConsumerItemValue(item) = &mut record else {
+        unreachable!()
+    };
+    item.reobserves = Some(original_index);
+    consumer.append_session_record(None, record).await.unwrap();
+    let result = consumer
+        .commit_source_unavailable_overlay(None, key.clone(), reader_id, offsets[1], 1)
+        .await;
+    assert_eq!(
+        result,
+        Ok(false),
+        "a replacement physical observation does not advance logical consumer input"
+    );
+    assert_eq!(
+        consumer
+            .consumer_source_unavailable(&key, reader_id)
+            .await
+            .unwrap(),
+        Some(offsets[1])
+    );
+}
+
+#[test]
 async fn source_unavailable_and_consumer_journal_append_are_serialized() {
     let source_identity = identity();
     let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
@@ -3398,7 +3628,10 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
         binding_slot: 0,
     };
     let first_item = StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        reobserves: None,
+        format_version:
+            golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
         session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key.clone()),
         reader_id,
         source_offset: offsets[0],
@@ -3457,7 +3690,9 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
             .append_session_record(
                 None,
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    reobserves: None,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                     session_key: StreamRegistrationInvocation::Local(
                         key.session_key.idempotency_key,
                     ),
@@ -3862,7 +4097,9 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
             None,
             StreamSessionRecord::ConsumerTerminal(
                 golem_common::model::durable_stream::StreamConsumerTerminalRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    reobserves: None,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                     session_key: StreamRegistrationInvocation::Local(
                         identity.invocation.idempotency_key,
                     ),

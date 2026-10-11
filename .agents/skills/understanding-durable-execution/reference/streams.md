@@ -273,13 +273,39 @@ A restarted producer likewise rebuilds from its own oplog and resumes after its 
 sequence.
 
 `DurableInputEndpoint` owns the consumer reader, replay queue, packed-byte buffering and read
-ordinal. It journals and commits a received item before returning `DurableInputRead`; completing
-that read restores its source and advances the ordinal. Its `StreamSession` supplies binding-local
+ordinal. Host projections journal and commit at take time; guest reads return a pending
+observation for the native adapter to record at consumption. Completing a read restores its
+source and advances the ordinal. Its `StreamSession` supplies binding-local
 mapping and cancellation policy. `DurableInputProducer` is the Wasmtime adapter: it polls reads,
 converts values and handles guest-drop cleanup. Read futures and cancellation futures have
 different result types; cancellation does not manufacture a read result. Before any read, the
 endpoint may instead be consumed as `ForwardedDurableInput`, preserving the original foreign
 handle and avoiding attachment to the intermediary.
+
+Native guest reads record one `ConsumerItemValue` or `ConsumerTerminal` at Wasmtime's per-read
+consumption observer. The observer synchronously reserves the oplog position with `enqueue_add`,
+then owned work commits and indexes the record under producer admission. Its position is the
+guest boundary: replay retains the reconstructed item there until the observer acknowledges
+synchronous return, waitable delivery or callback. These records remain hints and satisfy no claim.
+There is no extra durable call or delivery marker. Packed byte records contain only the bytes
+the guest read consumed; later reads record the remainder. A crash between host take and guest
+consumption leaves no consumer record, so restart re-reads the source by offset. Nested reader
+identities resolve from the parent's assigned journal index before indexing or forwarding proceeds.
+Store teardown abandons observation rather than recording guest cancellation. Zero-capacity
+readiness reads consume no source item and record nothing. Host projections retain take-time
+journaling and batching. Their records are skippable hints, distinguished from guest observations
+by the consumer discriminant rather than the source binding.
+
+Atomic rollback retains the logical consumer input. If a `Jump` deleted its physical observation,
+the re-executed read records a replacement boundary with `reobserves` referencing the original.
+Append and replay validate identical logical content. Consumer progress advances only for the
+original record, and nested reader identities retain its introducing index; replacement records
+introduce no readers. Each re-executed read adds one physical boundary, not another logical item.
+
+Cancellation replay has an open limit: the adapter does not reconstruct the canonical
+inline-versus-blocked cancellation return disposition. When cancellation cannot retain a
+recorded guest delivery, it reports `UnexpectedOplogEntry` and poisons replay instead of
+discarding the value. The runtime does not force always-blocked cancellation.
 
 Producer identity is checked wherever a durable stream identity crosses a boundary:
 `validate_forwarded_mapping` (`durable_session.rs`) requires the attachment's session key,
@@ -423,6 +449,12 @@ data/control pair or control-only checkpoint. Partial bodies and SSE data withou
 advance the checkpoint. The SDK retains the pending batch and item/byte index and fetches again
 only after draining it. `now` is resolved once by catch-up. Up-to-date and empty results are not
 EOF; only the closed flag ends a stream, after delivering the final payload. HTTP 410 is an error.
+HTTP `Stream-Closed` is set only by case-insensitive `true`; other textual values, including
+empty, are unset. Duplicate, non-textual and oversized headers remain protocol errors.
+`Stream-Up-To-Date` retains its separate strict flag parser. Golem gateway stream and session
+metadata responses emit `Stream-Closed: true` when applicable and otherwise omit it; session
+manifest `closed` fields remain JSON booleans. Successful SSE reads use JSON control flags,
+not the HTTP flag parser.
 
 Append `Start` records the resource ID, exact sequence, payload and close flag; the writer
 descriptor supplies the producer ID and epoch. JSON values

@@ -1,0 +1,114 @@
+---
+import { Code } from "astro:components";
+import { artifacts } from "../data/homepage";
+
+const { eyebrow, heading, leadHtml, points, filename, snippet } = artifacts;
+---
+
+<section class="artifacts">
+  <div class="container">
+    <header class="art-header">
+      <span class="eyebrow">{eyebrow}</span>
+      <h2 class="section-heading">{heading}</h2>
+      <p class="art-lead" set:html={leadHtml} />
+    </header>
+
+    <div class="art-inner">
+      <ul class="art-points">
+        {
+          points.map((pt) => (
+            <li>
+              <h3>{pt.title}</h3>
+              <p>{pt.body}</p>
+            </li>
+          ))
+        }
+      </ul>
+
+      <div class="art-code">
+        <div class="art-code-header">
+          <span class="mono">{filename}</span>
+        </div>
+        <Code code={snippet} lang="typescript" theme="github-dark-default" />
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .artifacts {
+    padding: 5rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .art-header {
+    margin-bottom: 2.25rem;
+  }
+  .art-lead {
+    font-size: 1.02rem;
+    line-height: 1.6;
+    max-width: 62ch;
+  }
+  .art-inner {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2rem;
+    align-items: start;
+  }
+  @media (min-width: 960px) {
+    .art-inner {
+      grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+      gap: 3rem;
+    }
+  }
+  .art-points {
+    list-style: none;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.1rem 1.75rem;
+  }
+  @media (min-width: 640px) {
+    .art-points {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  .art-points li {
+    border-top: 1px solid var(--border);
+    padding-top: 0.9rem;
+  }
+  .art-points h3 {
+    font-size: 1rem;
+    margin-bottom: 0.3rem;
+    letter-spacing: -0.005em;
+  }
+  .art-points p {
+    font-size: 0.92rem;
+    line-height: 1.55;
+  }
+  .art-code {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--code-bg);
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  }
+  .art-code-header {
+    padding: 0.55rem 0.9rem;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+  .art-code :global(pre.astro-code) {
+    border: 0 !important;
+    border-radius: 0 !important;
+    margin: 0;
+    background: var(--code-bg) !important;
+    padding: 1.2rem 1.4rem !important;
+  }
+  @media (max-width: 480px) {
+    .art-code :global(pre.astro-code) {
+      font-size: 0.78rem;
+      padding: 1rem !important;
+    }
+  }
+</style>

@@ -218,6 +218,9 @@ enum ReplayTransitionPhase {
     Live = 2,
 }
 
+type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
+type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
+
 /// The shared replay cursor: the position reached in the oplog, the target it replays up to, and
 /// every piece of state mutated while advancing it.
 ///
@@ -246,6 +249,9 @@ struct ReplayCursor {
     /// cancels the completion after its delivery marker was consumed). Every subsequent cursor
     /// transaction fails with this same deterministic replay error.
     delivery_failure: std::sync::Mutex<Option<String>>,
+    /// Guest-consumed journal positions, with their durable scope owner. Host projections are
+    /// ordinary hints; guest records reserve the cursor until the native read observer fires.
+    stream_observations: std::sync::Mutex<StreamObservationPositions>,
     /// Published cursor position. Lock-free reads; writes happen only through a held [`CursorTx`].
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
@@ -283,7 +289,7 @@ struct ReplayCursor {
     /// A `std` mutex (like `log_hashes`) rather than part of [`CursorState`]: the live marker
     /// recorder is an owned tokio task that must not queue on the cursor lock, and all accesses
     /// are short synchronous map operations that never hold the lock across an `await`.
-    completion_markers: std::sync::Mutex<HashMap<OplogIndex, CompletionMarker>>,
+    completion_markers: std::sync::Mutex<CompletionMarkers>,
     /// Hashes of log entries persisted since the last read non-hint oplog entry, with their
     /// number of occurrences. A counted multiset (not a set) because large or repetitive
     /// stdout/stderr output regularly produces identical consecutive log entries, each of which
@@ -326,13 +332,11 @@ pub(super) enum CompletionMarker {
     Discarded(OplogIndex),
 }
 
-/// Ownership of the global replay cursor gate after the matching `CompletionDelivered` marker has
-/// been consumed. The guard is acknowledged only at the same guest-facing boundary that recorded
-/// the marker live; until then every later cursor transaction remains blocked.
+/// Ownership of the cursor gate after a guest observation record has been consumed. Only its
+/// actual guest boundary may acknowledge it; later cursor transactions remain blocked until then.
 pub(in crate::durable_host) struct ReplayDeliveryBarrier {
     replay_state: ReplayState,
-    start_index: OplogIndex,
-    marker_index: OplogIndex,
+    boundary: String,
     gate: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
@@ -345,8 +349,21 @@ impl ReplayDeliveryBarrier {
     ) -> Self {
         Self {
             replay_state,
-            start_index,
-            marker_index,
+            boundary: format!(
+                "CompletionDelivered at {marker_index} for durable call Start at {start_index}"
+            ),
+            gate: Some(gate),
+        }
+    }
+
+    fn for_stream(
+        replay_state: ReplayState,
+        index: OplogIndex,
+        gate: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Self {
+        Self {
+            replay_state,
+            boundary: format!("consumer stream observation at {index}"),
             gate: Some(gate),
         }
     }
@@ -358,9 +375,8 @@ impl ReplayDeliveryBarrier {
 
     pub(in crate::durable_host) fn fail(mut self, reason: impl Into<String>) {
         self.replay_state.record_delivery_failure(format!(
-            "replay could not reproduce CompletionDelivered at {} for durable call Start at {}: {}",
-            self.marker_index,
-            self.start_index,
+            "replay could not reproduce {}: {}",
+            self.boundary,
             reason.into()
         ));
         self.gate.take();
@@ -372,8 +388,8 @@ impl Drop for ReplayDeliveryBarrier {
     fn drop(&mut self) {
         if self.gate.is_some() {
             self.replay_state.record_delivery_failure(format!(
-                "replay delivery barrier for CompletionDelivered at {} and durable call Start at {} was dropped before the recorded guest-delivery boundary",
-                self.marker_index, self.start_index
+                "replay delivery barrier for {} was dropped before the recorded guest-delivery boundary",
+                self.boundary
             ));
             self.gate.take();
             self.replay_state.cursor.progress.notify_waiters();

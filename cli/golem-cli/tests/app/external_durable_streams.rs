@@ -384,6 +384,246 @@ async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
 
 #[test]
 #[timeout("10 minutes")]
+async fn external_durable_streams_golem_gateway_e2e() {
+    let mut ctx = TestContext::new();
+    for name in ["external-durable-streams", "agent-sdk-rust"] {
+        let fixture = workspace_path().join(format!(
+            "test-components/golem_it_{}_release.wasm",
+            name.replace('-', "_")
+        ));
+        assert!(
+            fixture.is_file(),
+            "build test-components/{name} before running this test"
+        );
+        fs::copy(&fixture, ctx.cwd_path_join(format!("{name}.wasm"))).unwrap();
+    }
+    ctx.start_server().await;
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: external-durable-streams-gateway
+        environments:
+          local:
+            server: local
+        components:
+          golem-it:external-durable-streams:
+            componentWasm: external-durable-streams.wasm
+            outputWasm: external-durable-streams-final.wasm
+          golem-it:agent-sdk-rust:
+            componentWasm: agent-sdk-rust.wasm
+            outputWasm: agent-sdk-rust-final.wasm
+        httpApi:
+          deployments:
+            local:
+              - domain: localhost:{port}
+                agents:
+                  DurableStreamAgent: {{}}
+    "#, version = versions::sdk::MANIFEST, port = ctx.custom_request_port()},
+    )
+    .unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let origin = format!("http://localhost:{}", ctx.custom_request_port());
+
+    for transport in ["catch-up", "long-poll"] {
+        let session =
+            format!("{origin}/durable-stream-agents/{transport}/echo/invocations/session");
+        let input = format!("{session}/streams/input");
+        let output = format!("{session}/streams/output");
+        let created = client.put(&input).send().await.unwrap();
+        assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+        assert!(!created.headers().contains_key("stream-closed"));
+        for method in [reqwest::Method::HEAD, reqwest::Method::GET] {
+            let metadata = client
+                .request(method.clone(), &session)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(metadata.status(), reqwest::StatusCode::OK);
+            assert!(!metadata.headers().contains_key("stream-closed"));
+            if method == reqwest::Method::GET {
+                assert_eq!(metadata.json::<Value>().await.unwrap()["closed"], false);
+            }
+        }
+        let appended: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            &format!("writer-{transport}"),
+            "append_json",
+            vec![
+                json!(input),
+                json!("open-producer"),
+                json!(["\"open\""]),
+                json!(false),
+            ],
+        )
+        .await;
+        assert!(appended.unwrap()[0].is_some());
+        // A bounded guest read returns data before closure. Returning early as EOF
+        // would lose the item; waiting for EOF would time out this invocation.
+        let open: Result<Vec<String>, String> = invoke(
+            &ctx,
+            &format!("open-reader-{transport}"),
+            "consume_json",
+            vec![json!(input), json!("-1"), json!(transport), json!(1)],
+        )
+        .await;
+        assert_eq!(open.unwrap(), ["\"open\""]);
+        let head = client.head(&input).send().await.unwrap();
+        assert_eq!(head.status(), reqwest::StatusCode::OK);
+        assert!(!head.headers().contains_key("stream-closed"));
+        let offset = head.headers()["stream-next-offset"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        let closed: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            &format!("closer-{transport}"),
+            "append_json",
+            vec![
+                json!(input),
+                json!("close-producer"),
+                json!([]),
+                json!(true),
+            ],
+        )
+        .await;
+        assert!(closed.unwrap()[0].is_some());
+        // The limit exceeds the item count, so these calls must observe EOF.
+        let eof: Result<Vec<String>, String> = invoke(
+            &ctx,
+            &format!("eof-reader-{transport}"),
+            "consume_json",
+            vec![json!(input), json!(offset), json!(transport), json!(100)],
+        )
+        .await;
+        assert!(eof.unwrap().is_empty());
+        let echoed: Result<Vec<String>, String> = invoke(
+            &ctx,
+            &format!("output-reader-{transport}"),
+            "consume_json",
+            vec![json!(output), json!("-1"), json!(transport), json!(100)],
+        )
+        .await;
+        assert_eq!(echoed.unwrap(), ["\"open\""]);
+        let metadata = client.head(&session).send().await.unwrap();
+        assert_eq!(metadata.status(), reqwest::StatusCode::OK);
+        assert_eq!(metadata.headers()["stream-closed"], "true");
+        let manifest = client.get(&session).send().await.unwrap();
+        assert_eq!(manifest.headers()["stream-closed"], "true");
+        assert_eq!(manifest.json::<Value>().await.unwrap()["closed"], true);
+    }
+
+    // Forward real gateway responses unchanged. Observe a live request before
+    // appending, and its data response before closing, not the initial catch-up.
+    let (responses, mut observed) = tokio::sync::mpsc::unbounded_channel();
+    let gateway = origin.clone();
+    let forwarder = client.clone();
+    let proxy = axum::Router::new().fallback(move |request: axum::extract::Request| {
+        let responses = responses.clone();
+        let gateway = gateway.clone();
+        let forwarder = forwarder.clone();
+        async move {
+            let long_poll = request
+                .uri()
+                .query()
+                .is_some_and(|query| query.split('&').any(|part| part == "live=long-poll"));
+            if long_poll {
+                let _ = responses.send(None);
+            }
+            let mut headers = request.headers().clone();
+            headers.remove(reqwest::header::HOST);
+            let response = forwarder
+                .get(format!("{gateway}{}", request.uri()))
+                .headers(headers)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response.bytes().await.unwrap();
+            if long_poll && status.is_success() && !headers.contains_key("stream-closed") {
+                let _ = responses.send(Some((status, body.clone())));
+            }
+            let mut response = axum::response::Response::new(axum::body::Body::from(body));
+            *response.status_mut() = status;
+            *response.headers_mut() = headers;
+            response
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let proxy_task = tokio::spawn(async move { axum::serve(listener, proxy).await.unwrap() });
+    let path = "/durable-stream-agents/live/echo/invocations/session/streams/input";
+    let input = format!("{origin}{path}");
+    assert_eq!(
+        client.put(&input).send().await.unwrap().status(),
+        reqwest::StatusCode::CREATED
+    );
+    let proxy_input = format!("http://127.0.0.1:{port}{path}");
+    let read = invoke::<Result<Vec<String>, String>>(
+        &ctx,
+        "live-reader",
+        "consume_json",
+        vec![
+            json!(proxy_input),
+            json!("-1"),
+            json!("long-poll"),
+            json!(100),
+        ],
+    );
+    let write = async {
+        let started = tokio::time::timeout(Duration::from_secs(30), observed.recv())
+            .await
+            .expect("guest did not send a long-poll request")
+            .unwrap();
+        assert!(started.is_none());
+        let appended: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            "live-writer",
+            "append_json",
+            vec![
+                json!(input),
+                json!("live-producer"),
+                json!(["\"live\""]),
+                json!(false),
+            ],
+        )
+        .await;
+        assert!(appended.unwrap()[0].is_some());
+        let (status, body) = tokio::time::timeout(Duration::from_secs(30), observed.recv())
+            .await
+            .expect("guest did not read the append through long-poll while open")
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, reqwest::StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!(["live"])
+        );
+        let closed: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            "live-closer",
+            "append_json",
+            vec![
+                json!(input),
+                json!("live-close-producer"),
+                json!([]),
+                json!(true),
+            ],
+        )
+        .await;
+        assert!(closed.unwrap()[0].is_some());
+    };
+    let (read, ()) = tokio::join!(read, write);
+    assert_eq!(read.unwrap(), ["\"live\""]);
+    proxy_task.abort();
+    let _ = proxy_task.await;
+}
+
+#[test]
+#[timeout("10 minutes")]
 async fn external_durable_streams_reference_server_e2e() {
     let fixture =
         workspace_path().join("test-components/golem_it_external_durable_streams_release.wasm");

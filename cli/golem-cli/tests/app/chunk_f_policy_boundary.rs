@@ -16,6 +16,7 @@ fn prepare_fixture(ctx: &mut TestContext) {
     ctx.cd(FIXTURE);
 
     let sdk = workspace_path().join("sdks/rust/golem-rust");
+    ctx.add_env_var("GOLEM_RUST_PATH", sdk.to_str().unwrap());
     for component in ["provider", "caller"] {
         let manifest = ctx.cwd_path_join(format!("{component}/Cargo.toml"));
         let contents = std::fs::read_to_string(&manifest).unwrap();

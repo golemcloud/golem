@@ -186,7 +186,7 @@ pub(super) fn emit(
             )],
             false,
         );
-        r["200"]["headers"] = json!({"Stream-Closed": header("All slots closed or deleted", json!({"type":"boolean"})), "Cache-Control": header("Session metadata is not cached", string_schema())});
+        r["200"]["headers"] = json!({"Stream-Closed": header("Present as true only when all slots are closed or deleted; otherwise omitted", json!({"type":"string","enum":["true"]})), "Cache-Control": header("Session metadata is not cached", string_schema())});
         if method == "head" {
             add_expiry_response_headers(&mut r["200"]["headers"]);
         }
@@ -237,7 +237,7 @@ pub(super) fn emit(
     fork_parameters.push(path_parameter(&fork_name, reference(SESSION)));
     for method in ["get", "head"] {
         let mut r = responses(&[("200", "Fork manifest and immutable fork point")], false);
-        r["200"]["headers"] = json!({"Stream-Closed": header("All slots closed or deleted", json!({"type":"boolean"})), "Cache-Control": header("Session metadata is not cached", string_schema())});
+        r["200"]["headers"] = json!({"Stream-Closed": header("Present as true only when all slots are closed or deleted; otherwise omitted", json!({"type":"string","enum":["true"]})), "Cache-Control": header("Session metadata is not cached", string_schema())});
         if method == "head" {
             add_expiry_response_headers(&mut r["200"]["headers"]);
         }
@@ -458,8 +458,8 @@ pub(super) fn emit(
                         reference(OFFSET),
                     );
                     headers["Stream-Closed"] = header(
-                        "Closure on success or closed-stream conflict",
-                        json!({"type":"boolean"}),
+                        "Present as true on closed success or closed-stream conflict; otherwise omitted",
+                        json!({"type":"string","enum":["true"]}),
                     );
                 }
                 let producer_headers: &[&str] = match code {
@@ -559,7 +559,7 @@ fn header(description: &str, schema: Value) -> Value {
 fn metadata_headers(read: bool, expiry: bool) -> Value {
     let mut headers = json!({
         "Stream-Next-Offset": header("Next read cursor", reference(OFFSET)),
-        "Stream-Closed": header("Terminal state; on reads true only at EOF", json!({"type":"boolean"})),
+        "Stream-Closed": header("Present as true only when closed (on reads only at EOF); otherwise omitted", json!({"type":"string","enum":["true"]})),
         "Stream-Cancelled": header("Cancellation terminal", json!({"type":"boolean"})),
         "Stream-Up-To-Date": header("Read reached current head", json!({"type":"boolean"})),
         "Cache-Control": header("Caching policy", string_schema()),

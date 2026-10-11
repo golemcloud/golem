@@ -722,7 +722,6 @@ class ResolvedAgentImpl {
     /** The handler `this`: state fields + `getId`/`getPhantomId` helpers. */
     private readonly instance: Record<string, unknown>,
     private readonly methods: Record<string, (...args: unknown[]) => unknown>,
-    private readonly agentId: ParsedAgentId,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
     private readonly customSnapshot?: {
       save?: () =>
@@ -737,7 +736,7 @@ class ResolvedAgentImpl {
   }
 
   getId(): ParsedAgentId {
-    return this.agentId;
+    return getRawSelfAgentId();
   }
 
   async invoke(
@@ -1000,17 +999,16 @@ export function registerAgentInitiator(
     state: object,
     context: Extract<ReturnType<typeof resolveContext>, { tag: 'ok' }>['val'],
   ): ResolvedAgentImpl => {
-    const { agentId, phantomId, sdkPrincipal, config } = context;
+    const { sdkPrincipal, config } = context;
     const instance: Record<string, unknown> = { ...(state as Record<string, unknown>) };
-    instance.getId = () => agentId;
-    instance.getPhantomId = () => phantomId;
+    instance.getId = getRawSelfAgentId;
+    instance.getPhantomId = () => getRawSelfAgentId().parsedWire()[2];
     instance.getPrincipal = () => sdkPrincipal;
     instance.config = config;
     return new ResolvedAgentImpl(
       reg,
       instance,
       impl.methods as Record<string, (...args: unknown[]) => unknown>,
-      agentId,
       impl.snapshot,
     );
   };

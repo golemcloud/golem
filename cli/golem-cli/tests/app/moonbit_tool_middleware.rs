@@ -21,22 +21,27 @@ use wit_parser::{Resolve, WorldItem, WorldKey};
 
 const APP_NAME: &str = "moonbit-tool-middleware-roles";
 
-/// Copies the fixture app into the test cwd and points its MoonBit SDK dependency
-/// at the local SDK checkout.
+/// Copies the fixture app into the test cwd and selects its MoonBit SDK and tools
+/// dependencies from the SDK overrides.
 fn setup_app(ctx: &mut TestContext) {
     let fixture = ctx.test_data_path_join(APP_NAME);
     fs_extra::dir::copy(fixture, ctx.cwd_path(), &fs_extra::dir::CopyOptions::new()).unwrap();
     ctx.cd(APP_NAME);
 
-    let sdk_path = sdk_overrides()
-        .unwrap()
-        .moonbit_sdk_path
-        .as_ref()
-        .expect("MoonBit role integration requires the local SDK override");
+    let overrides = sdk_overrides().unwrap();
     let module_path = ctx.cwd_path_join("moon.mod.json");
     let mut module: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&module_path).unwrap()).unwrap();
-    module["deps"]["golemcloud/golem_sdk"] = serde_json::json!({ "path": sdk_path });
+    module["deps"]["golemcloud/golem_sdk"] =
+        serde_json::from_str(&overrides.moonbit_sdk_dep()).unwrap();
+    let tools_dependencies = overrides.moonbit_sdk_tools_bin_deps();
+    if !tools_dependencies.is_empty() {
+        let tools: serde_json::Value =
+            serde_json::from_str(&format!("{{\"deps\":{{}}{tools_dependencies}}}")).unwrap();
+        module["bin-deps"] = tools["bin-deps"].clone();
+    } else {
+        module.as_object_mut().unwrap().remove("bin-deps");
+    }
     std::fs::write(
         module_path,
         serde_json::to_string_pretty(&module).unwrap() + "\n",

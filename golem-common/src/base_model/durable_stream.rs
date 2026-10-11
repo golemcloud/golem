@@ -1171,11 +1171,26 @@ pub enum ExternalProducerId {
     Attached,
 }
 
+/// The boundary that authored a consumer journal record. A reader binding identifies its source,
+/// not whether a projection or the guest consumes it.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamConsumerObservation {
+    Host,
+    Guest {
+        parent_start_index: Option<OplogIndex>,
+    },
+}
+
+pub const STREAM_CONSUMER_RECORD_FORMAT_VERSION: u8 = 2;
+
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerItemValueRecord {
     pub format_version: u8,
+    pub observation: StreamConsumerObservation,
+    pub reobserves: Option<OplogIndex>,
     pub session_key: StreamRegistrationInvocation,
     pub reader_id: LocalStreamReaderId,
     pub source_offset: StreamOffset,
@@ -1211,6 +1226,8 @@ impl StreamConsumerItemValueRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerTerminalRecord {
     pub format_version: u8,
+    pub observation: StreamConsumerObservation,
+    pub reobserves: Option<OplogIndex>,
     pub session_key: StreamRegistrationInvocation,
     pub reader_id: LocalStreamReaderId,
     pub source_offset: StreamOffset,
@@ -1481,6 +1498,42 @@ pub enum StreamSessionRecord {
 }
 
 impl StreamSessionRecord {
+    /// A replacement physical observation of an existing logical consumer record.
+    pub fn reobserves(&self) -> Option<OplogIndex> {
+        match self {
+            Self::ConsumerItemValue(record) => record.reobserves,
+            Self::ConsumerTerminal(record) => record.reobserves,
+            _ => None,
+        }
+    }
+
+    /// Checks the complete logical content while allowing a replacement guest owner.
+    pub fn matches_reobserved(&self, original: &Self) -> bool {
+        match (self, original) {
+            (Self::ConsumerItemValue(record), Self::ConsumerItemValue(original)) => {
+                let mut record = record.clone();
+                record.reobserves = None;
+                record.observation = original.observation.clone();
+                record == *original
+                    && matches!(
+                        original.observation,
+                        StreamConsumerObservation::Guest { .. }
+                    )
+            }
+            (Self::ConsumerTerminal(record), Self::ConsumerTerminal(original)) => {
+                let mut record = record.clone();
+                record.reobserves = None;
+                record.observation = original.observation.clone();
+                record == *original
+                    && matches!(
+                        original.observation,
+                        StreamConsumerObservation::Guest { .. }
+                    )
+            }
+            _ => false,
+        }
+    }
+
     /// Identifies records that can change this owner's callee-side session lifecycle.
     pub fn local_session_key(&self) -> Option<&IdempotencyKey> {
         let reference = match self {
@@ -1564,8 +1617,24 @@ impl StreamSessionRecord {
                 .is_ok_and(|attachment_id| attachment_id == attempt.attachment_id)
         }
 
-        if self.format_version() != DURABLE_STREAM_FORMAT_VERSION {
+        let expected_version = match self {
+            Self::ConsumerItemValue(_) | Self::ConsumerTerminal(_) => {
+                STREAM_CONSUMER_RECORD_FORMAT_VERSION
+            }
+            _ => DURABLE_STREAM_FORMAT_VERSION,
+        };
+        if self.format_version() != expected_version {
             return false;
+        }
+        if let Some(index) = self.reobserves() {
+            let guest = match self {
+                Self::ConsumerItemValue(record) => &record.observation,
+                Self::ConsumerTerminal(record) => &record.observation,
+                _ => unreachable!(),
+            };
+            if !index.is_defined() || !matches!(guest, StreamConsumerObservation::Guest { .. }) {
+                return false;
+            }
         }
         match self {
             Self::Prepared(record) => {
@@ -1846,12 +1915,12 @@ fn topology_mapping_matches(
 mod tests {
     use super::{
         AttachmentId, AttemptId, DurableStreamHandle, LocalStreamReaderId,
-        PersistedInvocationTarget, PersistedStreamInvocationDescriptor, SessionStreamRole,
-        StartAttemptDescriptor, StreamAttachmentKey, StreamBindingRecord,
-        StreamConsumerItemValueRecord, StreamId, StreamInvocationId, StreamOffset,
-        StreamOffsetError, StreamRecordReference, StreamRegistrationInvocation,
-        StreamSessionExpiryPolicy, StreamSessionInvocationResultRecord,
-        StreamSessionPreparedRecord, StreamSessionRecord,
+        PersistedInvocationTarget, PersistedStreamInvocationDescriptor,
+        STREAM_CONSUMER_RECORD_FORMAT_VERSION, SessionStreamRole, StartAttemptDescriptor,
+        StreamAttachmentKey, StreamBindingRecord, StreamConsumerItemValueRecord,
+        StreamConsumerObservation, StreamId, StreamInvocationId, StreamOffset, StreamOffsetError,
+        StreamRecordReference, StreamRegistrationInvocation, StreamSessionExpiryPolicy,
+        StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
@@ -1999,7 +2068,9 @@ mod tests {
             idempotency_key: IdempotencyKey::new("invocation".to_string()),
         };
         let mut record = StreamConsumerItemValueRecord {
-            format_version: 1,
+            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+            observation: StreamConsumerObservation::Host,
+            reobserves: None,
             session_key: super::StreamRegistrationInvocation::Remote(session_key),
             reader_id: LocalStreamReaderId {
                 introducing_oplog_index: OplogIndex::from_u64(4),

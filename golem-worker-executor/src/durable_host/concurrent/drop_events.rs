@@ -304,10 +304,6 @@ pub struct DroppedCall {
     pub(super) request_upload: PendingUpload,
     pub(super) span_finished: Option<golem_common::model::oplog::SpanFinished>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
-    /// Shared signal for process-equivalent executor teardown. An unfinished call dropped after
-    /// this signal is intentionally left incomplete for replay rather than treated as guest
-    /// cancellation or a host-call programming error.
-    pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     /// The dropped call's atomic-region ownership lease, shared with every other holder (the
     /// originating handle, terminal guards). Released — store-free and idempotently — once the
     /// call's terminal is recorded.
@@ -348,10 +344,6 @@ impl DroppedCall {
 
     pub fn request_upload(&self) -> &PendingUpload {
         &self.request_upload
-    }
-
-    pub(super) fn is_executor_shutting_down(&self) -> bool {
-        self.executor_shutdown.is_cancelled()
     }
 
     /// The atomic region currently owning the dropped call, read through its lease.

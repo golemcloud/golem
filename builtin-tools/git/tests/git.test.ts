@@ -3,6 +3,7 @@ import fs from "node:fs";
 import {
   chmod,
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   readlink,
@@ -28,6 +29,7 @@ import {
   limitedDiffOutput,
   localConfig,
   parseIdentity,
+  relativePaths,
   repository,
   restoreIndexPaths,
   stage,
@@ -50,7 +52,7 @@ async function fixture(): Promise<string> {
 
 test("repeated -C directories apply sequentially", () => {
   assert.equal(
-    effectiveCwd(["workspace", "src", ".."]).split("\\").join("/"),
+    effectiveCwd(["workspace", "src", ".."], "/").split("\\").join("/"),
     "/workspace",
   );
 });
@@ -59,12 +61,53 @@ test("each repeated -C directory must exist before the next is applied", async (
   const dir = await mkdtemp(path.join(os.tmpdir(), "golem-git-tool-cwd-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await assert.rejects(
-    validatedCwd([path.join(dir, "missing"), ".."]),
+    validatedCwd([path.join(dir, "missing"), ".."], "/"),
     /does not exist/,
   );
   const file = path.join(dir, "file");
   await writeFile(file, "not a directory");
-  await assert.rejects(validatedCwd([file]), /not a directory/);
+  await assert.rejects(validatedCwd([file], "/"), /not a directory/);
+});
+
+test("-C directories resolve from the start directory", () => {
+  const unix = (value: string) => value.split("\\").join("/");
+  assert.equal(unix(effectiveCwd([], "/work/repo")), "/work/repo");
+  assert.equal(unix(effectiveCwd(["repo"], "/work")), "/work/repo");
+  assert.equal(unix(effectiveCwd(["repo", ".."], "/work")), "/work");
+  assert.equal(unix(effectiveCwd(["/elsewhere"], "/work")), "/elsewhere");
+  assert.equal(unix(effectiveCwd([], "work")), "/work");
+});
+
+test("the start directory must exist before any -C directory is applied", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "golem-git-tool-start-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, "repo"));
+  assert.equal(await validatedCwd([], dir), dir);
+  assert.equal(await validatedCwd(["repo"], dir), path.join(dir, "repo"));
+  await assert.rejects(
+    validatedCwd(["repo"], path.join(dir, "missing")),
+    /does not exist/,
+  );
+  const file = path.join(dir, "file");
+  await writeFile(file, "not a directory");
+  await assert.rejects(validatedCwd([], file), /not a directory/);
+  // An absolute -C replaces the start directory, so that one need not exist.
+  assert.equal(
+    await validatedCwd([path.join(dir, "repo")], path.join(dir, "missing")),
+    path.join(dir, "repo"),
+  );
+});
+
+test("a repository and its path arguments are found from the start directory", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, "src"));
+  const inside = await repository([], path.join(dir, "src"));
+  assert.equal(inside.dir, dir);
+  assert.equal(inside.cwd, path.join(dir, "src"));
+  assert.deepEqual(relativePaths(inside, ["main.ts"]), ["src/main.ts"]);
+  const parent = await repository([".."], path.join(dir, "src"));
+  assert.equal(parent.cwd, dir);
 });
 
 test("author syntax is strict", () => {
@@ -91,7 +134,7 @@ test("local config is narrow and commit keeps author and committer separate", as
   const dir = await mkdtemp(path.join(os.tmpdir(), "golem-git-tool-commit-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await git.init({ fs, dir, defaultBranch: "main" });
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
 
   await assert.rejects(localConfig(repo, "user.name", undefined), /not set/);
   await assert.rejects(
@@ -136,7 +179,7 @@ test("local config is narrow and commit keeps author and committer separate", as
 test("local config rejects lossy values without modifying the file", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   const configPath = path.join(dir, ".git/config");
   const before = await fs.promises.readFile(configPath);
 
@@ -186,7 +229,7 @@ test("status distinguishes index and worktree changes", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "head\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   await git.commit({
     fs,
@@ -209,7 +252,7 @@ test("untracked status uses Git porcelain codes and NUL termination", async (t) 
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "new file.txt"), "new\n");
-  const entries = await statusEntries(await repository([dir]), []);
+  const entries = await statusEntries(await repository([dir], "/"), []);
   assert.deepEqual(entries, [
     {
       path: "new file.txt",
@@ -226,7 +269,7 @@ test("staged deletion followed by recreation uses separate porcelain records", a
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "old\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   await createCommit(repo, ["initial"], undefined, false);
   await rm(path.join(dir, "file.txt"));
@@ -272,7 +315,7 @@ test("diff compares index to worktree and HEAD to index independently", async (t
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "head\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   await git.commit({
     fs,
@@ -296,7 +339,7 @@ test("diff excludes untracked files", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "tracked.txt"), "tracked\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["tracked.txt"], false, false);
   await git.commit({
     fs,
@@ -325,7 +368,7 @@ test("diff excludes untracked files", async (t) => {
 test("added and deleted file patches use Git metadata and null paths", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await writeFile(path.join(dir, "content.txt"), "content\n");
   await writeFile(path.join(dir, "empty.txt"), "");
   await stage(repo, [], true, false);
@@ -367,7 +410,7 @@ test("diff preserves UTF-8 BOM changes", async (t) => {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filepath = path.join(dir, "bom.txt");
   await writeFile(filepath, "\uFEFFbefore\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["bom.txt"], false, false);
   await git.commit({
     fs,
@@ -400,7 +443,7 @@ test("read-only status and diff cover deletions, binaries, path filters, stats, 
   await writeFile(path.join(dir, "deleted.txt"), "deleted\n");
   await writeFile(path.join(dir, "binary.bin"), Buffer.from([0xff, 1, 2]));
   await writeFile(path.join(dir, "no-newline.txt"), "before");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, [], true, false);
   const before = await git.commit({
     fs,
@@ -470,7 +513,7 @@ test("diff handles file-directory replacements without reading symlink targets",
   t.after(() => rm(destination, { recursive: true, force: true }));
   await fs.promises.mkdir(path.join(dir, "a"));
   await writeFile(path.join(dir, "a/file.txt"), "nested\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, [], true, false);
   const directoryCommit = await git.commit({
     fs,
@@ -500,7 +543,7 @@ test("diff handles file-directory replacements without reading symlink targets",
 
   await fs.promises.mkdir(path.join(symlinkDir, "a"));
   await writeFile(path.join(symlinkDir, "a/file.txt"), "nested\n");
-  const symlinkRepo = await repository([symlinkDir]);
+  const symlinkRepo = await repository([symlinkDir], "/");
   await stage(symlinkRepo, [], true, false);
   await git.commit({
     fs,
@@ -520,7 +563,7 @@ test("diff stats count source lines beginning with header-like prefixes", async 
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "prefix.txt"), "--old\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["prefix.txt"], false, false);
   await git.commit({
     fs,
@@ -538,7 +581,7 @@ test("diff rejects work above the deterministic edit budget", async (t) => {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filepath = path.join(dir, "large.txt");
   await writeFile(filepath, `${"old\n".repeat(10_001)}`);
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["large.txt"], false, false);
   await git.commit({
     fs,
@@ -559,7 +602,7 @@ test("relative symlinks retain link text and mode across staging and commits", a
   await writeFile(path.join(dir, "target-a.txt"), "a\n");
   await writeFile(path.join(dir, "target-b.txt"), "b\n");
   await symlink("target-a.txt", path.join(dir, "link.txt"));
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
 
   await stage(repo, ["link.txt"], false, false);
   const oid = await git.commit({
@@ -596,7 +639,7 @@ test("same-content file and symlink transitions are status, diff, and staging ch
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "entry"), "target.txt");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["entry"], false, false);
   await git.commit({
     fs,
@@ -630,7 +673,7 @@ test("path checkout restores same-content file and symlink transitions", async (
   t.after(() => rm(dir, { recursive: true, force: true }));
   const entry = path.join(dir, "entry");
   await writeFile(entry, "target.txt");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["entry"], false, false);
 
   await rm(entry);
@@ -657,7 +700,7 @@ test("path checkout rejects symlinked parent directories before mutation", async
   t.after(() => rm(destination, { recursive: true, force: true }));
   await fs.promises.mkdir(path.join(dir, "src"));
   await writeFile(path.join(dir, "src/file.txt"), "indexed\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["src/file.txt"], false, false);
   await rm(path.join(dir, "src"), { recursive: true });
   await writeFile(path.join(destination, "file.txt"), "unrelated\n");
@@ -679,7 +722,7 @@ test("branch checkout rejects a conflicting local file type change", async (t) =
   t.after(() => rm(dir, { recursive: true, force: true }));
   const entry = path.join(dir, "entry");
   await writeFile(entry, "base");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["entry"], false, false);
   const base = await git.commit({
     fs,
@@ -715,7 +758,7 @@ test("checkout preservation rejects symlinked ancestors before mutation", async 
   t.after(() => rm(dir, { recursive: true, force: true }));
   t.after(() => rm(outside, { recursive: true, force: true }));
   await writeFile(path.join(dir, "base.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["base.txt"], false, false);
   await createCommit(repo, ["base"], undefined, false);
   await fs.promises.mkdir(path.join(dir, "d"));
@@ -742,7 +785,7 @@ test("checkout rejects ignored symlink ancestors for target paths", async (t) =>
   t.after(() => rm(dir, { recursive: true, force: true }));
   t.after(() => rm(outside, { recursive: true, force: true }));
   await writeFile(path.join(dir, "base.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["base.txt"], false, false);
   await createCommit(repo, ["base"], undefined, false);
   await branchCommand(repo, false, "target", undefined);
@@ -780,7 +823,7 @@ test("checkout rejects file-directory tree transitions before mutation", async (
     } else {
       await writeFile(entry, "file\n");
     }
-    const repo = await repository([dir]);
+    const repo = await repository([dir], "/");
     await stage(repo, [], true, false);
     const initial = await createCommit(repo, ["initial"], undefined, false);
     await branchCommand(repo, false, "initial", initial);
@@ -809,7 +852,7 @@ test("branch mutations use one canonical local ref", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   await createCommit(repo, ["base"], undefined, false);
 
@@ -823,7 +866,7 @@ test("checkout -b cannot be redirected by a same-named tag", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "base.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["base.txt"], false, false);
   const base = await createCommit(repo, ["base"], undefined, false);
   await branchCommand(repo, false, "tag-target", undefined);
@@ -848,7 +891,7 @@ test("checkout -b switches an unborn repository to the new branch", async (t) =>
   const dir = await mkdtemp(path.join(os.tmpdir(), "golem-git-unborn-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await git.init({ fs, dir, defaultBranch: "main" });
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
 
   await assert.rejects(
     checkoutCommand(repo, "@", false, undefined, []),
@@ -889,7 +932,7 @@ for (const packed of [false, true]) {
     }
     await writeFile(path.join(dir, ".git", "HEAD"), "ref: refs/heads/unborn\n");
     const beforeIndex = await readFile(path.join(dir, ".git", "index"));
-    const repo = await repository([dir]);
+    const repo = await repository([dir], "/");
 
     await assert.rejects(
       checkoutCommand(repo, "main", false, undefined, []),
@@ -909,7 +952,7 @@ test("ordinary checkout resolves a same-named local branch before its tag", asyn
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "base.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["base.txt"], false, false);
   const base = await createCommit(repo, ["base"], undefined, false);
   await branchCommand(repo, false, "target", undefined);
@@ -936,7 +979,7 @@ test("checkout HEAD keeps the current branch attached", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   await createCommit(repo, ["base"], undefined, false);
 
@@ -958,7 +1001,7 @@ test("checkout never writes through a preserved leaf symlink", async (t) => {
   const entry = path.join(dir, "entry");
   await writeFile(victim, "victim\n");
   await writeFile(entry, "head\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["entry"], false, false);
   await createCommit(repo, ["head"], undefined, false);
   await writeFile(entry, victim);
@@ -976,7 +1019,7 @@ test("late checkout failure restores the complete original worktree", async (t) 
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await symlink("old", path.join(dir, "link"));
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["link"], false, false);
   await createCommit(repo, ["old link"], undefined, false);
   await branchCommand(repo, false, "target", undefined);
@@ -1015,7 +1058,7 @@ test("branch start points must name existing commits", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   await createCommit(repo, ["base"], undefined, false);
   const blob = await git.writeBlob({ fs, dir, blob: Buffer.from("blob") });
@@ -1035,7 +1078,7 @@ test("checkout validates target blobs before preserving local state", async (t) 
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "base.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["base.txt"], false, false);
   await createCommit(repo, ["base"], undefined, false);
   await branchCommand(repo, false, "target", undefined);
@@ -1085,7 +1128,7 @@ test("branch creation, listing, and guarded deletion follow HEAD ancestry", asyn
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   const base = await createCommit(repo, ["base"], undefined, false);
 
@@ -1132,7 +1175,7 @@ test("checkout preserves permissible changes, rejects overwrites, cleans failed 
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "shared.txt"), "shared\n");
   await writeFile(path.join(dir, "conflict.txt"), "base\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, [], true, false);
   const base = await createCommit(repo, ["base"], undefined, false);
   await branchCommand(repo, false, "target", undefined);
@@ -1179,7 +1222,7 @@ test("path checkout validates every path and materializes every blob before muta
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "a.txt"), "indexed-a\n");
   await writeFile(path.join(dir, "z.txt"), "indexed-z\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, [], true, false);
   const commit = await createCommit(repo, ["files"], undefined, false);
   await writeFile(path.join(dir, "a.txt"), "worktree-a\n");
@@ -1212,7 +1255,7 @@ test("diff root pathspec and cached diff on unborn HEAD include changes", async 
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(path.join(dir, "file.txt"), "new\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
 
   const unfiltered = await diff(repo, [], [], true, false, 3);
@@ -1237,7 +1280,7 @@ test("ignored executables do not block add --all", async (t) => {
   const ignored = path.join(dir, "ignored");
   await writeFile(ignored, "#!/bin/sh\n");
   await chmod(ignored, 0o755);
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
 
   assert.deepEqual(await stage(repo, [], true, false), [
     ".gitignore",
@@ -1258,7 +1301,7 @@ test("add handles explicit paths, ignored descendants, -A, and -u", async (t) =>
   await writeFile(path.join(dir, "src/ignored.txt"), "ignored\n");
   await fs.promises.mkdir(path.join(dir, "ignored-dir"));
   await writeFile(path.join(dir, "ignored-dir/file.txt"), "ignored\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
 
   assert.deepEqual(await stage(repo, ["src"], false, false), [
     "src/tracked.txt",
@@ -1293,7 +1336,7 @@ test("explicit missing and ignored paths fail before changing the index", async 
   await writeFile(path.join(dir, ".gitignore"), "ignored.txt\n");
   await writeFile(path.join(dir, "valid.txt"), "valid\n");
   await writeFile(path.join(dir, "ignored.txt"), "ignored\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
 
   await assert.rejects(
     stage(repo, ["valid.txt", "missing.txt"], false, false),
@@ -1312,7 +1355,7 @@ test("repeated -A preserves a staged file-to-directory replacement", async (t) =
   t.after(() => rm(dir, { recursive: true, force: true }));
   const entry = path.join(dir, "entry");
   await writeFile(entry, "file\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["entry"], false, false);
   await git.commit({
     fs,
@@ -1338,7 +1381,7 @@ test("-u does not re-add a file recreated after its staged deletion", async (t) 
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filepath = path.join(dir, "file.txt");
   await writeFile(filepath, "tracked\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["file.txt"], false, false);
   await git.commit({
     fs,
@@ -1359,7 +1402,7 @@ test("HEAD-only ignored paths reject explicit add atomically", async (t) => {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const ignored = path.join(dir, "ignored.txt");
   await writeFile(ignored, "tracked\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["ignored.txt"], false, false);
   await git.commit({
     fs,
@@ -1385,7 +1428,7 @@ test("chmod-only changes and executable checkout targets fail closed", async (t)
   t.after(() => rm(dir, { recursive: true, force: true }));
   const executable = path.join(dir, "run.sh");
   await writeFile(executable, "#!/bin/sh\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, ["run.sh"], false, false);
   await git.commit({
     fs,
@@ -1436,7 +1479,7 @@ test("executable files fail closed before staging", async (t) => {
   const executable = path.join(dir, "run.sh");
   await writeFile(executable, "#!/bin/sh\n");
   await chmod(executable, 0o755);
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await assert.rejects(
     stage(repo, ["run.sh"], false, false),
     /cannot preserve executable-file modes/,
@@ -1449,7 +1492,7 @@ test("diff quotes paths that contain record-separator characters", async (t) => 
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filepath = "line\nbreak.txt";
   await writeFile(path.join(dir, filepath), "before\n");
-  const repo = await repository([dir]);
+  const repo = await repository([dir], "/");
   await stage(repo, [filepath], false, false);
   await git.commit({
     fs,

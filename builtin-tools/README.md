@@ -39,7 +39,7 @@ container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `b
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
-`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.7` supports local
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.10` supports local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
 workflows. It exposes no remote commands. The runtime provides WASI HTTP, and a separate integration
 probe verifies that explicitly injecting `isomorphic-git/http/web` uses durable WASI HTTP calls
@@ -179,7 +179,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.7
+      version: 0.1.10
 
 agents:
   CodingAgent:
@@ -195,6 +195,12 @@ Examples of the supported command surface include `git -C workspace status --sho
 the shared tool command model requires canonical long names, short-only Git options also have
 descriptive long forms such as `--working-directory` and `--new-branch`; inherited `-C` is accepted
 after a subcommand as well as before it.
+
+Git starts in the directory given by `--cwd`, and the first `-C` resolves from there. A shell
+supplies it: in a Bash script or a `golem ssh` session, `cd workspace` followed by
+`git status --short` works without `-C`, because the option declares the `PWD` variable. Any other
+caller starts at `/` unless it passes `--cwd`, and a caller that builds the input record directly
+sets its `cwd` field.
 
 The `web-fetch` release is selected and bound in the same way, but requires no filesystem grant:
 

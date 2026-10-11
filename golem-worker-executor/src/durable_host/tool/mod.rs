@@ -3377,7 +3377,12 @@ where
                 }
                 failed_resources.parent_end_attempted = true;
             }
-            failed_resources.resources.release_for_owner_failure();
+            if let Err(disposal_error) =
+                failed_resources.resources.release_for_owner_failure().await
+                && owner_operations.selected_owner_failure().is_none()
+            {
+                *error = disposal_error.into();
+            }
         }
         if matches!(
             cleanup_operation.winner_if_active(),

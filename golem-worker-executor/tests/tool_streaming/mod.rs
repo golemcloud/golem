@@ -47,6 +47,7 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
+use golem_common::schema::tool::argv::{self, ParsedToolArguments};
 use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
@@ -1279,6 +1280,60 @@ async fn invoke_git_tool_success_with_key(
                 .ok_or_else(|| anyhow::anyhow!("missing canonical git field '{}'", field.name))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        idempotency_key,
+        principal,
+        command_path,
+        TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+    )
+    .await
+}
+
+/// Runs git from a command line, parsed the way the CLI and the bash tool parse it.
+async fn invoke_git_tool_argv_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    args: &[&str],
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command_line = args.join(" ");
+    let argv = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let parsed = argv::parse(definition, &argv)
+        .map_err(|error| anyhow::anyhow!("git {command_line} was rejected: {error}"))?;
+    let ParsedToolArguments::Invoke {
+        command_path,
+        input,
+    } = parsed
+    else {
+        anyhow::bail!("git {command_line} printed help instead of running");
+    };
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        IdempotencyKey::fresh(),
+        principal,
+        command_path,
+        *input,
+    )
+    .await
+}
+
+async fn invoke_git_tool_input(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    idempotency_key: IdempotencyKey,
+    principal: Principal,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command = command_path.join(" ");
     let output = executor
         .invoke_external_tool(
             worker_id,
@@ -1286,7 +1341,7 @@ async fn invoke_git_tool_success_with_key(
             idempotency_key,
             ToolName::try_from("git").unwrap(),
             command_path,
-            TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+            input,
             InvocationContextStack::fresh(),
             principal,
             None,
@@ -13202,6 +13257,254 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
 }
 
 #[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_recursive_rm_removes_typescript_output(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let mut deployment: Option<ToolDeploymentState> = None;
+    for (provider, package) in [
+        (javascript_tools, "golem:javascript-tools"),
+        (typescript_tools, "golem:typescript-tools"),
+    ] {
+        let component = executor
+            .component_dep(&context.default_environment_id, provider)
+            .store()
+            .await?;
+        let metadata = extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", provider.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        let provider_deployment = deployment_state(
+            context.account_id,
+            component.id,
+            component.revision,
+            package,
+            "ToolStreamingCaller",
+            metadata.tools,
+        );
+        if let Some(deployment) = &mut deployment {
+            deployment
+                .registered_tools
+                .extend(provider_deployment.registered_tools);
+            for (owner, bindings) in provider_deployment.tool_bindings {
+                deployment
+                    .tool_bindings
+                    .entry(owner)
+                    .or_default()
+                    .extend(bindings);
+            }
+        } else {
+            deployment = Some(provider_deployment);
+        }
+    }
+    let mut deployment = deployment.unwrap();
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let mut failures = Vec::new();
+    for (agent_name, remove) in [
+        (
+            "recursive-rm-sync",
+            "fs.rmSync('candidate', { recursive: true, force: true }); verify();",
+        ),
+        (
+            "recursive-rm-promises",
+            "await require('node:fs/promises').rm('candidate', { recursive: true, force: true }); verify();",
+        ),
+    ] {
+        let setup = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec![
+                "-e",
+                "const fs = require('node:fs'); fs.mkdirSync('src/nested', { recursive: true }); fs.writeFileSync('src/main.ts', 'export const main: number = 17;\\n'); fs.writeFileSync('src/nested/value.ts', 'export const value: number = 42;\\n');",
+            ],
+        )
+        .await?;
+        assert_eq!(setup.exit_code, 0, "setup: {setup:?}");
+
+        let compilation = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "tsc",
+            "/workspace",
+            vec![
+                "--pretty",
+                "false",
+                "--target",
+                "es2022",
+                "--module",
+                "es2022",
+                "--rootDir",
+                "src",
+                "--outDir",
+                "candidate",
+                "--noEmitOnError",
+                "src/main.ts",
+                "src/nested/value.ts",
+            ],
+        )
+        .await?;
+        assert_eq!(compilation.exit_code, 0, "compilation: {compilation:?}");
+
+        let script = format!(
+            r#"
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+assert.equal(fs.readFileSync('candidate/main.js', 'utf8'), 'export const main = 17;\n');
+assert.equal(fs.readFileSync('candidate/nested/value.js', 'utf8'), 'export const value = 42;\n');
+console.log('compiled-output-readable');
+function verify() {{
+    assert.equal(fs.existsSync('candidate'), false);
+    assert.equal(fs.readFileSync('src/nested/value.ts', 'utf8'), 'export const value: number = 42;\n');
+    console.log('candidate-removed-source-preserved');
+}}
+{remove}
+"#
+        );
+        let removal = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec!["-e", &script],
+        )
+        .await?;
+        assert!(
+            removal.stdout.starts_with(b"compiled-output-readable\n"),
+            "output must be readable before removal: {removal:?}"
+        );
+        if removal.exit_code != 0
+            || removal.stdout != b"compiled-output-readable\ncandidate-removed-source-preserved\n"
+            || !removal.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{agent_name}: exit {}; stdout: {}; stderr: {}",
+                removal.exit_code,
+                String::from_utf8_lossy(&removal.stdout),
+                String::from_utf8_lossy(&removal.stderr),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn typescript_guest_recursive_rm_removes_tool_created_output(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_ts_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider = executor
+        .component_dep(&context.default_environment_id, typescript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", typescript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider.id,
+        provider.revision,
+        "golem:typescript-tools",
+        "TsToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let mut failures = Vec::new();
+    for promises in [false, true] {
+        let result = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id!("TsToolStreamingCaller", format!("guest-rm-{promises}")),
+                "recursiveRmToolOutput",
+                data_value!(promises),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        if result != Ok("removed-output-source-preserved-recompiled".to_string()) {
+            failures.push(format!("promises={promises}: {result:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
 #[ignore = "GOL-714: completed JavaScript tool calls do not reconstruct deterministically"]
 #[tracing::instrument]
 #[timeout("10m")]
@@ -13628,18 +13931,14 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     });
     let cwd = string_list(&["/workspace/repo"]);
 
-    invoke_git_tool_success(
+    // Optional arguments reach git from a command line both when given and when left out.
+    invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "init",
-        BTreeMap::from([
-            ("working-directory", string_list(&[])),
-            ("directory", optional_string(Some("workspace/repo"))),
-            ("initial-branch", optional_string(Some("main"))),
-        ]),
+        &["init", "-b", "main", "workspace/repo"],
     )
     .await?;
     for (key, value) in [
@@ -13655,6 +13954,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
             "config",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String(key.to_string())),
                 ("value", optional_string(Some(value))),
                 ("local", SchemaValue::Bool(true)),
@@ -13697,6 +13997,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["hello.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -13712,6 +14013,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "commit",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("message", string_list(&["initial"])),
             ("author", optional_string(None)),
             ("allow-empty", SchemaValue::Bool(false)),
@@ -13764,6 +14066,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["hello.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -13819,6 +14122,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "config",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("key", SchemaValue::String("user.name".to_string())),
             ("value", optional_string(None)),
             ("local", SchemaValue::Bool(true)),
@@ -13847,6 +14151,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "status",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&[])),
             ("short", SchemaValue::Bool(false)),
             ("porcelain", SchemaValue::String("v1".to_string())),
@@ -13899,19 +14204,13 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         .into_typed()?;
     assert_eq!(branch_tip.trim(), commit_oid);
 
-    let log = invoke_git_tool_success(
+    let log = invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "log",
-        BTreeMap::from([
-            ("working-directory", cwd.clone()),
-            ("ref", optional_string(None)),
-            ("max-count", SchemaValue::F64(1.0)),
-            ("oneline", SchemaValue::Bool(true)),
-        ]),
+        &["-C", "/workspace/repo", "log", "-n", "1", "--oneline"],
     )
     .await?;
     let Some(SchemaValue::Record { fields: log_fields }) = log else {
@@ -13931,6 +14230,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "diff",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("from", optional_string(None)),
             ("to", optional_string(None)),
             ("paths", string_list(&["hello.txt"])),
@@ -13961,6 +14261,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "diff",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("from", optional_string(None)),
             ("to", optional_string(None)),
             ("paths", string_list(&["hello.txt"])),
@@ -13991,6 +14292,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(Some("persisted-state"))),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(None)),
@@ -14028,6 +14330,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(None)),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(None)),
@@ -14055,6 +14358,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(None)),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(Some("main"))),
@@ -14218,6 +14522,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
         "init",
         BTreeMap::from([
             ("working-directory", string_list(&[])),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("directory", optional_string(Some("workspace/repo"))),
             ("initial-branch", optional_string(Some(branch))),
         ]),
@@ -14236,6 +14541,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
             "config",
             BTreeMap::from([
                 ("working-directory", string_list(&["/workspace/repo"])),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String(key.to_string())),
                 ("value", optional_string(Some(value))),
                 ("local", SchemaValue::Bool(true)),
@@ -14293,6 +14599,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             "status",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("paths", string_list(&[])),
                 ("short", SchemaValue::Bool(true)),
                 ("porcelain", SchemaValue::String("v1".to_string())),
@@ -14348,6 +14655,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             "config",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String("user.name".to_string())),
                 ("value", optional_string(Some("Cancelled Name"))),
                 ("local", SchemaValue::Bool(true)),
@@ -14400,6 +14708,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         "config",
         BTreeMap::from([
             ("working-directory", cwd),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("key", SchemaValue::String("user.name".to_string())),
             ("value", optional_string(None)),
             ("local", SchemaValue::Bool(true)),
@@ -14446,6 +14755,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             "commit",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("message", string_list(&["baseline"])),
                 ("author", optional_string(None)),
                 ("allow-empty", SchemaValue::Bool(true)),
@@ -14488,6 +14798,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["recovered.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -14510,6 +14821,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             "commit",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("message", string_list(&["survives terminal crash"])),
                 ("author", optional_string(None)),
                 ("allow-empty", SchemaValue::Bool(false)),
@@ -14579,6 +14891,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
                 "commit",
                 BTreeMap::from([
                     ("working-directory", cwd.clone()),
+                    ("cwd", SchemaValue::String("/".to_string())),
                     ("message", string_list(&["survives terminal crash"])),
                     ("author", optional_string(None)),
                     ("allow-empty", SchemaValue::Bool(false)),
@@ -14611,6 +14924,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "log",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("ref", optional_string(None)),
             ("max-count", SchemaValue::F64(2.0)),
             ("oneline", SchemaValue::Bool(true)),
@@ -14653,6 +14967,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "init",
         BTreeMap::from([
             ("working-directory", string_list(&[])),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("directory", optional_string(Some("workspace/repo"))),
             ("initial-branch", optional_string(Some("isolated"))),
         ]),

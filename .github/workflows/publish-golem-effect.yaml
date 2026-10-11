@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 env:
-  WASM_RQUICKJS_VERSION: "0.4.6"
+  WASM_RQUICKJS_VERSION: "0.4.10"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
   NPM_CONFIG_AUDIT: "false"
