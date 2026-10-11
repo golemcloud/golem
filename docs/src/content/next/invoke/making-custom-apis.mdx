@@ -706,7 +706,7 @@ Selection is **not cloning**. If the selected UUID has not been used, Golem foll
 
 The following mount fragments declare an optional query selector. Omit the optional flag to make it required:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 http: http.mount('/decisions/{decision}', {
@@ -744,9 +744,17 @@ http: Http.mount('/decisions/{decision}', {
 #derive.mount_phantom_id(query = "instance", optional = true)
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+HTTP: &golem.Mount{
+	Path:      "/decisions/{decision}",
+	PhantomID: golem.PhantomIDQuery("instance").Optional(),
+},
+```
+</Tabs.Tab>
 </Tabs>
 
-For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to phantom selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
+For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`; in Go, use `golem.PhantomIDPath` instead of `golem.PhantomIDQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to phantom selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
 
 | Request | Result |
 | --- | --- |

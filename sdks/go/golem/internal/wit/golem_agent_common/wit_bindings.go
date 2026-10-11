@@ -194,6 +194,45 @@ type ReadOnlyConfig struct {
 	UsesPrincipal bool
 }
 
+type PhantomIdBindingDetails struct {
+	Name     string
+	Optional bool
+}
+
+const (
+	PhantomIdBindingPath  uint8 = 0
+	PhantomIdBindingQuery uint8 = 1
+)
+
+type PhantomIdBinding struct {
+	tag   uint8
+	value any
+}
+
+func (self PhantomIdBinding) Tag() uint8 {
+	return self.tag
+}
+
+func (self PhantomIdBinding) Path() PhantomIdBindingDetails {
+	if self.tag != PhantomIdBindingPath {
+		panic("tag mismatch")
+	}
+	return self.value.(PhantomIdBindingDetails)
+}
+func (self PhantomIdBinding) Query() PhantomIdBindingDetails {
+	if self.tag != PhantomIdBindingQuery {
+		panic("tag mismatch")
+	}
+	return self.value.(PhantomIdBindingDetails)
+}
+
+func MakePhantomIdBindingPath(value PhantomIdBindingDetails) PhantomIdBinding {
+	return PhantomIdBinding{PhantomIdBindingPath, value}
+}
+func MakePhantomIdBindingQuery(value PhantomIdBindingDetails) PhantomIdBinding {
+	return PhantomIdBinding{PhantomIdBindingQuery, value}
+}
+
 type FileResponseHeader struct {
 	Name  string
 	Value string
@@ -448,6 +487,7 @@ type HttpMountDetails struct {
 	PathPrefix         []PathSegment
 	AuthDetails        witTypes.Option[AuthDetails]
 	PhantomAgent       bool
+	PhantomIdBinding   witTypes.Option[PhantomIdBinding]
 	CorsOptions        CorsOptions
 	WebhookSuffix      []PathSegment
 	StaticBindings     []FileMapping

@@ -361,9 +361,9 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
 	wasm_import_get_all_agent_types(returnArea)
-	result553 := make([]golem_agent_common.RegisteredAgentType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
+	result557 := make([]golem_agent_common.RegisteredAgentType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(48+46*4))
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(40+52*4))
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))
@@ -4724,11 +4724,11 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 			result512 = append(result512, golem_agent_common.AgentDependency{TypeName: value254, Description: option256, Schema: golem_core_types.SchemaGraph{TypeNodes: result432, Defs: result436, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option438, Description: value439, PromptHint: option441, InputSchema: variant456}, Methods: result511})
 		}
 
-		var option547 witTypes.Option[golem_agent_common.HttpMountDetails]
+		var option551 witTypes.Option[golem_agent_common.HttpMountDetails]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (28 * 4)))) {
 		case 0:
 
-			option547 = witTypes.None[golem_agent_common.HttpMountDetails]()
+			option551 = witTypes.None[golem_agent_common.HttpMountDetails]()
 		case 1:
 			result517 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (30 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (30 * 4)))); index++ {
@@ -4772,196 +4772,222 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 			default:
 				panic("unreachable")
 			}
-			result520 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (33 * 4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (33 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 * 4))))), index*(2*4))
-				value519 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-				result520 = append(result520, value519)
-			}
-
-			result525 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (35 * 4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (35 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (34 * 4))))), index*(3*4))
-				var variant524 golem_agent_common.PathSegment
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					value521 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentLiteral(value521)
-
-				case 1:
-
-					variant524 = golem_agent_common.MakePathSegmentSystemVariable(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))))
-
-				case 2:
-					value522 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentPathVariable(golem_agent_common.PathVariable{VariableName: value522})
-
-				case 3:
-					value523 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentRemainingPathVariable(golem_agent_common.PathVariable{VariableName: value523})
-
-				default:
-					panic("unreachable")
-				}
-
-				result525 = append(result525, variant524)
-			}
-
-			result533 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (37 * 4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (37 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (36 * 4))))), index*(5*4))
-				var variant532 golem_agent_common.FileMapping
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					result527 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result527 = append(result527, value526)
-					}
-
-					value528 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant532 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result527, FilePath: value528})
-
-				case 1:
-					result530 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value529 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result530 = append(result530, value529)
-					}
-
-					value531 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant532 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result530, FilesystemRoot: value531})
-
-				default:
-					panic("unreachable")
-				}
-
-				result533 = append(result533, variant532)
-			}
-
-			result541 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (39 * 4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (39 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (38 * 4))))), index*(5*4))
-				var variant540 golem_agent_common.FileMapping
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					result535 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value534 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result535 = append(result535, value534)
-					}
-
-					value536 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant540 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result535, FilePath: value536})
-
-				case 1:
-					result538 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value537 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result538 = append(result538, value537)
-					}
-
-					value539 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant540 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result538, FilesystemRoot: value539})
-
-				default:
-					panic("unreachable")
-				}
-
-				result541 = append(result541, variant540)
-			}
-
-			result544 := make([]golem_agent_common.FileResponseHeader, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (41 * 4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (41 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 * 4))))), index*(4*4))
-				value542 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-				value543 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-				result544 = append(result544, golem_agent_common.FileResponseHeader{Name: value542, Value: value543})
-			}
-
-			var option546 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (42 * 4)))) {
+			var option522 witTypes.Option[golem_agent_common.PhantomIdBinding]
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 * 4)))) {
 			case 0:
 
-				option546 = witTypes.None[string]()
+				option522 = witTypes.None[golem_agent_common.PhantomIdBinding]()
 			case 1:
-				value545 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (43 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (44 * 4))))
+				var variant521 golem_agent_common.PhantomIdBinding
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (33 * 4)))) {
+				case 0:
+					value519 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (34 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (35 * 4))))
 
-				option546 = witTypes.Some[string](value545)
+					variant521 = golem_agent_common.MakePhantomIdBindingPath(golem_agent_common.PhantomIdBindingDetails{Name: value519, Optional: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (36 * 4)))) != 0)})
+
+				case 1:
+					value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (34 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (35 * 4))))
+
+					variant521 = golem_agent_common.MakePhantomIdBindingQuery(golem_agent_common.PhantomIdBindingDetails{Name: value520, Optional: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (36 * 4)))) != 0)})
+
+				default:
+					panic("unreachable")
+				}
+
+				option522 = witTypes.Some[golem_agent_common.PhantomIdBinding](variant521)
+			default:
+				panic("unreachable")
+			}
+			result524 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (38 * 4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (38 * 4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (37 * 4))))), index*(2*4))
+				value523 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+				result524 = append(result524, value523)
+			}
+
+			result529 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 * 4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 * 4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (39 * 4))))), index*(3*4))
+				var variant528 golem_agent_common.PathSegment
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					value525 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentLiteral(value525)
+
+				case 1:
+
+					variant528 = golem_agent_common.MakePathSegmentSystemVariable(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))))
+
+				case 2:
+					value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentPathVariable(golem_agent_common.PathVariable{VariableName: value526})
+
+				case 3:
+					value527 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentRemainingPathVariable(golem_agent_common.PathVariable{VariableName: value527})
+
+				default:
+					panic("unreachable")
+				}
+
+				result529 = append(result529, variant528)
+			}
+
+			result537 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (42 * 4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (42 * 4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (41 * 4))))), index*(5*4))
+				var variant536 golem_agent_common.FileMapping
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					result531 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result531 = append(result531, value530)
+					}
+
+					value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant536 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result531, FilePath: value532})
+
+				case 1:
+					result534 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value533 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result534 = append(result534, value533)
+					}
+
+					value535 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant536 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result534, FilesystemRoot: value535})
+
+				default:
+					panic("unreachable")
+				}
+
+				result537 = append(result537, variant536)
+			}
+
+			result545 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (44 * 4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (44 * 4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (43 * 4))))), index*(5*4))
+				var variant544 golem_agent_common.FileMapping
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					result539 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value538 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result539 = append(result539, value538)
+					}
+
+					value540 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant544 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result539, FilePath: value540})
+
+				case 1:
+					result542 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value541 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result542 = append(result542, value541)
+					}
+
+					value543 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant544 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result542, FilesystemRoot: value543})
+
+				default:
+					panic("unreachable")
+				}
+
+				result545 = append(result545, variant544)
+			}
+
+			result548 := make([]golem_agent_common.FileResponseHeader, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (46 * 4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (46 * 4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (45 * 4))))), index*(4*4))
+				value546 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value547 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+				result548 = append(result548, golem_agent_common.FileResponseHeader{Name: value546, Value: value547})
+			}
+
+			var option550 witTypes.Option[string]
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (47 * 4)))) {
+			case 0:
+
+				option550 = witTypes.None[string]()
+			case 1:
+				value549 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (49 * 4))))
+
+				option550 = witTypes.Some[string](value549)
 			default:
 				panic("unreachable")
 			}
 
-			option547 = witTypes.Some[golem_agent_common.HttpMountDetails](golem_agent_common.HttpMountDetails{PathPrefix: result517, AuthDetails: option518, PhantomAgent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 + 31*4)))) != 0), CorsOptions: golem_agent_common.CorsOptions{AllowedPatterns: result520}, WebhookSuffix: result525, StaticBindings: result533, FilesystemBindings: result541, FileResponseHeaders: result544, OpenapiProviderMethod: option546})
+			option551 = witTypes.Some[golem_agent_common.HttpMountDetails](golem_agent_common.HttpMountDetails{PathPrefix: result517, AuthDetails: option518, PhantomAgent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 + 31*4)))) != 0), PhantomIdBinding: option522, CorsOptions: golem_agent_common.CorsOptions{AllowedPatterns: result524}, WebhookSuffix: result529, StaticBindings: result537, FilesystemBindings: result545, FileResponseHeaders: result548, OpenapiProviderMethod: option550})
 		default:
 			panic("unreachable")
 		}
-		var variant549 golem_agent_common.Snapshotting
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 44*4)))) {
+		var variant553 golem_agent_common.Snapshotting
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (50 * 4)))) {
 		case 0:
 
-			variant549 = golem_agent_common.MakeSnapshottingDisabled()
+			variant553 = golem_agent_common.MakeSnapshottingDisabled()
 
 		case 1:
-			var variant548 golem_agent_common.SnapshottingConfig
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 44*4)))) {
+			var variant552 golem_agent_common.SnapshottingConfig
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 50*4)))) {
 			case 0:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigDefault()
+				variant552 = golem_agent_common.MakeSnapshottingConfigDefault()
 
 			case 1:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigPeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (24 + 44*4)))))
+				variant552 = golem_agent_common.MakeSnapshottingConfigPeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 50*4)))))
 
 			case 2:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigEveryNInvocation(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 44*4))))))
+				variant552 = golem_agent_common.MakeSnapshottingConfigEveryNInvocation(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 50*4))))))
 
 			default:
 				panic("unreachable")
 			}
 
-			variant549 = golem_agent_common.MakeSnapshottingEnabled(variant548)
+			variant553 = golem_agent_common.MakeSnapshottingEnabled(variant552)
 
 		default:
 			panic("unreachable")
 		}
-		result552 := make([]golem_agent_common.AgentConfigDeclaration, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 45*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 45*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 44*4))))), index*(4*4))
-			result551 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+		result556 := make([]golem_agent_common.AgentConfigDeclaration, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 51*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 51*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 50*4))))), index*(4*4))
+			result555 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-				value550 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value554 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-				result551 = append(result551, value550)
+				result555 = append(result555, value554)
 			}
 
-			result552 = append(result552, golem_agent_common.AgentConfigDeclaration{Source: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), Path: result551, ValueType: *(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))})
+			result556 = append(result556, golem_agent_common.AgentConfigDeclaration{Source: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), Path: result555, ValueType: *(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))})
 		}
 
-		result553 = append(result553, golem_agent_common.RegisteredAgentType{AgentType: golem_agent_common.AgentType{TypeName: value, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))), Description: value0, SourceLanguage: value1, Schema: golem_core_types.SchemaGraph{TypeNodes: result174, Defs: result178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option180, Description: value181, PromptHint: option183, InputSchema: variant198}, Methods: result253, Dependencies: result512, Mode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (27 * 4))))), HttpMount: option547, Snapshotting: variant549, Config: result552}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (32 + 46*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 46*4))))}}})
+		result557 = append(result557, golem_agent_common.RegisteredAgentType{AgentType: golem_agent_common.AgentType{TypeName: value, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))), Description: value0, SourceLanguage: value1, Schema: golem_core_types.SchemaGraph{TypeNodes: result174, Defs: result178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option180, Description: value181, PromptHint: option183, InputSchema: variant198}, Methods: result253, Dependencies: result512, Mode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (27 * 4))))), HttpMount: option551, Snapshotting: variant553, Config: result556}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (24 + 52*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (32 + 52*4))))}}})
 	}
 
-	result554 := result553
-	return result554
+	result558 := result557
+	return result558
 
 }
 
@@ -4972,15 +4998,15 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (56 + 46*4), 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (48 + 52*4), 8))
 	utf8 := unsafe.Pointer(unsafe.StringData(agentTypeName))
 	pinner.Pin(utf8)
 	wasm_import_get_agent_type(uintptr(utf8), uint32(len(agentTypeName)), returnArea)
-	var option553 witTypes.Option[golem_agent_common.RegisteredAgentType]
+	var option557 witTypes.Option[golem_agent_common.RegisteredAgentType]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		option553 = witTypes.None[golem_agent_common.RegisteredAgentType]()
+		option557 = witTypes.None[golem_agent_common.RegisteredAgentType]()
 	case 1:
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4))))
@@ -9342,11 +9368,11 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 			result512 = append(result512, golem_agent_common.AgentDependency{TypeName: value254, Description: option256, Schema: golem_core_types.SchemaGraph{TypeNodes: result432, Defs: result436, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option438, Description: value439, PromptHint: option441, InputSchema: variant456}, Methods: result511})
 		}
 
-		var option547 witTypes.Option[golem_agent_common.HttpMountDetails]
+		var option551 witTypes.Option[golem_agent_common.HttpMountDetails]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 28*4)))) {
 		case 0:
 
-			option547 = witTypes.None[golem_agent_common.HttpMountDetails]()
+			option551 = witTypes.None[golem_agent_common.HttpMountDetails]()
 		case 1:
 			result517 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 30*4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 30*4)))); index++ {
@@ -9390,197 +9416,223 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 			default:
 				panic("unreachable")
 			}
-			result520 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 33*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 33*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 32*4))))), index*(2*4))
-				value519 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-				result520 = append(result520, value519)
-			}
-
-			result525 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 34*4))))), index*(3*4))
-				var variant524 golem_agent_common.PathSegment
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					value521 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentLiteral(value521)
-
-				case 1:
-
-					variant524 = golem_agent_common.MakePathSegmentSystemVariable(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))))
-
-				case 2:
-					value522 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentPathVariable(golem_agent_common.PathVariable{VariableName: value522})
-
-				case 3:
-					value523 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentRemainingPathVariable(golem_agent_common.PathVariable{VariableName: value523})
-
-				default:
-					panic("unreachable")
-				}
-
-				result525 = append(result525, variant524)
-			}
-
-			result533 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 37*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 37*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 36*4))))), index*(5*4))
-				var variant532 golem_agent_common.FileMapping
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					result527 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result527 = append(result527, value526)
-					}
-
-					value528 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant532 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result527, FilePath: value528})
-
-				case 1:
-					result530 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value529 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result530 = append(result530, value529)
-					}
-
-					value531 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant532 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result530, FilesystemRoot: value531})
-
-				default:
-					panic("unreachable")
-				}
-
-				result533 = append(result533, variant532)
-			}
-
-			result541 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 39*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 39*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 38*4))))), index*(5*4))
-				var variant540 golem_agent_common.FileMapping
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					result535 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value534 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result535 = append(result535, value534)
-					}
-
-					value536 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant540 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result535, FilePath: value536})
-
-				case 1:
-					result538 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value537 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result538 = append(result538, value537)
-					}
-
-					value539 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant540 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result538, FilesystemRoot: value539})
-
-				default:
-					panic("unreachable")
-				}
-
-				result541 = append(result541, variant540)
-			}
-
-			result544 := make([]golem_agent_common.FileResponseHeader, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 41*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 41*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 40*4))))), index*(4*4))
-				value542 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-				value543 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-				result544 = append(result544, golem_agent_common.FileResponseHeader{Name: value542, Value: value543})
-			}
-
-			var option546 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 42*4)))) {
+			var option522 witTypes.Option[golem_agent_common.PhantomIdBinding]
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 32*4)))) {
 			case 0:
 
-				option546 = witTypes.None[string]()
+				option522 = witTypes.None[golem_agent_common.PhantomIdBinding]()
 			case 1:
-				value545 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 43*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 44*4))))
+				var variant521 golem_agent_common.PhantomIdBinding
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 33*4)))) {
+				case 0:
+					value519 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 34*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4))))
 
-				option546 = witTypes.Some[string](value545)
+					variant521 = golem_agent_common.MakePhantomIdBindingPath(golem_agent_common.PhantomIdBindingDetails{Name: value519, Optional: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 36*4)))) != 0)})
+
+				case 1:
+					value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 34*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4))))
+
+					variant521 = golem_agent_common.MakePhantomIdBindingQuery(golem_agent_common.PhantomIdBindingDetails{Name: value520, Optional: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 36*4)))) != 0)})
+
+				default:
+					panic("unreachable")
+				}
+
+				option522 = witTypes.Some[golem_agent_common.PhantomIdBinding](variant521)
+			default:
+				panic("unreachable")
+			}
+			result524 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 38*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 38*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 37*4))))), index*(2*4))
+				value523 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+				result524 = append(result524, value523)
+			}
+
+			result529 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 40*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 40*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 39*4))))), index*(3*4))
+				var variant528 golem_agent_common.PathSegment
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					value525 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentLiteral(value525)
+
+				case 1:
+
+					variant528 = golem_agent_common.MakePathSegmentSystemVariable(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))))
+
+				case 2:
+					value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentPathVariable(golem_agent_common.PathVariable{VariableName: value526})
+
+				case 3:
+					value527 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentRemainingPathVariable(golem_agent_common.PathVariable{VariableName: value527})
+
+				default:
+					panic("unreachable")
+				}
+
+				result529 = append(result529, variant528)
+			}
+
+			result537 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 42*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 42*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 41*4))))), index*(5*4))
+				var variant536 golem_agent_common.FileMapping
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					result531 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result531 = append(result531, value530)
+					}
+
+					value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant536 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result531, FilePath: value532})
+
+				case 1:
+					result534 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value533 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result534 = append(result534, value533)
+					}
+
+					value535 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant536 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result534, FilesystemRoot: value535})
+
+				default:
+					panic("unreachable")
+				}
+
+				result537 = append(result537, variant536)
+			}
+
+			result545 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 44*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 44*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 43*4))))), index*(5*4))
+				var variant544 golem_agent_common.FileMapping
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					result539 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value538 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result539 = append(result539, value538)
+					}
+
+					value540 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant544 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result539, FilePath: value540})
+
+				case 1:
+					result542 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value541 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result542 = append(result542, value541)
+					}
+
+					value543 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant544 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result542, FilesystemRoot: value543})
+
+				default:
+					panic("unreachable")
+				}
+
+				result545 = append(result545, variant544)
+			}
+
+			result548 := make([]golem_agent_common.FileResponseHeader, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 46*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 46*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 45*4))))), index*(4*4))
+				value546 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value547 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+				result548 = append(result548, golem_agent_common.FileResponseHeader{Name: value546, Value: value547})
+			}
+
+			var option550 witTypes.Option[string]
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 47*4)))) {
+			case 0:
+
+				option550 = witTypes.None[string]()
+			case 1:
+				value549 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 48*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 49*4))))
+
+				option550 = witTypes.Some[string](value549)
 			default:
 				panic("unreachable")
 			}
 
-			option547 = witTypes.Some[golem_agent_common.HttpMountDetails](golem_agent_common.HttpMountDetails{PathPrefix: result517, AuthDetails: option518, PhantomAgent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (10 + 31*4)))) != 0), CorsOptions: golem_agent_common.CorsOptions{AllowedPatterns: result520}, WebhookSuffix: result525, StaticBindings: result533, FilesystemBindings: result541, FileResponseHeaders: result544, OpenapiProviderMethod: option546})
+			option551 = witTypes.Some[golem_agent_common.HttpMountDetails](golem_agent_common.HttpMountDetails{PathPrefix: result517, AuthDetails: option518, PhantomAgent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (10 + 31*4)))) != 0), PhantomIdBinding: option522, CorsOptions: golem_agent_common.CorsOptions{AllowedPatterns: result524}, WebhookSuffix: result529, StaticBindings: result537, FilesystemBindings: result545, FileResponseHeaders: result548, OpenapiProviderMethod: option550})
 		default:
 			panic("unreachable")
 		}
-		var variant549 golem_agent_common.Snapshotting
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 44*4)))) {
+		var variant553 golem_agent_common.Snapshotting
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 50*4)))) {
 		case 0:
 
-			variant549 = golem_agent_common.MakeSnapshottingDisabled()
+			variant553 = golem_agent_common.MakeSnapshottingDisabled()
 
 		case 1:
-			var variant548 golem_agent_common.SnapshottingConfig
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 44*4)))) {
+			var variant552 golem_agent_common.SnapshottingConfig
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 50*4)))) {
 			case 0:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigDefault()
+				variant552 = golem_agent_common.MakeSnapshottingConfigDefault()
 
 			case 1:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigPeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 44*4)))))
+				variant552 = golem_agent_common.MakeSnapshottingConfigPeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 50*4)))))
 
 			case 2:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigEveryNInvocation(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 44*4))))))
+				variant552 = golem_agent_common.MakeSnapshottingConfigEveryNInvocation(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 50*4))))))
 
 			default:
 				panic("unreachable")
 			}
 
-			variant549 = golem_agent_common.MakeSnapshottingEnabled(variant548)
+			variant553 = golem_agent_common.MakeSnapshottingEnabled(variant552)
 
 		default:
 			panic("unreachable")
 		}
-		result552 := make([]golem_agent_common.AgentConfigDeclaration, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 45*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 45*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 44*4))))), index*(4*4))
-			result551 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+		result556 := make([]golem_agent_common.AgentConfigDeclaration, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 51*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 51*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 50*4))))), index*(4*4))
+			result555 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-				value550 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value554 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-				result551 = append(result551, value550)
+				result555 = append(result555, value554)
 			}
 
-			result552 = append(result552, golem_agent_common.AgentConfigDeclaration{Source: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), Path: result551, ValueType: *(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))})
+			result556 = append(result556, golem_agent_common.AgentConfigDeclaration{Source: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), Path: result555, ValueType: *(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))})
 		}
 
-		option553 = witTypes.Some[golem_agent_common.RegisteredAgentType](golem_agent_common.RegisteredAgentType{AgentType: golem_agent_common.AgentType{TypeName: value, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))), Description: value0, SourceLanguage: value1, Schema: golem_core_types.SchemaGraph{TypeNodes: result174, Defs: result178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option180, Description: value181, PromptHint: option183, InputSchema: variant198}, Methods: result253, Dependencies: result512, Mode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 27*4))))), HttpMount: option547, Snapshotting: variant549, Config: result552}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 46*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (48 + 46*4))))}}})
+		option557 = witTypes.Some[golem_agent_common.RegisteredAgentType](golem_agent_common.RegisteredAgentType{AgentType: golem_agent_common.AgentType{TypeName: value, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))), Description: value0, SourceLanguage: value1, Schema: golem_core_types.SchemaGraph{TypeNodes: result174, Defs: result178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option180, Description: value181, PromptHint: option183, InputSchema: variant198}, Methods: result253, Dependencies: result512, Mode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 27*4))))), HttpMount: option551, Snapshotting: variant553, Config: result556}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 52*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 52*4))))}}})
 	default:
 		panic("unreachable")
 	}
-	result554 := option553
-	return result554
+	result558 := option557
+	return result558
 
 }
 
@@ -9591,15 +9643,15 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (56 + 46*4), 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (48 + 52*4), 8))
 	utf8 := unsafe.Pointer(unsafe.StringData(agentId))
 	pinner.Pin(utf8)
 	wasm_import_get_agent_type_by_agent_id(uintptr(utf8), uint32(len(agentId)), returnArea)
-	var option553 witTypes.Option[golem_agent_common.RegisteredAgentType]
+	var option557 witTypes.Option[golem_agent_common.RegisteredAgentType]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		option553 = witTypes.None[golem_agent_common.RegisteredAgentType]()
+		option557 = witTypes.None[golem_agent_common.RegisteredAgentType]()
 	case 1:
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4))))
@@ -13961,11 +14013,11 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 			result512 = append(result512, golem_agent_common.AgentDependency{TypeName: value254, Description: option256, Schema: golem_core_types.SchemaGraph{TypeNodes: result432, Defs: result436, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option438, Description: value439, PromptHint: option441, InputSchema: variant456}, Methods: result511})
 		}
 
-		var option547 witTypes.Option[golem_agent_common.HttpMountDetails]
+		var option551 witTypes.Option[golem_agent_common.HttpMountDetails]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 28*4)))) {
 		case 0:
 
-			option547 = witTypes.None[golem_agent_common.HttpMountDetails]()
+			option551 = witTypes.None[golem_agent_common.HttpMountDetails]()
 		case 1:
 			result517 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 30*4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 30*4)))); index++ {
@@ -14009,197 +14061,223 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 			default:
 				panic("unreachable")
 			}
-			result520 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 33*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 33*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 32*4))))), index*(2*4))
-				value519 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-				result520 = append(result520, value519)
-			}
-
-			result525 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 34*4))))), index*(3*4))
-				var variant524 golem_agent_common.PathSegment
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					value521 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentLiteral(value521)
-
-				case 1:
-
-					variant524 = golem_agent_common.MakePathSegmentSystemVariable(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))))
-
-				case 2:
-					value522 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentPathVariable(golem_agent_common.PathVariable{VariableName: value522})
-
-				case 3:
-					value523 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-
-					variant524 = golem_agent_common.MakePathSegmentRemainingPathVariable(golem_agent_common.PathVariable{VariableName: value523})
-
-				default:
-					panic("unreachable")
-				}
-
-				result525 = append(result525, variant524)
-			}
-
-			result533 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 37*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 37*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 36*4))))), index*(5*4))
-				var variant532 golem_agent_common.FileMapping
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					result527 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result527 = append(result527, value526)
-					}
-
-					value528 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant532 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result527, FilePath: value528})
-
-				case 1:
-					result530 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value529 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result530 = append(result530, value529)
-					}
-
-					value531 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant532 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result530, FilesystemRoot: value531})
-
-				default:
-					panic("unreachable")
-				}
-
-				result533 = append(result533, variant532)
-			}
-
-			result541 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 39*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 39*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 38*4))))), index*(5*4))
-				var variant540 golem_agent_common.FileMapping
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
-					result535 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value534 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result535 = append(result535, value534)
-					}
-
-					value536 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant540 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result535, FilePath: value536})
-
-				case 1:
-					result538 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-						value537 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result538 = append(result538, value537)
-					}
-
-					value539 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant540 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result538, FilesystemRoot: value539})
-
-				default:
-					panic("unreachable")
-				}
-
-				result541 = append(result541, variant540)
-			}
-
-			result544 := make([]golem_agent_common.FileResponseHeader, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 41*4))))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 41*4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 40*4))))), index*(4*4))
-				value542 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-				value543 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-				result544 = append(result544, golem_agent_common.FileResponseHeader{Name: value542, Value: value543})
-			}
-
-			var option546 witTypes.Option[string]
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 42*4)))) {
+			var option522 witTypes.Option[golem_agent_common.PhantomIdBinding]
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 32*4)))) {
 			case 0:
 
-				option546 = witTypes.None[string]()
+				option522 = witTypes.None[golem_agent_common.PhantomIdBinding]()
 			case 1:
-				value545 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 43*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 44*4))))
+				var variant521 golem_agent_common.PhantomIdBinding
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 33*4)))) {
+				case 0:
+					value519 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 34*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4))))
 
-				option546 = witTypes.Some[string](value545)
+					variant521 = golem_agent_common.MakePhantomIdBindingPath(golem_agent_common.PhantomIdBindingDetails{Name: value519, Optional: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 36*4)))) != 0)})
+
+				case 1:
+					value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 34*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 35*4))))
+
+					variant521 = golem_agent_common.MakePhantomIdBindingQuery(golem_agent_common.PhantomIdBindingDetails{Name: value520, Optional: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 36*4)))) != 0)})
+
+				default:
+					panic("unreachable")
+				}
+
+				option522 = witTypes.Some[golem_agent_common.PhantomIdBinding](variant521)
+			default:
+				panic("unreachable")
+			}
+			result524 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 38*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 38*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 37*4))))), index*(2*4))
+				value523 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+				result524 = append(result524, value523)
+			}
+
+			result529 := make([]golem_agent_common.PathSegment, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 40*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 40*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 39*4))))), index*(3*4))
+				var variant528 golem_agent_common.PathSegment
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					value525 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentLiteral(value525)
+
+				case 1:
+
+					variant528 = golem_agent_common.MakePathSegmentSystemVariable(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))))
+
+				case 2:
+					value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentPathVariable(golem_agent_common.PathVariable{VariableName: value526})
+
+				case 3:
+					value527 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+
+					variant528 = golem_agent_common.MakePathSegmentRemainingPathVariable(golem_agent_common.PathVariable{VariableName: value527})
+
+				default:
+					panic("unreachable")
+				}
+
+				result529 = append(result529, variant528)
+			}
+
+			result537 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 42*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 42*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 41*4))))), index*(5*4))
+				var variant536 golem_agent_common.FileMapping
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					result531 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result531 = append(result531, value530)
+					}
+
+					value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant536 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result531, FilePath: value532})
+
+				case 1:
+					result534 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value533 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result534 = append(result534, value533)
+					}
+
+					value535 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant536 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result534, FilesystemRoot: value535})
+
+				default:
+					panic("unreachable")
+				}
+
+				result537 = append(result537, variant536)
+			}
+
+			result545 := make([]golem_agent_common.FileMapping, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 44*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 44*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 43*4))))), index*(5*4))
+				var variant544 golem_agent_common.FileMapping
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
+					result539 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value538 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result539 = append(result539, value538)
+					}
+
+					value540 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant544 = golem_agent_common.MakeFileMappingExact(golem_agent_common.ExactFileMapping{PublicPath: result539, FilePath: value540})
+
+				case 1:
+					result542 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
+						value541 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result542 = append(result542, value541)
+					}
+
+					value543 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant544 = golem_agent_common.MakeFileMappingSubtree(golem_agent_common.SubtreeFileMapping{PublicPrefix: result542, FilesystemRoot: value543})
+
+				default:
+					panic("unreachable")
+				}
+
+				result545 = append(result545, variant544)
+			}
+
+			result548 := make([]golem_agent_common.FileResponseHeader, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 46*4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 46*4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 45*4))))), index*(4*4))
+				value546 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value547 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+				result548 = append(result548, golem_agent_common.FileResponseHeader{Name: value546, Value: value547})
+			}
+
+			var option550 witTypes.Option[string]
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 47*4)))) {
+			case 0:
+
+				option550 = witTypes.None[string]()
+			case 1:
+				value549 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 48*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 49*4))))
+
+				option550 = witTypes.Some[string](value549)
 			default:
 				panic("unreachable")
 			}
 
-			option547 = witTypes.Some[golem_agent_common.HttpMountDetails](golem_agent_common.HttpMountDetails{PathPrefix: result517, AuthDetails: option518, PhantomAgent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (10 + 31*4)))) != 0), CorsOptions: golem_agent_common.CorsOptions{AllowedPatterns: result520}, WebhookSuffix: result525, StaticBindings: result533, FilesystemBindings: result541, FileResponseHeaders: result544, OpenapiProviderMethod: option546})
+			option551 = witTypes.Some[golem_agent_common.HttpMountDetails](golem_agent_common.HttpMountDetails{PathPrefix: result517, AuthDetails: option518, PhantomAgent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (10 + 31*4)))) != 0), PhantomIdBinding: option522, CorsOptions: golem_agent_common.CorsOptions{AllowedPatterns: result524}, WebhookSuffix: result529, StaticBindings: result537, FilesystemBindings: result545, FileResponseHeaders: result548, OpenapiProviderMethod: option550})
 		default:
 			panic("unreachable")
 		}
-		var variant549 golem_agent_common.Snapshotting
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 44*4)))) {
+		var variant553 golem_agent_common.Snapshotting
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 50*4)))) {
 		case 0:
 
-			variant549 = golem_agent_common.MakeSnapshottingDisabled()
+			variant553 = golem_agent_common.MakeSnapshottingDisabled()
 
 		case 1:
-			var variant548 golem_agent_common.SnapshottingConfig
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 44*4)))) {
+			var variant552 golem_agent_common.SnapshottingConfig
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 50*4)))) {
 			case 0:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigDefault()
+				variant552 = golem_agent_common.MakeSnapshottingConfigDefault()
 
 			case 1:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigPeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 44*4)))))
+				variant552 = golem_agent_common.MakeSnapshottingConfigPeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 50*4)))))
 
 			case 2:
 
-				variant548 = golem_agent_common.MakeSnapshottingConfigEveryNInvocation(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 44*4))))))
+				variant552 = golem_agent_common.MakeSnapshottingConfigEveryNInvocation(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 50*4))))))
 
 			default:
 				panic("unreachable")
 			}
 
-			variant549 = golem_agent_common.MakeSnapshottingEnabled(variant548)
+			variant553 = golem_agent_common.MakeSnapshottingEnabled(variant552)
 
 		default:
 			panic("unreachable")
 		}
-		result552 := make([]golem_agent_common.AgentConfigDeclaration, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 45*4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 45*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 44*4))))), index*(4*4))
-			result551 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
+		result556 := make([]golem_agent_common.AgentConfigDeclaration, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 51*4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 51*4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 50*4))))), index*(4*4))
+			result555 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))), index*(2*4))
-				value550 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value554 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-				result551 = append(result551, value550)
+				result555 = append(result555, value554)
 			}
 
-			result552 = append(result552, golem_agent_common.AgentConfigDeclaration{Source: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), Path: result551, ValueType: *(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))})
+			result556 = append(result556, golem_agent_common.AgentConfigDeclaration{Source: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), Path: result555, ValueType: *(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))})
 		}
 
-		option553 = witTypes.Some[golem_agent_common.RegisteredAgentType](golem_agent_common.RegisteredAgentType{AgentType: golem_agent_common.AgentType{TypeName: value, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))), Description: value0, SourceLanguage: value1, Schema: golem_core_types.SchemaGraph{TypeNodes: result174, Defs: result178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option180, Description: value181, PromptHint: option183, InputSchema: variant198}, Methods: result253, Dependencies: result512, Mode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 27*4))))), HttpMount: option547, Snapshotting: variant549, Config: result552}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 46*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (48 + 46*4))))}}})
+		option557 = witTypes.Some[golem_agent_common.RegisteredAgentType](golem_agent_common.RegisteredAgentType{AgentType: golem_agent_common.AgentType{TypeName: value, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))), Description: value0, SourceLanguage: value1, Schema: golem_core_types.SchemaGraph{TypeNodes: result174, Defs: result178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))}, Constructor: golem_agent_common.AgentConstructor{Name: option180, Description: value181, PromptHint: option183, InputSchema: variant198}, Methods: result253, Dependencies: result512, Mode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 27*4))))), HttpMount: option551, Snapshotting: variant553, Config: result556}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 52*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 52*4))))}}})
 	default:
 		panic("unreachable")
 	}
-	result554 := option553
-	return result554
+	result558 := option557
+	return result558
 
 }
 

@@ -271,6 +271,77 @@ func TestBuildHTTPValidations(t *testing.T) {
 	}
 }
 
+func TestPhantomSelectorCompilesToTheMount(t *testing.T) {
+	path := agent("Decision", &Mount{Path: "/decisions/{decision}/{instance}", PhantomID: PhantomIDPath("instance").Optional()},
+		fields("decision"), method("state", nil, GET("/state")))
+	mount, _, errs := buildHTTP(path)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected definition errors: %v", errs)
+	}
+	b := mount.Some().PhantomIdBinding
+	if !b.IsSome() || b.Some().Tag() != common.PhantomIdBindingPath || b.Some().Path() != (common.PhantomIdBindingDetails{Name: "instance", Optional: true}) {
+		t.Errorf("path selector = %+v", b)
+	}
+
+	query := agent("Decision", &Mount{Path: "/decisions/{decision}", PhantomID: PhantomIDQuery("instance")},
+		fields("decision"), method("state", nil, GET("/state")))
+	mount, _, errs = buildHTTP(query)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected definition errors: %v", errs)
+	}
+	b = mount.Some().PhantomIdBinding
+	if !b.IsSome() || b.Some().Tag() != common.PhantomIdBindingQuery || b.Some().Query() != (common.PhantomIdBindingDetails{Name: "instance"}) {
+		t.Errorf("query selector = %+v", b)
+	}
+
+	none, _, _ := buildHTTP(agent("Decision", &Mount{Path: "/decisions/{decision}"}, fields("decision")))
+	if none.Some().PhantomIdBinding.IsSome() {
+		t.Errorf("a mount without PhantomID declares a selector")
+	}
+}
+
+func TestPhantomSelectorValidations(t *testing.T) {
+	ephemeral := agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("instance")}, fields("id"))
+	ephemeral.mode = common.AgentModeEphemeral
+	streams := method("events", []engine.Field{{Name: "uploads", Typ: reflect.TypeFor[AgentStream[byte]]()}},
+		POST("/events", DurableStreams(StreamRoute{})))
+	cases := []struct {
+		name string
+		e    *agentEntry
+		want string
+	}{
+		{"empty name", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("")}, fields("id")), "nonempty name"},
+		{"ephemeral agent", ephemeral, "requires a durable agent"},
+		{
+			"file exposure",
+			agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("instance"), ExposeFiles: []FileMapping{{Route: "/files", Path: "/data"}}}, fields("id")),
+			"cannot be combined with ExposeFiles",
+		},
+		{"path selector names no capture", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDPath("instance")}, fields("id")), "exactly one mount capture"},
+		{"path selector names an Id field", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDPath("id")}, fields("id")), "not a constructor (Id) field"},
+		{"query selector with a mount capture of the same name", agent("A", &Mount{Path: "/a/{id}/{instance}", PhantomID: PhantomIDQuery("instance")}, fields("id")), "{instance} is not a constructor"},
+		{
+			"endpoint path variable",
+			agent("A", &Mount{Path: "/a/{id}/{instance}", PhantomID: PhantomIDPath("instance")}, fields("id"), method("m", fields("instance"), POST("/m/{instance}"))),
+			"is the mount's phantom selector",
+		},
+		{
+			"endpoint query parameter",
+			agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("instance")}, fields("id"), method("m", fields("x"), POST("/m?instance={x}"))),
+			"is the mount's phantom selector",
+		},
+		{"durable streams control", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("offset")}, fields("id"), streams), "Durable Streams control"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, errs := buildHTTP(c.e)
+			if !containsDefErr(errs, c.want) {
+				t.Errorf("errors %v, want one mentioning %q", errs, c.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
