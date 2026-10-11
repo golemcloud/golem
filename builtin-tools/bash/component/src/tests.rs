@@ -1,6 +1,15 @@
 use super::*;
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    // A native command of a script writes to the standard output of the process, which the
+    // shell points at the output of the command for that time. The test runner writes the
+    // result line of each other test to the same descriptor. The lock makes the test runner
+    // wait, so that no result line gets into the output of a script.
+    //
+    // Natively, a command that is a stage of a pipeline runs on another thread, and a native
+    // command flushes the standard output there. It would wait for this lock without end, so a
+    // script of these tests must have no pipeline.
+    let _stdout = std::io::stdout().lock();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
