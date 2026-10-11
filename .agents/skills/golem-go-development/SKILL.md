@@ -1,8 +1,14 @@
-# Golem Go SDK
+---
+name: golem-go-development
+description: "Builds, tests, and lints the Golem Go SDK modules (core, golem, bridge) and explains their traps: native linking of WIT bindings, the patched Go toolchain, canonical JSON versus the wire form, error shapes, and release tags. Use for changes under sdks/go or the Go bridge generators."
+---
+
+# Golem Go SDK Development
 
 ## Overview
 
-Three independently built Go modules, none of them part of the root Cargo workspace:
+Work from `sdks/go/<module>/`; the root Rust build does not build the Go SDK. Three
+independently built Go modules, none of them part of the root Cargo workspace:
 
 - `core/` — the shared model. `core/schema` holds the schema model, canonical JSON,
   JSON Schema rendering, validation and the schema-native REST wire form;
@@ -80,6 +86,17 @@ cd sdks/go/golem  && go build ./... && go test ./... \
   && GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false .
 ```
 
+The guest SDK is vetted for wasm at `.` only: the generated `internal/wit` bindings trip
+vet's `unsafe.Pointer` and unkeyed-field checks, so they are compiled, not vetted. CI runs
+this set, the binding drift check and the linters in the `build-golem-go` job
+(`.github/workflows/ci.yaml`).
+
+Generated binding code lands in `internal/wit/` and is wiped on every run. The
+hand-written export slots in `internal/exports/` survive because `--export-pkg-name`
+points the generated glue at them, and `dev-tools/go-bindgen-fixup` works around two
+wit-bindgen `crates/go` bugs (tag-constant collisions, and a missing `empty.s` for the
+exports package).
+
 Regenerate the committed WIT bindings after a WIT change, and commit the result — CI
 rejects drift:
 
@@ -99,6 +116,17 @@ cargo test -p golem-worker-executor --test integration -- --skip diag_ agent_sdk
 Lint with `golangci-lint` per module; each has its own `.golangci.yml`. The version
 must be one built with Go 1.27 or newer, or it cannot parse the guest SDK's generic
 methods.
+
+## Module paths and directory names
+
+The guest SDK is `github.com/golemcloud/golem/sdks/go/golem`, package `golem`. Go binds an
+import to the package clause, but tooling and readers expect it to match the last path
+element, so the directory is named `golem` and agents import the SDK with no alias. A
+hyphenated name (`golem-go-sdk`) would force an alias back. `core` and `bridge` follow the
+same rule.
+
+`componentize-go` is pinned per module through Go's `tool` directive, never installed
+globally.
 
 ## Native linking and `//go:wasmimport`
 
@@ -221,3 +249,28 @@ derives the core path from the Go SDK path override and reconciles both the `req
 and the `replace` on every build (`app/build/check/go.rs`, `sdk_overrides.rs`,
 `app/edit/go_mod.rs`). Adding a fourth module means extending that fan-out, and every
 component `go.mod` with it.
+
+## Local SDK overrides
+
+`GOLEM_GO_PATH` (or `GOLEM_PATH`, which derives it) makes the CLI write `replace`
+directives into a generated app's `go.mod` that point at this checkout. This is how a
+playground app tests SDK changes without a release.
+
+## Releasing: Go has no package registry
+
+The git tag is the release; `proxy.golang.org` reads it from this repository, and there is
+no publish workflow. A module in a subdirectory must be tagged with that subdirectory as
+the prefix, which is a Go rule (<https://go.dev/ref/mod>), so the tags break the
+`golem-<lang>-v*` convention of the other SDKs:
+
+```
+sdks/go/golem/v0.1.0   ✅ the only form Go recognises
+golem-go-v0.1.0        ❌ invisible to Go
+```
+
+Each module is tagged on its own (`sdks/go/core/…`, `sdks/go/golem/…`,
+`sdks/go/bridge/…`). The tags collide with nothing: there is no root `go.mod`, so the
+repository's own release tags are invisible to Go. With the default `GOPROXY` a consumer
+downloads only the module subtree. The mirror keeps a module permanently only if it detects
+a license, and Go has no metadata field for one, so each module directory carries its own
+`LICENSE`.

@@ -78,7 +78,7 @@ Then broaden only as warranted:
 | Broad CLI behavior | Targeted `cargo-test-r` filters, then `cargo make cli-integration-tests` only if needed |
 | HTTP or gRPC endpoint behavior | Relevant endpoint tests; use the full HTTP/gRPC API suite for cross-cutting endpoint changes |
 | SDK behavior used by the platform | Relevant SDK tests plus only the platform tests that exercise the changed integration |
-| Go SDK (`sdks/go/golem/`) | `go test ./...` there; host-call paths only build under a generated app, so also build one — see the `sdk-development` skill |
+| Go SDK (`sdks/go/`) | the per-module build, test and lint set in the `golem-go-development` skill; changes that reach a running component also rebuild `test-components/agent-sdk-go` and run the `agent_sdk_go` executor tests |
 | CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
 | CLI JSON output affecting skill tests | Update and run affected skill harness tests/scenarios; run harness build/tests only if harness code or tests changed |
 
