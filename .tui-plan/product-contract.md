@@ -45,6 +45,13 @@ The permanent destinations are:
   returning restores collection selection and scroll.
 - Merely selecting an Agent never silently retargets another destination.
   `Open selected Agent in …` is an explicit scope handoff.
+- Agent, Oplog, Metrics, and Stream expose related destinations as compact
+  links in the owning page-title row. A visible unavailable link is explanatory,
+  not clickable. Exact-Agent links use the selected row or series; set links
+  retain the explicit scope. Metrics-to-Oplog also retains the inspected sample
+  or bucket correlation.
+- Opening a Stream link only navigates. It does not connect and cannot silently
+  retarget a different active Stream session.
 - Context changes keep the active destination but return it to its root, clear
   operational scopes and live buffers, cancel stale requests, and reload.
 

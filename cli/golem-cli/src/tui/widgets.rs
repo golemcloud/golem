@@ -2250,6 +2250,104 @@ pub(super) struct PaneHeaderStatus<'a> {
     pub tone: PaneStatusTone,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct PaneHeaderAction<'a> {
+    pub label: &'a str,
+    pub available: bool,
+}
+
+pub(super) struct PaneHeaderActions<'a> {
+    pub actions: &'a [PaneHeaderAction<'a>],
+}
+
+impl PaneHeaderActions<'_> {
+    pub fn render(
+        self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        reserved_left: u16,
+        reserved_right: u16,
+        visual: &TuiVisualStyle,
+    ) -> Vec<Option<Rect>> {
+        let mut regions = vec![None; self.actions.len()];
+        if area.height == 0
+            || area.width
+                <= reserved_left
+                    .saturating_add(reserved_right)
+                    .saturating_add(8)
+        {
+            return regions;
+        }
+        let available_width = area
+            .width
+            .saturating_sub(reserved_left)
+            .saturating_sub(reserved_right)
+            .saturating_sub(2) as usize;
+        let prefix = "open  ";
+        let mut used = UnicodeWidthStr::width(prefix);
+        let mut visible = 0;
+        for action in self.actions {
+            let separator = usize::from(visible > 0) * 2;
+            let width = UnicodeWidthStr::width(action.label);
+            if used.saturating_add(separator).saturating_add(width) > available_width {
+                break;
+            }
+            used = used.saturating_add(separator).saturating_add(width);
+            visible += 1;
+        }
+        if visible == 0 {
+            return regions;
+        }
+        let target = Rect {
+            x: area
+                .right()
+                .saturating_sub(reserved_right)
+                .saturating_sub(used as u16)
+                .saturating_sub(1),
+            width: used as u16,
+            height: 1,
+            ..area
+        };
+        let mut spans = vec![Span::styled(
+            prefix,
+            Style::default().fg(visual.text_muted).bg(visual.surface),
+        )];
+        let mut column = UnicodeWidthStr::width(prefix) as u16;
+        for (index, action) in self.actions.iter().take(visible).enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(
+                    "  ",
+                    Style::default().fg(visual.border).bg(visual.surface),
+                ));
+                column = column.saturating_add(2);
+            }
+            let width = UnicodeWidthStr::width(action.label) as u16;
+            let action_area = Rect::new(target.x.saturating_add(column), target.y, width, 1);
+            if action.available {
+                regions[index] = Some(action_area);
+            }
+            spans.push(Span::styled(
+                action.label.to_string(),
+                Style::default()
+                    .fg(if action.available {
+                        visual.accent_hover
+                    } else {
+                        visual.text_faint
+                    })
+                    .bg(visual.surface)
+                    .add_modifier(if action.available {
+                        Modifier::BOLD | Modifier::UNDERLINED
+                    } else {
+                        Modifier::empty()
+                    }),
+            ));
+            column = column.saturating_add(width);
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), target);
+        regions
+    }
+}
+
 impl PaneHeaderStatus<'_> {
     pub fn render(self, frame: &mut Frame<'_>, area: Rect, visual: &TuiVisualStyle) {
         if area.width < 8 || area.height == 0 {
@@ -3283,6 +3381,39 @@ mod tests {
             rendered,
             "View  [Dashboard] Explore   Source  Agents [Server]   Scope environment"
         );
+    }
+
+    #[test]
+    fn pane_header_actions_expose_only_visible_available_hit_regions() {
+        let visual = TuiVisualStyle::production();
+        let actions = [
+            PaneHeaderAction {
+                label: "Agent",
+                available: true,
+            },
+            PaneHeaderAction {
+                label: "Oplog",
+                available: false,
+            },
+            PaneHeaderAction {
+                label: "Metrics",
+                available: true,
+            },
+        ];
+        let mut regions = Vec::new();
+        let buffer = render(48, 1, |frame| {
+            regions =
+                PaneHeaderActions { actions: &actions }.render(frame, frame.area(), 12, 0, &visual);
+        });
+        let rendered = text(&buffer);
+
+        assert!(
+            rendered.contains("open  Agent  Oplog  Metrics"),
+            "{rendered}"
+        );
+        assert!(regions[0].is_some());
+        assert!(regions[1].is_none());
+        assert!(regions[2].is_some());
     }
 
     #[test]

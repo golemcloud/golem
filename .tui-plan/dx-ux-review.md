@@ -696,5 +696,8 @@ renderers are no longer live contracts.
   implemented and their focused checks are green. Page titles now carry
   identity only; segmented controls, transient status, continuous spines, and
   adaptive nested panes have shared owners. Grouped journal and exact Entries
-  have separate production preview cases. Handoffs, remaining pointer parity,
-  and final Metrics review remain tracked in `tasks.md`.
+  have separate production preview cases. Agent, Oplog, Metrics, and Stream now
+  expose scope-aware related links in their owning title row, including exact
+  Metrics sample/bucket correlation and safe passive Stream navigation.
+  Remaining pointer parity and the final Metrics review remain tracked in
+  `tasks.md`.

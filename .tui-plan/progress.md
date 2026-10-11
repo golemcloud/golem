@@ -1,5 +1,25 @@
 # Progress
 
+## 2026-10-11: Visible Ops Investigation Handoffs
+
+- Added a compact `open` action cluster to the existing pane-title row for
+  related Agent, Oplog, Metrics, and Stream destinations. Available targets are
+  accented, underlined, and pointer-addressable; unavailable targets remain
+  visible but muted so the relationship and its current limit are both clear.
+- Preserved explicit scope semantics across those links: Agent selections move
+  as the sorted included set, Oplog and Metrics retain their current multi-Agent
+  scope, and Agent/Stream links use the selected exact Agent.
+- Kept Metrics-to-Oplog correlation exact. Explore links retain the selected
+  raw oplog index or aggregate bucket range instead of degrading into a generic
+  Agent-scope jump; dashboard aggregates do not claim an exact handoff.
+- Kept passive Stream navigation separate from session lifecycle. It may open
+  an idle or matching Agent Stream but never silently retargets another active
+  session.
+
+Ready for combined terminal review with the input, Overview, hierarchy, and
+Oplog checkpoints. Pointer parity and the final Metrics density pass remain
+active before Ops acceptance.
+
 ## 2026-10-11: Oplog Master/Details Explorer
 
 - Replaced the ad-hoc Entries-only split with one shared Ops master/details

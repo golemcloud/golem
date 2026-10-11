@@ -225,6 +225,17 @@ title. Nested data panes use `PaneChrome`, continuous outer-left spines, and
 owned structural dividers. Responsive stacking changes geometry only: it does
 not add duplicate headings or a destination-specific control grammar.
 
+Related investigation destinations use a compact `open` action cluster in the
+otherwise-unused right side of that same title row. It is not a second header.
+Available links are accent-underlined and have exact pointer regions;
+unavailable links remain visible in the faint style without a hit region. The
+cluster yields to the title and transient header status on narrow layouts.
+Scope transfer remains explicit: Oplog and Metrics preserve the owning page's
+full Agent scope, while Agent and Stream require one exact selected Agent.
+Metrics-to-Oplog retains the inspected sample index or aggregate bucket range.
+Opening Stream does not start it and never silently retargets another live
+session.
+
 Metrics separates curated Dashboard from ad-hoc Explore and keeps Server and
 Agent telemetry explicit. Oplog separates Grouped from exact Entries. Stream
 is an exact-Agent live session. Fake telemetry belongs only to visibly labelled

@@ -78,11 +78,12 @@ use crate::tui::widgets::{
     CommandRow, ContextHeader, ContextPair, ControlChoice, ControlGroup, ControlStrip,
     CursorCollectionState, DecisionTableRow, FieldRow, FooterStatusCluster, FooterStatusItem,
     HelpRow, JsonDocument, KeyHint, NavigationRow, Notice, NoticeKind, OverlayFrame, PaneChrome,
-    PaneEnding, PaneFocus, PaneHeader, PaneHeaderStatus, PaneLayout, PaneScrollbarSlot,
-    PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan, PaneTableColumn, PaneTableState,
-    ReviewFieldRow, ScrollableDocument, SearchInput, SectionHeading, SelectableRow, ShortcutRow,
-    StatusKind, StatusMarker, WorkspaceItem, WorkspaceSelector, fit, pane_table_virtual_width,
-    render_scrollbar, responsive_table_columns, shortcut_line, wrap_styled_line,
+    PaneEnding, PaneFocus, PaneHeader, PaneHeaderAction, PaneHeaderActions, PaneHeaderStatus,
+    PaneLayout, PaneScrollbarSlot, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
+    PaneTableColumn, PaneTableState, ReviewFieldRow, ScrollableDocument, SearchInput,
+    SectionHeading, SelectableRow, ShortcutRow, StatusKind, StatusMarker, WorkspaceItem,
+    WorkspaceSelector, fit, pane_table_virtual_width, render_scrollbar, responsive_table_columns,
+    shortcut_line, wrap_styled_line,
 };
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -2262,6 +2263,9 @@ impl TuiApp {
             return;
         }
         match hit {
+            Some(RegionKind::OpsLink(destination)) => {
+                self.open_related_destination(destination, event_tx)
+            }
             Some(RegionKind::OpsTab(destination)) => {
                 self.restore_default_mode();
                 self.select_ops_destination(destination, event_tx);
@@ -3320,8 +3324,102 @@ impl TuiApp {
         agents
     }
 
-    fn open_agent_scope_in_oplog(&mut self, event_tx: Option<&TuiEventSender>) {
-        let agents = self.agent_handoff_scope();
+    fn activity_selected_agent(&self) -> Option<AgentIdentity> {
+        match self.activity.representation {
+            ActivityRepresentation::Entries => self
+                .activity
+                .entries
+                .get(self.activity.selected)
+                .map(|entry| AgentIdentity {
+                    component: entry.component.clone(),
+                    agent_id: entry.agent_id.clone(),
+                }),
+            ActivityRepresentation::Grouped => activity::grouped_entries(&self.activity.entries)
+                .get(self.activity.selected)
+                .map(|group| AgentIdentity {
+                    component: group.component.clone(),
+                    agent_id: group.agent_id.clone(),
+                }),
+        }
+    }
+
+    fn related_exact_agent(&self) -> Option<AgentIdentity> {
+        match self.ops.active() {
+            OpsDestination::Agents => self.stream_target_candidate(),
+            OpsDestination::Oplog => self.activity_selected_agent().or_else(|| {
+                self.ops
+                    .current_oplog()
+                    .and_then(|route| (route.agents.len() == 1).then(|| route.agents[0].clone()))
+            }),
+            OpsDestination::Stream => self
+                .ops
+                .current_stream()
+                .cloned()
+                .or_else(|| self.stream.target.clone()),
+            OpsDestination::Metrics => self.metric_selected_agent(),
+            _ => None,
+        }
+    }
+
+    fn metric_selected_agent(&self) -> Option<AgentIdentity> {
+        if self.metrics.source != crate::model::local_observability::LocalMetricSource::Agents
+            || self.metrics.mode != MetricsMode::Explore
+            || matches!(self.ops.current_route(), OpsRoute::MetricsPanel(_))
+        {
+            return None;
+        }
+        if self.metrics.agent_scope.len() == 1 {
+            return self.metrics.agent_scope.first().cloned();
+        }
+        let agent_id = self
+            .metrics
+            .series
+            .get(self.metrics.selected_series)?
+            .agent_id
+            .as_deref()?;
+        let mut matches = self
+            .agents
+            .agents
+            .iter()
+            .filter(|agent| agent.agent_id == agent_id)
+            .map(AgentListItem::identity);
+        let agent = matches.next()?;
+        matches.next().is_none().then_some(agent)
+    }
+
+    fn stream_handoff_available(&self, agent: &AgentIdentity) -> bool {
+        !self.stream_session_active() || self.stream.target.as_ref() == Some(agent)
+    }
+
+    fn related_stream_available(&self) -> bool {
+        self.related_exact_agent()
+            .is_some_and(|agent| self.stream_handoff_available(&agent))
+    }
+
+    fn ops_handoff_scope(&self) -> Vec<AgentIdentity> {
+        match self.ops.active() {
+            OpsDestination::Agents => self.agent_handoff_scope(),
+            OpsDestination::Oplog => self
+                .ops
+                .current_oplog()
+                .map(|route| route.agents.clone())
+                .unwrap_or_default(),
+            OpsDestination::Stream => self.related_exact_agent().into_iter().collect(),
+            OpsDestination::Metrics
+                if self.metrics.source
+                    == crate::model::local_observability::LocalMetricSource::Agents =>
+            {
+                self.metrics.agent_scope.clone()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn open_scope_in_oplog(
+        &mut self,
+        agents: Vec<AgentIdentity>,
+        event_tx: Option<&TuiEventSender>,
+    ) {
         if agents.is_empty() || agents.len() > activity::HARD_AGENT_LIMIT {
             return;
         }
@@ -3335,8 +3433,11 @@ impl TuiApp {
         self.refresh_activity(event_tx);
     }
 
-    fn open_agent_scope_in_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
-        let agents = self.agent_handoff_scope();
+    fn open_scope_in_metrics(
+        &mut self,
+        agents: Vec<AgentIdentity>,
+        event_tx: Option<&TuiEventSender>,
+    ) {
         if agents.is_empty() || agents.len() > activity::HARD_AGENT_LIMIT {
             return;
         }
@@ -3345,6 +3446,54 @@ impl TuiApp {
         self.active_workspace = Workspace::Ops;
         self.ops.select(OpsDestination::Metrics);
         self.reload_metrics(event_tx);
+    }
+
+    fn open_related_destination(
+        &mut self,
+        destination: OpsDestination,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        match destination {
+            OpsDestination::Agents => {
+                let Some(agent) = self.related_exact_agent() else {
+                    return;
+                };
+                self.active_workspace = Workspace::Ops;
+                self.ops.open_agent(agent);
+            }
+            OpsDestination::Oplog if self.ops.active() == OpsDestination::Metrics => {
+                self.open_metric_sample_in_oplog(event_tx)
+            }
+            OpsDestination::Oplog => self.open_scope_in_oplog(self.ops_handoff_scope(), event_tx),
+            OpsDestination::Metrics => {
+                self.open_scope_in_metrics(self.ops_handoff_scope(), event_tx)
+            }
+            OpsDestination::Stream => {
+                let Some(agent) = self.related_exact_agent() else {
+                    return;
+                };
+                if !self.stream_handoff_available(&agent) {
+                    return;
+                }
+                if self.stream.target.as_ref() != Some(&agent) {
+                    self.stream.reset();
+                }
+                self.active_workspace = Workspace::Ops;
+                self.ops.open_stream(agent);
+                self.stream.mark_visible();
+            }
+            OpsDestination::Overview
+            | OpsDestination::Deployments
+            | OpsDestination::Configuration => {}
+        }
+    }
+
+    fn open_agent_scope_in_oplog(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.open_scope_in_oplog(self.agent_handoff_scope(), event_tx);
+    }
+
+    fn open_agent_scope_in_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.open_scope_in_metrics(self.agent_handoff_scope(), event_tx);
     }
 
     fn use_environment_metrics_scope(&mut self, event_tx: Option<&TuiEventSender>) {
@@ -9963,6 +10112,36 @@ fn render_ops_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
 }
 
+fn render_ops_related_links(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    links: &[(OpsDestination, &str, bool)],
+    reserved_left: u16,
+    reserved_right: u16,
+) {
+    let actions = links
+        .iter()
+        .map(|(_, label, available)| PaneHeaderAction {
+            label,
+            available: *available,
+        })
+        .collect::<Vec<_>>();
+    let regions = PaneHeaderActions { actions: &actions }.render(
+        frame,
+        area,
+        reserved_left,
+        reserved_right,
+        &theme(),
+    );
+    for ((destination, _, _), region) in links.iter().zip(regions) {
+        if let Some(region) = region {
+            app.geometry
+                .add_region(RegionKind::OpsLink(*destination), region);
+        }
+    }
+}
+
 fn adaptive_ops_pane_layout(area: Rect, horizontal_at: u16, weights: &[u32]) -> PaneLayout {
     if area.width == 0 || area.height == 0 {
         return PaneLayout {
@@ -10408,15 +10587,14 @@ fn overview_bytes(bytes: u64) -> String {
 fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let chrome = PaneChrome { area };
     let target = app
-        .stream
-        .target
-        .as_ref()
-        .or_else(|| app.ops.current_stream());
+        .ops
+        .current_stream()
+        .or_else(|| app.stream.target.as_ref());
     let title = target.map_or_else(
         || "Stream".to_string(),
         |target| format!("Stream / {}", target.agent_id),
     );
-    let mut status_lines = vec![stream_status_line(app, area.width as usize)];
+    let mut status_lines = vec![stream_status_line(app, target, area.width as usize)];
     if let StreamStatus::Reconnecting {
         attempt,
         delay,
@@ -10448,6 +10626,20 @@ fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .len()
         .min(area.height.saturating_sub(1) as usize) as u16;
     chrome.render_header(frame, area, &title, PaneFocus::Active, &theme());
+    let target_available = target.is_some();
+    let related_links = [
+        (OpsDestination::Agents, "Agent", target_available),
+        (OpsDestination::Oplog, "Oplog", target_available),
+        (OpsDestination::Metrics, "Metrics", target_available),
+    ];
+    render_ops_related_links(
+        frame,
+        area,
+        app,
+        &related_links,
+        (UnicodeWidthStr::width(title.as_str()) as u16).saturating_add(6),
+        0,
+    );
     let outer_body = chrome.body_area(area);
     let [status_row, body] = Layout::default()
         .direction(Direction::Vertical)
@@ -10503,7 +10695,11 @@ fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     chrome.render_body_boundary(frame, outer_body, &theme());
 }
 
-fn stream_status_line(app: &TuiApp, width: usize) -> Line<'static> {
+fn stream_status_line(
+    app: &TuiApp,
+    route_target: Option<&AgentIdentity>,
+    width: usize,
+) -> Line<'static> {
     let visual = theme();
     let status_color = match app.stream.status {
         StreamStatus::Connected => visual.success,
@@ -10511,10 +10707,7 @@ fn stream_status_line(app: &TuiApp, width: usize) -> Line<'static> {
         StreamStatus::Failed(_) => visual.error,
         StreamStatus::Disconnected => visual.text_muted,
     };
-    let target = app
-        .stream
-        .target
-        .as_ref()
+    let target = route_target
         .map(|target| format!("{}/{}", target.component, target.agent_id))
         .unwrap_or_else(|| "one exact Agent required".to_string());
     let summary = format!(
@@ -10703,6 +10896,29 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         }
         .render(frame, area, &theme());
     }
+    let oplog_scope = app.ops_handoff_scope();
+    let selected_agent = app.related_exact_agent().is_some();
+    let related_links = [
+        (OpsDestination::Agents, "Agent", selected_agent),
+        (
+            OpsDestination::Metrics,
+            "Metrics",
+            !oplog_scope.is_empty() && oplog_scope.len() <= activity::HARD_AGENT_LIMIT,
+        ),
+        (
+            OpsDestination::Stream,
+            "Stream",
+            app.related_stream_available(),
+        ),
+    ];
+    render_ops_related_links(
+        frame,
+        area,
+        app,
+        &related_links,
+        12,
+        u16::from(load_label.is_some()).saturating_mul(18),
+    );
     let scan_progress = app
         .activity
         .progress
@@ -11261,6 +11477,28 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         }
         .render(frame, area, &theme());
     }
+    let exact_agent = app.related_exact_agent().is_some();
+    let related_links = [
+        (OpsDestination::Agents, "Agent", exact_agent),
+        (
+            OpsDestination::Oplog,
+            "Oplog",
+            app.metric_sample_oplog_target().is_ok(),
+        ),
+        (
+            OpsDestination::Stream,
+            "Stream",
+            app.related_stream_available(),
+        ),
+    ];
+    render_ops_related_links(
+        frame,
+        area,
+        app,
+        &related_links,
+        14,
+        u16::from(app.metrics.loading).saturating_mul(16),
+    );
     let outer_body = chrome.body_area(area);
     let [controls_row, body] = Layout::default()
         .direction(Direction::Vertical)
@@ -12559,6 +12797,23 @@ fn render_ops_agent_overview(
         area.width,
     );
     render_ops_document(frame, area, app, &title, lines);
+    let links = [
+        (OpsDestination::Oplog, "Oplog", true),
+        (OpsDestination::Metrics, "Metrics", true),
+        (
+            OpsDestination::Stream,
+            "Stream",
+            app.related_stream_available(),
+        ),
+    ];
+    render_ops_related_links(
+        frame,
+        area,
+        app,
+        &links,
+        (UnicodeWidthStr::width(title.as_str()) as u16).saturating_add(6),
+        0,
+    );
 }
 
 fn render_ops_deployments(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -13138,6 +13393,22 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         tone: refresh_tone,
     }
     .render(frame, list_header, &theme());
+    let scope = app.agent_handoff_scope();
+    let scope_available = !scope.is_empty() && scope.len() <= activity::HARD_AGENT_LIMIT;
+    let links = [
+        (OpsDestination::Oplog, "Oplog", scope_available),
+        (OpsDestination::Metrics, "Metrics", scope_available),
+        (
+            OpsDestination::Stream,
+            "Stream",
+            app.related_stream_available(),
+        ),
+    ];
+    if let Some([details_header, _]) = details_parts {
+        render_ops_related_links(frame, details_header, app, &links, 12, 0);
+    } else {
+        render_ops_related_links(frame, list_header, app, &links, 22, 18);
+    }
 
     let filtered = app.filtered_agents();
     let owned_rows = filtered
@@ -19558,6 +19829,156 @@ mod tests {
     }
 
     #[test]
+    fn visible_agent_handoff_links_open_the_explicit_scope() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.included = [
+            AgentIdentity {
+                component: "orders".to_string(),
+                agent_id: "order-1".to_string(),
+            },
+            AgentIdentity {
+                component: "cart".to_string(),
+                agent_id: "cart-2".to_string(),
+            },
+        ]
+        .into_iter()
+        .collect();
+
+        let frame = render_app_text_at(&app, 140, 30);
+        assert!(frame.contains("open  Oplog  Metrics  Stream"), "{frame}");
+        let oplog = snapshot_region(&app, RegionKind::OpsLink(OpsDestination::Oplog));
+        assert!(
+            app.geometry
+                .region(RegionKind::OpsLink(OpsDestination::Metrics))
+                .is_some()
+        );
+        assert!(
+            app.geometry
+                .region(RegionKind::OpsLink(OpsDestination::Stream))
+                .is_none()
+        );
+
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), oplog.x, oplog.y),
+            None,
+        );
+
+        assert_eq!(app.ops.active(), OpsDestination::Oplog);
+        assert_eq!(
+            app.ops
+                .current_oplog()
+                .expect("visible Oplog link should retain scope")
+                .agents
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cart-2", "order-1"]
+        );
+    }
+
+    #[test]
+    fn oplog_and_stream_headers_expose_exact_agent_transitions() {
+        let mut app = test_app();
+        let cart = AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+        };
+        let order = AgentIdentity {
+            component: "orders".to_string(),
+            agent_id: "order-1".to_string(),
+        };
+        app.ops.open_oplog(OplogRoute {
+            agents: vec![cart.clone(), order.clone()],
+            focus: None,
+            from_unix_nanos: None,
+            to_unix_nanos: None,
+        });
+        app.activity.representation = ActivityRepresentation::Entries;
+        app.activity.entries = vec![activity::ActivityEntry {
+            component: order.component.clone(),
+            agent_id: order.agent_id.clone(),
+            presentation: crate::model::agent::oplog::OplogEntryPresentation {
+                index: 7,
+                timestamp: golem_common::model::Timestamp::from(7),
+                kind: "Log".to_string(),
+                group: None,
+                detail: serde_json::json!({"message": "ready"}),
+            },
+        }];
+
+        let oplog_frame = render_app_text_at(&app, 140, 30);
+        assert!(
+            oplog_frame.contains("open  Agent  Metrics  Stream"),
+            "{oplog_frame}"
+        );
+        let agent = snapshot_region(&app, RegionKind::OpsLink(OpsDestination::Agents));
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), agent.x, agent.y),
+            None,
+        );
+        assert_eq!(app.ops.current_agent(), Some(&order));
+
+        app.ops.open_stream(cart.clone());
+        let stream_frame = render_app_text_at(&app, 140, 30);
+        assert!(
+            stream_frame.contains("open  Agent  Oplog  Metrics"),
+            "{stream_frame}"
+        );
+        let metrics = snapshot_region(&app, RegionKind::OpsLink(OpsDestination::Metrics));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                metrics.x,
+                metrics.y,
+            ),
+            None,
+        );
+        assert_eq!(app.ops.active(), OpsDestination::Metrics);
+        assert_eq!(app.metrics.agent_scope, vec![cart]);
+    }
+
+    #[test]
+    fn passive_stream_handoff_never_retargets_a_live_session() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.selected = 1;
+        let running = AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+        };
+        let selected = AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-2".to_string(),
+        };
+        app.stream.target = Some(running.clone());
+        app.stream.status = StreamStatus::Connected;
+
+        let frame = render_app_text_at(&app, 140, 30);
+        assert!(frame.contains("Stream"), "{frame}");
+        assert!(
+            app.geometry
+                .region(RegionKind::OpsLink(OpsDestination::Stream))
+                .is_none()
+        );
+
+        app.open_related_destination(OpsDestination::Stream, None);
+        assert_eq!(app.ops.active(), OpsDestination::Agents);
+        assert_eq!(app.stream.target, Some(running));
+
+        app.stream.disconnect();
+        render_app_text_at(&app, 140, 30);
+        let stream = snapshot_region(&app, RegionKind::OpsLink(OpsDestination::Stream));
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), stream.x, stream.y),
+            None,
+        );
+        assert_eq!(app.ops.current_stream(), Some(&selected));
+        assert_eq!(app.stream.target, None);
+        assert_eq!(app.stream.status, StreamStatus::Disconnected);
+    }
+
+    #[test]
     fn agent_scope_is_retained_by_metrics_until_explicitly_cleared() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
@@ -20517,7 +20938,23 @@ mod tests {
             },
         }];
 
-        app.handle_key(key(KeyCode::Enter));
+        let frame = render_app_text_at(&app, 140, 32);
+        assert!(frame.contains("open  Agent  Oplog  Stream"), "{frame}");
+        assert!(
+            app.geometry
+                .region(RegionKind::OpsLink(OpsDestination::Agents))
+                .is_some()
+        );
+        assert!(
+            app.geometry
+                .region(RegionKind::OpsLink(OpsDestination::Stream))
+                .is_some()
+        );
+        let oplog = snapshot_region(&app, RegionKind::OpsLink(OpsDestination::Oplog));
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), oplog.x, oplog.y),
+            None,
+        );
 
         assert_eq!(app.ops.active(), OpsDestination::Oplog);
         assert_eq!(
