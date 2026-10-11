@@ -45,6 +45,17 @@ fn a_path_that_is_not_utf8_is_not_given() {
 }
 
 #[test]
+fn a_result_is_accepted_only_with_the_size_of_the_content() {
+    let written = |bytes_written| Written {
+        disposition: Disposition::Replaced,
+        bytes_written,
+    };
+    assert_eq!(confirmed(&written(8), 8), Ok(()));
+    assert!(confirmed(&written(7), 8).is_err());
+    assert!(confirmed(&written(9), 8).is_err());
+}
+
+#[test]
 fn only_the_definition_of_the_built_in_write_file_is_accepted() {
     crate::forward::tests::assert_accepts_only(include_str!("definition.json"), is_write_file);
 }

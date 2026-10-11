@@ -32,10 +32,6 @@ struct Arguments {
 
 /// The result of `edit-file`.
 #[derive(IntoSchema, FromSchema)]
-#[cfg_attr(
-    not(target_arch = "wasm32"),
-    allow(dead_code, reason = "only a Golem host takes a call")
-)]
 struct Edited {
     replacements: u64,
     bytes_before: u64,
@@ -85,27 +81,13 @@ impl bash_shell::commands::FileEditor for EditFileTool {
             old_text: edit.old_text.to_owned(),
             new_text: edit.new_text.to_owned(),
         });
-        let length = |bytes: &[u8]| u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        match edited {
-            Ok(edited)
-                if edited.replacements == 1
-                    && edited.bytes_before == length(old)
-                    && edited.bytes_after == length(new) =>
-            {
-                true
-            }
-            Ok(edited) => {
-                self.0.give_up(&format!(
-                    "{} replacements, from {} to {} bytes",
-                    edited.replacements, edited.bytes_before, edited.bytes_after
-                ));
-                false
-            }
-            Err(failure) => {
-                self.0.give_up(&failure.reason);
-                false
-            }
+        let made = edited
+            .map_err(|failure| failure.reason)
+            .and_then(|edited| confirmed(&edited, old.len(), new.len()));
+        if let Err(reason) = &made {
+            self.0.give_up(reason);
         }
+        made.is_ok()
     }
 }
 
@@ -136,14 +118,17 @@ fn request<'a>(path: &'a Path, old: &'a [u8], new: &'a [u8]) -> Option<Edit<'a>>
 }
 
 /// How many times the text that changes is made longer by one line on each side, to get a text
-/// that is in the content one time, before the whole content is sent.
+/// that is in the content one time and that the tool finds fast, before the whole content is
+/// sent.
 const WIDENINGS: usize = 3;
 
 /// A text of `old`, which is not empty, and the text that replaces it to give `new`. The text
 /// starts in `old` at one character and at no other, as the tool needs it.
 ///
 /// The text is what is between the first and the last difference of `old` and `new`. When that
-/// text is empty or is also in another place, it is made longer by whole lines.
+/// text is empty, is also in another place, or is slow for the tool to find, it is made longer
+/// by whole lines, at most [`WIDENINGS`] times. When none of these texts is in one place and
+/// fast to find, the text is the whole content.
 fn replacement<'a>(old: &'a str, new: &'a str) -> (&'a str, &'a str) {
     let shorter = old.len().min(new.len());
     let mut start = old
@@ -167,7 +152,7 @@ fn replacement<'a>(old: &'a str, new: &'a str) -> (&'a str, &'a str) {
     let mut end = old.len() - after;
     for _ in 0..=WIDENINGS {
         let text = &old[start..end];
-        if is_in_one_place(old, text) {
+        if is_in_one_place(old, text) && is_fast_to_find(old, text) {
             return (text, &new[start..new.len() - (old.len() - end)]);
         }
         // The start of the line before, and the end of the line after. The byte before `start`
@@ -189,6 +174,46 @@ fn is_in_one_place(content: &str, text: &str) -> bool {
     // The next place can start inside the first one.
     let next = first + content[first..].chars().next().map_or(1, char::len_utf8);
     !content[next..].contains(text)
+}
+
+/// Whether the tool finds `text` in `content` fast.
+///
+/// The tool compares `text` at each character of `content`, up to the first byte that differs.
+/// A long text that starts again and again in the content thus costs the tool the product of
+/// the two lengths. This counts that work, and it stops at four times the bytes of `content`.
+fn is_fast_to_find(content: &str, text: &str) -> bool {
+    let (content, text) = (content.as_bytes(), text.as_bytes());
+    let limit = content.len().saturating_mul(4);
+    let mut work = 0_usize;
+    // The tool sees at once that the text does not fit in a shorter rest of the content.
+    for start in 0..=content.len().saturating_sub(text.len()) {
+        let equal = content[start..]
+            .iter()
+            .zip(text)
+            .take_while(|(content, text)| content == text)
+            .count();
+        work = work.saturating_add(equal + 1);
+        if work > limit {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether the result of the tool is that of one replacement that changed a file of `old`
+/// bytes to one of `new` bytes.
+fn confirmed(edited: &Edited, old: usize, new: usize) -> Result<(), String> {
+    let length = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
+    if edited.replacements == 1
+        && edited.bytes_before == length(old)
+        && edited.bytes_after == length(new)
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "{} replacements, from {} to {} bytes",
+        edited.replacements, edited.bytes_before, edited.bytes_after
+    ))
 }
 
 /// Whether `tool` has the command, the arguments and the result of the built-in `edit-file`.

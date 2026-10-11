@@ -41,10 +41,6 @@ enum Disposition {
 struct Written {
     #[allow(dead_code, reason = "the record is decoded as a whole")]
     disposition: Disposition,
-    #[cfg_attr(
-        not(target_arch = "wasm32"),
-        allow(dead_code, reason = "only a Golem host takes a call")
-    )]
     bytes_written: u64,
 }
 
@@ -82,20 +78,13 @@ impl bash_shell::commands::FileWriter for WriteFileTool {
             content: text.to_owned(),
             create_parent_directories: false,
         });
-        let length = u64::try_from(text.len()).unwrap_or(u64::MAX);
-        match written {
-            Ok(written) if written.bytes_written == length => true,
-            Ok(written) => {
-                let wrote = written.bytes_written;
-                self.0
-                    .give_up(&format!("{wrote} of {length} bytes written"));
-                false
-            }
-            Err(failure) => {
-                self.0.give_up(&failure.reason);
-                false
-            }
+        let made = written
+            .map_err(|failure| failure.reason)
+            .and_then(|written| confirmed(&written, text.len()));
+        if let Err(reason) = &made {
+            self.0.give_up(reason);
         }
+        made.is_ok()
     }
 }
 
@@ -107,6 +96,17 @@ fn request<'a>(path: &'a Path, content: &'a [u8]) -> Option<(&'a str, &'a str)> 
         return None;
     }
     Some((path.to_str()?, std::str::from_utf8(content).ok()?))
+}
+
+/// Whether the result of the tool is that of a write of `length` bytes.
+fn confirmed(written: &Written, length: usize) -> Result<(), String> {
+    if written.bytes_written == u64::try_from(length).unwrap_or(u64::MAX) {
+        return Ok(());
+    }
+    Err(format!(
+        "{} of {length} bytes written",
+        written.bytes_written
+    ))
 }
 
 /// Whether `tool` has the command, the arguments and the result of the built-in `write-file`.

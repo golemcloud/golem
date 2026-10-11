@@ -79,6 +79,56 @@ fn text_that_no_line_makes_single_is_sent_as_the_whole_content() {
     assert_eq!(checked("aa", "a"), ("aa", "a"));
 }
 
+/// The tool compares the text at each character of the content, up to the first byte that
+/// differs. A long text that starts again and again costs it the product of the two lengths.
+/// The whole content costs it one comparison. Here each line before the text is also a line of
+/// the text, so a longer text starts again and again too.
+#[test]
+fn text_that_the_tool_finds_slowly_is_sent_as_the_whole_content() {
+    let old = format!("{}end\n", "row\n".repeat(20_000));
+    let new = "row\n".repeat(10_000);
+    assert_eq!(checked(&old, &new), (old.as_str(), new.as_str()));
+}
+
+/// The line `x` is before the text that changes, and the content has an `x` in no other place.
+/// A text that starts with that line costs the tool one byte in each other place.
+#[test]
+fn text_that_a_line_makes_fast_to_find_is_sent_from_that_line() {
+    let rows = "row\n".repeat(20_000);
+    let old = format!("{rows}x\n{}end\n", "row\n".repeat(10_000));
+    let new = format!("{rows}x\n");
+    let (old_text, new_text) = checked(&old, &new);
+    assert!(old_text.len() < old.len(), "the whole content is sent");
+    assert!(is_fast_to_find(&old, old_text));
+    assert_eq!(new_text, "x\n");
+}
+
+#[test]
+fn a_long_text_that_the_tool_finds_fast_is_sent_alone() {
+    let block: String = (0..5_000).map(|line| format!("line {line}\n")).collect();
+    let old = format!("head\n{block}tail\n");
+    assert_eq!(checked(&old, "head\ntail\n"), (block.as_str(), ""));
+}
+
+#[test]
+fn the_work_of_the_tool_is_counted_as_the_tool_does_it() {
+    // One byte for each place where the text does not start, and the equal bytes where it does.
+    assert!(is_fast_to_find("abcdefgh", "h"));
+    assert!(is_fast_to_find("abcabcabd", "abd"));
+    // 1,000 places, and 500 equal bytes at each of the first 500.
+    let content = format!("{}b", "a".repeat(1_000));
+    assert!(!is_fast_to_find(&content, &format!("{}b", "a".repeat(500))));
+    assert!(is_fast_to_find(&content, &content));
+    // The limit is four times the 1,001 bytes of the content, which is 4,004. The work is 3,993
+    // for the first text and 4,986 for the second.
+    assert!(is_fast_to_find(&content, "aaab"));
+    assert!(!is_fast_to_find(&content, "aaaab"));
+    // A long text costs one byte at each place where its first byte differs from the content.
+    // That is 500 places here, and the text starts at one more place.
+    let content = format!("{0}b{0}", "a".repeat(500));
+    assert!(is_fast_to_find(&content, &format!("b{}", "a".repeat(500))));
+}
+
 #[test]
 fn a_change_is_never_sent_from_inside_a_character() {
     // `é` and `è` have the same first byte, and `é` and `ĩ` have the same last byte.
@@ -166,6 +216,20 @@ fn a_path_that_is_not_utf8_is_not_given() {
     use std::os::unix::ffi::OsStrExt;
     let path = Path::new(std::ffi::OsStr::from_bytes(b"/a/\xff.txt"));
     assert_eq!(request(path, b"one\n", b"1\n"), None);
+}
+
+#[test]
+fn a_result_is_accepted_only_for_one_replacement_with_both_sizes() {
+    let edited = |replacements, bytes_before, bytes_after| Edited {
+        replacements,
+        bytes_before,
+        bytes_after,
+    };
+    assert_eq!(confirmed(&edited(1, 8, 6), 8, 6), Ok(()));
+    assert!(confirmed(&edited(2, 8, 6), 8, 6).is_err());
+    assert!(confirmed(&edited(0, 8, 6), 8, 6).is_err());
+    assert!(confirmed(&edited(1, 7, 6), 8, 6).is_err());
+    assert!(confirmed(&edited(1, 8, 5), 8, 6).is_err());
 }
 
 #[test]
