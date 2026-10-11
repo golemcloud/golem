@@ -86,6 +86,16 @@ fn changes(tool: &Tool) -> Vec<(String, Tool)> {
             body.positionals.fixed.remove(index);
         });
     }
+    for index in 1..body.positionals.fixed.len() {
+        let name = &body.positionals.fixed[index].name;
+        change(
+            format!("argument {name} before the argument in front of it"),
+            &|tool| {
+                let body = tool.commands.nodes[0].body.as_mut().unwrap();
+                body.positionals.fixed.swap(index - 1, index);
+            },
+        );
+    }
     change("one more argument".into(), &|tool| {
         let body = tool.commands.nodes[0].body.as_mut().unwrap();
         let argument = body.positionals.fixed[0].clone();
@@ -139,6 +149,20 @@ fn changes(tool: &Tool) -> Vec<(String, Tool)> {
         let of = shared.name.clone().unwrap_or_default();
         match &shared.body {
             SchemaType::Record { fields, .. } => {
+                for field in 1..fields.len() {
+                    let name = &fields[field].name;
+                    change(
+                        format!("{of}.{name} before the field in front of it"),
+                        &|tool| {
+                            let SchemaType::Record { fields, .. } =
+                                &mut tool.schema.defs[index].body
+                            else {
+                                unreachable!()
+                            };
+                            fields.swap(field - 1, field);
+                        },
+                    );
+                }
                 for field in 0..fields.len() {
                     let name = &fields[field].name;
                     change(format!("{of}.{name} with another name"), &|tool| {
@@ -165,6 +189,19 @@ fn changes(tool: &Tool) -> Vec<(String, Tool)> {
                 }
             }
             SchemaType::Enum { cases, .. } => {
+                for case in 1..cases.len() {
+                    let name = &cases[case];
+                    change(
+                        format!("{of}.{name} before the case in front of it"),
+                        &|tool| {
+                            let SchemaType::Enum { cases, .. } = &mut tool.schema.defs[index].body
+                            else {
+                                unreachable!()
+                            };
+                            cases.swap(case - 1, case);
+                        },
+                    );
+                }
                 for case in 0..cases.len() {
                     let name = &cases[case];
                     change(format!("{of}.{name} with another name"), &|tool| {

@@ -66,8 +66,8 @@ fn takes<A: IntoSchema, R: IntoSchema>(tool: &Tool, read_only: bool) -> bool {
 
 /// Whether two types, each with the graph that has its definitions, have the same structure: the
 /// same fields and cases with the same names, in the same order. The names and the ids of the
-/// definitions are not compared, because a type of this crate cannot have the id of a type of
-/// the tool.
+/// definitions are not compared, because the input record of a tool is not a definition, and a
+/// type of this crate gets its name and its id from its Rust path by default.
 fn same_shape(left: (&SchemaType, &SchemaGraph), right: (&SchemaType, &SchemaGraph)) -> bool {
     let (Some(left_type), Some(right_type)) = (resolved(left), resolved(right)) else {
         return false;
