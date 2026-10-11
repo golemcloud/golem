@@ -80,7 +80,8 @@ impl GoEnv {
             .env("GOTOOLCHAIN", "local")
             .env("GOCACHE", self.cache_dir.join("build"))
             .env("GOMODCACHE", self.cache_dir.join("mod"))
-            .env("GOFLAGS", "-mod=mod");
+            // The module cache lives under target/; keep it writable so it can be removed.
+            .env("GOFLAGS", "-mod=mod -modcacherw");
         cmd
     }
 
