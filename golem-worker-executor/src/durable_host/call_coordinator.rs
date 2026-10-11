@@ -463,22 +463,7 @@ where
                 continue;
             }
         }
-        let has_pending_source_transfer = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_scan
-                .as_ref()
-                .is_some_and(|scan| {
-                    scan.pending.iter().any(|pending| {
-                        matches!(&pending.event, QueuedCardEvent::TransferStarted(_))
-                    })
-                })
-        });
-        let retries = if has_pending_source_transfer {
-            prepare_pending_source_card_transfers_access(store, get_ctx).await?
-        } else {
-            Vec::new()
-        };
+        let retries = prepare_pending_source_card_transfers_access(store, get_ctx).await?;
         if retries.is_empty() {
             return Ok(Some(boundary_guard));
         }
@@ -518,7 +503,7 @@ where
 
     loop {
         let pending_events = crate::durable_host::next_drainable_card_events(
-            pending_card_events_at_boundary_access(store, get_ctx).await?,
+            pending_card_events_at_boundary_access(store, get_ctx).await,
         );
         let Some(pending_event) = pending_events.first() else {
             break;
@@ -598,63 +583,23 @@ where
     .await
 }
 
+/// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent
+/// status is the only source of queued card events.
 async fn pending_card_events_at_boundary_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<Vec<golem_common::model::PendingCardEventRef>, WorkerExecutorError>
+) -> Vec<golem_common::model::PendingCardEventRef>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (worker, oplog) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        (ctx.public_state.worker().clone(), ctx.state.oplog.clone())
-    });
-    let status = worker.get_last_known_status().await;
-    let current_idx = oplog.current_oplog_index().await;
-    let unread_range = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        match &mut ctx.state.card_event_boundary_scan {
-            Some(scan) => {
-                scan.synchronize(status.oplog_idx, &status.pending_card_events, current_idx)
-            }
-            None => {
-                ctx.state.card_event_boundary_scan =
-                    Some(crate::durable_host::CardEventBoundaryScan::new(
-                        status.oplog_idx,
-                        status.pending_card_events.clone(),
-                    ));
-            }
-        }
-        ctx.state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .unread_range(current_idx)
-    });
-
-    if let Some((start, count)) = unread_range {
-        let entries = oplog.read_exact(start, count).await;
-        store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_scan
-                .as_mut()
-                .expect("card event boundary scan must be initialized")
-                .fold_through(current_idx, &entries);
-        });
-    }
-
-    Ok(store.with(|mut access| {
-        get_ctx(access.data_mut())
-            .state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .pending
-            .clone()
-    }))
+    let worker = store.with(|mut access| get_ctx(access.data_mut()).public_state.worker().clone());
+    worker
+        .get_last_known_status()
+        .await
+        .pending_card_events
+        .clone()
 }
 
 async fn admit_card_to_wallet_access<T, D, Ctx>(
@@ -1137,7 +1082,7 @@ where
         return Ok(Vec::new());
     }
 
-    let pending_events = pending_card_events_at_boundary_access(store, get_ctx).await?;
+    let pending_events = pending_card_events_at_boundary_access(store, get_ctx).await;
     let mut retries = Vec::new();
     let mut first_error = None;
     for pending in pending_events {
