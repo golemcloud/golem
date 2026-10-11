@@ -30,7 +30,7 @@ use crate::bridge_gen::{
     validate_host_managed_agent_bridge_policy,
 };
 use crate::fs;
-use crate::sdk_overrides::{sdk_overrides, workspace_root};
+use crate::sdk_overrides::{RustDependency, sdk_overrides, workspace_root};
 use anyhow::{anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
@@ -358,16 +358,6 @@ impl RustBridgeGenerator {
 
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let golem_source = if self.testing {
-            // In test mode, use the local workspace path, so we always test against the current code
-            GolemDependencySource::Path(workspace_root()?)
-        } else {
-            match sdk_overrides()?.golem_repo_root()? {
-                Some(repo_root) => GolemDependencySource::Path(repo_root),
-                None => GolemDependencySource::GitMain,
-            }
-        };
-
         let mut doc = DocumentMut::new();
 
         doc["package"] = Item::Table(Default::default());
@@ -379,6 +369,14 @@ impl RustBridgeGenerator {
         doc["dependencies"] = Item::Table(Table::default());
         match self.mode {
             RustBridgeMode::ExternalRest => {
+                let golem_source = if self.testing {
+                    GolemDependencySource::Path(workspace_root()?)
+                } else {
+                    match sdk_overrides()?.golem_repo_root()? {
+                        Some(repo_root) => GolemDependencySource::Path(repo_root),
+                        None => GolemDependencySource::GitMain,
+                    }
+                };
                 doc["features"] = Item::Table(Table::default());
                 doc["features"]["default"] = string_array(&["client"]);
                 doc["features"]["client"] = string_array(&[
@@ -404,9 +402,14 @@ impl RustBridgeGenerator {
                 doc["dependencies"]["uuid"] = optional_dep("1.18.1", &["v4"]);
             }
             RustBridgeMode::GuestWasmRpc => {
+                let sdk_dependency = if self.testing {
+                    RustDependency::Path(workspace_root()?.join("sdks/rust/golem-rust"))
+                } else {
+                    sdk_overrides()?.golem_rust_dependency()
+                };
                 doc["dependencies"]["chrono"] = dep("0.4", &[]);
-                doc["dependencies"]["golem-rust"] = golem_source
-                    .dep_item("sdks/rust/golem-rust", &["export_golem_agentic", "macro"])?;
+                doc["dependencies"]["golem-rust"] =
+                    sdk_dependency.as_toml_item(&["export_golem_agentic", "macro"])?;
                 doc["dependencies"]["serde"] = dep("1", &["derive"]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
             }

@@ -460,7 +460,12 @@ pub async fn ensure_common_deps_for_tool(
                 })
                 .await
         }
-        _ if normalized == "moon" || tool_lives_in_mooncakes(tool) => {
+        _ if normalized == "moon"
+            || tool_lives_in_mooncakes(tool)
+            || Path::new(tool)
+                .components()
+                .any(|component| component.as_os_str() == "__moonbin__") =>
+        {
             let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
             let build_dir = fs::absolute_lexical_path(build_dir)?;
             let Some(moon_module_root) = build_dir
