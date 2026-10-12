@@ -143,10 +143,12 @@ func openSession(a *Agent, method string, params schema.SchemaValue) (*session, 
 	})
 	if err != nil {
 		end()
+		stopStreamArguments(params)
 		return nil, fmt.Errorf("golem: %s.%s arguments: %w", a.typeName, method, err)
 	}
 	if err := s.prepareStart(); err != nil {
 		end()
+		stopStreamArguments(params)
 		return nil, err
 	}
 	go s.connect(0)
@@ -304,9 +306,7 @@ func (s *session) connect(delay time.Duration) {
 			HTTPHeader:      http.Header{"Authorization": {"Bearer " + s.agent.configuration.Server.Token()}},
 			CompressionMode: websocket.CompressionDisabled,
 		}
-		if client := s.agent.configuration.client(); client.Timeout == 0 {
-			options.HTTPClient = client
-		}
+		options.HTTPClient = dialClient(s.agent.configuration.client())
 		ws, response, err := websocket.Dial(s.life, s.url(), options)
 		if err != nil {
 			if s.life.Err() != nil {
@@ -474,25 +474,12 @@ func (s *session) fail(err error) {
 			poke(out.wake)
 		}
 	}
-	inputs := slices.Collect(func(yield func(*inputStream) bool) {
-		for _, in := range s.inputs {
-			if !yield(in) {
-				return
-			}
-		}
-		for _, in := range s.byProvisional {
-			if !yield(in) {
-				return
-			}
-		}
-	})
+	inputs := s.allInputs()
 	c := s.conn
 	s.conn = nil
 	close(s.done)
 	s.mu.Unlock()
-	for _, in := range inputs {
-		in.h.stop("cancelled")
-	}
+	stopInputs(inputs)
 	if c != nil {
 		c.enqueue(outFrame{close: true})
 	} else {
@@ -529,15 +516,66 @@ func (s *session) finish() {
 		return
 	}
 	s.over = true
+	inputs := s.allInputs()
 	c := s.conn
 	s.conn = nil
 	close(s.done)
 	s.mu.Unlock()
+	// The call is over, so whatever an input still holds will not be read.
+	stopInputs(inputs)
 	if c != nil {
 		c.enqueue(outFrame{close: true})
 	} else {
 		s.endLife()
 	}
+}
+
+// dialClient is the configured client for the WebSocket handshake. The
+// websocket library rejects a client with a Timeout, which would also end a
+// long-lived connection, so a copy without one keeps the client's transport,
+// jar and redirect policy.
+func dialClient(client *http.Client) *http.Client {
+	if client.Timeout == 0 {
+		return client
+	}
+	dial := *client
+	dial.Timeout = 0
+	return &dial
+}
+
+// allInputs is every stream argument of the session; the caller holds s.mu.
+func (s *session) allInputs() []*inputStream {
+	return slices.Collect(func(yield func(*inputStream) bool) {
+		for _, in := range s.inputs {
+			if !yield(in) {
+				return
+			}
+		}
+		for _, in := range s.byProvisional {
+			if !yield(in) {
+				return
+			}
+		}
+	})
+}
+
+// stopInputs stops the sources of the stream arguments, so a writer blocked on
+// a full buffer is released.
+func stopInputs(inputs []*inputStream) {
+	for _, in := range inputs {
+		in.h.stop("cancelled")
+	}
+}
+
+// stopStreamArguments stops every stream argument in params that could be
+// given away, for a call that is never sent.
+func stopStreamArguments(params schema.SchemaValue) {
+	_, _ = mapStreams(params, func(v schema.StreamValue) (schema.SchemaValue, error) {
+		if h, ok := v.Handle.(*inputHandle); ok && h.err == nil {
+			h.stop("cancelled")
+		}
+		return v, nil
+	})
 }
 
 // await waits for the result. A caller that gives up first cancels the call.
@@ -572,8 +610,13 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 	}
 
 	s.mu.Lock()
-	accepted := s.accepted && s.conn == c
+	current, accepted := s.conn == c, s.accepted
 	s.mu.Unlock()
+	if !current {
+		// A frame the old connection had already received when the session
+		// gave it up; the session resumes on the next connection.
+		return nil
+	}
 	if !accepted {
 		return protocolErrorf("%s arrived before the invocation was accepted", kind)
 	}

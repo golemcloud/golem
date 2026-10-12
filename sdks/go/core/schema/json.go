@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"slices"
@@ -50,8 +51,9 @@ import (
 //   - a result is {"ok": …} or {"err": …};
 //   - binary is base64url with no padding.
 //
-// Diverging from any of this is not a stylistic choice: GOL-653 records what
-// happened when two other SDKs did.
+// Diverging from any of this is not a stylistic choice: an SDK that renders a
+// wide integer as a number, or a duration as a string, produces JSON the host
+// and the other SDKs read differently.
 
 // UnpackJSON renders a value as canonical JSON, using ordinary Go values.
 func (r Ref) UnpackJSON(v SchemaValue) (any, error) {
@@ -432,6 +434,9 @@ func (r Ref) PackJSONBytes(data []byte) (SchemaValue, error) {
 	if err := dec.Decode(&value); err != nil {
 		return nil, fmt.Errorf("golem: invalid JSON: %w", err)
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("golem: invalid JSON: data after the value")
+	}
 	return r.PackJSON(value)
 }
 
@@ -520,6 +525,9 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 
 	case F32Type:
 		f, err := jsonFloat(value, path)
+		if err == nil && math.IsInf(float64(float32(f)), 0) {
+			err = fmt.Errorf("%s: %v is outside the f32 range", pathOrRoot(path), f)
+		}
 		if err == nil {
 			err = checkNumeric(b.Restrictions, floatBound(float64(float32(f))), path)
 		}
@@ -969,6 +977,11 @@ func jsonInt(value any, path string, min, max int64) (int64, error) {
 	case float64:
 		if v != math.Trunc(v) {
 			return 0, fmt.Errorf("%s: %v is not an integer", pathOrRoot(path), v)
+		}
+		// Converting a float beyond the int64 range is implementation-defined,
+		// so the range is checked on the float first.
+		if v < -0x1p63 || v >= 0x1p63 {
+			return 0, fmt.Errorf("%s: %v is outside the range [%d, %d]", pathOrRoot(path), v, min, max)
 		}
 		return boundsCheck(int64(v), min, max, path)
 	case int64:

@@ -393,6 +393,9 @@ func DecodeMap[K comparable, V any](sv schema.SchemaValue, fk Decoder[K], fv Dec
 		if err != nil {
 			return nil, fmt.Errorf("map key %d: %w", i, err)
 		}
+		if _, seen := out[key]; seen {
+			return nil, fmt.Errorf("map key %d: the key %v appears twice", i, key)
+		}
 		value, err := fv(entry.Value)
 		if err != nil {
 			return nil, fmt.Errorf("map value %d: %w", i, err)

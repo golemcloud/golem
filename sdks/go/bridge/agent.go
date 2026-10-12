@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/core/schema"
@@ -39,7 +40,8 @@ type Agent struct {
 	phantomID     *string
 	config        []ConfigEntry
 	typedConfig   []TypedConfigEntry
-	id            *AgentID
+	// id is learned from the server and may be set by concurrent calls.
+	id atomic.Pointer[AgentID]
 }
 
 // AgentOption adjusts how an agent is addressed.
@@ -130,10 +132,11 @@ func (a *Agent) TypeName() string { return a.typeName }
 // ID is the agent's identity once the server has assigned one, which happens on
 // Create or on the first awaited invocation.
 func (a *Agent) ID() (AgentID, bool) {
-	if a.id == nil {
+	id := a.id.Load()
+	if id == nil {
 		return AgentID{}, false
 	}
-	return *a.id, true
+	return *id, true
 }
 
 // Create creates the agent, or returns the identity of the existing one.
@@ -144,7 +147,7 @@ func (a *Agent) Create(ctx context.Context) (AgentID, error) {
 	if err != nil {
 		return AgentID{}, err
 	}
-	a.id = &id
+	a.id.Store(&id)
 	return id, nil
 }
 

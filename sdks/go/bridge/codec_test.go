@@ -143,3 +143,13 @@ func TestDecodingTheWrongKindSaysWhatWasExpected(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestAMapWithARepeatedKeyIsRejected(t *testing.T) {
+	m := schema.MapValue{Entries: []schema.MapEntry{
+		{Key: schema.StringValue{Value: "k"}, Value: schema.BoolValue{Value: true}},
+		{Key: schema.StringValue{Value: "k"}, Value: schema.BoolValue{Value: false}},
+	}}
+	if _, err := DecodeMap(m, DecodeString, DecodeBool); err == nil || !strings.Contains(err.Error(), "appears twice") {
+		t.Fatalf("got %v", err)
+	}
+}

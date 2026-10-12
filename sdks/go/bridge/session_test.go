@@ -551,26 +551,41 @@ func TestAFailingSourceIsUnavailable(t *testing.T) {
 // A caller that gives up before the result cancels the streams it sent.
 func TestGivingUpCancelsTheCall(t *testing.T) {
 	cancelled := make(chan map[string]any, 1)
+	// The client sends input items only once it holds the acceptance, so the
+	// first item tells the test that giving up now must cancel the stream.
+	streaming := make(chan struct{})
 	server := newFakeServer(t, func(c *fakeConn) {
 		start := c.expect("invocationStart")
 		refs := provisionalRefs(t, start)
 		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		first := true
 		for {
 			r := c.read()
-			if r.kind == "streamCancel" {
+			switch r.kind {
+			case "inputStreamItem":
+				if first {
+					first = false
+					close(streaming)
+				}
+			case "streamCancel":
 				cancelled <- r.m
 				return
-			}
-			if r.kind == "" {
+			case "":
 				return
 			}
 		}
 	})
 	w, s := NewAgentStream[uint32]()
 	defer func() { _ = w.Close() }()
+	if err := w.Write(1); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-streaming:
+		case <-time.After(10 * time.Second):
+		}
 		cancel()
 	}()
 	err := InvokeStreaming(ctx, server.agent(t), "consume", streamParams(EncodeStream(EncodeU32)(s)))
@@ -610,5 +625,163 @@ func TestAStreamIsReadOnce(t *testing.T) {
 	EncodeStream(EncodeU32)(fresh)
 	if _, _, err := fresh.Next(context.Background()); !errors.Is(err, ErrStreamConsumed) {
 		t.Fatalf("a given stream was read: %v", err)
+	}
+}
+
+func noResult(c *fakeConn) {
+	c.send("invocationResult", map[string]any{"mappings": []any{}, "result": map[string]any{"kind": "none"}})
+}
+
+// A frame the old connection had already received when the session gave it up
+// is ignored, not a protocol error; one on the current connection before the
+// acceptance still is.
+func TestAFrameFromAStaleConnectionIsIgnored(t *testing.T) {
+	item, err := encodeMessage("outputStreamItem", map[string]any{
+		"channel": 2, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+		"value": map[string]any{"kind": "u32", "value": 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, current := &sessionConn{}, &sessionConn{}
+	s := &session{conn: current, accepted: true}
+	if err := s.handleText(old, item); err != nil {
+		t.Fatalf("a stale frame failed the session: %v", err)
+	}
+	s = &session{conn: current}
+	if err := s.handleText(current, item); err == nil {
+		t.Fatal("a frame before the acceptance was accepted")
+	}
+}
+
+// A stream argument of a call that is never sent is stopped, so its writer is
+// not left blocked.
+func TestAStreamArgumentOfAFailedCallIsStopped(t *testing.T) {
+	server := newFakeServer(t)
+	w, s := NewAgentStream[uint32]()
+	given := EncodeStream(EncodeU32)(s)
+	again := EncodeStream(EncodeU32)(s)
+	params := schema.RecordValue{Fields: []schema.SchemaValue{given, again}}
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consumeTwo", params); !errors.Is(err, ErrStreamConsumed) {
+		t.Fatalf("got %v", err)
+	}
+	if err := w.Write(1); !errors.Is(err, ErrStreamClosed) {
+		t.Fatalf("the writer of a stopped argument wrote: %v", err)
+	}
+}
+
+// A call that finishes without reading all of an input stops it, so a writer
+// waiting for room is released.
+func TestAFinishedCallStopsItsUnreadInput(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		c.expect("inputStreamItem")
+		noResult(c)
+		finished(c)
+		c.waitClose()
+	})
+	w, s := NewAgentStream[uint32]()
+	if err := w.Write(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consumeSome", streamParams(EncodeStream(EncodeU32)(s))); err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan error, 1)
+	go func() {
+		for {
+			if err := w.Write(1); err != nil {
+				stopped <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-stopped:
+		if !errors.Is(err, ErrStreamClosed) {
+			t.Fatalf("the writer stopped with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the writer of an unread input was never released")
+	}
+}
+
+// A partial acknowledgement keeps the rest of a packed batch in flight, and the
+// acknowledgement of the rest releases it.
+func TestAPartlyAcknowledgedBatchStaysInFlight(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		batch := c.expect("input-u8")
+		if batch.binary == nil || batch.binary.sequence != 0 || len(batch.binary.payload) != 5 {
+			t.Errorf("batch %+v", batch.binary)
+		}
+		ack(c, 1, 2, false)
+		ack(c, 1, 5, false)
+		if end := c.expect("inputStreamEnd"); end.m["sequence"] != "5" {
+			t.Errorf("the end came at %v", end.m["sequence"])
+		}
+		ack(c, 1, 5, true)
+		noResult(c)
+		finished(c)
+		c.waitClose()
+	})
+	params := streamParams(EncodeStream(EncodeU8)(StreamOf[uint8](1, 2, 3, 4, 5)))
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consumeBytes", params); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A stream inside an input item gets a provisional reference; the item's
+// acknowledgement maps it to a channel, on which the nested stream flows.
+func TestANestedInputStreamFlowsOnItsOwnChannel(t *testing.T) {
+	var nested []any
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "outer", 0, false))
+		item := c.expect("inputStreamItem")
+		value := item.m["value"].(map[string]any)
+		if value["kind"] != "stream" {
+			t.Errorf("the item is %v", value)
+			return
+		}
+		provisional := value["value"].(map[string]any)["provisionalRef"].(string)
+		c.send("inputStreamAck", map[string]any{
+			"channel": 1, "highestContiguousSequence": "1", "terminal": false,
+			"mappings": []any{inputMapping(3, provisional, "nested", 0, false)},
+		})
+		outerEnded, nestedEnded := false, false
+		for !outerEnded || !nestedEnded {
+			r := c.read()
+			switch {
+			case r.kind == "inputStreamItem" && r.m["channel"] == float64(3):
+				nested = append(nested, r.m["value"].(map[string]any)["value"])
+				ack(c, 3, uint64(len(nested)), false)
+			case r.kind == "inputStreamEnd" && r.m["channel"] == float64(1):
+				ack(c, 1, 1, true)
+				outerEnded = true
+			case r.kind == "inputStreamEnd" && r.m["channel"] == float64(3):
+				ack(c, 3, uint64(len(nested)), true)
+				nestedEnded = true
+			default:
+				t.Errorf("unexpected %s %v", r.kind, r.m)
+				return
+			}
+		}
+		noResult(c)
+		finished(c)
+		c.waitClose()
+	})
+	outer := StreamOf(StreamOf[uint32](7, 8))
+	params := streamParams(EncodeStream(EncodeStream(EncodeU32))(outer))
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consumeNested", params); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(nested, []any{float64(7), float64(8)}) {
+		t.Fatalf("the nested stream carried %v", nested)
 	}
 }

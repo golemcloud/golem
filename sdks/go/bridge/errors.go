@@ -30,6 +30,8 @@ func (e *Error) Error() string {
 	switch {
 	case e.Status != 0 && e.Body != "":
 		return fmt.Sprintf("golem: %s failed with HTTP %d: %s", e.Endpoint, e.Status, e.Body)
+	case e.Status != 0 && e.Err != nil:
+		return fmt.Sprintf("golem: %s failed with HTTP %d: %v", e.Endpoint, e.Status, e.Err)
 	case e.Status != 0:
 		return fmt.Sprintf("golem: %s failed with HTTP %d", e.Endpoint, e.Status)
 	default:

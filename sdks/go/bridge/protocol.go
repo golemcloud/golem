@@ -77,7 +77,6 @@ type invokeAgentRequest struct {
 	MethodParameters json.RawMessage  `json:"methodParameters"`
 	Mode             InvocationMode   `json:"mode"`
 	ScheduleAt       *string          `json:"scheduleAt,omitempty"`
-	IdempotencyKey   *string          `json:"idempotencyKey,omitempty"`
 }
 
 type configEntryDTO struct {

@@ -44,7 +44,7 @@ func createAgent(ctx context.Context, a *Agent) (AgentID, error) {
 		Config:        configEntriesToDTO(a.config),
 	}
 	var response createAgentResponse
-	if err := post(ctx, *a.configuration, "create-agent", request, nil, &response); err != nil {
+	if err := post(ctx, *a.configuration, "create-agent", request, &response); err != nil {
 		return AgentID{}, err
 	}
 	return response.AgentID, nil
@@ -79,12 +79,13 @@ func invokeAgent(
 		ScheduleAt:       scheduleAt,
 	}
 	var response invokeAgentResponse
-	if err := post(ctx, *a.configuration, "invoke-agent", request, nil, &response); err != nil {
+	if err := post(ctx, *a.configuration, "invoke-agent", request, &response); err != nil {
 		return Result{}, err
 	}
 	// The identity is learned from the first call, so a phantom or ephemeral
 	// agent that was never created explicitly still reports one afterwards.
-	a.id = &response.AgentID
+	id := response.AgentID
+	a.id.Store(&id)
 
 	result := Result{AgentID: response.AgentID, IdempotencyKey: response.IdempotencyKey}
 	if response.Result == nil {
@@ -100,6 +101,14 @@ func invokeAgent(
 	if err != nil {
 		return Result{}, fmt.Errorf("golem: %s.%s result: %w", a.typeName, method, err)
 	}
+	// As on the session path, the value must fit the graph it arrived with.
+	graph, err := schema.UnmarshalWireGraph(response.Result.Graph)
+	if err != nil {
+		return Result{}, fmt.Errorf("golem: %s.%s result graph: %w", a.typeName, method, err)
+	}
+	if err := schema.NewRef(graph).Validate(value); err != nil {
+		return Result{}, fmt.Errorf("golem: %s.%s result: %w", a.typeName, method, err)
+	}
 	result.Value = value
 	return result, nil
 }
@@ -109,7 +118,6 @@ func post(
 	configuration Configuration,
 	endpoint string,
 	request any,
-	idempotencyKey *string,
 	response any,
 ) error {
 	body, err := json.Marshal(request)
@@ -123,9 +131,6 @@ func post(
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Authorization", "Bearer "+configuration.Server.Token())
-	if idempotencyKey != nil {
-		httpRequest.Header.Set("Idempotency-Key", *idempotencyKey)
-	}
 
 	httpResponse, err := configuration.client().Do(httpRequest)
 	if err != nil {
@@ -141,7 +146,15 @@ func post(
 			Body:     string(text),
 		}
 	}
-	if err := json.NewDecoder(httpResponse.Body).Decode(response); err != nil {
+	// The response is held to the same strict JSON as a session message.
+	data, err := io.ReadAll(httpResponse.Body)
+	if err == nil {
+		err = schema.CheckWireJSON(data)
+	}
+	if err == nil {
+		err = json.Unmarshal(data, response)
+	}
+	if err != nil {
 		return &Error{
 			Endpoint: endpoint,
 			Status:   httpResponse.StatusCode,

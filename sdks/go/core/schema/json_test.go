@@ -47,9 +47,9 @@ func mustReject(t *testing.T, root SchemaType, in, wantMsg string) {
 	}
 }
 
-// TestWideIntegersAreCanonicalStrings is the GOL-653 property: s64 and u64 do
-// not fit a JSON number, so they travel as canonical base-10 strings. MoonBit
-// and Scala render them as numbers and cap them at 2^53-1; Go must not.
+// TestWideIntegersAreCanonicalStrings: s64 and u64 do not fit a JSON number,
+// so they travel as canonical base-10 strings, never as numbers capped at
+// 2^53-1.
 func TestWideIntegersAreCanonicalStrings(t *testing.T) {
 	if got := roundTrip(t, typ(S64Type{}), `"-9223372036854775808"`); got != `"-9223372036854775808"` {
 		t.Errorf("s64 round-tripped to %s", got)
@@ -63,8 +63,8 @@ func TestWideIntegersAreCanonicalStrings(t *testing.T) {
 	}
 }
 
-// TestWideIntegerAsNumberIsRejected — accepting a number here is precisely the
-// divergence GOL-653 records.
+// TestWideIntegerAsNumberIsRejected — a wide integer as a JSON number loses
+// precision past 2^53, so it is not accepted.
 func TestWideIntegerAsNumberIsRejected(t *testing.T) {
 	mustReject(t, typ(S64Type{}), `42`, "canonical integer string")
 	mustReject(t, typ(U64Type{}), `42`, "canonical integer string")
@@ -99,8 +99,7 @@ func TestNarrowIntegersAreNumbers(t *testing.T) {
 	mustReject(t, typ(S32Type{}), `"5"`, "expected integer")
 }
 
-// TestDurationIsAnObjectOfNanoseconds — not an ISO-8601 string, which is the
-// other half of the GOL-653 divergence.
+// TestDurationIsAnObjectOfNanoseconds — not an ISO-8601 string.
 func TestDurationIsAnObjectOfNanoseconds(t *testing.T) {
 	in := `{"nanoseconds":"-1500000000"}`
 	if got := roundTrip(t, typ(DurationType{}), in); got != in {
@@ -302,4 +301,26 @@ func TestUUIDIsAHyphenatedString(t *testing.T) {
 	}
 	mustReject(t, typ(UUIDType{}), `"dd00721b33294621a01dc71f02cd78c6"`, "hyphenated UUID")
 	mustReject(t, typ(UUIDType{}), `42`, "hyphenated UUID string")
+}
+
+// A float beyond the int64 range must not convert into a value that passes the
+// range check, an f32 that overflows is not infinity, and nothing may follow
+// the value.
+func TestNumbersOutOfRangeAndTrailingDataAreRejected(t *testing.T) {
+	ref := NewRef(SchemaGraph{Root: typ(S32Type{})})
+	for _, big := range []float64{1e20, -1e20, 0x1p63} {
+		if _, err := ref.PackJSON(big); err == nil || !strings.Contains(err.Error(), "outside the range") {
+			t.Errorf("packing %v as s32: %v", big, err)
+		}
+	}
+	mustReject(t, typ(F32Type{}), `1e300`, "outside the f32 range")
+	mustReject(t, typ(F32Type{}), `-1e39`, "outside the f32 range")
+	if got := roundTrip(t, typ(F32Type{}), `1.5`); got != `1.5` {
+		t.Errorf("f32 round-tripped to %s", got)
+	}
+	for _, in := range []string{`1 2`, `{"a":1} garbage`, `"x"]`} {
+		if _, err := NewRef(SchemaGraph{Root: typ(StringType{})}).PackJSONBytes([]byte(in)); err == nil {
+			t.Errorf("accepted %q", in)
+		}
+	}
 }

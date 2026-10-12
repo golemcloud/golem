@@ -33,7 +33,8 @@ import (
 // SchemaType and SchemaValue, and openapi/golem-service.yaml is generated from
 // those same types.
 //
-// It is not canonical JSON, and confusing the two is the GOL-653 failure mode.
+// It is not canonical JSON, and an SDK that confuses the two sends values the
+// host reads as something else.
 // Canonical JSON (json.go) renders a value *through its schema* into what an
 // author would write by hand: a record becomes an object with named fields, a
 // s64 becomes a base-10 string, binary becomes base64url. The wire form is

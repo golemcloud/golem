@@ -389,3 +389,86 @@ func TestANewPhantomIDIsAFreshV4UUID(t *testing.T) {
 		t.Fatalf("two phantom ids collided: %s", *a.phantomID)
 	}
 }
+
+// A 2xx answer the client cannot use says why, not only which status it was.
+func TestAnUnreadableAnswerSaysWhy(t *testing.T) {
+	for _, response := range []string{
+		`not json`,
+		// Duplicate members are rejected, as on the session path.
+		`{"agentId":{"componentId":"c","agentId":"a"},"agentId":{"componentId":"c","agentId":"b"}}`,
+	} {
+		r := newRecorder(t)
+		r.respond = func(string) (int, string) { return 200, response }
+		_, err := testAgent(t, r).Invoke(context.Background(), "greet", schema.RecordValue{})
+		var bridgeErr *Error
+		if !errors.As(err, &bridgeErr) || bridgeErr.Status != 200 || bridgeErr.Err == nil {
+			t.Fatalf("%s: got %v", response, err)
+		}
+		if !strings.Contains(err.Error(), "could not read the response") {
+			t.Fatalf("%s: the error does not say why: %v", response, err)
+		}
+	}
+}
+
+// A result that does not fit the graph it arrived with is rejected, as on the
+// session path.
+func TestAResultMustFitItsGraph(t *testing.T) {
+	r := newRecorder(t)
+	r.respond = func(string) (int, string) {
+		return 200, `{"agentId":{"componentId":"c","agentId":"a"},"idempotencyKey":"k1",
+			"result":{"graph":{"root":{"kind":"u8","value":{}}},
+			"value":{"kind":"string","value":"not a u8"}}}`
+	}
+	if _, err := testAgent(t, r).Invoke(context.Background(), "greet", schema.RecordValue{}); err == nil {
+		t.Fatal("a result that does not fit its graph was accepted")
+	}
+}
+
+// One client may be used from several goroutines; run with -race.
+func TestConcurrentCallsOnOneAgent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"agentId":{"componentId":"c","agentId":"a"},"idempotencyKey":"k"}`)
+	}))
+	t.Cleanup(server.Close)
+	agent, err := NewAgent("greeter", schema.RecordValue{}, WithConfiguration(Configuration{
+		Server: Custom(server.URL, "token"), AppName: "app", EnvName: "env",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 8)
+	for range 8 {
+		go func() {
+			_, err := agent.Invoke(context.Background(), "ping", schema.RecordValue{})
+			agent.ID()
+			errs <- err
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if id, ok := agent.ID(); !ok || id.AgentID != "a" {
+		t.Fatalf("identity read as %v %v", id, ok)
+	}
+}
+
+// The WebSocket handshake uses the configured client's transport even when
+// the client has a timeout, which the websocket library does not accept.
+func TestTheDialClientKeepsTheTransport(t *testing.T) {
+	transport := &http.Transport{}
+	client := &http.Client{Timeout: time.Minute, Transport: transport}
+	dial := dialClient(client)
+	if dial.Timeout != 0 || dial.Transport != transport {
+		t.Fatalf("dial client = %+v", dial)
+	}
+	if client.Timeout != time.Minute {
+		t.Fatal("the configured client was changed")
+	}
+	plain := &http.Client{}
+	if dialClient(plain) != plain {
+		t.Fatal("a client without a timeout was copied")
+	}
+}
