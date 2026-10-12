@@ -4666,6 +4666,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "conditional-trait-gen",
  "cookie",
  "criterion",
  "dashmap",
