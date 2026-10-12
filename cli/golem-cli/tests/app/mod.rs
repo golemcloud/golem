@@ -869,6 +869,55 @@ impl TestContext {
         }
     }
 
+    async fn cli_with_broken_stderr<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        drop(child.stderr.take());
+        let mut stdout = child.stdout.take().unwrap();
+
+        let mut stdout_bytes = Vec::new();
+        stdout.read_to_end(&mut stdout_bytes).await.unwrap();
+
+        RawOutput {
+            status: child.wait().await.unwrap(),
+            stdout: stdout_bytes,
+            stderr: Vec::new(),
+        }
+    }
+
     async fn cli_process_after<I, S>(
         &self,
         command_args: I,

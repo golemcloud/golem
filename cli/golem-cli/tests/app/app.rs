@@ -85,6 +85,34 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
     );
 }
 
+#[test]
+async fn closed_stderr_keeps_the_exit_code_of_a_failed_command(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+
+    let usage_error = ctx
+        .cli_with_broken_stderr(["--no-such-flag", cmd::NEW])
+        .await;
+    assert_eq!(
+        usage_error.exit_code(),
+        Some(2),
+        "a usage error with a closed stderr changed its exit code"
+    );
+
+    let missing_input = ctx.cli_with_broken_stderr([flag::YES, cmd::NEW]).await;
+    assert_eq!(
+        missing_input.exit_code(),
+        Some(2),
+        "a missing input with a closed stderr changed its exit code"
+    );
+
+    let no_manifest = ctx.cli_with_broken_stderr([cmd::BUILD]).await;
+    assert_eq!(
+        no_manifest.exit_code(),
+        Some(1),
+        "a failed command with a closed stderr changed its exit code"
+    );
+}
+
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
 /// command help go to stderr with exit code 2.
 #[test]

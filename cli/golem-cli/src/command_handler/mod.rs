@@ -49,8 +49,8 @@ use crate::command_handler::ssh::NOT_RUN_EXIT;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{
-    Output, RawOutputReservation, TracingSuppression, log_anyhow_error, logln, print_bytes,
-    print_line, set_log_output, settle_print,
+    Output, RawOutputReservation, TracingSuppression, ignore_closed_pipe, log_anyhow_error, logln,
+    print_bytes, print_line, set_log_output,
 };
 use crate::model::format::Format;
 use crate::{command_name, init_tracing};
@@ -230,7 +230,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 .await;
 
                 logln("");
-                settle_print(error.print());
+                ignore_closed_pipe(error.print());
 
                 match ctx {
                     Ok(ctx) => {
@@ -249,7 +249,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             } => {
                 init_tracing(fallback_command.global_flags.verbosity(), false);
                 debug_log_parse_error(&error, &fallback_command);
-                settle_print(error.print());
+                ignore_closed_pipe(error.print());
 
                 Ok(clamp_exit_code(error.exit_code()))
             }

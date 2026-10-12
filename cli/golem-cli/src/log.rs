@@ -298,6 +298,13 @@ fn line_bytes(line: impl Display) -> Vec<u8> {
     format!("{line}\n").into_bytes()
 }
 
+/// What a writer does when the reader of its stream has closed the pipe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OnClosedReader {
+    EndProcess,
+    DropOutput,
+}
+
 #[derive(Clone, Copy)]
 enum StandardStream {
     Stdout,
@@ -311,15 +318,42 @@ impl StandardStream {
             Self::Stderr => "stderr",
         }
     }
+
+    /// Output of stdout is the result of the command, so nothing is left to do once its reader
+    /// has gone. Output of stderr tells the user why a command failed, and the command must
+    /// still end with its own exit code.
+    fn on_closed_reader(self) -> OnClosedReader {
+        match self {
+            Self::Stdout => OnClosedReader::EndProcess,
+            Self::Stderr => OnClosedReader::DropOutput,
+        }
+    }
 }
 
-/// Ends the process quietly when the reader of the stream has closed the pipe, as a signal
-/// would end `cat`. Any other write error panics, as `println!` does.
-fn settle(stream: &str, result: std::io::Result<Delivery>) {
+#[derive(Debug)]
+enum Reaction {
+    Continue,
+    EndProcess,
+    Fail(std::io::Error),
+}
+
+fn react(on_closed_reader: OnClosedReader, result: std::io::Result<Delivery>) -> Reaction {
     match result {
-        Ok(Delivery::Delivered) => {}
-        Ok(Delivery::ReaderClosed) => std::process::exit(0),
-        Err(error) => panic!("failed printing to {stream}: {error}"),
+        Ok(Delivery::Delivered) => Reaction::Continue,
+        Ok(Delivery::ReaderClosed) => match on_closed_reader {
+            OnClosedReader::EndProcess => Reaction::EndProcess,
+            OnClosedReader::DropOutput => Reaction::Continue,
+        },
+        Err(error) => Reaction::Fail(error),
+    }
+}
+
+/// Carries out the reaction. A write error other than a closed pipe panics, as `println!` does.
+fn settle(stream: StandardStream, result: std::io::Result<Delivery>) {
+    match react(stream.on_closed_reader(), result) {
+        Reaction::Continue => {}
+        Reaction::EndProcess => std::process::exit(0),
+        Reaction::Fail(error) => panic!("failed printing to {}: {error}", stream.name()),
     }
 }
 
@@ -328,7 +362,7 @@ fn write_to(stream: StandardStream, bytes: &[u8]) {
         StandardStream::Stdout => deliver(&mut std::io::stdout().lock(), bytes),
         StandardStream::Stderr => deliver(&mut std::io::stderr().lock(), bytes),
     };
-    settle(stream.name(), result);
+    settle(stream, result);
 }
 
 /// Like `println!`, but ends the process with exit code 0 when the reader of stdout has gone.
@@ -336,7 +370,7 @@ pub fn print_line(line: impl Display) {
     write_to(StandardStream::Stdout, &line_bytes(line));
 }
 
-/// Like `eprintln!`, but ends the process with exit code 0 when the reader of stderr has gone.
+/// Like `eprintln!`, but drops the line when the reader of stderr has gone.
 pub fn eprint_line(line: impl Display) {
     write_to(StandardStream::Stderr, &line_bytes(line));
 }
@@ -346,28 +380,44 @@ pub fn print_text(text: impl Display) {
     write_to(StandardStream::Stdout, text.to_string().as_bytes());
 }
 
-/// Like `eprint!`, but ends the process with exit code 0 when the reader of stderr has gone.
+/// Like `eprint!`, but drops the text when the reader of stderr has gone.
 pub fn eprint_text(text: impl Display) {
     write_to(StandardStream::Stderr, text.to_string().as_bytes());
 }
 
 /// Writes raw bytes to stdout, ending the process with exit code 0 when the reader has gone.
+/// Any other write error panics.
 pub fn print_bytes(bytes: &[u8]) {
     write_to(StandardStream::Stdout, bytes);
 }
 
-/// Handles the outcome of a library call that printed to a standard stream by itself.
-pub fn settle_print(result: std::io::Result<()>) {
-    settle(
-        "its output",
-        result.map(|()| Delivery::Delivered).or_else(|error| {
-            if error.kind() == ErrorKind::BrokenPipe {
-                Ok(Delivery::ReaderClosed)
-            } else {
-                Err(error)
-            }
-        }),
-    );
+/// Writes raw bytes to stdout. Ends the process with exit code 0 when the reader has gone, and
+/// returns any other write error.
+pub fn try_print_bytes(bytes: &[u8]) -> std::io::Result<()> {
+    let result = deliver(&mut std::io::stdout().lock(), bytes);
+    match react(StandardStream::Stdout.on_closed_reader(), result) {
+        Reaction::Continue => Ok(()),
+        Reaction::EndProcess => std::process::exit(0),
+        Reaction::Fail(error) => Err(error),
+    }
+}
+
+/// Handles the outcome of a library call that printed a message by itself. A closed pipe is
+/// ignored, so that the command goes on to end with its own exit code. Any other write error
+/// panics.
+pub fn ignore_closed_pipe(result: std::io::Result<()>) {
+    let result = deliver_result(result);
+    if let Reaction::Fail(error) = react(OnClosedReader::DropOutput, result) {
+        panic!("failed printing a message: {error}");
+    }
+}
+
+fn deliver_result(result: std::io::Result<()>) -> std::io::Result<Delivery> {
+    match result {
+        Ok(()) => Ok(Delivery::Delivered),
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => Ok(Delivery::ReaderClosed),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn tracing_writer() -> TracingWriter {
@@ -675,7 +725,10 @@ impl LogColorize for Utf8PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{Delivery, deliver, error_message_for_output, line_bytes, message_for_output};
+    use super::{
+        Delivery, OnClosedReader, Reaction, StandardStream, deliver, error_message_for_output,
+        line_bytes, message_for_output, react,
+    };
     use anyhow::anyhow;
     use std::io::{Error, ErrorKind, Write};
     use test_r::test;
@@ -727,6 +780,68 @@ mod tests {
             let error = deliver(&mut out, b"line\n").unwrap_err();
             assert_eq!(error.kind(), ErrorKind::PermissionDenied);
         }
+    }
+
+    #[test]
+    fn a_closed_reader_of_stdout_ends_the_process() {
+        let on_closed = StandardStream::Stdout.on_closed_reader();
+        assert_eq!(on_closed, OnClosedReader::EndProcess);
+        assert!(matches!(
+            react(on_closed, Ok(Delivery::ReaderClosed)),
+            Reaction::EndProcess
+        ));
+    }
+
+    #[test]
+    fn a_closed_reader_of_stderr_drops_the_output_and_continues() {
+        let on_closed = StandardStream::Stderr.on_closed_reader();
+        assert_eq!(on_closed, OnClosedReader::DropOutput);
+        assert!(matches!(
+            react(on_closed, Ok(Delivery::ReaderClosed)),
+            Reaction::Continue
+        ));
+    }
+
+    #[test]
+    fn another_write_error_fails_on_both_streams() {
+        for stream in [StandardStream::Stdout, StandardStream::Stderr] {
+            let reaction = react(
+                stream.on_closed_reader(),
+                Err(Error::from(ErrorKind::PermissionDenied)),
+            );
+            assert!(matches!(
+                reaction,
+                Reaction::Fail(error) if error.kind() == ErrorKind::PermissionDenied
+            ));
+        }
+    }
+
+    #[test]
+    fn a_delivered_write_continues_on_both_streams() {
+        for stream in [StandardStream::Stdout, StandardStream::Stderr] {
+            assert!(matches!(
+                react(stream.on_closed_reader(), Ok(Delivery::Delivered)),
+                Reaction::Continue
+            ));
+        }
+    }
+
+    #[test]
+    fn a_message_printed_by_a_library_ignores_only_a_closed_pipe() {
+        assert!(matches!(
+            react(
+                OnClosedReader::DropOutput,
+                super::deliver_result(Err(Error::from(ErrorKind::BrokenPipe)))
+            ),
+            Reaction::Continue
+        ));
+        assert!(matches!(
+            react(
+                OnClosedReader::DropOutput,
+                super::deliver_result(Err(Error::from(ErrorKind::PermissionDenied)))
+            ),
+            Reaction::Fail(_)
+        ));
     }
 
     #[test]
