@@ -14,7 +14,7 @@ import (
 	_ "agent-sdk-go/agents/jsonsnap/impl"
 	_ "agent-sdk-go/agents/kvstore/impl"
 	_ "agent-sdk-go/agents/ledger/impl"
-	_ "agent-sdk-go/agents/logs/impl"
+	_ "agent-sdk-go/agents/logger/impl"
 	_ "agent-sdk-go/agents/mysqlstore/impl"
 	_ "agent-sdk-go/agents/pgstore/impl"
 	_ "agent-sdk-go/agents/promises/impl"

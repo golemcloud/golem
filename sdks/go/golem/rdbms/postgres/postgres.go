@@ -570,65 +570,9 @@ func encodeParams(args []any) ([]pg.DbValue, error) {
 
 // ── Value decoding ────────────────────────────────────────────────────────────
 //
-// decode is split into a flat part (decodeFlat, every non-recursive family) and
-// the host-backed recursive part (decodeLazy, which calls LazyDbValue.Get/Drop).
-
-func decode(v pg.DbValue) any {
-	if x, ok := decodeFlat(v); ok {
-		return x
-	}
-	return decodeLazy(v)
-}
-
-// decodeLazy handles the recursive families (array, composite, domain, custom
-// range). It calls the host to read each lazy child and drops it afterwards.
-func decodeLazy(v pg.DbValue) any {
-	switch v.Tag() {
-	case pg.DbValueArray:
-		lazies := v.Array()
-		out := make([]any, len(lazies))
-		for i, l := range lazies {
-			out[i] = decode(l.Get())
-			l.Drop()
-		}
-		return out
-	case pg.DbValueComposite:
-		c := v.Composite()
-		fields := make([]any, len(c.Values))
-		for i, l := range c.Values {
-			fields[i] = decode(l.Get())
-			l.Drop()
-		}
-		return CompositeValue{Name: c.Name, Fields: fields}
-	case pg.DbValueDomain:
-		d := v.Domain()
-		val := decode(d.Value.Get())
-		d.Value.Drop()
-		return DomainValue{Name: d.Name, Value: val}
-	case pg.DbValueRange:
-		rg := v.Range()
-		return RangeValue{Name: rg.Name, Start: valueBoundFromWit(rg.Value.Start), End: valueBoundFromWit(rg.Value.End)}
-	default:
-		panic(fmt.Sprintf("golem/rdbms/postgres: unhandled value case %s", tagName(v.Tag())))
-	}
-}
-
-func valueBoundFromWit(b pg.ValueBound) Bound[any] {
-	switch b.Tag() {
-	case pg.ValueBoundIncluded:
-		l := b.Included()
-		val := decode(l.Get())
-		l.Drop()
-		return Included[any](val)
-	case pg.ValueBoundExcluded:
-		l := b.Excluded()
-		val := decode(l.Get())
-		l.Drop()
-		return Excluded[any](val)
-	default:
-		return Unbounded[any]()
-	}
-}
+// A value is decoded by a flat part (decodeFlat, every non-recursive family) and
+// a host-backed recursive part (decodeLazy in postgres_wasm.go, which reads each
+// lazy child through the host).
 
 // decodeFlat handles every non-recursive family; ok is false for the recursive
 // ones (array/composite/domain/range), which decodeLazy takes.
