@@ -92,12 +92,19 @@ pub(super) async fn context() -> TestContext {
                   name: bash
                   version: "0.2.1"
               fixture: {{}}
+              git:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: git
+                  version: "0.1.10"
             agents:
               BashOwner:
                 tools:
                   bash:
                     filesystemAccess: allowed
                   fixture:
+                    filesystemAccess: allowed
+                  git:
                     filesystemAccess: allowed
               BashOnlyOwner:
                 tools:

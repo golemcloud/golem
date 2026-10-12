@@ -13,11 +13,11 @@
 // limitations under the License.
 
 pub mod sdk {
-    pub const RUST: &str = "3.0.0-rc2";
-    pub const TS: &str = "2.0.0-rc1";
-    pub const EFFECT_GOLEM: &str = "2.0.0-rc1";
-    pub const SCALA: &str = "2.0.0-RC1";
-    pub const MOONBIT: &str = "0.6.0-rc3";
+    pub const RUST: &str = "3.0.0-rc3";
+    pub const TS: &str = "2.0.0-rc3";
+    pub const EFFECT_GOLEM: &str = "2.0.0-rc2";
+    pub const SCALA: &str = "2.0.0-RC2";
+    pub const MOONBIT: &str = "0.6.0-rc4";
     pub const GO: &str = "0.1.0";
     pub const MANIFEST: &str = "1.6.0";
 

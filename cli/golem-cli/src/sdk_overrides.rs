@@ -72,7 +72,7 @@ pub enum SdkOverridesTestProfile {
 
 /// This should be `PublishedArtifacts` in RC and release phase, otherwise `LocalWorkspace`.
 pub const SDK_OVERRIDES_DEFAULT_TEST_PROFILE: SdkOverridesTestProfile =
-    SdkOverridesTestProfile::LocalWorkspace;
+    SdkOverridesTestProfile::PublishedArtifacts;
 
 static SDK_OVERRIDES: LazyLock<anyhow::Result<SdkOverrides>> = LazyLock::new(SdkOverrides::load);
 
@@ -280,12 +280,11 @@ impl SdkOverrides {
     /// from the application root directory.
     ///
     /// In override (dev) mode it expands to a `moon -C <local-tools-path> run cmd --`
-    /// invocation that runs the tool from a local sibling checkout without changing
-    /// the working directory.
+    /// invocation that runs the tool from a local sibling checkout.
     ///
-    /// In published mode it expands to the launcher script that `moon` installs into
-    /// `.mooncakes/golemcloud/golem_sdk_tools/golem-sdk-tools` when the project
-    /// declares `golemcloud/golem_sdk_tools` as a `bin-deps` dependency.
+    /// In published mode it runs the launcher installed by `moon install` under
+    /// `_build/__moonbin__` for the project's `bin-deps` dependency. The launcher
+    /// selects the runtime and preserves the application working directory.
     pub fn moonbit_sdk_tools_cmd(&self) -> String {
         match &self.moonbit_sdk_path {
             Some(path) => {
@@ -297,7 +296,7 @@ impl SdkOverrides {
                     .unwrap_or_else(|| ".mooncakes/golemcloud/golem_sdk_tools".to_string());
                 format!("moon -C \"{tools_path}\" run cmd --")
             }
-            None => "./.mooncakes/golemcloud/golem_sdk_tools/golem-sdk-tools".to_string(),
+            None => "./_build/__moonbin__/golem-sdk-tools".to_string(),
         }
     }
 
@@ -715,6 +714,42 @@ mod tests {
             serde_json::from_str(&overrides.moonbit_sdk_dep()).unwrap();
 
         assert_eq!(dependency["path"], path);
+    }
+
+    #[test]
+    fn moonbit_tools_use_selected_published_dependency() {
+        let overrides = SdkOverrides {
+            moonbit_sdk_version: Some("0.6.0-rc4".to_string()),
+            ..Default::default()
+        };
+        let module: serde_json::Value = serde_json::from_str(&format!(
+            "{{\"deps\":{{\"golemcloud/golem_sdk\":{}}}{}}}",
+            overrides.moonbit_sdk_dep(),
+            overrides.moonbit_sdk_tools_bin_deps(),
+        ))
+        .unwrap();
+        assert_eq!(module["deps"]["golemcloud/golem_sdk"], "0.6.0-rc4");
+        assert_eq!(
+            module["bin-deps"]["golemcloud/golem_sdk_tools"],
+            "0.6.0-rc4"
+        );
+        assert_eq!(
+            overrides.moonbit_sdk_tools_cmd(),
+            "./_build/__moonbin__/golem-sdk-tools"
+        );
+    }
+
+    #[test]
+    fn moonbit_local_tools_keep_quoted_sibling_path() {
+        let overrides = SdkOverrides {
+            moonbit_sdk_path: Some("/repo with spaces/golem_sdk".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(overrides.moonbit_sdk_tools_bin_deps(), "");
+        assert_eq!(
+            overrides.moonbit_sdk_tools_cmd(),
+            "moon -C \"/repo with spaces/golem_sdk_tools\" run cmd --"
+        );
     }
 
     #[test]

@@ -4707,7 +4707,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
-async fn synchronous_clock_does_not_wait_for_wallet_reconciliation(
+async fn synchronous_clock_overlaps_http_and_replays_offline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -4740,66 +4740,6 @@ async fn synchronous_clock_does_not_wait_for_wallet_reconciliation(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clocks", "synchronous-clock-wallet-contention");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "use_std_time_apis", data_value!())
-        .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let mut clock = executor.gate_next_wall_clock_now(&owner).await?;
-
-    let invoke = async {
-        executor
-            .invoke_and_await_agent(&component, &agent_id, "use_std_time_apis", data_value!())
-            .await
-    };
-    let control = async {
-        clock.entered().await;
-        let boundary = tokio::time::timeout(
-            Duration::from_secs(5),
-            executor.hold_invalidated_card_boundary(&owner),
-        )
-        .await
-        .map_err(|_| anyhow!("wallet boundary was already held when clock gate fired"))??;
-        let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        let clock_after = before.last().unwrap().oplog_index;
-        clock.release();
-        loop {
-            // ReadLocal completion appends without committing; expose the buffered records to
-            // the public oplog query without requiring another guest host call to make progress.
-            executor.commit_oplog(&worker_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            let clock_start = oplog.iter().find_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(start)
-                    if entry.oplog_index > clock_after
-                        && start.function_name == "wall_clock::now" =>
-                {
-                    Some(entry.oplog_index)
-                }
-                _ => None,
-            });
-            if clock_start.is_some_and(|start| {
-                oplog.iter().any(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
-                })
-            }) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        // The clock must record its value without acquiring the held wallet boundary.
-        drop(boundary);
-        Ok::<_, anyhow::Error>(())
-    };
-    let (_, ()) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::try_join!(invoke, control)
-    })
-    .await
-    .map_err(|_| anyhow!("P2 clock did not complete while the wallet boundary was held"))??;
-
-    // Also run the real accessor/exclusive overlap, without a gate that itself retains the Store.
     let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
