@@ -1612,6 +1612,16 @@ pub trait CancelTester {
     async fn grow_memory_after_rpc_result(&self, counter_name: String);
 
     async fn durable_operation_after_rpc_result(&self, counter_name: String, operation: String);
+
+    async fn replay_barrier_probe(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+        counter: String,
+        rounds: u32,
+    ) -> u64;
 }
 
 struct CancelTesterImpl {
@@ -1721,6 +1731,61 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 impl CancelTester for CancelTesterImpl {
     fn new(name: String) -> Self {
         Self { _name: name }
+    }
+
+    async fn replay_barrier_probe(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+        counter: String,
+        rounds: u32,
+    ) -> u64 {
+        let mut a = Box::pin(async move {
+            RpcBlockingCounterClient::get(target_a)
+                .inc_after_promise(gate_a)
+                .await
+        });
+        let mut b = Box::pin(async move {
+            let rpc = WasmRpc::new(
+                "RpcCounter",
+                encode_single_parameter(counter),
+                None,
+                Vec::new(),
+            );
+            for _ in 0..rounds {
+                rpc.invoke_and_await("inc_by", encode_single_parameter(3u64), None)
+                    .unwrap();
+            }
+            let value = RpcBlockingCounterClient::get(target_b)
+                .inc_after_promise(gate_b)
+                .await;
+            for _ in 0..rounds {
+                rpc.invoke_and_await("inc_by", encode_single_parameter(5u64), None)
+                    .unwrap();
+            }
+            value
+        });
+        let mut result_a = None;
+        let mut result_b = None;
+        std::future::poll_fn(|cx| {
+            if result_a.is_none()
+                && let std::task::Poll::Ready(value) = a.as_mut().poll(cx)
+            {
+                result_a = Some(value);
+            }
+            if result_b.is_none()
+                && let std::task::Poll::Ready(value) = b.as_mut().poll(cx)
+            {
+                result_b = Some(value);
+            }
+            match (result_a, result_b) {
+                (Some(a), Some(b)) => std::task::Poll::Ready(a + b),
+                _ => std::task::Poll::Pending,
+            }
+        })
+        .await
     }
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String) {
