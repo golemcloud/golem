@@ -46,6 +46,12 @@ pub trait ValidationProbe {
     ) -> Result<ChainEvidence, ProbeError>;
 }
 
+#[tool_definition(version = "1.0.0")]
+pub trait PermissionProbe {
+    async fn read(&self, path: String) -> Result<String, ProbeError>;
+    async fn delete(&self, path: String) -> Result<String, ProbeError>;
+}
+
 struct ChainProbeImpl;
 
 #[tool_implementation]
@@ -88,6 +94,21 @@ impl ValidationProbe for ValidationProbeImpl {
         } else {
             Ok(evidence(mode.clone(), "validation".to_string(), mode))
         }
+    }
+}
+
+struct PermissionProbeImpl;
+
+#[tool_implementation]
+impl PermissionProbe for PermissionProbeImpl {
+    async fn read(&self, path: String) -> Result<String, ProbeError> {
+        announce_effect(&format!("permission/read{path}")).await;
+        Ok(format!("read:{path}"))
+    }
+
+    async fn delete(&self, path: String) -> Result<String, ProbeError> {
+        announce_effect(&format!("permission/delete{path}")).await;
+        Ok(format!("delete:{path}"))
     }
 }
 

@@ -26,12 +26,14 @@ components:
 
 tools:
   chain-probe: {}
+  permission-probe: {}
   validation-probe: {}
 
 agents:
   ToolRuntimeBypassOwner:
     tools:
       chain-probe: {}
+      permission-probe: {}
       validation-probe: {}
 
 bridge:

@@ -216,6 +216,10 @@ async fn universal_one(
 }
 
 async fn announce_checkpoint(oplog_idx: u64) {
+    announce(&format!("stale-ready/{oplog_idx}")).await;
+}
+
+async fn announce(path: &str) {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::wit_future;
 
@@ -233,7 +237,7 @@ async fn announce_checkpoint(oplog_idx: u64) {
         .set_authority(Some(&format!("127.0.0.1:{port}")))
         .expect("set authority");
     request
-        .set_path_with_query(Some(&format!("/stale-ready/{oplog_idx}")))
+        .set_path_with_query(Some(&format!("/{path}")))
         .expect("set path");
     let send = async move { client::send(request).await.expect("send checkpoint") };
     let finish = async move {
@@ -336,4 +340,116 @@ async fn universal_two(
         underlying,
     )
     .await
+}
+
+fn permission_path(input: &TypedSchemaValue) -> String {
+    match input.value() {
+        SchemaValue::Record { fields } => match fields.first() {
+            Some(SchemaValue::String(path)) => path.clone(),
+            _ => panic!("permission probe path is a string"),
+        },
+        _ => panic!("permission probe input is a record"),
+    }
+}
+
+fn with_permission_path(input: &TypedSchemaValue, path: &str) -> TypedSchemaValue {
+    let (graph, mut value) = input.clone().into_parts();
+    let SchemaValue::Record { fields } = &mut value else {
+        panic!("permission probe input is a record");
+    };
+    fields[0] = SchemaValue::String(path.to_string());
+    TypedSchemaValue::new(graph, value)
+}
+
+fn describe_permission_outcome(
+    outcome: Result<InvocationResult, ToolInvokeError<RawCustomToolError>>,
+) -> String {
+    match outcome {
+        Ok(result) => match result.result.as_ref().map(TypedSchemaValue::value) {
+            Some(SchemaValue::String(value)) => format!("ok:{value}"),
+            other => format!("unexpected:{other:?}"),
+        },
+        Err(ToolInvokeError::Denied(_)) => "denied".to_string(),
+        Err(error) => format!("error:{error:?}"),
+    }
+}
+
+fn permission_result(
+    outcome: String,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    Ok(InvocationResult {
+        result: Some(
+            outcome
+                .into_typed_schema_value()
+                .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?,
+        ),
+        stdout: None,
+        stderr: None,
+    })
+}
+
+/// Rewrites permission-probe calls according to the outer path argument:
+/// `/as-delete<rest>` forwards `delete <rest>`, `/alias<rest>` forwards `read <rest>`,
+/// `/twice<rest>` forwards `read <rest>` before and after a promise checkpoint, and
+/// `/pending<rest>` announces `pending-starting`, then starts `read <rest>` and returns
+/// `returned-early` while that call is still being admitted, without awaiting it. Any other path is
+/// forwarded unchanged. The result describes the inner outcome instead of propagating it.
+#[universal_tool_middleware(name = "runtime-bypass-permission")]
+async fn permission_layer(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    _stdout: Option<OutputStream>,
+    _stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    let path = permission_path(&input);
+    let read = || vec!["read".to_string()];
+    if let Some(rest) = path.strip_prefix("/as-delete") {
+        let outcome = underlying
+            .invoke(
+                vec!["delete".to_string()],
+                with_permission_path(&input, rest),
+                stdin,
+            )
+            .await;
+        return permission_result(describe_permission_outcome(outcome));
+    }
+    if let Some(rest) = path.strip_prefix("/alias") {
+        let outcome = underlying
+            .invoke(read(), with_permission_path(&input, rest), stdin)
+            .await;
+        return permission_result(describe_permission_outcome(outcome));
+    }
+    if let Some(rest) = path.strip_prefix("/twice") {
+        let inner = with_permission_path(&input, rest);
+        let first =
+            describe_permission_outcome(underlying.invoke(read(), inner.clone(), None).await);
+        let promise = golem_rust::create_promise();
+        announce(&format!("permission-ready/{}", promise.oplog_idx)).await;
+        golem_rust::await_promise(&promise).await;
+        let second = describe_permission_outcome(underlying.invoke(read(), inner, None).await);
+        return permission_result(format!("first={first};second={second}"));
+    }
+    if let Some(rest) = path.strip_prefix("/pending") {
+        announce("pending-starting").await;
+        let inner = with_permission_path(&input, rest);
+        let mut call = Box::pin(async move { underlying.invoke(read(), inner, None).await });
+        let pending = std::future::poll_fn(|context| {
+            std::task::Poll::Ready(call.as_mut().poll(context).is_pending())
+        })
+        .await;
+        if !pending {
+            return permission_result("completed-before-return".to_string());
+        }
+        spawn_local(async move {
+            let _ = call.await;
+        });
+        return permission_result("returned-early".to_string());
+    }
+    let outcome = underlying.invoke(command_path, input, stdin).await;
+    permission_result(describe_permission_outcome(outcome))
 }
