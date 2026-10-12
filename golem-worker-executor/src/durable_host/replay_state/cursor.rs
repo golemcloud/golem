@@ -3592,14 +3592,6 @@ impl ReplayState {
         self.cursor.is_live()
     }
 
-    pub(crate) fn has_stream_observation(&self, index: OplogIndex) -> bool {
-        self.cursor
-            .stream_observations
-            .lock()
-            .unwrap()
-            .contains_key(&index)
-    }
-
     /// Returns whether the primary owner has published live admission after reconstruction
     /// settlement. Cursor exhaustion alone is intentionally not sufficient.
     pub(crate) fn is_live_published(&self) -> bool {
