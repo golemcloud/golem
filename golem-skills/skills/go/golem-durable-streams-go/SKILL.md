@@ -111,6 +111,7 @@ receipt, err := durablestreams.AppendJSON(w, []Event{ev}, false) // true closes 
 - `ReadBytes(url, opts)` reads a byte stream. `ReadOptions` sets the starting `Checkpoint` (default `durablestreams.Start`), the `Transport` once caught up (`LongPoll` by default, or `SSE`), the attempt `Timeout`, the `IdleDelay` and `Retry`; `r.Checkpoint()` is where a later reader can resume.
 - A `Writer` has one append in flight: after an error, `RetryPending()` resends that exact append before new data is accepted. `w.Close()` closes the stream; `w.AppendBytes` writes bytes.
 - Transient failures (timeouts, transport, rate limits, unavailability) are retried per `RetryOptions`; any other `*durablestreams.Error` is returned, and an error never means the end of a stream.
+- HTTPS is required except when the host is `localhost`, a dot-delimited subdomain such as `app.localhost`, or a loopback IP. Localhost names are case-insensitive and may have one terminal DNS dot. The URL authority stays unchanged. Redirects and URL credentials are rejected.
 
 ```shell
 golem build
