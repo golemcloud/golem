@@ -17,8 +17,8 @@ use anyhow::anyhow;
 use golem_cli::error::NonSuccessfulExit;
 use golem_cli::log::{log_error, logln};
 use golem_common::config::DbSqliteConfig;
-use golem_service_base::db::PoolApi;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, PoolApi};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -155,6 +155,19 @@ pub async fn preflight_registry_db_compat(data_dir: &Path) -> Result<(), CompatC
         .await
         .map_err(|err| CompatCheckError::sqlite(registry_db_path.clone(), err))?;
 
+    let has_any_table = pool
+        .with_ro("compat", "any_table_exists")
+        .fetch_optional_as::<(i64,), _>(sqlx::query_as(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1;",
+        ))
+        .await
+        .map_err(|err| CompatCheckError::sqlite(registry_db_path.clone(), err.into()))?
+        .is_some();
+
+    if !has_any_table {
+        return Ok(());
+    }
+
     let has_table = pool
         .with_ro("compat", "table_exists")
         .fetch_optional_as::<(i64,), _>(
@@ -220,30 +233,35 @@ pub async fn write_registry_db_compat(data_dir: &Path) -> anyhow::Result<()> {
     let registry_db_path = registry_db_path(data_dir);
     let pool = sqlite_pool(&registry_db_path).await?;
 
-    pool.with_rw("compat", "create_table")
-        .execute(sqlx::query(
-            r#"
-                CREATE TABLE IF NOT EXISTS golem_compat_info (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    db_compat_version INTEGER NOT NULL CHECK (db_compat_version >= 0)
-                );
-            "#,
-        ))
+    let mut tx = pool
+        .with_rw("compat", "write_db_compat_version")
+        .begin()
         .await?;
 
-    pool.with_rw("compat", "upsert_db_compat_version")
-        .execute(
-            sqlx::query(
-                r#"
-                    INSERT INTO golem_compat_info (id, db_compat_version)
-                    VALUES (1, ?)
-                    ON CONFLICT(id) DO UPDATE
-                    SET db_compat_version = excluded.db_compat_version;
-                "#,
-            )
-            .bind(CLI_CURRENT_DB_COMPAT_VERSION),
+    tx.execute(sqlx::query(
+        r#"
+            CREATE TABLE IF NOT EXISTS golem_compat_info (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                db_compat_version INTEGER NOT NULL CHECK (db_compat_version >= 0)
+            );
+        "#,
+    ))
+    .await?;
+
+    tx.execute(
+        sqlx::query(
+            r#"
+                INSERT INTO golem_compat_info (id, db_compat_version)
+                VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE
+                SET db_compat_version = excluded.db_compat_version;
+            "#,
         )
-        .await?;
+        .bind(CLI_CURRENT_DB_COMPAT_VERSION),
+    )
+    .await?;
+
+    tx.commit().await?;
 
     Ok(())
 }
@@ -395,6 +413,20 @@ mod tests {
             .expect("failed to create compat table");
     }
 
+    async fn create_other_table(data_dir: &Path) {
+        let db_path = registry_db_path(data_dir);
+        let pool = sqlite_pool(&db_path)
+            .await
+            .expect("failed to initialize sqlite pool");
+
+        pool.with_rw("test", "create_other_table")
+            .execute(sqlx::query(
+                "CREATE TABLE some_other_table (id INTEGER PRIMARY KEY);",
+            ))
+            .await
+            .expect("failed to create other table");
+    }
+
     async fn insert_compat_row(data_dir: &Path, version: i64) {
         let db_path = registry_db_path(data_dir);
         let pool = sqlite_pool(&db_path)
@@ -418,9 +450,18 @@ mod tests {
     }
 
     #[test]
-    async fn preflight_rejects_missing_compat_table() {
+    async fn preflight_allows_empty_registry_db() {
         let data_dir = TestDataDir::new();
         setup_registry_db(&data_dir.path).await;
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+    }
+
+    #[test]
+    async fn preflight_rejects_missing_compat_table() {
+        let data_dir = TestDataDir::new();
+        create_other_table(&data_dir.path).await;
 
         let result = preflight_registry_db_compat(&data_dir.path).await;
         assert!(matches!(
@@ -499,6 +540,46 @@ mod tests {
         let data_dir = TestDataDir::new();
         create_compat_table(&data_dir.path).await;
         insert_compat_row(&data_dir.path, CLI_CURRENT_DB_COMPAT_VERSION).await;
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+    }
+
+    #[test]
+    async fn preflight_accepts_data_dir_after_compat_write() {
+        let data_dir = TestDataDir::new();
+
+        write_registry_db_compat(&data_dir.path)
+            .await
+            .expect("compat write failed");
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+    }
+
+    #[test]
+    async fn preflight_accepts_data_dir_after_repeated_compat_write() {
+        let data_dir = TestDataDir::new();
+
+        write_registry_db_compat(&data_dir.path)
+            .await
+            .expect("first compat write failed");
+        write_registry_db_compat(&data_dir.path)
+            .await
+            .expect("second compat write failed");
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+    }
+
+    #[test]
+    async fn preflight_accepts_registry_db_with_marker_and_other_tables() {
+        let data_dir = TestDataDir::new();
+
+        write_registry_db_compat(&data_dir.path)
+            .await
+            .expect("compat write failed");
+        create_other_table(&data_dir.path).await;
 
         let result = preflight_registry_db_compat(&data_dir.path).await;
         assert!(result.is_ok(), "expected success, got: {result:?}");

@@ -127,8 +127,9 @@ pub async fn launch_golem_services(
         .await
         .map_err(anyhow::Error::from)?;
 
-    let started_components = start_components(args, &mut join_set).await?;
     write_registry_db_compat(&args.data_dir).await?;
+
+    let started_components = start_components(args, &mut join_set).await?;
     let custom_request_port = started_components.worker_service.custom_request_port;
     let mcp_port = started_components.worker_service.mcp_port;
     let worker_shutdown = started_components.worker_executor.shutdown.clone();
