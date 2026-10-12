@@ -29,6 +29,7 @@ import type { SnapshotPart } from './snapshot';
 import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
+import { prepareNativeProcess } from './internal/tool/nativeProcess';
 import { sdkPrincipalFromHost } from './principal';
 import {
   encodeDeclaredToolErrorPayload,
@@ -1082,10 +1083,13 @@ export const golemAgent200Guest: GolemAgentGuest = {
 // as an alias of golemAgent200Guest so the generated wrapper finds it.
 export const guest: GolemAgentGuest = golemAgent200Guest;
 
-export const golemTool010Guest: GolemToolGuest = {
+export const golemTool010Guest: GolemToolGuest & {
+  prepareNativeProcess: typeof prepareNativeProcess;
+} = {
   discoverTools,
   getTool,
   invoke: invokeTool,
+  prepareNativeProcess,
 };
 
 // The generated wrapper also looks up the tool guest by its short interface name.
