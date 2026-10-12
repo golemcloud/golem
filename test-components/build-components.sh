@@ -8,7 +8,7 @@ ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" 
 effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect")
 scala_test_apps=("tool-streaming-scala")
 moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
-go_test_apps=("agent-sdk-go" "tool-streaming-go")
+go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
