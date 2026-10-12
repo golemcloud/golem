@@ -158,6 +158,69 @@ field and use `null` for an absent option. Wide integers are decimal strings: du
 `{ nanoseconds: "..." }` and quantity uses a decimal-string `mantissa`; integers through 32 bits
 remain numbers. Streams and opaque capabilities require `*Value` APIs and transfer ownership once.
 
+## Unstructured outputs and HTTP responses
+
+`Unstructured.UnstructuredText()` and `Unstructured.UnstructuredBinary()` declare unstructured
+values. A method returns them as `TextReferenceValue` or `BinaryReferenceValue`: either
+`{ _tag: "inline", val, ... }` with the data, or `{ _tag: "url", val }`. Wrap an element in
+`Unstructured.Option(...)` to return an `Option` of the reference. `Unstructured.Option` is only a
+method `success`; it is not an input parameter or a multimodal member. Each form combines with a
+typed `error`:
+
+```ts
+import { Effect, Option, Schema } from "effect"
+import { defineAgent, Http, method, Method, Unstructured } from "@golemcloud/effect-golem"
+
+const Pending = Schema.Struct({ _tag: Schema.Literal("Pending") })
+
+export const Files = defineAgent({
+  name: "Files",
+  id: { bucket: Schema.String },
+  http: Http.mount("/files/{bucket}"),
+  methods: {
+    download: method({
+      input: { id: Schema.String },
+      success: Unstructured.Option(
+        Unstructured.UnstructuredBinary({ restrictions: [{ mimeType: "image/png" }] }),
+      ),
+      error: Pending,
+    }).pipe(Method.withHttp(Http.get("/{id}"))),
+  },
+})
+
+Files.implement({
+  init: () => Effect.void,
+  methods: () => ({
+    download: ({ id }) =>
+      id === "missing"
+        ? Effect.succeed(Option.none())
+        : id === "pending"
+          ? Effect.fail({ _tag: "Pending" as const })
+          : Effect.succeed(
+              Option.some({ _tag: "inline", val: new Uint8Array(), mimeType: "image/png" }),
+            ),
+  }),
+})
+```
+
+The output schema is the element's `variant { inline, url }` with an `unstructured-text` or
+`unstructured-binary` role. `Unstructured.Option` wraps it in `option<_>`, and a typed error wraps
+the success in `result<_, error>`. The role stays on the nested variant. Typed clients decode the
+same reference and `Option` values and return the typed error in the Effect error channel.
+Reflection and `DynamicClient` see the schema value with the role intact.
+
+The Golem HTTP host maps the output of an HTTP endpoint method as follows:
+
+| Output                       | Response                                                        |
+| ---------------------------- | --------------------------------------------------------------- |
+| element                      | `inline` → 200 with the raw body; `url` → redirect              |
+| `option<element>`            | `none` → 404; `some` → as the element                           |
+| `result<element, E>`         | `ok` → as the element; `err` → 500 with the error as JSON       |
+| `result<option<element>, E>` | `ok(none)` → 404; `ok(some)` → as the element; `err` → 500 JSON |
+
+Other success schemas use the same `option` and `result` rules with a JSON body in place of the raw
+body.
+
 ## Configuration and opaque secrets
 
 `Schema.Redacted(inner)` declares a secret. The config wire value is an opaque host handle;

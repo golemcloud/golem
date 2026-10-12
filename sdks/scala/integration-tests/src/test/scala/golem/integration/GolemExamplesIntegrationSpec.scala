@@ -982,8 +982,43 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     }
   ).map(_ @@ TestAspect.timeout(60.seconds))
 
+  // ---------------------------------------------------------------------------
+  // RawFilesAgent: unstructured bodies nested in Option and Either
+  // Mount: /api/raw-files/{value}
+  // ---------------------------------------------------------------------------
+  private val rawFilesTests: Seq[Spec[GolemServer, Throwable]] = Seq(
+    test("http-raw-binary-found") {
+      for {
+        _              <- ZIO.service[GolemServer]
+        (status, body) <- httpGet("/api/raw-files/test-key/binary/data.bin")
+      } yield assertTrue(status == 200, body == "raw-binary-body")
+    },
+
+    test("http-raw-binary-missing") {
+      for {
+        _           <- ZIO.service[GolemServer]
+        (status, _) <- httpGet("/api/raw-files/test-key/binary/missing")
+      } yield assertTrue(status == 404)
+    },
+
+    test("http-raw-binary-error") {
+      for {
+        _              <- ZIO.service[GolemServer]
+        (status, body) <- httpGet("/api/raw-files/test-key/binary/broken")
+      } yield assertTrue(status == 500, body.contains("cannot read broken"))
+    },
+
+    test("http-raw-text") {
+      for {
+        _                  <- ZIO.service[GolemServer]
+        (status, body)     <- httpGet("/api/raw-files/test-key/text/note")
+        (missingStatus, _) <- httpGet("/api/raw-files/test-key/text/other")
+      } yield assertTrue(status == 200, body == "raw text body", missingStatus == 404)
+    }
+  ).map(_ @@ TestAspect.timeout(60.seconds))
+
   private val httpTests: Seq[Spec[GolemServer, Throwable]] =
-    weatherTests ++ inventoryTests ++ catalogTests ++ webhookTests ++ fetchTests
+    weatherTests ++ inventoryTests ++ catalogTests ++ webhookTests ++ fetchTests ++ rawFilesTests
 
   // ---------------------------------------------------------------------------
   // Snapshotting oplog tests

@@ -126,6 +126,14 @@ pub async fn[T] AgentStreamWriter::close(Self[T]) -> Unit
 pub async fn[T] AgentStreamWriter::write_all(Self[T], Array[T]) -> AgentStreamWriteOutcome
 pub async fn[T] AgentStreamWriter::write_one(Self[T], T) -> AgentStreamWriteOutcome
 
+pub(all) struct AnyLanguage {
+} derive(Eq, @debug.Debug)
+pub impl AllowedLanguages for AnyLanguage
+
+pub(all) struct AnyMimeType {
+} derive(Eq, @debug.Debug)
+pub impl AllowedMimeTypes for AnyMimeType
+
 pub(all) struct Duration {
   nanoseconds : Int64
 } derive(Eq, @debug.Debug)
@@ -175,6 +183,34 @@ pub impl[S : TextSpec] WireSchema for Text[S]
 pub(all) struct TypeTag[T] {
 }
 
+pub(all) enum UnstructuredBinary[M] {
+  Inline(bytes~ : Bytes, mime_type~ : String?)
+  Url(String)
+}
+pub fn[M] UnstructuredBinary::inline(Bytes, mime_type? : String) -> Self[M]
+pub fn[M] UnstructuredBinary::url(String) -> Self[M]
+pub impl[M : AllowedMimeTypes] FromSchema for UnstructuredBinary[M]
+pub impl[M : AllowedMimeTypes] FromWire for UnstructuredBinary[M]
+pub impl[M : AllowedMimeTypes] IntoSchema for UnstructuredBinary[M]
+pub impl[M] IntoWire for UnstructuredBinary[M]
+pub impl[M : AllowedMimeTypes] WireSchema for UnstructuredBinary[M]
+pub impl[M] Eq for UnstructuredBinary[M]
+pub impl[M] @debug.Debug for UnstructuredBinary[M]
+
+pub(all) enum UnstructuredText[L] {
+  Inline(text~ : String, language~ : String?)
+  Url(String)
+}
+pub fn[L] UnstructuredText::inline(String, language? : String) -> Self[L]
+pub fn[L] UnstructuredText::url(String) -> Self[L]
+pub impl[L : AllowedLanguages] FromSchema for UnstructuredText[L]
+pub impl[L : AllowedLanguages] FromWire for UnstructuredText[L]
+pub impl[L : AllowedLanguages] IntoSchema for UnstructuredText[L]
+pub impl[L] IntoWire for UnstructuredText[L]
+pub impl[L : AllowedLanguages] WireSchema for UnstructuredText[L]
+pub impl[L] Eq for UnstructuredText[L]
+pub impl[L] @debug.Debug for UnstructuredText[L]
+
 pub(all) struct Url {
   value : String
 } derive(Eq, @debug.Debug)
@@ -218,10 +254,19 @@ pub(all) struct WireTypeEncoder {
 pub fn WireTypeEncoder::named(Self, String, () -> Int, name? : String?) -> Int
 pub fn WireTypeEncoder::new() -> Self
 pub fn WireTypeEncoder::push(Self, @types.SchemaTypeBody) -> Int
+pub fn WireTypeEncoder::push_with_metadata(Self, @types.SchemaTypeBody, @types.MetadataEnvelope) -> Int
 
 // Type aliases
 
 // Traits
+pub(open) trait AllowedLanguages {
+  fn languages() -> Array[String]
+}
+
+pub(open) trait AllowedMimeTypes {
+  fn mime_types() -> Array[String]
+}
+
 pub(open) trait FromSchema {
   fn from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
 }

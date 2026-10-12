@@ -29,9 +29,17 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
   import q.reflect.*
 
   def graph(tpe: TypeRepr): SchemaGraph = {
-    val builder                 = new SchemaBuilder
-    def id(t: TypeRepr): String = t.dealias.typeSymbol.fullName.replace("$.", ".").stripSuffix("$") +
-      (if (t.typeArgs.isEmpty) "" else t.typeArgs.map(id).mkString("<", ",", ">"))
+    val builder = new SchemaBuilder
+
+    def allowList(ty: TypeRepr, what: String): Option[List[String]] =
+      ty.typeArgs match {
+        case List(arg) =>
+          AllowedStringsMacro.literalValues(using q)(arg) match {
+            case Right(values) => values
+            case Left(error)   => report.errorAndAbort(s"Invalid $what: $error")
+          }
+        case _ => report.errorAndAbort(s"Invalid $what: expected one type argument in ${ty.show}")
+      }
 
     def body(tpe: TypeRepr): SchemaType = {
       val ty = tpe.dealias
@@ -54,6 +62,10 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         ty.show == "golem.host.QuotaApi.QuotaToken"
       )
         return SchemaType(SchemaTypeBody.QuotaTokenType(QuotaTokenSpec()))
+      if (ty.typeSymbol.fullName == "golem.schema.UnstructuredText")
+        return Unstructured.textType(allowList(ty, "UnstructuredText language type"))
+      if (ty.typeSymbol.fullName == "golem.schema.UnstructuredBinary")
+        return Unstructured.binaryType(allowList(ty, "UnstructuredBinary MIME type"))
       ty.asType match {
         case '[Unit]                               => t.tuple(Nil)
         case '[Boolean]                            => t.bool
@@ -93,7 +105,7 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
           else {
             val sym = ty.typeSymbol
             builder.register(
-              id(ty),
+              StableTypeId.of(using q)(tpe),
               () => {
                 if (sym.flags.is(Flags.Case) || sym.flags.is(Flags.Module))
                   t.record(sym.caseFields.map(f => t.field(f.name, body(ty.memberType(f)))))

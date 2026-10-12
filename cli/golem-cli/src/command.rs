@@ -3096,8 +3096,12 @@ pub mod server {
         )]
         pub ports_file: Option<PathBuf>,
 
-        /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
-        #[clap(long)]
+        /// Directory to store data in. Uses localServer.dataDir from the manifest if set;
+        /// otherwise defaults to:
+        ///   Linux: $XDG_DATA_HOME/golem, or $HOME/.local/share/golem if unset
+        ///   macOS: $HOME/Library/Application Support/golem
+        ///   Windows: %LOCALAPPDATA%\golem (usually C:\Users\<user>\AppData\Local\golem)
+        #[clap(long, verbatim_doc_comment)]
         pub data_dir: Option<PathBuf>,
 
         /// Clean the data directory immediately before starting the server,
