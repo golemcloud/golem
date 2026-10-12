@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::compat::{preflight_registry_db_compat, write_registry_db_compat};
-use crate::router::start_router;
+use crate::router::bind_router;
 use crate::{StartedComponents, registry_db_path};
 use anyhow::Context;
 use golem_cli::fs;
@@ -28,6 +28,7 @@ use golem_registry_service::config::{
     BuiltinArtifactsConfig, BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig,
     PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
 };
+use golem_registry_service::startup::{StartupPhase, StartupProgress};
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
@@ -127,19 +128,27 @@ pub async fn launch_golem_services(
         .await
         .map_err(anyhow::Error::from)?;
 
-    let started_components = start_components(args, &mut join_set).await?;
+    let startup_progress = StartupProgress::default();
+    let router = bind_router(
+        &args.router_addr,
+        args.router_port,
+        startup_progress.clone(),
+        &mut join_set,
+    )
+    .await?;
+    let router_port = router.port();
+    info!(
+        router_port,
+        "Golem server is starting, requests are answered with 503 Service Unavailable until it is ready"
+    );
+
+    let started_components = start_components(args, &startup_progress, &mut join_set).await?;
     write_registry_db_compat(&args.data_dir).await?;
     let custom_request_port = started_components.worker_service.custom_request_port;
     let mcp_port = started_components.worker_service.mcp_port;
     let worker_shutdown = started_components.worker_executor.shutdown.clone();
 
-    let router_port = start_router(
-        &args.router_addr,
-        args.router_port,
-        started_components,
-        &mut join_set,
-    )
-    .await?;
+    router.serve(started_components);
 
     let startup_ports = StartupPorts {
         router_port,
@@ -152,7 +161,7 @@ pub async fn launch_golem_services(
 
     info!(
         router_port,
-        custom_request_port, mcp_port, "Started Golem services"
+        custom_request_port, mcp_port, "Golem server is ready"
     );
 
     Ok((join_set, startup_ports, worker_shutdown))
@@ -169,6 +178,7 @@ async fn write_startup_ports_file(path: &PathBuf, ports: &StartupPorts) -> anyho
 
 async fn start_components(
     args: &LaunchArgs,
+    startup_progress: &StartupProgress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
     let component_compilation_service_config = component_compilation_service_config(args);
@@ -183,9 +193,11 @@ async fn start_components(
 
     let registry_service = run_registry_service(
         registry_service_config(args, &component_compilation_service)?,
+        startup_progress.clone(),
         join_set,
     )
     .await?;
+    startup_progress.set_phase(StartupPhase::StartingServices);
 
     let shard_manager =
         run_shard_manager(shard_manager_config(args, &registry_service), join_set).await?;
@@ -539,11 +551,13 @@ async fn run_component_compilation_service(
 
 async fn run_registry_service(
     config: RegistryServiceConfig,
+    startup_progress: StartupProgress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_registry_service::SingleExecutableRunDetails, anyhow::Error> {
     let prometheus_registry = golem_registry_service::metrics::register_all();
     let span = tracing::info_span!("registry-service", component = "registry-service");
     RegistryService::new(config, prometheus_registry)
+        .with_startup_progress(startup_progress)
         .start_for_single_executable(join_set)
         .instrument(span)
         .await

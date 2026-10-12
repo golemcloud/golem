@@ -26,7 +26,7 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-re
 
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [API Gateway](/next/concepts/worker-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis or SQLite.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/next/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis or SQLite.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 

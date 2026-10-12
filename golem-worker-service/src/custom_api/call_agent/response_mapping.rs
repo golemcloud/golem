@@ -60,12 +60,21 @@ fn map_successful_agent_response(
         ));
     }
 
-    // An unstructured text/binary output — either the canonical
-    // `variant { inline, url }` wrapper or a bare `Text` / `Binary` rich scalar:
-    // `inline` becomes the HTTP body, `url` becomes a redirect (DB). The
-    // schema-driven classifier also validates the value matches the output kind.
+    map_component_model_agent_response(graph, output_type, agent_response)
+}
+
+/// A `200 OK` response for a successful payload: an unstructured text/binary
+/// value — either the canonical `variant { inline, url }` wrapper or a bare
+/// `Text` / `Binary` rich scalar — becomes the raw HTTP body (`inline`) or a
+/// redirect (`url`); any other value is rendered as JSON. The schema-driven
+/// classifier also validates that the value matches the declared kind.
+fn payload_response(
+    graph: &SchemaGraph,
+    typ: &SchemaType,
+    value: SchemaValue,
+) -> Result<RouteExecutionResult, RequestHandlerError> {
     if let Some(output) =
-        decode_unstructured_output(graph, output_type, &agent_response).map_err(map_schema_error)?
+        decode_unstructured_output(graph, typ, &value).map_err(map_schema_error)?
     {
         return Ok(match output {
             UnstructuredOutput::Url(url) => redirect(url)?,
@@ -79,8 +88,7 @@ fn map_successful_agent_response(
             }
         });
     }
-
-    map_component_model_agent_response(graph, output_type, agent_response)
+    Ok(ok_body(json_response_body(graph, typ.clone(), value)))
 }
 
 /// Render a raw `Text` / `Binary` value as an unstructured HTTP body, whether
@@ -142,40 +150,51 @@ fn map_schema_error(error: impl std::fmt::Display) -> RequestHandlerError {
     }
 }
 
+/// Maps an agent output to an HTTP response:
+///
+/// - `option<T>`: `none` → 404, `some(x)` → 200 with `x` as the payload;
+/// - `result<T, E>`: `ok` without a value → 204, `ok(x)` → 200 with `x` as the
+///   payload, `err` → 500 with the error as JSON;
+/// - `result<option<T>, E>`: as `result<T, E>`, except `ok(none)` → 404;
+/// - anything else → 200 with the value as the payload.
+///
+/// A payload that is an unstructured text/binary value is rendered raw (see
+/// [`payload_response`]); other payloads are rendered as JSON.
 fn map_component_model_agent_response(
     graph: &SchemaGraph,
     typ: &SchemaType,
     value: SchemaValue,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
+    if decode_unstructured_output(graph, typ, &value)
+        .map_err(map_schema_error)?
+        .is_some()
+    {
+        return payload_response(graph, typ, value);
+    }
+
     match value {
-        SchemaValue::Option { inner: None } => Ok(RouteExecutionResult {
-            status: StatusCode::NOT_FOUND,
-            headers: HeaderMap::new(),
-            body: ResponseBody::NoBody,
-        }),
+        SchemaValue::Option { inner: None } => Ok(not_found()),
 
         SchemaValue::Option { inner: Some(inner) } => {
-            let inner_type = unwrap_option_type(typ)?;
-            Ok(RouteExecutionResult {
-                status: StatusCode::OK,
-                headers: HeaderMap::new(),
-                body: json_response_body(graph, inner_type.clone(), *inner),
-            })
+            let inner_type = unwrap_option_type(graph, typ)?;
+            payload_response(graph, inner_type, *inner)
         }
 
-        SchemaValue::Result(ResultValuePayload::Ok { value: None }) => Ok(RouteExecutionResult {
-            status: StatusCode::NO_CONTENT,
-            headers: HeaderMap::new(),
-            body: ResponseBody::NoBody,
-        }),
+        SchemaValue::Result(ResultValuePayload::Ok { value: None }) => Ok(no_content()),
 
         SchemaValue::Result(ResultValuePayload::Ok { value: Some(inner) }) => {
-            let inner_type = unwrap_result_ok_type(typ)?;
-            Ok(RouteExecutionResult {
-                status: StatusCode::OK,
-                headers: HeaderMap::new(),
-                body: json_response_body(graph, inner_type.clone(), *inner),
-            })
+            let inner_type = unwrap_result_ok_type(graph, typ)?;
+            match (
+                *inner,
+                graph.resolve_ref(inner_type).map_err(map_schema_error)?,
+            ) {
+                (SchemaValue::Option { inner: None }, SchemaType::Option { .. }) => Ok(not_found()),
+                (SchemaValue::Option { inner: Some(inner) }, SchemaType::Option { .. }) => {
+                    let inner_type = unwrap_option_type(graph, inner_type)?;
+                    payload_response(graph, inner_type, *inner)
+                }
+                (inner, _) => payload_response(graph, inner_type, inner),
+            }
         }
 
         SchemaValue::Result(ResultValuePayload::Err { value: None }) => Ok(RouteExecutionResult {
@@ -185,7 +204,7 @@ fn map_component_model_agent_response(
         }),
 
         SchemaValue::Result(ResultValuePayload::Err { value: Some(inner) }) => {
-            let inner_type = unwrap_result_err_type(typ)?;
+            let inner_type = unwrap_result_err_type(graph, typ)?;
             Ok(RouteExecutionResult {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
                 headers: HeaderMap::new(),
@@ -193,16 +212,23 @@ fn map_component_model_agent_response(
             })
         }
 
-        other => Ok(RouteExecutionResult {
-            status: StatusCode::OK,
-            headers: HeaderMap::new(),
-            body: json_response_body(graph, typ.clone(), other),
-        }),
+        other => payload_response(graph, typ, other),
     }
 }
 
-fn unwrap_option_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandlerError> {
-    if let SchemaType::Option { inner, .. } = typ {
+fn not_found() -> RouteExecutionResult {
+    RouteExecutionResult {
+        status: StatusCode::NOT_FOUND,
+        headers: HeaderMap::new(),
+        body: ResponseBody::NoBody,
+    }
+}
+
+fn unwrap_option_type<'a>(
+    graph: &'a SchemaGraph,
+    typ: &'a SchemaType,
+) -> Result<&'a SchemaType, RequestHandlerError> {
+    if let SchemaType::Option { inner, .. } = graph.resolve_ref(typ).map_err(map_schema_error)? {
         Ok(inner)
     } else {
         Err(RequestHandlerError::invariant_violated(
@@ -211,8 +237,11 @@ fn unwrap_option_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandlerErr
     }
 }
 
-fn unwrap_result_ok_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandlerError> {
-    if let SchemaType::Result { spec, .. } = typ
+fn unwrap_result_ok_type<'a>(
+    graph: &'a SchemaGraph,
+    typ: &'a SchemaType,
+) -> Result<&'a SchemaType, RequestHandlerError> {
+    if let SchemaType::Result { spec, .. } = graph.resolve_ref(typ).map_err(map_schema_error)?
         && let Some(inner) = &spec.ok
     {
         Ok(inner)
@@ -223,8 +252,11 @@ fn unwrap_result_ok_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandler
     }
 }
 
-fn unwrap_result_err_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandlerError> {
-    if let SchemaType::Result { spec, .. } = typ
+fn unwrap_result_err_type<'a>(
+    graph: &'a SchemaGraph,
+    typ: &'a SchemaType,
+) -> Result<&'a SchemaType, RequestHandlerError> {
+    if let SchemaType::Result { spec, .. } = graph.resolve_ref(typ).map_err(map_schema_error)?
         && let Some(inner) = &spec.err
     {
         Ok(inner)
@@ -248,6 +280,7 @@ mod tests {
     use super::*;
     use assert2::let_assert;
     use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::schema_type::ResultSpec;
     use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
     use golem_common::schema::unstructured::{
         unstructured_binary_schema_type, unstructured_inline_value, unstructured_text_schema_type,
@@ -525,5 +558,185 @@ mod tests {
         let result = interpret_agent_response(invoke_result, &unit_output()).unwrap();
         assert_eq!(result.status, StatusCode::NO_CONTENT);
         let_assert!(ResponseBody::NoBody = result.body);
+    }
+
+    fn output(ty: SchemaType) -> CompiledOutputSchema {
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(ty.clone()),
+            output_schema: OutputSchema::Single(Box::new(ty)),
+        }
+    }
+
+    fn binary_wrapper() -> SchemaType {
+        unstructured_binary_schema_type(BinaryRestrictions::default())
+    }
+
+    fn error_record() -> SchemaType {
+        SchemaType::record_from_fields([("error", SchemaType::string())])
+    }
+
+    fn result_of(ok: SchemaType) -> SchemaType {
+        SchemaType::result(ResultSpec {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(error_record())),
+        })
+    }
+
+    fn png(bytes: Vec<u8>) -> SchemaValue {
+        unstructured_inline_value(SchemaValue::Binary(BinaryValuePayload {
+            bytes,
+            mime_type: Some("image/png".into()),
+        }))
+    }
+
+    fn some(value: SchemaValue) -> SchemaValue {
+        SchemaValue::Option {
+            inner: Some(Box::new(value)),
+        }
+    }
+
+    fn none() -> SchemaValue {
+        SchemaValue::Option { inner: None }
+    }
+
+    fn ok(value: SchemaValue) -> SchemaValue {
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(value)),
+        })
+    }
+
+    fn err() -> SchemaValue {
+        SchemaValue::Result(ResultValuePayload::Err {
+            value: Some(Box::new(SchemaValue::Record {
+                fields: vec![SchemaValue::String("pending".into())],
+            })),
+        })
+    }
+
+    fn assert_png_body(result: RouteExecutionResult, expected: &[u8]) {
+        assert_eq!(result.status, StatusCode::OK);
+        let_assert!(ResponseBody::UnstructuredBinaryBody { body } = result.body);
+        assert_eq!(body.data, expected);
+        assert_eq!(body.binary_type.mime_type, "image/png");
+    }
+
+    fn assert_error_body(result: RouteExecutionResult) {
+        assert_eq!(result.status, StatusCode::INTERNAL_SERVER_ERROR);
+        let_assert!(ResponseBody::ComponentModelJsonBody { .. } = result.body);
+    }
+
+    #[test]
+    fn option_of_unstructured_binary_some_returns_raw_body() {
+        let schema = output(SchemaType::option(binary_wrapper()));
+        let result = interpret_agent_response(Some(some(png(vec![1, 2]))), &schema).unwrap();
+        assert_png_body(result, &[1, 2]);
+    }
+
+    #[test]
+    fn option_of_unstructured_binary_none_returns_404() {
+        let schema = output(SchemaType::option(binary_wrapper()));
+        let result = interpret_agent_response(Some(none()), &schema).unwrap();
+        assert_eq!(result.status, StatusCode::NOT_FOUND);
+        let_assert!(ResponseBody::NoBody = result.body);
+    }
+
+    #[test]
+    fn option_of_unstructured_binary_url_returns_307_redirect() {
+        let schema = output(SchemaType::option(binary_wrapper()));
+        let invoke_result = Some(some(unstructured_url_value(
+            "https://example.com/blob.bin".into(),
+        )));
+        let result = interpret_agent_response(invoke_result, &schema).unwrap();
+        assert_eq!(result.status, StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            result
+                .headers
+                .get(&LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("https://example.com/blob.bin")
+        );
+    }
+
+    #[test]
+    fn option_of_bare_text_some_returns_raw_body() {
+        let schema = output(SchemaType::option(SchemaType::text(
+            TextRestrictions::default(),
+        )));
+        let invoke_result = Some(some(SchemaValue::Text(TextValuePayload {
+            text: "hello".into(),
+            language: None,
+        })));
+        let result = interpret_agent_response(invoke_result, &schema).unwrap();
+        assert_eq!(result.status, StatusCode::OK);
+        let_assert!(ResponseBody::UnstructuredTextBody { body } = result.body);
+        assert_eq!(body.data, "hello");
+    }
+
+    #[test]
+    fn result_of_unstructured_binary_ok_returns_raw_body() {
+        let schema = output(result_of(binary_wrapper()));
+        let result = interpret_agent_response(Some(ok(png(vec![3]))), &schema).unwrap();
+        assert_png_body(result, &[3]);
+    }
+
+    #[test]
+    fn result_of_unstructured_binary_err_returns_500_with_json_error() {
+        let schema = output(result_of(binary_wrapper()));
+        let result = interpret_agent_response(Some(err()), &schema).unwrap();
+        assert_error_body(result);
+    }
+
+    #[test]
+    fn result_of_unstructured_binary_with_mismatched_payload_is_rejected() {
+        let schema = output(result_of(binary_wrapper()));
+        let invoke_result = Some(ok(SchemaValue::Text(TextValuePayload {
+            text: "hello".into(),
+            language: None,
+        })));
+        let_assert!(Err(_) = interpret_agent_response(invoke_result, &schema));
+    }
+
+    #[test]
+    fn result_of_option_of_unstructured_binary_ok_some_returns_raw_body() {
+        let schema = output(result_of(SchemaType::option(binary_wrapper())));
+        let result = interpret_agent_response(Some(ok(some(png(vec![4, 5])))), &schema).unwrap();
+        assert_png_body(result, &[4, 5]);
+    }
+
+    #[test]
+    fn result_of_option_of_unstructured_binary_ok_none_returns_404() {
+        let schema = output(result_of(SchemaType::option(binary_wrapper())));
+        let result = interpret_agent_response(Some(ok(none())), &schema).unwrap();
+        assert_eq!(result.status, StatusCode::NOT_FOUND);
+        let_assert!(ResponseBody::NoBody = result.body);
+    }
+
+    #[test]
+    fn result_of_option_of_unstructured_binary_err_returns_500_with_json_error() {
+        let schema = output(result_of(SchemaType::option(binary_wrapper())));
+        let result = interpret_agent_response(Some(err()), &schema).unwrap();
+        assert_error_body(result);
+    }
+
+    #[test]
+    fn result_of_option_of_record_ok_none_returns_404() {
+        let value_record = SchemaType::record_from_fields([("value", SchemaType::string())]);
+        let schema = output(result_of(SchemaType::option(value_record)));
+        let result = interpret_agent_response(Some(ok(none())), &schema).unwrap();
+        assert_eq!(result.status, StatusCode::NOT_FOUND);
+        let_assert!(ResponseBody::NoBody = result.body);
+    }
+
+    #[test]
+    fn result_of_option_of_record_ok_some_returns_inner_json() {
+        let value_record = SchemaType::record_from_fields([("value", SchemaType::string())]);
+        let schema = output(result_of(SchemaType::option(value_record.clone())));
+        let invoke_result = Some(ok(some(SchemaValue::Record {
+            fields: vec![SchemaValue::String("v".into())],
+        })));
+        let result = interpret_agent_response(invoke_result, &schema).unwrap();
+        assert_eq!(result.status, StatusCode::OK);
+        let_assert!(ResponseBody::ComponentModelJsonBody { body } = result.body);
+        assert_eq!(body.root_type(), &value_record);
     }
 }

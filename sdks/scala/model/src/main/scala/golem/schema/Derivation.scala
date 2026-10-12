@@ -38,9 +38,10 @@ import scala.util.control.NonFatal
  *
  * The engine is host-agnostic and has no `js.*` imports.
  *
- * Rich types are intentionally NOT handled here (see `scala-sdk.md`, Slice 2
- * scope): the only `Schema`-bearing rich wrapper, `golem.config.Secret`, is
- * rejected loudly rather than silently unwrapped.
+ * Rich types with a dedicated schema node (path, url, datetime, duration,
+ * quantity, and the role-marked [[UnstructuredText]] / [[UnstructuredBinary]]
+ * variants) are recognized by their `TypeId` before structural unwrapping.
+ * `golem.config.Secret` is rejected loudly rather than silently unwrapped.
  */
 private[golem] object Derivation {
 
@@ -160,6 +161,7 @@ private[golem] object Derivation {
     r match {
       case TypeRepr.Ref(id)              => stableId(id)
       case TypeRepr.Applied(tycon, args) => renderRepr(tycon) + "<" + args.map(renderRepr).mkString(",") + ">"
+      case TypeRepr.Union(members)       => members.map(renderRepr).mkString(" | ")
       case other                         => TypeIdPrinter.render(other)
     }
 
@@ -209,6 +211,12 @@ private[golem] object Derivation {
   private def validateNanoseconds(nanoseconds: Int): Unit =
     if (nanoseconds < 0 || nanoseconds >= 1000000000)
       throw FromSchemaError(s"datetime nanoseconds out of range: $nanoseconds (expected 0..999999999)")
+
+  private def isUnstructuredText(reflect: Reflect.Bound[?]): Boolean   = normalizedName(reflect) == Unstructured.TextFqn
+  private def isUnstructuredBinary(reflect: Reflect.Bound[?]): Boolean =
+    normalizedName(reflect) == Unstructured.BinaryFqn
+  private def unstructuredAllowed(reflect: Reflect.Bound[?]): Option[List[String]] =
+    Unstructured.restrictionFromModifiers(reflect.modifiers)
 
   private def richBody(reflect: Reflect.Bound[?]): Option[SchemaTypeBody] =
     if (isPath(reflect)) Some(SchemaTypeBody.PathType(GolemPath.defaultSpec))
@@ -327,6 +335,12 @@ private[golem] object Derivation {
   private def reflectToSchema[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType = {
     failIfUnsupported(reflect)
 
+    if (isUnstructuredText(reflect)) Unstructured.textType(unstructuredAllowed(reflect))
+    else if (isUnstructuredBinary(reflect)) Unstructured.binaryType(unstructuredAllowed(reflect))
+    else reflectToSchemaNonUnstructured(reflect, ctx)
+  }
+
+  private def reflectToSchemaNonUnstructured[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType =
     richBody(reflect) match {
       case Some(body)              => SchemaType(body)
       case None if isUuid(reflect) => SchemaType(SchemaTypeBody.UuidType)
@@ -350,7 +364,6 @@ private[golem] object Derivation {
             }
         }
     }
-  }
 
   private def reflectToSchemaCore[A](reflect: Reflect.Bound[A], ctx: Ctx): SchemaType =
     reflect.asPrimitive match {
@@ -438,6 +451,14 @@ private[golem] object Derivation {
   private def dynamicToSchemaValue[A](reflect: Reflect.Bound[A], d: DV): SchemaValue = {
     failIfUnsupported(reflect)
 
+    if (isUnstructuredText(reflect))
+      Unstructured.textToSchemaValue(Unstructured.textFromDynamic(d), unstructuredAllowed(reflect))
+    else if (isUnstructuredBinary(reflect))
+      Unstructured.binaryToSchemaValue(Unstructured.binaryFromDynamic(d), unstructuredAllowed(reflect))
+    else dynamicToSchemaValueNonUnstructured(reflect, d)
+  }
+
+  private def dynamicToSchemaValueNonUnstructured[A](reflect: Reflect.Bound[A], d: DV): SchemaValue =
     richBody(reflect) match {
       case Some(_)                 => richToSchemaValue(reflect, d)
       case None if isUuid(reflect) => uuidToSchemaValue(d)
@@ -458,7 +479,6 @@ private[golem] object Derivation {
           }
         }
     }
-  }
 
   private def stringFromSingleValueRecord(d: DV, typeName: String): String =
     extractSingleRecordPrimitive[String](d, typeName) { case PrimitiveValue.String(v) => v }
@@ -742,6 +762,18 @@ private[golem] object Derivation {
   private def schemaValueToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV = {
     failIfUnsupported(reflect)
 
+    if (isUnstructuredText(reflect))
+      Unstructured.textToDynamic(
+        Unstructured.textFromSchemaValue(value, unstructuredAllowed(reflect)).fold(e => throw e, identity)
+      )
+    else if (isUnstructuredBinary(reflect))
+      Unstructured.binaryToDynamic(
+        Unstructured.binaryFromSchemaValue(value, unstructuredAllowed(reflect)).fold(e => throw e, identity)
+      )
+    else schemaValueToDynamicNonUnstructured(reflect, value)
+  }
+
+  private def schemaValueToDynamicNonUnstructured[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
     richBody(reflect) match {
       case Some(_)                 => richToDynamic(reflect, value)
       case None if isUuid(reflect) => uuidToDynamic(reflect, value)
@@ -762,7 +794,6 @@ private[golem] object Derivation {
           }
         }
     }
-  }
 
   private def richToDynamic[A](reflect: Reflect.Bound[A], value: SchemaValue): DV =
     if (isPath(reflect))

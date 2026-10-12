@@ -1,0 +1,114 @@
+import { Cards, Steps } from "nextra/components"
+
+# Develop an application on Golem
+
+A Golem application contains one or more WebAssembly components, their agents and tools, and optional HTTP or MCP API deployments. The application manifest keeps these parts and their environments in one deployable definition.
+
+## Create an application
+
+The primary development tool is the [Golem CLI](/v1.6/cli). List the current templates, optionally filtered by language:
+
+```shell copy
+golem templates
+golem templates rust
+```
+
+Create an application by selecting a template:
+
+```shell copy
+golem new my-app --template <template-name>
+cd my-app
+```
+
+In non-interactive use, provide at least one `--template`. The template determines the language and generates a component name when you do not pass `--component-name`.
+
+Add another component from the application directory:
+
+```shell copy
+golem new . --template <template-name> --component-name my:component
+```
+
+See [Defining components](/v1.6/develop/defining-components) and the language-specific SDK pages for implementation guidance.
+
+<Cards num={3}>
+  <Cards.Card title="Tool authoring and lifecycle" href="/v1.6/develop/tool-authoring" />
+  <Cards.Card title="HTTP routers and files" href="/v1.6/invoke/http-routers" />
+  <Cards.Card title="External Durable Streams" href="/v1.6/develop/durable-streams" />
+</Cards>
+
+## Build and deploy
+
+<Steps>
+### Build locally
+
+Build every selected component from the application manifest:
+
+```shell copy
+golem build
+```
+
+From a component directory, manifest discovery selects that component. You can also select components explicitly with positional names, for example `golem build my:component my:other-component`.
+
+### Review a deployment
+
+Preview the deployment without staging or applying changes:
+
+```shell copy
+golem deploy --plan
+```
+
+Use `--full-diff` when you also want unchanged entries in the displayed deployment and environment-setup diff.
+
+### Deploy the application
+
+```shell copy
+golem deploy
+```
+
+Deployments reconcile the application manifest as one application-level operation. Changed source is built automatically. Existing agents remain on their current component revision unless you explicitly request an update, redeployment, or reset.
+
+</Steps>
+
+### Choose what happens to existing agents
+
+By default, `golem deploy` activates the new component revisions and leaves existing agents on their current revision with their current state. To change existing agents during a deployment, pass one of these mutually exclusive flags:
+
+| Flag | Effect on existing agents | Typical use |
+|------|---------------------------|-------------|
+| `--update-agents auto` | Updates agents in place. Golem starts from the latest eligible periodic snapshot, or replays retained history when none is available. State is preserved. | Compatible code changes in shared or production environments |
+| `--update-agents manual` | Updates agents in place through a snapshot-based migration that your code implements. State is preserved. | Breaking changes with a migration |
+| `--redeploy-agents` | Deletes every agent and recreates it with the same name, environment variables, and configuration on the new revision. State is lost. | Development, when the agent list matters but state does not |
+| `--reset` | Deletes all agents and the environment (HTTP and MCP deployments, retry policies, plugins), then deploys from scratch. | A clean slate in local development or CI |
+
+See [Deployment](/v1.6/cli/app-manifest#build-and-deploy) for environment selection, [Updating agents](/v1.6/develop/updating) for the update model, and the [Redeploying existing agents](/v1.6/how-to-guides/common/golem-redeploy-agents) and [Updating running agents](/v1.6/how-to-guides/common/golem-update-running-agents) guides.
+
+## Expose an API
+
+Define HTTP endpoints in agent code, then configure HTTP and MCP deployments in `golem.yaml` using `httpApi.deployments` and `mcp.deployments`. `golem deploy` deploys them alongside the application's components, so you do not need a separate manual delete-and-recreate cycle for each version.
+
+Start with [Defining custom APIs](/v1.6/invoke/making-custom-apis), then see the [application manifest reference](/v1.6/app-manifest) for the deployment fields.
+
+Direct invocation remains available when an application does not need a public endpoint. See [Invoke](/v1.6/invoke) and [Agent communication](/v1.6/concepts/communication).
+
+## Next steps
+
+Topics most applications need after their first deployment:
+
+| Topic | Guide |
+|-------|-------|
+| Outgoing HTTP requests | [HTTP client](/v1.6/develop/http) |
+| Durability controls | [Durability](/v1.6/develop/durability) |
+| Retry policies | [Retries](/v1.6/develop/retries) |
+| Atomic regions and compensation | [Transactions](/v1.6/develop/transactions) |
+| Waiting for people and external events | [Promises](/v1.6/develop/promises) and [Webhooks](/v1.6/develop/webhooks) |
+| Calling other agents | [Agent to agent communication](/v1.6/develop/rpc) |
+| Files and embedded databases | [Agent filesystem](/v1.6/develop/agent-filesystem) and [Embedded databases](/v1.6/develop/embedded-databases) |
+| Model providers | [Using AI providers](/v1.6/develop/ai) |
+| Tools and their security model | [Tool authoring](/v1.6/develop/tool-authoring) and [Tool security model](/v1.6/develop/tool-security) |
+| Authority | [Cards reference](/v1.6/develop/cards) and [Configuration and secrets](/v1.6/develop/config-and-secrets) |
+| Parallel work | [Forking agents](/v1.6/develop/forking) |
+
+<Cards num={2}>
+  <Cards.Card title="Application manifest" href="/v1.6/cli/app-manifest" />
+  <Cards.Card title="Concepts: Agents" href="/v1.6/concepts/agents" />
+</Cards>

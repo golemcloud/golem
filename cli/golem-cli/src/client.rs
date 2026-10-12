@@ -14,6 +14,7 @@
 
 use crate::auth::{Auth, Authentication};
 use crate::config::{AuthenticationConfigWithSource, ClientConfig, HttpClientConfig};
+use crate::log::{LogIndent, log_warn_action, logln};
 use anyhow::bail;
 use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentSecretsClientLive,
@@ -39,7 +40,8 @@ use reqwest_retry::{
 };
 use std::borrow::Cow;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use url::Url;
 
 const RETRY_MAX_RETRIES: u32 = 3;
 const RETRY_MIN_DELAY: Duration = Duration::from_millis(150);
@@ -111,6 +113,7 @@ impl RetryableStrategy for ServiceRetryStrategy {
         res: &Result<reqwest::Response, reqwest_middleware::Error>,
     ) -> Option<Retryable> {
         match res {
+            Ok(response) if is_server_starting(response) => Some(Retryable::Fatal),
             Ok(success)
                 if success.status().is_server_error()
                     || success.status() == StatusCode::REQUEST_TIMEOUT
@@ -134,6 +137,7 @@ impl RetryableStrategy for InvokeRetryStrategy {
         res: &Result<reqwest::Response, reqwest_middleware::Error>,
     ) -> Option<Retryable> {
         match res {
+            Ok(response) if is_server_starting(response) => Some(Retryable::Fatal),
             Ok(success)
                 if matches!(
                     success.status(),
@@ -204,9 +208,142 @@ impl<T: Middleware> Middleware for RetryIfCloneableMiddleware<T> {
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct GoneErrorBody {
+struct ErrorResponseBody {
     error: Option<String>,
     code: Option<String>,
+}
+
+/// The server has bound its API port but is still starting, so it cannot serve the request yet.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct ServerStartingError {
+    pub message: String,
+}
+
+fn is_server_starting(response: &Response) -> bool {
+    response.status() == StatusCode::SERVICE_UNAVAILABLE
+        && response
+            .headers()
+            .get(api::header::GOLEM_SERVER_STATUS)
+            .is_some_and(|value| value == api::header::GOLEM_SERVER_STATUS_STARTING)
+}
+
+async fn server_starting_error(response: Response) -> ServerStartingError {
+    let message = response
+        .bytes()
+        .await
+        .ok()
+        .and_then(|body| serde_json::from_slice::<ErrorResponseBody>(&body).ok())
+        .and_then(|body| body.error)
+        .unwrap_or_else(|| "The Golem server is still starting".to_string());
+    ServerStartingError { message }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ServerStartingMiddleware;
+
+#[async_trait::async_trait]
+impl Middleware for ServerStartingMiddleware {
+    async fn handle(
+        &self,
+        req: Request,
+        extensions: &mut Extensions,
+        next: Next<'_>,
+    ) -> reqwest_middleware::Result<Response> {
+        let response = next.run(req, extensions).await?;
+        if is_server_starting(&response) {
+            return Err(reqwest_middleware::Error::middleware(
+                server_starting_error(response).await,
+            ));
+        }
+        Ok(response)
+    }
+}
+
+const SERVER_STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const SERVER_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const SERVER_STARTUP_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Waits while the server at `base_url` reports that it is still starting.
+///
+/// Returns as soon as the server answers in any other way, including when it cannot be reached;
+/// the requests that follow report those failures.
+pub async fn wait_for_server_startup(
+    client: &reqwest::Client,
+    base_url: &Url,
+) -> anyhow::Result<()> {
+    wait_for_server_startup_with(
+        client,
+        base_url,
+        SERVER_STARTUP_WAIT_TIMEOUT,
+        SERVER_STARTUP_POLL_INTERVAL,
+    )
+    .await
+}
+
+async fn wait_for_server_startup_with(
+    client: &reqwest::Client,
+    base_url: &Url,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> anyhow::Result<()> {
+    let mut healthcheck_url = base_url.clone();
+    healthcheck_url
+        .path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("Invalid server URL: {base_url}"))?
+        .pop_if_empty()
+        .push("healthcheck");
+
+    let started_at = Instant::now();
+    let mut indent: Option<LogIndent> = None;
+    let mut last_logged: Option<(String, Instant)> = None;
+
+    loop {
+        let response = match client.get(healthcheck_url.clone()).send().await {
+            Ok(response) => response,
+            Err(_) => return Ok(()),
+        };
+        if !is_server_starting(&response) {
+            return Ok(());
+        }
+        let message = server_starting_error(response).await.message;
+
+        if started_at.elapsed() >= timeout {
+            bail!(
+                "The server at {base_url} did not finish starting within {} seconds. Last status: {message}",
+                timeout.as_secs()
+            );
+        }
+
+        if indent.is_none() {
+            log_warn_action(
+                "Waiting",
+                format!("for the server at {base_url} to finish starting"),
+            );
+            indent = Some(LogIndent::new());
+        }
+        if should_log_startup_progress(last_logged.as_ref(), &message) {
+            logln(&message);
+            last_logged = Some((message, Instant::now()));
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+/// Logs every new startup phase, but progress updates within one phase (such as downloaded bytes)
+/// at most once per [`SERVER_STARTUP_PROGRESS_LOG_INTERVAL`].
+fn should_log_startup_progress(last_logged: Option<&(String, Instant)>, message: &str) -> bool {
+    fn phase(message: &str) -> &str {
+        message.split_once(" (").map_or(message, |(phase, _)| phase)
+    }
+
+    match last_logged {
+        None => true,
+        Some((last_message, _)) if last_message == message => false,
+        Some((last_message, _)) if phase(last_message) != phase(message) => true,
+        Some((_, logged_at)) => logged_at.elapsed() >= SERVER_STARTUP_PROGRESS_LOG_INTERVAL,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -228,7 +365,7 @@ impl Middleware for KillSwitchMiddleware {
                 .await
                 .map_err(reqwest_middleware::Error::middleware)?;
 
-            let parsed: Option<GoneErrorBody> = serde_json::from_slice(&body).ok();
+            let parsed: Option<ErrorResponseBody> = serde_json::from_slice(&body).ok();
 
             let code = parsed.as_ref().and_then(|b| b.code.as_deref());
             let message = parsed
@@ -466,7 +603,7 @@ pub fn new_reqwest_client(
     }
 
     let client = builder.connection_verbose(true).build()?;
-    let mut builder = ClientBuilder::new(client);
+    let mut builder = ClientBuilder::new(client).with(ServerStartingMiddleware);
 
     if let Some(retry_config) = middleware_config.retry {
         let retry_policy = ExponentialBackoff::builder()
@@ -546,4 +683,209 @@ pub async fn check_http_response_success(
         );
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::service::{ServiceError, ServiceErrorKind};
+    use poem::listener::{Acceptor, Listener};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::test;
+
+    fn starting_response() -> poem::Response {
+        poem::Response::builder()
+            .status(poem::http::StatusCode::SERVICE_UNAVAILABLE)
+            .header(
+                api::header::GOLEM_SERVER_STATUS,
+                api::header::GOLEM_SERVER_STATUS_STARTING,
+            )
+            .content_type("application/json")
+            .body(
+                serde_json::json!({
+                    "code": api::error_code::SERVER_STARTING,
+                    "error": "The Golem server is still starting: provisioning built-in tools",
+                })
+                .to_string(),
+            )
+    }
+
+    /// Serves `starting_requests` "still starting" responses, then `200 OK`.
+    async fn start_server(starting_requests: usize) -> (Url, Arc<AtomicUsize>) {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let acceptor = poem::listener::TcpListener::bind("127.0.0.1:0")
+            .into_acceptor()
+            .await
+            .unwrap();
+        let port = acceptor.local_addr()[0].as_socket_addr().unwrap().port();
+        let endpoint = poem::endpoint::make({
+            let requests = requests.clone();
+            move |_| {
+                let request = requests.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if request < starting_requests {
+                        starting_response()
+                    } else {
+                        poem::Response::builder().body("ok")
+                    }
+                }
+            }
+        });
+        tokio::spawn(async move {
+            poem::Server::new_with_acceptor(acceptor)
+                .run(endpoint)
+                .await
+                .unwrap();
+        });
+        (
+            Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap(),
+            requests,
+        )
+    }
+
+    #[test]
+    async fn waits_until_the_server_finished_starting() {
+        let (url, requests) = start_server(2).await;
+
+        wait_for_server_startup_with(
+            &reqwest::Client::new(),
+            &url,
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    async fn waiting_gives_up_after_the_timeout() {
+        let (url, _) = start_server(usize::MAX).await;
+
+        let error = wait_for_server_startup_with(
+            &reqwest::Client::new(),
+            &url,
+            Duration::from_millis(50),
+            Duration::from_millis(10),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains(
+                "Last status: The Golem server is still starting: provisioning built-in tools"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    async fn waiting_returns_when_the_server_is_unreachable() {
+        let (url, _) = start_server(0).await;
+        let unreachable = Url::parse("http://127.0.0.1:1/").unwrap();
+
+        wait_for_server_startup_with(
+            &reqwest::Client::new(),
+            &unreachable,
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .await
+        .unwrap();
+        wait_for_server_startup_with(
+            &reqwest::Client::new(),
+            &url,
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    async fn starting_server_is_reported_without_retries() {
+        let (url, requests) = start_server(usize::MAX).await;
+        let client = new_reqwest_client(
+            &HttpClientConfig::new_for_service_calls(false),
+            &MiddlewareConfig::with_service_retry(),
+        )
+        .unwrap();
+
+        let error = client
+            .get(url.join("v1/me").unwrap())
+            .send()
+            .await
+            .unwrap_err();
+
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let rendered = ServiceError {
+            service_name: "Me",
+            kind: ServiceErrorKind::MiddlewareError(error),
+        }
+        .to_string();
+        assert!(
+            rendered.contains(
+                "The Golem server is still starting: provisioning built-in tools. Retry when the server is ready."
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    async fn connection_failure_after_retries_names_the_server() {
+        let client = new_reqwest_client(
+            &HttpClientConfig::new_for_service_calls(false),
+            &MiddlewareConfig::with_service_retry(),
+        )
+        .unwrap();
+
+        let error = client
+            .get("http://127.0.0.1:1/v1/me")
+            .send()
+            .await
+            .unwrap_err();
+
+        let rendered = ServiceError {
+            service_name: "Me",
+            kind: ServiceErrorKind::MiddlewareError(error),
+        }
+        .render();
+        assert!(
+            rendered.contains("Cannot connect to")
+                && rendered.contains("http://127.0.0.1:1")
+                && rendered.contains("golem server run"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("retries"), "{rendered}");
+    }
+
+    #[test]
+    fn startup_progress_logging_is_throttled_within_a_phase() {
+        let just_now = Instant::now();
+        let long_ago = just_now - SERVER_STARTUP_PROGRESS_LOG_INTERVAL;
+        let fetching = "The Golem server is still starting: fetching built-in tools (1/6 ready)";
+        let fetching_more =
+            "The Golem server is still starting: fetching built-in tools (2/6 ready)";
+        let provisioning = "The Golem server is still starting: provisioning built-in tools";
+
+        assert!(should_log_startup_progress(None, fetching));
+        assert!(!should_log_startup_progress(
+            Some(&(fetching.to_string(), long_ago)),
+            fetching
+        ));
+        assert!(!should_log_startup_progress(
+            Some(&(fetching.to_string(), just_now)),
+            fetching_more
+        ));
+        assert!(should_log_startup_progress(
+            Some(&(fetching.to_string(), long_ago)),
+            fetching_more
+        ));
+        assert!(should_log_startup_progress(
+            Some(&(fetching.to_string(), just_now)),
+            provisioning
+        ));
+    }
 }

@@ -8855,6 +8855,7 @@ enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
     ExecutorShutdownDuringBodyValidation,
+    RestartDuringBodyValidation,
     CrashReplayClaimWindow,
     EntityCustomRootCrashReplay,
 }
@@ -9007,6 +9008,9 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
             "exclusive-p2-body-validation-shutdown"
         }
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+            "exclusive-p2-body-validation-restart"
+        }
         CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             "exclusive-p2-crash-replay-window"
         }
@@ -9054,6 +9058,17 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         let reconstruction_start =
             wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        if case == CompletedReconstructionExclusiveCase::RestartDuringBodyValidation {
+            let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let clock = golem_common::model::oplog::host_functions::HostFunctionName::WallClockNow
+                .to_string();
+            assert!(
+                recorded.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Start(start) if start.function_name == clock
+                )),
+                "the lifecycle test must keep normal wall-clock recording"
+            );
+        }
         if case == CompletedReconstructionExclusiveCase::Divergence {
             let updated_component = executor
                 .update_component(&caller_component.id, caller.wasm_name.as_str())
@@ -9196,6 +9211,34 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 })?;
                 executor.shutdown_and_wait_for_invocation_loops().await?;
             }
+            CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("completed reconstruction did not reach body validation gate")
+                })?;
+                let mut next_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+                eprintln!(
+                    "LIFECYCLE_PROBE restart while historical body {reconstruction_start} is held before validation"
+                );
+                // Normal lifecycle cancellation must destroy the blocked body's Store and
+                // settle its reconstruction ownership. Do not release its validation gate.
+                executor.simulated_crash(&worker_id).await?;
+                let next_start =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), next_claim.entered())
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "restart did not install a generation and reclaim the entity"
+                            )
+                        })?;
+                assert_eq!(next_start, reconstruction_start);
+                eprintln!("LIFECYCLE_PROBE next Store reclaimed historical body {next_start}");
+                next_claim.release();
+            }
         }
         Ok::<_, anyhow::Error>(reconstruction_start)
     };
@@ -9209,6 +9252,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
     match case {
         CompletedReconstructionExclusiveCase::Success
+        | CompletedReconstructionExclusiveCase::RestartDuringBodyValidation
         | CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -9351,6 +9395,26 @@ async fn completed_reconstruction_divergence_fails_automatic_update_and_runs_on_
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Divergence,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn restart_cancels_completed_reconstruction_during_body_validation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation,
     )
     .await
 }
