@@ -19,7 +19,7 @@ func init() {
 		conn := websocket.MustConnect(in.URL)
 		conn.MustSendText(in.Message)
 		msg := golem.Must(conn.Receive())
-		golem.Must0(conn.Close(1000, "done"))
+		golem.Must0(conn.CloseWith(1000, "done"))
 		return msg.Text()
 	})
 }

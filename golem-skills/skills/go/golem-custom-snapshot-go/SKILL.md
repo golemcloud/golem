@@ -9,7 +9,7 @@ description: "Enabling snapshot-based recovery and customizing state save/load f
 
 Snapshotting serializes a running Go agent's state so the host can save it and later restore it. It solves two problems:
 
-1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions.
+1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions. A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Automatic updates and snapshot-based recovery work.
 2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, frequent state changes). Without snapshotting, every recovery replays the full oplog; with periodic snapshotting, recovery starts from the latest snapshot and replays only what came after it.
 
 > **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
@@ -131,8 +131,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-    Spend = Agent.Method[SpendIn, int64]("spend", golem.Desc("Add to the running total"))
-    Total = Agent.Method[golem.Unit, int64]("total", golem.Desc("Return the running total"))
+    Spend = Agent.Method[SpendIn, int64]("spend", golem.Description("Add to the running total"))
+    Total = Agent.Method[golem.Unit, int64]("total", golem.Description("Return the running total"))
 )
 ```
 

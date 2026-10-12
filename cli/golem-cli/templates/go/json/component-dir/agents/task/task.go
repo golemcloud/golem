@@ -30,15 +30,15 @@ var (
 	// CreateTask creates a task from a JSON body `{"title": …}` and returns the
 	// full Task.
 	CreateTask = Agent.Method[CreateTaskIn, Task]("createTask",
-		golem.Desc("Create a task"),
+		golem.Description("Create a task"),
 		golem.HTTP(golem.POST("/tasks")))
 	// GetTasks lists every task as a JSON array.
 	GetTasks = Agent.Method[golem.Unit, []Task]("getTasks",
-		golem.Desc("List every task"),
+		golem.Description("List every task"),
 		golem.HTTP(golem.GET("/tasks")))
 	// CompleteTask marks a task completed by id; it returns none for an unknown
 	// id.
 	CompleteTask = Agent.Method[CompleteTaskIn, golem.Option[Task]]("completeTask",
-		golem.Desc("Mark a task completed"),
+		golem.Description("Mark a task completed"),
 		golem.HTTP(golem.POST("/tasks/{id}/complete")))
 )

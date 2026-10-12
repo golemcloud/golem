@@ -71,9 +71,9 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 var (
     // Request opens the promise and returns its id for an external completer.
-    Request = Agent.Method[golem.Unit, golem.PromiseID]("request", golem.Desc("Open an approval request, returning the promise id to complete"))
+    Request = Agent.Method[golem.Unit, golem.PromiseID]("request", golem.Description("Open an approval request, returning the promise id to complete"))
     // Await durably blocks until the open request is completed.
-    Await = Agent.Method[golem.Unit, Verdict]("await", golem.Desc("Durably block until the open request is completed"))
+    Await = Agent.Method[golem.Unit, Verdict]("await", golem.Description("Durably block until the open request is completed"))
 )
 ```
 

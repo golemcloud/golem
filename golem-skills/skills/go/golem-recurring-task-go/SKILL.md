@@ -31,8 +31,8 @@ type ID struct{ Name string }
 var Agent = golem.DefineAgent[ID](golem.Spec{Name: "PollerAgent", Description: "Periodic poller"})
 
 var (
-	Start = Agent.Method[golem.Unit, golem.Unit]("start", golem.Desc("Begin the recurring loop"))
-	Tick  = Agent.Method[golem.Unit, golem.Unit]("tick", golem.Desc("One iteration; reschedules itself"))
+	Start = Agent.Method[golem.Unit, golem.Unit]("start", golem.Description("Begin the recurring loop"))
+	Tick  = Agent.Method[golem.Unit, golem.Unit]("tick", golem.Description("One iteration; reschedules itself"))
 )
 ```
 

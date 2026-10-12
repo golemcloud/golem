@@ -23,14 +23,14 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var (
-	Create = Agent.Method[Table, golem.Unit]("create", golem.Desc("Create the table"))
+	Create = Agent.Method[Table, golem.Unit]("create", golem.Description("Create the table"))
 	// Insert inserts a row in a committed transaction and returns the affected row count.
-	Insert = Agent.Method[Row, uint64]("insert", golem.Desc("Insert a row and commit"))
+	Insert = Agent.Method[Row, uint64]("insert", golem.Description("Insert a row and commit"))
 	// InsertRolledBack inserts a row in a transaction it rolls back.
-	InsertRolledBack = Agent.Method[Row, golem.Unit]("insert_rolled_back", golem.Desc("Insert a row and roll back"))
+	InsertRolledBack = Agent.Method[Row, golem.Unit]("insert_rolled_back", golem.Description("Insert a row and roll back"))
 	// Names reads the names ordered by id, once with Query and once with QueryStream,
 	// and fails when the two disagree.
-	Names = Agent.Method[Table, []string]("names", golem.Desc("Read the names ordered by id"))
+	Names = Agent.Method[Table, []string]("names", golem.Description("Read the names ordered by id"))
 	// FailingQuery runs invalid SQL and returns the error kind.
-	FailingQuery = Agent.Method[Table, string]("failing_query", golem.Desc("Run invalid SQL and report the error kind"))
+	FailingQuery = Agent.Method[Table, string]("failing_query", golem.Description("Run invalid SQL and report the error kind"))
 )

@@ -203,7 +203,7 @@ type IncrementByIn struct{ Value uint64 }
 var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
 
 var IncrementBy = Agent.Method[IncrementByIn, uint64]("incrementBy",
-    golem.Desc("Add a value to the current counter"),
+    golem.Description("Add a value to the current counter"),
     golem.PromptHint("Increments the counter by the given value and returns the new count"))
 ```
 </Tabs.Tab>

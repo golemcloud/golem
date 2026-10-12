@@ -36,7 +36,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
     Description: "Processes one item",
 })
 
-var Process = Agent.Method[ProcessIn, string]("process", golem.Desc("Process a single item and return the result"))
+var Process = Agent.Method[ProcessIn, string]("process", golem.Description("Process a single item and return the result"))
 ```
 
 ### Coordinator fan-out (`agents/coordinator/impl/impl.go`)
@@ -165,7 +165,7 @@ Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and retu
 ## Key Constraints
 
 - **No threads within an agent.** Parallelism comes from distributing across distinct worker instances (distinct `ID`s); fanning out to the *same* instance serializes.
-- Don't hold a `*golem.Future` across invocations — start it and `Get()` it within the same handler. `Get` consumes the future (a second `Get` panics).
+- Don't hold a `*golem.Future` across invocations — start it and `Get()` it within the same handler. A second `Get` returns the same result; `Cancel` before the call starts makes `Get` return `golem.ErrCallCancelled`.
 - `Future.Get` returns a remote failure as an error, and `Promise.Await` returns an error only for a payload that does not decode; their `Must` forms panic. Model expected outcomes as a `golem.Result` in the method output.
 - Avoid a **synchronous** cycle: two agents each blocking in `Call` / `MustCall` on the other deadlocks. Break cycles with `Trigger` / promises.
 - Worker instances persist after the coordinator finishes (they are durable by default); give them stable IDs you can address again, or make them ephemeral (see `golem-stateless-agent-go`).

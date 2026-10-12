@@ -363,7 +363,7 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
     }
     ```
 
-    Only the agent that created the promise can await it. A payload that does not decode as `T` panics.
+    Only the agent that created the promise can await it. A payload that does not decode as `T` is returned as an error by `Await` and `AwaitContext`; `MustAwait` panics with it.
     </Tabs.Tab>
 </Tabs>
 

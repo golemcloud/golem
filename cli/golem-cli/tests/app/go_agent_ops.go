@@ -304,7 +304,7 @@ func init() {
 		if err != nil {
 			return "callAsync: " + err.Error()
 		}
-		awaited, err := pending.Wait()
+		awaited, err := pending.Get()
 		if err != nil {
 			return "wait: " + err.Error()
 		}

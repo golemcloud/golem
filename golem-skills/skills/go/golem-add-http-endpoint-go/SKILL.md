@@ -41,10 +41,10 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 var (
 	// GET /counters/{name}/value  — options compose: Desc + HTTP in one call.
-	Value = Agent.Method[golem.Unit, int64]("value", golem.Desc("Read the current value"), golem.HTTP(golem.GET("/value")))
+	Value = Agent.Method[golem.Unit, int64]("value", golem.Description("Read the current value"), golem.HTTP(golem.GET("/value")))
 
 	// POST /counters/{name}/add  — AddIn arrives as the JSON body
-	Add = Agent.Method[AddIn, int64]("add", golem.Desc("Add to the count"), golem.HTTP(golem.POST("/add")))
+	Add = Agent.Method[AddIn, int64]("add", golem.Description("Add to the count"), golem.HTTP(golem.POST("/add")))
 )
 ```
 

@@ -23,6 +23,7 @@ pub mod durability;
 pub mod http;
 pub mod invocation;
 pub mod keyvalue;
+pub mod logging;
 pub mod promise;
 pub mod rdbms;
 pub mod retry;

@@ -24,7 +24,7 @@ Rules come from three tiers, and the Go `retry` subpackage
 1. **Declare base rules** in `golem.yaml` (`retryPolicyDefaults`), scoped per environment.
 2. **Build strategies in code** from a base policy plus fluent combinators.
 3. **Apply** them: `retry.Set` for code-owned rules (often in the constructor), `retry.With` for per-call overrides.
-4. **Query** active rules with `retry.GetByName` / `retry.GetPolicies` / `retry.PolicyNames`.
+4. **Query** active rules with `retry.ByName` / `retry.Policies` / `retry.PolicyNames`.
 
 ## 1. Define Retry Policies in the Application Manifest
 
@@ -228,13 +228,13 @@ agent.Handle(retrying.Burst, func(_ *golem.Context[state], _ golem.Unit) retryin
 names := retry.PolicyNames()
 
 // Fully decoded rules:
-for _, p := range retry.GetPolicies() {
+for _, p := range retry.Policies() {
 	_ = p.Name()     // string
 	_ = p.Priority() // uint32
 }
 
 // A specific rule by name:
-if np, found := retry.GetByName("http-transient"); found {
+if np, found := retry.ByName("http-transient"); found {
 	_ = np.Priority()
 }
 

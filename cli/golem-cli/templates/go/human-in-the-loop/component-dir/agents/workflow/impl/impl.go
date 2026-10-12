@@ -27,8 +27,8 @@ func init() {
 		//    Normally you would surface this in a UI, email, etc.
 		approver := human.Agent.Get(human.ID{Username: in.Approver})
 		human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
-			WorkflowId: ctx.State.workflowID,
-			PromiseId:  approval.ID(),
+			WorkflowID: ctx.State.workflowID,
+			PromiseID:  approval.ID(),
 		})
 
 		// 3. Pause here until the promise is completed by the human.

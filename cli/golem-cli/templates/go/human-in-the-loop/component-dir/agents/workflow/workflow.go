@@ -16,5 +16,5 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var Start = Agent.Method[StartIn, string]("start",
-	golem.Desc("Ask the approver for a decision and wait for it"),
+	golem.Description("Ask the approver for a decision and wait for it"),
 	golem.HTTP(golem.POST("/start")))

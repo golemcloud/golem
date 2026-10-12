@@ -520,7 +520,7 @@ pub fn RequestHandler::add_details(
     </Tabs.Tab>
 
     <Tabs.Tab>
-Method metadata is passed as options to the method descriptor: `golem.Desc(...)` sets the description and `golem.PromptHint(...)` the prompt hint.
+Method metadata is passed as options to the method descriptor: `golem.Description(...)` sets the description and `golem.PromptHint(...)` the prompt hint.
 
 ```go
 package requesthandler
@@ -544,7 +544,7 @@ type AddDetailsIn struct{ Details TaskDetails }
 var Agent = golem.DefineAgent[ID](golem.Spec{Name: "RequestHandler"})
 
 var AddDetails = Agent.Method[AddDetailsIn, RequestHandlerStatus]("addDetails",
-	golem.Desc("Adds some more details to the request handler about the task being performed. The result is an update of the current status."),
+	golem.Description("Adds some more details to the request handler about the task being performed. The result is an update of the current status."),
 	golem.PromptHint("Enter new details about the task"))
 ```
     </Tabs.Tab>
@@ -749,8 +749,10 @@ Environment variables are accessible through the standard `os` package:
 ```go
 import "os"
 
-agentID := os.Getenv("GOLEM_AGENT_ID")
+region := os.Getenv("REGION")
 ```
+
+`os.Getenv` keeps the values from when the component started. Read the agent's own id with `ctx.AgentID()` in a method (or `ic.AgentID()` in the constructor): a fork's copy and a replay see the right id there.
 </Tabs.Tab>
 
 </Tabs>

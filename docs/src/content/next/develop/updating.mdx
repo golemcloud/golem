@@ -221,6 +221,10 @@ It is also possible to manually implement a pair of functions for saving and loa
             return nil
         }
         ```
+
+        <Callout type="warning">
+        A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Automatic updates and snapshot-based recovery work.
+        </Callout>
     </Tabs.Tab>
 </Tabs>
 

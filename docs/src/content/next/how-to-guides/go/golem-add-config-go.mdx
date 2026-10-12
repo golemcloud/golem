@@ -48,12 +48,12 @@ var Agent = golem.DefineConfiguredAgent[ID, Config](golem.Spec{
 })
 
 var (
-	Greet    = Agent.Method[golem.Unit, string]("greet", golem.Desc("Greeting, from config"))
-	Settings = Agent.Method[golem.Unit, []string]("settings", golem.Desc("Return the configured features"))
+	Greet    = Agent.Method[golem.Unit, string]("greet", golem.Description("Greeting, from config"))
+	Settings = Agent.Method[golem.Unit, []string]("settings", golem.Description("Return the configured features"))
 )
 ```
 
-Field-name conventions match plain agent types: use sized integers (`int64`, not bare `int`), a `*T` field is `option<T>`, and nested structs recurse. Field names are lower-camel-cased for the wire (`RatePct` → `ratePct`).
+Field-name conventions match plain agent types: use sized integers (`int64`, not bare `int`), a `*T` field is `option<T>`, and nested structs recurse. Field names are lowerCamelCase for the wire, with each initialism as one word (`RatePct` → `ratePct`, `APIKey` → `apiKey`, `AccountID` → `accountId`).
 
 ## Implementation (`agents/shop/impl/impl.go`)
 
@@ -99,7 +99,7 @@ type Config struct {
 
 ## Providing Values in `golem.yaml`
 
-Set defaults under `agents.<Name>.config`. Keys are **camelCase** — they match the lower-camel-cased Go field names; nested structs are nested maps, and a `map[string]V` is a list of `[key, value]` pairs:
+Set defaults under `agents.<Name>.config`. Keys are **camelCase** — they match the Go field names in lowerCamelCase, with each initialism as one word (`AccountID` → `accountId`); nested structs are nested maps, and a `map[string]V` is a list of `[key, value]` pairs:
 
 ```yaml
 agents:
@@ -115,16 +115,16 @@ agents:
 
 ## Overriding Config Over RPC
 
-When one agent calls another, the caller can override the callee's **local** (non-secret) config at client creation with `golem.WithConfig`:
+When one agent calls another, the caller can override the callee's **local** (non-secret) config at client creation with the callee definition's `WithConfig`, which checks the config type at compile time:
 
 ```go
 client := shop.Agent.Get(
 	shop.ID{Name: "acme"},
-	golem.WithConfig(shop.Config{Greeting: "Hi from the caller"}),
+	shop.Agent.WithConfig(shop.Config{Greeting: "Hi from the caller"}),
 )
 ```
 
-Only declared local keys can be overridden; secret fields are always platform-provisioned and are skipped. `golem.WithConfig` sends every local field of the struct. To set only some, or to call an agent in another component, use the generated guest client's `With<Agent>Config` option (see [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go)). It sends only the fields you set, through `golem.WithConfigEntries(golem.ConfigEntryOf(path, value)…)`.
+Only declared local keys can be overridden; secret fields are always platform-provisioned and are skipped. `WithConfig` replaces every local value: it sends every local field of the struct, zero values included. To set only some, or to call an agent in another component, use the generated guest client's `With<Agent>Config` option (see [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go)). It sends only the fields you set, through `golem.WithConfigEntries(golem.ConfigEntryOf(path, value)…)`.
 
 ## Key Constraints
 
@@ -138,4 +138,4 @@ Only declared local keys can be overridden; secret fields are always platform-pr
 |-------|--------------|
 | [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the base agent this config attaches to |
 | [`golem-add-secret-go`](/next/how-to-guides/go/golem-add-secret-go) | Add `golem.Secret[T]` fields for sensitive values |
-| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | Override a callee's config with `golem.WithConfig` over RPC |
+| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | Override a callee's config with the definition's `WithConfig` over RPC |

@@ -61,8 +61,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Open = Agent.Method[golem.Unit, string]("open", golem.Desc("Create a promise and return its webhook URL"))
-	Result = Agent.Method[golem.Unit, Event]("result", golem.Desc("Await the payload POSTed to the webhook URL"))
+	Open = Agent.Method[golem.Unit, string]("open", golem.Description("Create a promise and return its webhook URL"))
+	Result = Agent.Method[golem.Unit, Event]("result", golem.Description("Await the payload POSTed to the webhook URL"))
 )
 ```
 

@@ -54,8 +54,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
-	Value     = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current value"))
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Description("Increase the count by one"))
+	Value     = Agent.Method[golem.Unit, int64]("value", golem.Description("Return the current value"))
 )
 ```
 

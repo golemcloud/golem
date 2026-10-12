@@ -20,8 +20,8 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 
 var (
 	// Bump schedules a counter increment and lets it run.
-	Bump = Agent.Method[ScheduleIn, golem.Unit]("bump", golem.Desc("Schedule an increment on the target counter"))
+	Bump = Agent.Method[ScheduleIn, golem.Unit]("bump", golem.Description("Schedule an increment on the target counter"))
 	// BumpCancelled schedules the same increment and immediately cancels it, so
 	// the counter must never move.
-	BumpCancelled = Agent.Method[ScheduleIn, golem.Unit]("bump-cancelled", golem.Desc("Schedule an increment on the target counter, then cancel it"))
+	BumpCancelled = Agent.Method[ScheduleIn, golem.Unit]("bump-cancelled", golem.Description("Schedule an increment on the target counter, then cancel it"))
 )

@@ -41,8 +41,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Add  = Agent.Method[AddIn, int64]("add", golem.Desc("Insert a note, return the new count"))
-	List = Agent.Method[golem.Unit, []string]("list", golem.Desc("Return all note bodies"))
+	Add  = Agent.Method[AddIn, int64]("add", golem.Description("Insert a note, return the new count"))
+	List = Agent.Method[golem.Unit, []string]("list", golem.Description("Return all note bodies"))
 )
 ```
 

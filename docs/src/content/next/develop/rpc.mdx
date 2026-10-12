@@ -226,7 +226,7 @@ type ID struct{ Location string }
 
 var Agent = golem.DefineAgent[ID](golem.Spec{Name: "WeatherAgent"})
 
-var CurrentWeather = Agent.Method[golem.Unit, string]("currentWeather", golem.Desc("Gets the current weather"))
+var CurrentWeather = Agent.Method[golem.Unit, string]("currentWeather", golem.Description("Gets the current weather"))
 ```
 
 ```go filename="agents/weather/impl/impl.go"

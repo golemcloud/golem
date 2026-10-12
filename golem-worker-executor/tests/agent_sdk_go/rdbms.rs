@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The Go SDK's Postgres wrapper against a real database: committed and
-//! rolled-back transactions, Query and QueryStream agreeing, a classified
+//! The Go SDK's Postgres and MySQL wrappers against real databases: committed
+//! and rolled-back transactions, Query and QueryStream agreeing, a classified
 //! error, and recorded statements replaying after a crash instead of running
 //! again. Mirrors `rdbms::rdbms_postgres_crud`.
 
 use crate::Tracing;
 use golem_common::{agent_id, data_value};
+use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -41,6 +42,11 @@ async fn postgres() -> DockerPostgresRdb {
     DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await
 }
 
+#[test_dep(scope = Shared)]
+async fn mysql() -> DockerMysqlRdb {
+    DockerMysqlRdb::new(&Uuid::new_v4().to_string()).await
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -51,7 +57,43 @@ async fn go_postgres_transactions_queries_and_replay(
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    let address = postgres.public_connection_string();
+    transactions_queries_and_replay(
+        last_unique_id,
+        deps,
+        agent_sdk_go,
+        "PgAgent",
+        postgres.public_connection_string(),
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn go_mysql_transactions_queries_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    transactions_queries_and_replay(
+        last_unique_id,
+        deps,
+        agent_sdk_go,
+        "MySQLAgent",
+        mysql.public_connection_string(),
+    )
+    .await
+}
+
+async fn transactions_queries_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_sdk_go: &PrecompiledComponent,
+    agent_type: &str,
+    address: String,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -59,7 +101,7 @@ async fn go_postgres_transactions_queries_and_replay(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("PgAgent", "go-pg-1");
+    let agent_id = agent_id!(agent_type, "go-rdbms-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

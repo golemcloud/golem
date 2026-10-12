@@ -20,13 +20,13 @@ type TransformIn struct {
 type DurableEchoIn struct{ Input golem.AgentStream[string] }
 
 type AppendExternalIn struct {
-	Url        string
-	ProducerId string
+	URL        string
+	ProducerID string
 	Values     []string
 	Close      bool
 }
 
-type ReadExternalIn struct{ Url string }
+type ReadExternalIn struct{ URL string }
 
 var Agent = golem.DefineConfiguredAgent[ID, Config](golem.Spec{
 	Name: "StreamingAgent",
@@ -34,20 +34,20 @@ var Agent = golem.DefineConfiguredAgent[ID, Config](golem.Spec{
 })
 
 var (
-	Sum         = Agent.Method[SumIn, int64]("sum", golem.Desc("Add up a stream of numbers"))
-	Produce     = Agent.Method[golem.Unit, golem.AgentStream[int64]]("produce", golem.Desc("Stream a few numbers"))
-	Transform   = Agent.Method[TransformIn, golem.AgentStream[string]]("transform", golem.Desc("Prefix every number of a stream"))
-	Nested      = Agent.Method[golem.Unit, golem.AgentStream[golem.AgentStream[int64]]]("nested", golem.Desc("Stream streams"))
+	Sum         = Agent.Method[SumIn, int64]("sum", golem.Description("Add up a stream of numbers"))
+	Produce     = Agent.Method[golem.Unit, golem.AgentStream[int64]]("produce", golem.Description("Stream a few numbers"))
+	Transform   = Agent.Method[TransformIn, golem.AgentStream[string]]("transform", golem.Description("Prefix every number of a stream"))
+	Nested      = Agent.Method[golem.Unit, golem.AgentStream[golem.AgentStream[int64]]]("nested", golem.Description("Stream streams"))
 	Recoverable = Agent.Method[golem.Unit, golem.AgentStream[golem.Result[int64, string]]]("recoverable",
-		golem.Desc("Stream items that may each fail"))
-	Status = Agent.Method[golem.Unit, string]("status", golem.Desc("Report how many producers were cancelled"))
+		golem.Description("Stream items that may each fail"))
+	Status = Agent.Method[golem.Unit, string]("status", golem.Description("Report how many producers were cancelled"))
 	// DurableEcho is served over the Durable Streams protocol: its input and its
 	// result each get a URL that external clients append to, read and fork.
 	DurableEcho = Agent.Method[DurableEchoIn, golem.AgentStream[string]]("durableEcho",
-		golem.Desc("Echo a stream written over HTTP"),
+		golem.Description("Echo a stream written over HTTP"),
 		golem.HTTP(golem.PUT("/echo")))
 	AppendExternal = Agent.Method[AppendExternalIn, golem.Option[string]]("appendExternal",
-		golem.Desc("Append values to an external Durable Stream"))
+		golem.Description("Append values to an external Durable Stream"))
 	ReadExternal = Agent.Method[ReadExternalIn, []string]("readExternal",
-		golem.Desc("Read every value of an external Durable Stream"))
+		golem.Description("Read every value of an external Durable Stream"))
 )

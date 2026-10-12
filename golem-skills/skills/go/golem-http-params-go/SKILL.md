@@ -126,8 +126,20 @@ Handlers return their output value; the platform maps it to a response. In Go:
 | `T` (any type) | 200 OK | JSON-serialized `T` |
 | `*T` | 200 OK if non-nil, 404 Not Found if nil | JSON `T` or empty |
 | `golem.Result[T, E]` | 200 OK on `Ok`, 500 Internal Server Error on `Err` | JSON `T` or JSON `E` |
+| `golem.Result[*T, E]` | 200 OK on `Ok` with a value, 404 Not Found on `Ok(nil)`, 500 on `Err` | JSON `T`, empty, or JSON `E` |
+| `golem.UnstructuredBinary[M]` | 200 OK | raw bytes with `Content-Type` (default `application/octet-stream`) |
+| `golem.UnstructuredText[L]` | 200 OK | `text/plain; charset=utf-8` (plus `Content-Language` when set) |
+| an unstructured value with `URL` set | 307 Temporary Redirect | `Location` = the URL |
 
-`golem.Unit` is the empty result placeholder; `*T` is Golem's `option<T>` (a nil pointer means "absent"); `golem.Result[Ok, Err]` returns the error as an observable value (see `golem-add-agent-go` on returning failures).
+`golem.Unit` is the empty result placeholder; `*T` is Golem's `option<T>` (a nil pointer means "absent", as does `golem.Option[T]`); `golem.Result[Ok, Err]` returns the error as an observable value (see `golem-add-agent-go` on returning failures).
+
+The value inside an option or an `Ok` follows the same rules as a top-level value. An unstructured value nested in `*T`, `golem.Result[T, E]` or `golem.Result[*T, E]` is sent as the **raw** body (or a redirect), not as JSON:
+
+```go
+// 200 raw bytes / 404 when missing / 500 with a JSON DownloadError
+var Download = Agent.Method[DownloadIn, golem.Result[*golem.UnstructuredBinary[golem.AnyMimeType], DownloadError]](
+	"download", golem.HTTP(golem.GET("/files/{id}")))
+```
 
 ## Data type to JSON mapping
 

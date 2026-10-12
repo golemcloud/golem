@@ -233,6 +233,8 @@ By default, side effects are persisted and retried one by one. It is possible to
             secondResult = secondSideEffect(firstResult)
         })
         ```
+
+        A panic in the callback traps the component at once, even where something above would recover it, so the region stays open and runs again on retry. An outgoing `net/http` request inside the region keeps it from closing ("non-re-executable durable calls initiated in it are still in flight"); cross-agent RPC inside a region works, so make HTTP calls outside the region or through RPC to an agent that owns the call.
     </Tabs.Tab>
 
 </Tabs>

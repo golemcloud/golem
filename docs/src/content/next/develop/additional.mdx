@@ -1127,6 +1127,7 @@ This can be useful if state needs to be shared between different agents or if th
         func (b *Bucket) GetMany(keys []string) map[string][]byte
         func (b *Bucket) SetMany(entries map[string][]byte)
         func (b *Bucket) DeleteMany(keys []string)
+        func (b *Bucket) Close()
         ```
 
         For example:
@@ -1139,7 +1140,7 @@ This can be useful if state needs to be shared between different agents or if th
         value, found := bucket.Get("greeting")
         ```
 
-        `keyvalue.Typed[T](bucket)` wraps a bucket in a `*keyvalue.Store[T]` with the same operations, storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string). Its `Get` returns `(T, bool, error)`, where the error reports stored data that does not decode as `T`; `MustGet` panics on that error instead.
+        `bucket.Typed[T]()` wraps a bucket in a `*keyvalue.Store[T]` with the same operations, storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string). Its `Get` returns `(T, bool, error)`, where the error reports stored data that does not decode as `T`; `MustGet` panics on that error instead. `GetMany` and `SetMany` work on several keys at once. `Close` releases the bucket's host handle; it is optional, because an unused bucket is also released when Go collects it.
     </Tabs.Tab>
 </Tabs>
 
@@ -1539,13 +1540,14 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         func (c *Container) GetRange(name string, start, end uint64) ([]byte, error)
         func (c *Container) WriteData(name string, data []byte) error
         func (c *Container) ListObjects() ([]string, error)
-        func (c *Container) Delete(name string) error
-        func (c *Container) DeleteMany(names []string) error
-        func (c *Container) Has(name string) (bool, error)
+        func (c *Container) DeleteObject(name string) error
+        func (c *Container) DeleteObjects(names []string) error
+        func (c *Container) HasObject(name string) (bool, error)
         func (c *Container) ObjectInfo(name string) (ObjectMetadata, error)
         func (c *Container) Clear() error
+        func (c *Container) Close()
         ```
 
-        The Go wrapper reads and writes blob data as `[]byte`. `blobstore.Typed[T](container)` wraps a container in a `*blobstore.Store[T]` storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string). Its `Set` panics when the value does not encode as JSON.
+        The Go wrapper reads and writes blob data as `[]byte`. `container.Typed[T]()` wraps a container in a `*blobstore.Store[T]` storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string), with `Get`, `Set`, `Delete`, `Exists` and `Keys`. `Set` panics when the value does not encode as JSON and returns an error when the write fails; `MustSet` panics on that error too. `Close` releases the container's host handle; it is optional, because an unused container is also released when Go collects it.
     </Tabs.Tab>
 </Tabs>

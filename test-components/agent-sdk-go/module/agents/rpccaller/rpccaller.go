@@ -26,17 +26,17 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var (
-	Call  = Agent.Method[CallIn, int64]("call", golem.Desc("Record via a synchronous RPC and return the ledger's new total"))
-	Async = Agent.Method[CallIn, int64]("async", golem.Desc("Record via CallAsync + Future.Get and return the ledger's new total"))
+	Call  = Agent.Method[CallIn, int64]("call", golem.Description("Record via a synchronous RPC and return the ledger's new total"))
+	Async = Agent.Method[CallIn, int64]("async", golem.Description("Record via CallAsync + Future.Get and return the ledger's new total"))
 	// AtomicCall makes the same RPC inside durability.Atomically — checks whether a
 	// cross-agent call settles before an atomic region closes.
-	AtomicCall = Agent.Method[CallIn, int64]("atomic-call", golem.Desc("Record via a synchronous RPC inside an atomic region"))
+	AtomicCall = Agent.Method[CallIn, int64]("atomic-call", golem.Description("Record via a synchronous RPC inside an atomic region"))
 	// CallParallel records on every region's ledger at once, one goroutine per
 	// region, and returns the totals in region order.
-	CallParallel = Agent.Method[CallParallelIn, []int64]("call-parallel", golem.Desc("Record on several ledgers concurrently from goroutines"))
+	CallParallel = Agent.Method[CallParallelIn, []int64]("call-parallel", golem.Description("Record on several ledgers concurrently from goroutines"))
 	// AwaitRemote blocks on another agent's promise through a synchronous RPC,
 	// so the caller stays inside the call for as long as the promise is open.
-	AwaitRemote = Agent.Method[AwaitRemoteIn, string]("await-remote", golem.Desc("Await a PromiseAgent's promise through a synchronous RPC"))
+	AwaitRemote = Agent.Method[AwaitRemoteIn, string]("await-remote", golem.Description("Await a PromiseAgent's promise through a synchronous RPC"))
 	// AwaitRemoteAsync is AwaitRemote through CallAsync + Future.Get.
-	AwaitRemoteAsync = Agent.Method[AwaitRemoteIn, string]("await-remote-async", golem.Desc("Await a PromiseAgent's promise through CallAsync + Future.Get"))
+	AwaitRemoteAsync = Agent.Method[AwaitRemoteIn, string]("await-remote-async", golem.Description("Await a PromiseAgent's promise through CallAsync + Future.Get"))
 )

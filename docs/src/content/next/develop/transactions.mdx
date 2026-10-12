@@ -490,6 +490,6 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     ```
 
     `resultFallible` is a `golem.Result[Pair, transaction.Failure[string]]`, and `resultInfallible` is the plain
-    `Pair`. The steps of a transaction run inside an atomic region, in which an outgoing `net/http` request does not currently complete; perform such external calls through RPC to another agent that owns the HTTP request.
+    `Pair`. The steps of a transaction run inside an atomic region, in which an outgoing `net/http` request keeps the region from closing; perform such external calls through RPC to another agent that owns the HTTP request.
     </Tabs.Tab>
 </Tabs>

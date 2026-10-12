@@ -15,4 +15,4 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 	Name: "WsAgent", Description: "Exercises the Go SDK websocket wrapper", Mode: golem.Durable,
 })
 
-var Echo = Agent.Method[EchoIn, string]("echo", golem.Desc("Connect to the URL, send the message, and return the echoed reply"))
+var Echo = Agent.Method[EchoIn, string]("echo", golem.Description("Connect to the URL, send the message, and return the echoed reply"))

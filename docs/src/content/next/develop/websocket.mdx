@@ -202,6 +202,7 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
     func init() {
         agent.Handle(example.Run, func(_ *golem.Context[state], _ golem.Unit) golem.Unit {
             conn := websocket.MustConnect("wss://example.com/chat")
+            defer conn.Close() // CloseWith(code, reason) sends a close code
             slog.Info("Connected")
             conn.MustSendText("Hello, server!")
             for {

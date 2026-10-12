@@ -31,9 +31,10 @@ fails partway through, recovery re-executes the **entire** region from the start
 so effects performed before the crash happen again (all-or-nothing).
 
 `durability.Atomically(f func())` runs `f` as one region: on normal return it commits;
-if `f` **panics**, the region stays open and the runtime re-executes the whole
-region on retry. Panicking is therefore the way to abort a region, consistent with
-the fail-loud model.
+if `f` **panics**, the component traps at once (even where a caller above would
+recover the panic, such as a tool handler or the HTTP router), the region stays
+open, and the runtime re-executes the whole region on retry. Panicking is therefore
+the way to abort a region, consistent with the fail-loud model.
 
 `f` takes no arguments and returns nothing — **return a value by capturing it in
 an outer variable**:
@@ -69,10 +70,10 @@ durability.Atomically(func() {
 > `golem-add-transactions-go`, which build on this primitive.
 
 > **Outgoing HTTP inside a region.** Cross-agent RPC works inside `Atomically`, as
-> above. An outgoing HTTP request (`net/http`) does not yet: the region fails to
-> close with *"non-re-executable durable calls initiated in it are still in
-> flight"*. Until that is resolved, make HTTP calls outside the region — or reach
-> for them through RPC to an agent that owns the call.
+> above. An outgoing HTTP request (`net/http`) inside a region keeps it from
+> closing: the region fails with *"non-re-executable durable calls initiated in it
+> are still in flight"*. Make HTTP calls outside the region, or through RPC to an
+> agent that owns the call.
 
 ## Custom Durability for Libraries
 

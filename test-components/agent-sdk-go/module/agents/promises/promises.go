@@ -21,10 +21,10 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 var (
 	// Create makes a promise and returns its oplog index — the part of the
 	// PromiseID a completer needs alongside this agent's own id.
-	Create = Agent.Method[golem.Unit, int64]("create", golem.Desc("Create a promise and return its oplog index"))
+	Create = Agent.Method[golem.Unit, int64]("create", golem.Description("Create a promise and return its oplog index"))
 	// Await suspends until the promise is completed and returns its payload.
-	Await = Agent.Method[OplogIdxIn, string]("await", golem.Desc("Await the promise with the given oplog index"))
+	Await = Agent.Method[OplogIdxIn, string]("await", golem.Description("Await the promise with the given oplog index"))
 	// Complete completes a promise from inside the agent (the agent-to-agent path),
 	// reporting whether this call was the one that completed it.
-	Complete = Agent.Method[CompleteIn, bool]("complete", golem.Desc("Complete the promise with the given oplog index"))
+	Complete = Agent.Method[CompleteIn, bool]("complete", golem.Description("Complete the promise with the given oplog index"))
 )

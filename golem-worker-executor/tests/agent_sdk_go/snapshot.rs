@@ -119,3 +119,67 @@ async fn go_custom_snapshot_round_trips_unexported_state(
     );
     Ok(())
 }
+
+/// An agent whose state has exported fields and no Snapshotter is saved as JSON
+/// by default: after a restart the state comes back from the snapshot (the
+/// restore hook ran, not the constructor), with the items in order.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_default_json_snapshot_recovers_exported_state(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("JSONSnapAgent", "go-json-snapshot-1");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    for item in ["a", "b", "c", "d"] {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "add", data_value!(item))
+            .await?;
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_))),
+        "expected an automatic snapshot"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let items = executor
+        .invoke_and_await_agent(&component, &agent_id, "items", data_value!())
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    let origin = executor
+        .invoke_and_await_agent(&component, &agent_id, "origin", data_value!())
+        .await?
+        .into_typed::<String>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(items, vec!["a", "b", "c", "d"]);
+    assert_eq!(
+        origin, "restored",
+        "the default snapshot restores through the restore hook, not the constructor"
+    );
+    Ok(())
+}

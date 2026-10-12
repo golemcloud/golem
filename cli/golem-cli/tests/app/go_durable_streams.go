@@ -14,13 +14,13 @@ type Config struct{ ExternalAuth golem.Secret[string] }
 var Agent = golem.DefineConfiguredAgent[ID, Config](golem.Spec{Name: "StreamingAgent"})
 
 type AppendIn struct {
-	Url        string
-	ProducerId string
+	URL        string
+	ProducerID string
 	Values     []string
 	Close      bool
 }
 
-type ReadIn struct{ Url string }
+type ReadIn struct{ URL string }
 
 var (
 	AppendExternal = Agent.Method[AppendIn, golem.Option[string]]("appendExternal")
@@ -32,8 +32,8 @@ type state struct{}
 func init() {
 	agent := Agent.ImplementConfigured(func(*golem.InitContext[ID, state, Config]) *state { return &state{} })
 	agent.Handle(AppendExternal, func(ctx *golem.Context[state], in AppendIn) golem.Option[string] {
-		w, err := durablestreams.NewWriter(in.Url, "application/json", durablestreams.WriteOptions{
-			ProducerID: golem.Some(in.ProducerId),
+		w, err := durablestreams.NewWriter(in.URL, "application/json", durablestreams.WriteOptions{
+			ProducerID: golem.Some(in.ProducerID),
 			Auth:       golem.Some(ctx.Config(Agent).ExternalAuth),
 		})
 		if err != nil {
@@ -46,7 +46,7 @@ func init() {
 		return receipt.NextOffset
 	})
 	agent.Handle(ReadExternal, func(ctx *golem.Context[state], in ReadIn) []string {
-		values, err := durablestreams.ReadJSON[string](in.Url, durablestreams.ReadOptions{
+		values, err := durablestreams.ReadJSON[string](in.URL, durablestreams.ReadOptions{
 			Auth: golem.Some(ctx.Config(Agent).ExternalAuth),
 		}).Collect()
 		if err != nil {

@@ -23,8 +23,8 @@ var agent = human.Agent.Implement(func(id human.ID) *state {
 
 func init() {
 	agent.Handle(human.RequestApproval, func(ctx *golem.Context[state], in human.RequestApprovalIn) string {
-		ctx.State.pending[in.WorkflowId] = in.PromiseId
-		return fmt.Sprintf("User %s received approval request for workflow %s", ctx.State.username, in.WorkflowId)
+		ctx.State.pending[in.WorkflowID] = in.PromiseID
+		return fmt.Sprintf("User %s received approval request for workflow %s", ctx.State.username, in.WorkflowID)
 	})
 	agent.Handle(human.ListPendingApprovals, func(ctx *golem.Context[state], _ golem.Unit) []string {
 		return slices.Sorted(maps.Keys(ctx.State.pending))
@@ -33,12 +33,12 @@ func init() {
 		if in.Decision != "approved" && in.Decision != "rejected" {
 			return fmt.Sprintf("Received invalid approval decision %s", in.Decision)
 		}
-		promiseID, ok := ctx.State.pending[in.WorkflowId]
+		promiseID, ok := ctx.State.pending[in.WorkflowID]
 		if !ok {
-			return fmt.Sprintf("No pending request found for workflow %s", in.WorkflowId)
+			return fmt.Sprintf("No pending request found for workflow %s", in.WorkflowID)
 		}
 		golem.CompletePromise(promiseID, in.Decision)
-		delete(ctx.State.pending, in.WorkflowId)
-		return fmt.Sprintf("Workflow %s was %s by %s", in.WorkflowId, in.Decision, ctx.State.username)
+		delete(ctx.State.pending, in.WorkflowID)
+		return fmt.Sprintf("Workflow %s was %s by %s", in.WorkflowID, in.Decision, ctx.State.username)
 	})
 }

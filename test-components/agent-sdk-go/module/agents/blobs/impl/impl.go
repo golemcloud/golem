@@ -37,7 +37,7 @@ func init() {
 	})
 	agent.Handle(blobs.Delete, func(_ *golem.Context[state], in blobs.ObjectIn) golem.Unit {
 		c := blobstore.MustGetOrCreateContainer(in.Container)
-		golem.Must0(c.Delete(in.Object))
+		golem.Must0(c.DeleteObject(in.Object))
 		return golem.Unit{}
 	})
 	agent.Handle(blobs.List, func(_ *golem.Context[state], in blobs.ContainerIn) []string {

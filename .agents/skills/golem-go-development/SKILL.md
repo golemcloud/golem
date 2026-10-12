@@ -56,6 +56,14 @@ trap, the function has a `Must` variant next to the error-returning form
 (`MethodDef.MustCall`, `blobstore.MustGetContainer`); everywhere else `golem.Must`,
 `Must0` and `Must2` turn an error into a panic at the call site.
 
+Error kinds are named after the host. A kind constant spells the WIT case name in Go case,
+suffix included (`query-execution-failure` is `QueryExecutionFailure`, `custom-error` is
+`AgentCustomError`), so code, oplog and docs use one name. A package with one kind type
+uses bare names (`postgres.QueryExecutionFailure`, `durablestreams.NotFound`); a package
+with several kind types prefixes each with its type's stem (`AgentInvalidInput`,
+`RemoteProtocolError`). A kind that only the SDK knows (`tool.CallErrorKind`) follows the
+same prefix rule. A switch over a host error variant is pinned and has no catch-all kind.
+
 Generated clients follow where they run. A guest client runs in a component, so it has
 the forms of a same-component `MethodDef` — call, trigger, schedule, async — each with
 its `Must` variant, and `MustGet<Agent>` beside `Get<Agent>`. An external client runs in
@@ -210,6 +218,11 @@ wire form. Sending one where the other belongs is accepted by neither side.
   `invalid reference to runtime.sbrk`. That is expected — a component is a wasip1
   artifact — but the error says nothing useful. Use
   `GOOS=wasip1 GOARCH=wasm go vet ./...` to type-check one.
+- **The toolchain download is checksummed.** When bumping `go_toolchain::TAG`, replace
+  the five sha256 values in `go_toolchain::ARCHIVES` (`cli/golem-cli/src/versions.rs`)
+  with the new release's `.sha256` assets
+  (`gh release download <tag> --repo golemcloud/go --pattern '*.sha256'`); the CLI
+  refuses an archive whose hash does not match.
 - **`golem-temp/extracted-component-metadata/*.json` can be stale.** A build that
   rebuilt the wasm does not always refresh it, so it can give a confidently wrong
   answer about which agents a component publishes. Check the binary.

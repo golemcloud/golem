@@ -83,8 +83,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Greeting = Agent.Method[golem.Unit, string]("greeting", golem.Desc("Read /data/greeting.txt"))
-	Log      = Agent.Method[LogIn, golem.Unit]("log", golem.Desc("Append a line to /tmp/agent.log"))
+	Greeting = Agent.Method[golem.Unit, string]("greeting", golem.Description("Read /data/greeting.txt"))
+	Log      = Agent.Method[LogIn, golem.Unit]("log", golem.Description("Append a line to /tmp/agent.log"))
 )
 ```
 

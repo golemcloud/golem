@@ -47,15 +47,15 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 // Method descriptors are package-level vars: the same value drives the published
 // schema, the implementation binding, and calls from other agents.
 var (
-	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
-	Add       = Agent.Method[AddIn, int64]("add", golem.Desc("Add to the count"))
-	Value     = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current value"))
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Description("Increase the count by one"))
+	Add       = Agent.Method[AddIn, int64]("add", golem.Description("Add to the count"))
+	Value     = Agent.Method[golem.Unit, int64]("value", golem.Description("Return the current value"))
 )
 ```
 
 `golem.Unit` is the empty parameter/result placeholder (a method with no input or no output).
 
-`golem.Desc(...)` describes a method and `golem.PromptHint(...)` tells AI callers when to use it; `Spec.PromptHint` does the same for creating the agent.
+`golem.Description(...)` describes a method and `golem.PromptHint(...)` tells AI callers when to use it; `Spec.PromptHint` does the same for creating the agent.
 
 `Spec.Dependencies` lists other agents of the same component this one calls (`Dependencies: []golem.AgentDependency{billing.Agent}`); they are published with the agent's metadata.
 
@@ -116,7 +116,7 @@ Adding another agent = another `agents/<name>/` folder + one more blank import h
 
 ## Custom Types
 
-Parameter and result types are Go structs; each exported field becomes one WIT field, named by lower-camel-casing the Go name (`AmountCents` → `amountCents`).
+Parameter and result types are Go structs; each exported field becomes one WIT field, named by the Go name in lowerCamelCase with each initialism as one word (`AmountCents` → `amountCents`, `UserID` → `userId`). Two fields whose names map to the same schema name are a definition error.
 
 - Use sized integers (`int64`, `uint64`, …). Bare `int`/`uint` are **rejected** — their width is platform-dependent.
 - `time.Time`, `time.Duration` and `golem.UUID` are `datetime`, `duration` and `uuid`; `golem.ParseUUID` reads one from text.

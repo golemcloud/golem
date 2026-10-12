@@ -46,8 +46,9 @@ func init() {
 		return golem.ProduceStream(func(w *golem.AgentStreamWriter[string]) error {
 			for v := range in.Input.All() {
 				if err := w.Write(fmt.Sprintf("%s:%d", in.Prefix, v)); err != nil {
-					// Stopping early also closes the input, propagating the
-					// cancellation upstream.
+					// The reader went away: close the input too, so its producer
+					// learns that nobody reads it.
+					in.Input.Close()
 					ctx.State.cancelledProducers++
 					return nil
 				}
@@ -78,14 +79,14 @@ func init() {
 		})
 	})
 	agent.Handle(streaming.AppendExternal, func(ctx *golem.Context[state], in streaming.AppendExternalIn) golem.Option[string] {
-		w := golem.Must(durablestreams.NewWriter(in.Url, "application/json", durablestreams.WriteOptions{
-			ProducerID: golem.Some(in.ProducerId),
+		w := golem.Must(durablestreams.NewWriter(in.URL, "application/json", durablestreams.WriteOptions{
+			ProducerID: golem.Some(in.ProducerID),
 			Auth:       golem.Some(ctx.Config(streaming.Agent).ExternalAuth),
 		}))
 		return golem.Must(durablestreams.AppendJSON(w, in.Values, in.Close)).NextOffset
 	})
 	agent.Handle(streaming.ReadExternal, func(ctx *golem.Context[state], in streaming.ReadExternalIn) []string {
-		return golem.Must(durablestreams.ReadJSON[string](in.Url, durablestreams.ReadOptions{
+		return golem.Must(durablestreams.ReadJSON[string](in.URL, durablestreams.ReadOptions{
 			Auth: golem.Some(ctx.Config(streaming.Agent).ExternalAuth),
 		}).Collect())
 	})

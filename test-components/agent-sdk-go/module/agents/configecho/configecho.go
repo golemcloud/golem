@@ -20,6 +20,6 @@ var Agent = golem.DefineConfiguredAgent[Id, Config](golem.Spec{
 })
 
 var (
-	Greeting = Agent.Method[golem.Unit, string]("greeting", golem.Desc("Return the configured greeting"))
-	Cents    = Agent.Method[golem.Unit, int64]("cents", golem.Desc("Return the configured fee (nested config path)"))
+	Greeting = Agent.Method[golem.Unit, string]("greeting", golem.Description("Return the configured greeting"))
+	Cents    = Agent.Method[golem.Unit, int64]("cents", golem.Description("Return the configured fee (nested config path)"))
 )

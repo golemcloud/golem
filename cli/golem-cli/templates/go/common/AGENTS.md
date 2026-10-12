@@ -164,7 +164,7 @@ anywhere in the module (e.g. an `internal/` directory).
 
 ## Prerequisites
 
-- Golem CLI (`golem`) version 1.5.x: https://github.com/golemcloud/golem/releases
+- Golem CLI (`golem`) version 1.6.x: https://github.com/golemcloud/golem/releases
 - `wasm-tools`: https://github.com/bytecodealliance/wasm-tools
 - Go toolchain: https://go.dev/dl/ (Go 1.27.1 or newer) — for development: an IDE,
   `go test`, `go vet`. `golem build` does not use it: components are compiled with
@@ -178,7 +178,7 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 
 - **Agent type names**: the `Name` in `golem.Spec{Name: "CounterAgent"}`
 - **Method names**: the string passed to `Agent.Method[...]("increment")`
-- **Parameter and record field names**: the Go field name **lower-camel-cased** — `AmountCents` → `amountCents`
+- **Parameter and record field names**: the Go field name in **lowerCamelCase, with each initialism as one word** — `AmountCents` → `amountCents`, `UserID` → `userId`, `APIKey` → `apiKey`
 - **Variant case names**: the string in `golem.Case[Card]("card")`
 - **Enum case names**: positional, from `golem.DefineEnum[Status]("active", "closed")`
 
@@ -207,7 +207,9 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   environment with no special setup (they route to `wasi:cli/environment` via the toolchain's WASI
   adapter). Alongside any vars you set (`env:` in `golem.yaml`, or `golem agent new --env`), the runtime
   injects `GOLEM_AGENT_ID`, `GOLEM_WORKER_NAME`, `GOLEM_COMPONENT_ID`, `GOLEM_COMPONENT_REVISION` and
-  `GOLEM_AGENT_TYPE`.
+  `GOLEM_AGENT_TYPE`. `os.Getenv` keeps the values from when the component started, so a fork's copy
+  still sees the original id there: read the agent's own id with `ctx.AgentID()` (or `ic.AgentID()` in
+  the constructor) instead.
 - **Logging** uses the standard library — the SDK installs an `slog` handler on startup that routes
   `slog` (and, via slog, the standard `log` package) through the host logging channel, so records carry a
   real level and context in worker logs (`slog.Info(...)` → an `INFO` event, `slog.Warn`/`Error`
@@ -234,7 +236,7 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 - `gofmt -w .` — format code
 - `go vet ./...` — static checks
 - `go test ./...` — run tests
-- `golem app build` — build the components (runs `go tool componentize-go build`)
+- `golem build` — build the components (runs `go tool componentize-go build`)
 
 ## Running Golem CLI commands non-interactively
 

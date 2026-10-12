@@ -65,7 +65,8 @@ agent.Handle(pipe.Doubled, func(_ *golem.Context[state], in pipe.ValuesIn) golem
 ```
 
 - `golem.ProduceStream` runs the producer on its own goroutine and returns the reading end at once.
-- Returning an error (or panicking) from the producer fails the invocation — the component traps, as in Rust — because a stream has no failure end and the reader must not see a clean end. Model recoverable errors as items, e.g. `golem.AgentStream[golem.Result[T, E]]`.
+- Returning `golem.ErrReaderGone`, the error `Write` reports when the reader went away, ends the stream cleanly, so `return err` after a failed `Write` is fine. Any other error, or a panic, fails the invocation — the component traps, as in Rust — because a stream has no failure end and the reader must not see a clean end. Model recoverable errors as items, e.g. `golem.AgentStream[golem.Result[T, E]]`.
+- Stopping early does not close the input you were reading; call `in.Values.Close()` so its producer learns that nobody reads it.
 - `Write` blocks until the consumer has room: that is the back-pressure, so nothing piles up in memory. Its only error is `golem.ErrReaderGone`; writing to a closed writer, or a value that cannot be encoded, panics.
 - `golem.NewAgentStream[T]()` returns a writer and a stream for producing by hand; `defer w.Close()` ends it cleanly.
 - `golem.StreamOf(items...)` is a stream of fixed values, handy for small results and tests.

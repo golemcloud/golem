@@ -32,7 +32,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
     Mode:        golem.Ephemeral, // <- makes every invocation start clean
 })
 
-var Handle = Agent.Method[HandleIn, string]("handle", golem.Desc("Process one request and return the result"))
+var Handle = Agent.Method[HandleIn, string]("handle", golem.Description("Process one request and return the result"))
 ```
 
 ### Implementation
