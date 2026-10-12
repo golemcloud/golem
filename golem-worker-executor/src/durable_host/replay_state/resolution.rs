@@ -29,8 +29,9 @@ impl ReplayState {
 
     /// Drains every *awaited terminal* (`End`/`Cancelled` whose `start_index` has a registered
     /// awaiter) currently at the cursor head, routing each to its awaiter, then stops at the first
-    /// non-terminal entry without consuming it. This is the cursor-driving half of
-    /// [`Self::await_resolution_outcome`]; it never blocks (it parks by returning, not suspending).
+    /// non-terminal entry without consuming it. This test-only helper uses the same head drain as
+    /// [`Self::await_resolution_outcome`], but has no gate-versus-receiver arbitration. It waits
+    /// for the advance gate and returns at the first positional blocker.
     #[cfg(test)]
     pub(super) async fn drain_awaited_terminals(&self) -> Result<(), WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
@@ -282,6 +283,8 @@ impl ReplayState {
             // already-claimed, earlier-completing sibling in the interleaved case.
             let (returned_receiver, reconstruction, routed) = self
                 .run_owned_cursor_op(move |state| async move {
+                    // Cancellation drops the caller, not this operation. Keep reconstruction
+                    // fenced until the surviving drain and its abandoned result have settled.
                     let historical_reconstruction = historical_reconstruction;
                     let gate = state.cursor.advance_gate.clone().lock_owned();
                     tokio::pin!(gate);
@@ -300,11 +303,9 @@ impl ReplayState {
                         return Err(WorkerExecutorError::runtime(failure));
                     }
                     match routed {
-                        Some(Ok(outcome)) => Ok((
-                            receiver,
-                            historical_reconstruction,
-                            Some(state.validate_resolved_outcome(outcome)?),
-                        )),
+                        Some(Ok(outcome)) => {
+                            Ok((receiver, historical_reconstruction, Some(outcome)))
+                        }
                         Some(Err(_)) => {
                             state
                                 .cursor

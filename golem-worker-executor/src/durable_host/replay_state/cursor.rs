@@ -180,7 +180,8 @@ impl ReplayCursor {
 }
 
 /// An in-progress cursor-advance transaction. Holds [`ReplayCursor::state`] for its whole lifetime
-/// and is the only type permitted to publish the cursor position. Its methods may `await` oplog
+/// and is the only type permitted to advance the physical reader. Retained claims can separately
+/// publish their claimed position in `last_replayed_non_hint_index`. Its methods may `await` oplog
 /// reads / payload downloads while the lock is held (exactly as the old marker lock did), but they
 /// never `await` a resolver receiver and never call a `ReplayState` method that re-acquires the
 /// lock. It accumulates whether cursor progress should be signalled; the public entry point notifies
@@ -216,7 +217,7 @@ pub(super) struct RetainedClaims<'a> {
 }
 
 impl CursorTx<'_> {
-    fn retained_claims(&mut self) -> RetainedClaims<'_> {
+    pub(super) fn retained_claims(&mut self) -> RetainedClaims<'_> {
         RetainedClaims {
             cursor: self.cursor,
             st: &mut self.st,
@@ -289,13 +290,8 @@ impl CursorTx<'_> {
         matches!(entry, OplogEntry::Start { function_name, .. } if AbandonedStarts::can_drain(function_name))
     }
 
-    fn publish_retained_count(&self) {
-        self.cursor.unclaimed_retained_starts.publish(
-            self.st
-                .retained_starts
-                .values()
-                .map(|retained| &retained.entry),
-        );
+    fn publish_retained_count(&mut self) {
+        self.retained_claims().publish_retained_count();
     }
 
     fn retain_start(&mut self, idx: OplogIndex, entry: OplogEntry) {
@@ -421,6 +417,15 @@ impl RetainedClaims<'_> {
             .extend(deferred_events.into_iter().map(|(_, event)| event));
     }
 
+    /// Returns the guest-delivery marker for the durable call starting at `start_index`, if one
+    /// exists and lies outside any deleted region. A marker in a reverted/jumped-away region
+    /// belongs to an abandoned timeline; without a replacement marker, a still-visible accessor
+    /// `End` uses replay-tail delivery.
+    ///
+    /// The construction scan is bounded by the initial replay target, and target growth rescans
+    /// only the newly visible range (see [`ReplayState::set_replay_target`]). A returned marker
+    /// therefore never encodes knowledge beyond the target. Debug targets still validate delivery
+    /// boundaries, whereas fork/revert remove the future marker and recover the retained prefix.
     fn completion_marker(&self, start_index: OplogIndex) -> Option<CompletionMarker> {
         let marker = *self
             .cursor
@@ -459,20 +464,11 @@ impl RetainedClaims<'_> {
         invocation_id: uuid::Uuid,
         expected_parent: Option<OplogIndex>,
     ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
-        if self
-            .st
-            .claimed_custom_invocation_ids
-            .contains(&invocation_id)
-        {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                format!("unused custom durable invocation id {invocation_id}"),
-                "custom durable invocation IDs are single-use".to_string(),
-            ));
-        }
+        self.ensure_custom_invocation_unused(invocation_id)?;
         let matches_id = |entry: &OplogEntry| {
             matches!(entry, OplogEntry::Start {
-            invocation_id: Some(id), observational_owner: None, ..
-        } if *id == invocation_id)
+                invocation_id: Some(id), observational_owner: None, ..
+            } if *id == invocation_id)
         };
         let candidate = self
             .st
@@ -486,20 +482,67 @@ impl RetainedClaims<'_> {
         let Some((index, candidate)) = candidate else {
             return Ok(None);
         };
-        // A retained custom root still requires a unique ID across the whole visible history,
-        // not just the records already passed by the physical cursor.
+        self.validate_custom_candidate(
+            claim,
+            invocation_id,
+            expected_parent,
+            index,
+            &candidate,
+            OplogIndex::INITIAL,
+        )
+        .await?;
+        let result = self.claim_retained_start(&matches_id, None).await?;
+        if let Some((handle, _)) = &result {
+            self.st.claimed_custom_invocation_ids.insert(invocation_id);
+            self.register_custom_subtree_root(handle.start_idx());
+        }
+        Ok(result)
+    }
+
+    pub(super) fn ensure_custom_invocation_unused(
+        &self,
+        invocation_id: uuid::Uuid,
+    ) -> Result<(), WorkerExecutorError> {
+        if self
+            .st
+            .claimed_custom_invocation_ids
+            .contains(&invocation_id)
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("unused custom durable invocation id {invocation_id}"),
+                "custom durable invocation IDs are single-use".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates one exact-ID candidate before claiming or adopting its subtree. The gated
+    /// search already checked the prefix before its candidate, so it searches for duplicates
+    /// after that candidate. Retained selection has not checked history and starts at INITIAL.
+    pub(super) async fn validate_custom_candidate(
+        &self,
+        claim: &StartClaim,
+        invocation_id: uuid::Uuid,
+        expected_parent: Option<OplogIndex>,
+        index: OplogIndex,
+        candidate: &OplogEntry,
+        duplicate_scan_start: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
         let duplicate = self
             .cursor
             .scan_oplog(
-                OplogIndex::INITIAL,
+                duplicate_scan_start,
                 self.cursor.replay_target().next(),
                 &self.st.skipped_regions,
                 self.st
                     .skipped_regions
-                    .find_next_deleted_region(OplogIndex::INITIAL),
+                    .find_next_deleted_region(duplicate_scan_start),
                 OplogIndex::NONE,
                 |entry, _, current: &Option<OplogIndex>| {
-                    current.is_some_and(|current| current != index) && matches_id(entry)
+                    current.is_some_and(|current| current != index)
+                        && matches!(entry, OplogEntry::Start {
+                            invocation_id: Some(id), observational_owner: None, ..
+                        } if *id == invocation_id)
                 },
                 |_, _, _| true,
                 None,
@@ -514,32 +557,38 @@ impl RetainedClaims<'_> {
                 "custom durable invocation ID {invocation_id} is reused by Starts {index} and {duplicate}"
             )));
         }
+        let retained = self.st.retained_starts.contains_key(&index);
+        if (index <= self.cursor.last_replayed_index() && !retained)
+            || self.st.claimed_starts.contains(&index)
+        {
+            return Err(WorkerExecutorError::runtime(format!(
+                "custom durable invocation ID {invocation_id} at Start {index} was already consumed or claimed"
+            )));
+        }
         let OplogEntry::Start {
             function_name,
             durable_function_type,
             parent_start_index,
             request,
             ..
-        } = &candidate
+        } = candidate
         else {
-            unreachable!("custom candidate is a retained Start")
+            unreachable!("the exact custom candidate search only accepts Start entries")
         };
         if Some(function_name) != claim.expected_function_name()
             || Some(durable_function_type) != claim.expected_function_type()
             || *parent_start_index != expected_parent
-            || request.is_none()
         {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 claim.expected_description(),
                 format!("{candidate:?}"),
             ));
         }
-        let OplogEntry::Start {
-            request: Some(request),
-            ..
-        } = &candidate
-        else {
-            unreachable!()
+        let Some(request) = request else {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("custom durable Start at {index} with a request"),
+                format!("{candidate:?}"),
+            ));
         };
         if !recorded_request_payload_matches(
             self.cursor.oplog.as_ref(),
@@ -549,19 +598,17 @@ impl RetainedClaims<'_> {
                 .expect("custom claims pin a request"),
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
-        {
+        .map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "failed to load custom durable request payload at Start {index}: {err}"
+            ))
+        })? {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 format!("custom durable Start at {index} with the current request payload"),
                 "recorded request payload differs".to_string(),
             ));
         }
-        let result = self.claim_retained_start(&matches_id, None).await?;
-        if let Some((handle, _)) = &result {
-            self.st.claimed_custom_invocation_ids.insert(invocation_id);
-            self.register_custom_subtree_root(handle.start_idx());
-        }
-        Ok(result)
+        Ok(())
     }
 
     async fn claim_retained_start(
@@ -1764,12 +1811,13 @@ impl CursorTx<'_> {
     /// The [`Resolution`] a durable call starting at `start_index` receives from its committed
     /// terminal `entry` at `terminal_idx`, honouring the call's guest-delivery marker (if any).
     fn terminal_resolution(
-        &self,
+        &mut self,
         start_index: OplogIndex,
         terminal_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Resolution {
-        RetainedClaims::resolution(self.completion_marker(start_index), terminal_idx, entry)
+        self.retained_claims()
+            .terminal_resolution(start_index, terminal_idx, entry)
     }
 }
 
@@ -1780,14 +1828,7 @@ impl RetainedClaims<'_> {
         terminal_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Resolution {
-        Self::resolution(self.completion_marker(start_index), terminal_idx, entry)
-    }
-
-    fn resolution(
-        marker: Option<CompletionMarker>,
-        terminal_idx: OplogIndex,
-        entry: &OplogEntry,
-    ) -> Resolution {
+        let marker = self.completion_marker(start_index);
         match entry {
             OplogEntry::End {
                 response,
@@ -1824,31 +1865,6 @@ impl RetainedClaims<'_> {
 }
 
 impl CursorTx<'_> {
-    /// Returns the guest-delivery marker for the durable call starting at `start_index`, if one
-    /// exists and lies outside any deleted region. A marker in a reverted/jumped-away region
-    /// belongs to an abandoned timeline; without a replacement marker, a still-visible accessor
-    /// `End` uses replay-tail delivery.
-    ///
-    /// The `completion_markers` map is populated only from entries at or before the replay
-    /// target (the construction scan is bounded by the initial target and target growth rescans
-    /// exactly the newly visible range, see [`ReplayState::set_replay_target`]), so a returned
-    /// marker never encodes knowledge beyond the target. Debug targets still validate delivery
-    /// boundaries, whereas fork/revert remove the future marker and recover from the retained
-    /// prefix.
-    pub(super) fn completion_marker(&self, start_index: OplogIndex) -> Option<CompletionMarker> {
-        let marker = *self
-            .cursor
-            .completion_markers
-            .lock()
-            .unwrap()
-            .get(&start_index)?;
-        if !self.st.skipped_regions.is_in_deleted_region(marker.index()) {
-            Some(marker)
-        } else {
-            None
-        }
-    }
-
     /// Publishes a replay event for the primary Store to apply at its next boundary. While a
     /// retained `Start` is being committed past on its owner's behalf, the event is deferred to
     /// that `Start` instead (see [`RetainedStart::deferred_events`]); `ReplayFinished` describes

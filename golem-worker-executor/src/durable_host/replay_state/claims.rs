@@ -539,11 +539,8 @@ impl ReplayState {
             let on_claim = on_claim.clone();
             let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
-                    state
-                        .with_claim_tx(&owned_claim, None, |handle, entry| {
-                            on_claim(handle.start_idx(), &entry);
-                            (Some((handle, entry)), None, None)
-                        }, async |tx| match tx.claim_start(&owned_claim).await {
+                    let gated = async |tx: &mut super::cursor::CursorTx<'_>| {
+                        match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
                                 on_claim(handle.start_idx(), &entry);
                                 Ok((Some((handle, entry)), None, None))
@@ -581,7 +578,18 @@ impl ReplayState {
                                 "ordinary Start claims never enter missing-scope settlement"
                             ),
                             Err(error) => Err(error),
-                        })
+                        }
+                    };
+                    state
+                        .with_claim_tx(
+                            &owned_claim,
+                            None,
+                            |handle, entry| {
+                                on_claim(handle.start_idx(), &entry);
+                                (Some((handle, entry)), None, None)
+                            },
+                            gated,
+                        )
                         .await
                 })
                 .await?;
@@ -818,14 +826,12 @@ impl ReplayState {
             let owned_claim = claim.clone();
             let outcome = self
                 .run_owned_cursor_op(move |state| async move {
-                    state
-                        .with_claim_tx(&owned_claim, None, StartClaimAttempt::Claimed, async |tx| {
-                            tx.claim_scope_start_with_missing_recovery(
-                                &owned_claim,
-                                recover_missing,
-                            )
+                    let gated = async |tx: &mut super::cursor::CursorTx<'_>| {
+                        tx.claim_scope_start_with_missing_recovery(&owned_claim, recover_missing)
                             .await
-                        })
+                    };
+                    state
+                        .with_claim_tx(&owned_claim, None, StartClaimAttempt::Claimed, gated)
                         .await
                 })
                 .await?;
@@ -947,23 +953,26 @@ impl ReplayState {
             let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     let claim = match expected_parent_start_index {
-                        Some(parent) => StartClaim::owned_matching_request(&expected_function_name, &expected_function_type, parent, &expected_request),
-                        None => StartClaim::unowned_matching_request(&expected_function_name, &expected_function_type, &expected_request),
+                        Some(parent) => StartClaim::owned_matching_request(
+                            &expected_function_name,
+                            &expected_function_type,
+                            parent,
+                            &expected_request,
+                        ),
+                        None => StartClaim::unowned_matching_request(
+                            &expected_function_name,
+                            &expected_function_type,
+                            &expected_request,
+                        ),
                     };
-                    state
-                        .with_claim_tx(&claim, Some((expected_invocation_id, expected_parent_start_index)), |handle, entry| (Some((handle, entry)), None, None), async |tx| {
-                            if tx
-                                .st
-                                .claimed_custom_invocation_ids
-                                .contains(&expected_invocation_id)
-                            {
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                format!(
-                                    "unused custom durable invocation id {expected_invocation_id}"
-                                ),
-                                "custom durable invocation IDs are single-use".to_string(),
-                            ));
-                        }
+                    let gated = async |tx: &mut super::cursor::CursorTx<'_>| {
+                        tx.retained_claims()
+                            .ensure_custom_invocation_unused(expected_invocation_id)?;
+                        let matches_id = |entry: &OplogEntry| {
+                            matches!(entry, OplogEntry::Start {
+                                invocation_id: Some(id), observational_owner: None, ..
+                            } if *id == expected_invocation_id)
+                        };
 
                         let replay_target = tx.cursor.replay_target();
                         // The scan passes the cursor head without buffering it. It notes the owner
@@ -984,11 +993,7 @@ impl ReplayState {
                                 OplogIndex::NONE,
                                 |entry, _begin_idx, index: &Option<OplogIndex>| {
                                     index.is_some_and(|idx| idx <= replay_target)
-                                        && matches!(entry, OplogEntry::Start {
-                                            invocation_id: Some(invocation_id),
-                                            observational_owner: None,
-                                            ..
-                                        } if *invocation_id == expected_invocation_id)
+                                        && matches_id(entry)
                                 },
                                 |_, _, _| true,
                                 None,
@@ -1013,110 +1018,18 @@ impl ReplayState {
                                 entry: candidate,
                                 ..
                             } => {
-                                let duplicate = tx
-                                    .cursor
-                                    .scan_oplog(
+                                tx.retained_claims()
+                                    .validate_custom_candidate(
+                                        &claim,
+                                        expected_invocation_id,
+                                        expected_parent_start_index,
+                                        candidate_index,
+                                        &candidate,
                                         candidate_index.next(),
-                                        replay_target.next(),
-                                        &tx.st.skipped_regions,
-                                        tx.st
-                                            .skipped_regions
-                                            .find_next_deleted_region(candidate_index.next()),
-                                        OplogIndex::NONE,
-                                        |entry, _begin_idx, index: &Option<OplogIndex>| {
-                                            index.is_some_and(|idx| idx <= replay_target)
-                                                && matches!(entry, OplogEntry::Start {
-                                                    invocation_id: Some(invocation_id),
-                                                    observational_owner: None,
-                                                    ..
-                                                } if *invocation_id == expected_invocation_id)
-                                        },
-                                        |_, _, _| true,
-                                        None,
-                                        |_, idx, index: &mut Option<OplogIndex>| {
-                                            *index = Some(idx)
-                                        },
                                     )
-                                    .await;
-                                if let OplogEntryLookupResult::Found {
-                                    index: duplicate_index,
-                                    ..
-                                } = duplicate
-                                {
-                                    return Err(WorkerExecutorError::runtime(format!(
-                                        "custom durable invocation ID {expected_invocation_id} is reused by Starts {candidate_index} and {duplicate_index}"
-                                    )));
-                                }
-                                let retained = tx.st.retained_starts.contains_key(&candidate_index);
-                                if (candidate_index <= tx.cursor.last_replayed_index() && !retained)
-                                    || tx.st.claimed_starts.contains(&candidate_index)
-                                {
-                                    return Err(WorkerExecutorError::runtime(format!(
-                                        "custom durable invocation ID {expected_invocation_id} at Start {candidate_index} was already consumed or claimed"
-                                    )));
-                                }
+                                    .await?;
 
-                                let OplogEntry::Start {
-                                    function_name,
-                                    request,
-                                    durable_function_type,
-                                    parent_start_index,
-                                    ..
-                                } = candidate.as_ref()
-                                else {
-                                    unreachable!(
-                                        "the exact custom candidate scan only accepts Start entries"
-                                    );
-                                };
-                                if function_name != &expected_function_name
-                                    || durable_function_type != &expected_function_type
-                                    || *parent_start_index != expected_parent_start_index
-                                {
-                                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                        format!(
-                                            "custom durable Start at {candidate_index} matching function {expected_function_name}, type {expected_function_type:?}, parent {expected_parent_start_index:?}, and invocation id {expected_invocation_id}"
-                                        ),
-                                        format!("{candidate:?}"),
-                                    ));
-                                }
-                                let Some(recorded_request) = request else {
-                                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                        format!(
-                                            "custom durable Start at {candidate_index} with a request"
-                                        ),
-                                        format!("{candidate:?}"),
-                                    ));
-                                };
-                                let request_matches = recorded_request_payload_matches(
-                                    tx.cursor.oplog.as_ref(),
-                                    recorded_request,
-                                    &RequestClaimIdentity::Exact(Box::new(expected_request.clone())),
-                                )
-                                .await
-                                .map_err(|err| {
-                                    WorkerExecutorError::runtime(format!(
-                                        "failed to load custom durable request payload at Start {candidate_index}: {err}"
-                                    ))
-                                })?;
-                                if !request_matches {
-                                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                        format!(
-                                            "custom durable Start at {candidate_index} with the current request payload"
-                                        ),
-                                        "recorded request payload differs".to_string(),
-                                    ));
-                                }
-
-                                match tx
-                                    .claim_start_matching(
-                                    |entry| matches!(entry, OplogEntry::Start {
-                                        invocation_id: Some(invocation_id),
-                                        observational_owner: None,
-                                        ..
-                                    } if *invocation_id == expected_invocation_id),
-                                )
-                                    .await?
-                                {
+                                match tx.claim_start_matching(matches_id).await? {
                                     StartClaimAttempt::Claimed(handle, entry) => (handle, entry),
                                     StartClaimAttempt::Blocked(on) => {
                                         return Ok((None, Some(on), None));
@@ -1162,8 +1075,15 @@ impl ReplayState {
                             .insert(expected_invocation_id);
                         tx.register_custom_subtree_root(result.0.start_idx());
                         Ok((Some(result), None, None))
-                    })
-                    .await
+                    };
+                    state
+                        .with_claim_tx(
+                            &claim,
+                            Some((expected_invocation_id, expected_parent_start_index)),
+                            |handle, entry| (Some((handle, entry)), None, None),
+                            gated,
+                        )
+                        .await
             })
             .await?;
             if let Some(claimed) = claimed {

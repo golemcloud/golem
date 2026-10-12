@@ -100,19 +100,40 @@ async fn real_rpc_retained_start_reconstruction_probe(
                 print_rpc_memory_oplog(&oplog);
             }
             let first_rpc = oplog.iter().find_map(|e| match &e.entry {
-                PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::invoke_and_await" => Some(e.oplog_index),
+                PublicOplogEntry::Start(s)
+                    if s.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+                {
+                    Some(e.oplog_index)
+                }
                 _ => None,
             });
-            let delivered_a = oplog.iter().find_map(|e| matches!(&e.entry, PublicOplogEntry::CompletionDelivered(d) if Some(d.start_index) == first_rpc).then_some(e.oplog_index));
+            let delivered_a = oplog.iter().find_map(|e| match &e.entry {
+                PublicOplogEntry::CompletionDelivered(d) if Some(d.start_index) == first_rpc => {
+                    Some(e.oplog_index)
+                }
+                _ => None,
+            });
             if let Some(delivered_a) = delivered_a {
-                let drop_start = oplog.iter().find_map(|e| matches!(&e.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::drop" && e.oplog_index > delivered_a).then_some(e.oplog_index));
-                if oplog.iter().any(|e| matches!(&e.entry, PublicOplogEntry::End(end) if Some(end.start_index) == drop_start)) {
+                let drop_start = oplog.iter().find_map(|e| match &e.entry {
+                    PublicOplogEntry::Start(s)
+                        if s.function_name == "golem::rpc::wasm-rpc::drop"
+                            && e.oplog_index > delivered_a =>
+                    {
+                        Some(e.oplog_index)
+                    }
+                    _ => None,
+                });
+                if oplog.iter().any(|e| match &e.entry {
+                    PublicOplogEntry::End(end) => Some(end.start_index) == drop_start,
+                    _ => false,
+                }) {
                     return Ok::<_, anyhow::Error>(());
                 }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }).await??;
+    })
+    .await??;
     eprintln!("A delivered while B is pending; releasing B");
     executor.complete_promise(&gate_b, vec![]).await?;
     let result = tokio::time::timeout(Duration::from_secs(30), invocation).await???;
@@ -145,20 +166,46 @@ async fn real_rpc_retained_start_reconstruction_probe(
             })
             .unwrap()
     };
-    let delivered_a = oplog.iter().find_map(|e| matches!(&e.entry, PublicOplogEntry::CompletionDelivered(v) if v.start_index == starts[0]).then_some(e.oplog_index)).unwrap();
+    let delivered = |start| {
+        oplog
+            .iter()
+            .find_map(|e| match &e.entry {
+                PublicOplogEntry::CompletionDelivered(v) if v.start_index == start => {
+                    Some(e.oplog_index)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let delivered_a = delivered(starts[0]);
     assert!(starts[0] < starts[1]);
     assert!(end(starts[8]) < starts[9]);
     assert!(starts[9] < end(starts[0]));
     assert!(end(starts[0]) < delivered_a);
     assert!(delivered_a < end(starts[9]));
-    let delivered_b = oplog.iter().find_map(|e| matches!(&e.entry, PublicOplogEntry::CompletionDelivered(v) if v.start_index == starts[9]).then_some(e.oplog_index)).unwrap();
-    let drop_start = oplog.iter().find_map(|e| matches!(&e.entry, PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::drop" && e.oplog_index > delivered_a && e.oplog_index < delivered_b).then_some(e.oplog_index)).expect("the synchronous client drop must start between A and B deliveries");
+    let delivered_b = delivered(starts[9]);
+    let drop_start = oplog
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::Start(s)
+                if s.function_name == "golem::rpc::wasm-rpc::drop"
+                    && e.oplog_index > delivered_a
+                    && e.oplog_index < delivered_b =>
+            {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the synchronous client drop must start between A and B deliveries");
     assert!(delivered_a < drop_start);
     assert!(drop_start < end(drop_start));
     assert!(end(drop_start) < end(starts[9]));
     assert!(end(starts[9]) < delivered_b);
     for start in &starts[1..9] {
-        assert!(!oplog.iter().any(|e| matches!(&e.entry, PublicOplogEntry::CompletionDelivered(d) if d.start_index == *start)));
+        assert!(!oplog.iter().any(|e| match &e.entry {
+            PublicOplogEntry::CompletionDelivered(d) => d.start_index == *start,
+            _ => false,
+        }));
     }
     eprintln!(
         "Recorded overlap verified: A={}, last sync={}, open B={}, A delivery={delivered_a}",

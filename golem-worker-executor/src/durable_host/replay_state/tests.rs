@@ -6361,6 +6361,61 @@ async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup() {
+    let parent = OplogIndex::from_u64(1);
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let (replay, oplog) =
+        replay_state_and_oplog_over(vec![noop(), start, noop(), end_for(2, 1), noop()]).await;
+    let handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let start_index = handle.start_idx();
+    assert!(!handle.resolution_ready());
+    let claims = replay.cursor.reconstruction_claims.clone();
+    let gate = replay.cursor.advance_gate.clone().lock_owned().await;
+    let mut resolution = Box::pin(replay.await_resolution_outcome(handle));
+    assert!(futures::poll!(resolution.as_mut()).is_pending());
+    drop(resolution);
+
+    assert_eq!(claims.active_bodies(), HashSet::from([start_index]));
+    assert_eq!(claims.active_fences(), HashSet::from([start_index]));
+    assert!(replay.ensure_reconstruction_claims_empty().is_err());
+    let mut cleanup = Box::pin(async {
+        replay.fence_owned_cursor_ops().await.unwrap();
+        claims.wait_for_fences().await;
+    });
+    assert_pending(&mut cleanup, "cleanup while the advance gate remains held").await;
+    drop(gate);
+    cleanup.await;
+
+    assert!(claims.active_bodies().is_empty());
+    replay.ensure_reconstruction_claims_empty().unwrap();
+    assert_eq!(replay.last_replayed_index(), start_index);
+    {
+        let state = replay.cursor.state.lock().await;
+        assert!(!state.concurrent_resolver.is_awaited(start_index));
+        assert!(
+            state
+                .concurrent_resolver
+                .owns_terminal(start_index, OplogIndex::from_u64(4))
+        );
+    }
+    // The same admission check used by OwnerExecution now permits a fresh replay generation.
+    let replacement = test_replay_state(
+        replay.cursor.owned_agent_id.clone(),
+        oplog,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = claim_rejected_tool_reconstruction(&replacement, parent, &identity).await;
+    assert_eq!(handle.start_idx(), start_index);
+    drop(handle);
+    replacement.ensure_reconstruction_claims_empty().unwrap();
+    replay.ensure_reconstruction_claims_empty().unwrap();
+}
+
+#[test]
 async fn completed_entity_body_detects_unconsumed_owned_start_at_cursor_head() {
     let rs = replay_state_over(vec![
         noop(),
