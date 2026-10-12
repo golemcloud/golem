@@ -619,6 +619,8 @@ impl Default for DurableStreamsLoadConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
     pub component_cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub current_component_cache_ttl: Duration,
 }
 
 impl SafeDisplay for ComponentServiceConfig {
@@ -629,6 +631,11 @@ impl SafeDisplay for ComponentServiceConfig {
             "component_cache_max_capacity: {}",
             self.component_cache_max_capacity
         );
+        let _ = writeln!(
+            &mut result,
+            "current_component_cache_ttl: {:?}",
+            self.current_component_cache_ttl
+        );
         result
     }
 }
@@ -637,6 +644,7 @@ impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
             component_cache_max_capacity: 1024,
+            current_component_cache_ttl: Duration::from_secs(60),
         }
     }
 }
