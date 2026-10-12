@@ -29,11 +29,13 @@ There is no inverse projection from inner to outer permissions.
 - Authorization can await the synchronized authority boundary. The capability is checked again
   where the child operation is registered, so a use that loses the race with handler return is
   rejected with `Denied`, never admitted after revocation.
-- Asynchronous admissions (`Underlying` `invoke`, ambient `invoke` and `async-invoke-and-await`)
-  hold a `TailActivity` (`tool_admission_activity`) until the rejection is recorded or the
-  execution is spawned. A guest task may return while such a call is still being admitted, and
-  nothing else keeps the Store from settling with an unrecorded call. Synchronous
-  `invoke-and-await` blocks its guest task and needs no guard.
+- Every guest admission entry point (`underlying-tool.invoke`, and the `tool-rpc` methods
+  `invoke`, `async-invoke-and-await` and `invoke-and-await`) holds a `TailActivity`
+  (`tool_admission_activity`) until the rejection is recorded or the execution is spawned. The
+  WIT `async func` imports (`underlying-tool.invoke`, `invoke-and-await`) can leave the guest task
+  free to return while the call is still being admitted, and nothing else keeps the Store from
+  settling with an unrecorded call. `invoke-and-await` drops the activity before awaiting the
+  result, which may wait for the parent's end.
 
 ### Authority in entity Stores
 

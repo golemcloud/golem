@@ -4508,10 +4508,11 @@ where
     .await
 }
 
-/// Counts an asynchronous tool admission as tail work. The guest task may return while an
-/// asynchronously lowered call is still being admitted; until its rejection is recorded or its
-/// accepted execution is spawned, nothing else keeps the Store from settling. Hold the returned
-/// activity until that handoff.
+/// Counts a guest tool admission as tail work. An asynchronously lowered call can leave the
+/// guest task free to return while the call is still being admitted; until its rejection is
+/// recorded or its accepted execution is spawned, nothing else keeps the Store from settling.
+/// Every guest admission entry point holds the returned activity until that handoff, and drops it
+/// before awaiting the execution result, which may wait for the parent's end.
 fn tool_admission_activity<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
 ) -> crate::durable_host::tail_work::TailActivity
@@ -5411,6 +5412,7 @@ where
     let stdin_rep = stdin.as_ref().map(Resource::rep);
     let stdout_rep = stdout.as_ref().map(Resource::rep);
     let stderr_rep = stderr.as_ref().map(Resource::rep);
+    let admission_activity = tool_admission_activity(accessor);
     let dispatch = dispatch_tool_call(
         accessor,
         ToolCallTarget::Ambient(rpc),
@@ -5437,6 +5439,7 @@ where
             }
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
+                drop(admission_activity);
                 let mut results =
                     await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
                 results.pop().expect("one tool invocation has one result")
