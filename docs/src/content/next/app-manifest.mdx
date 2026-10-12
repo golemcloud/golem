@@ -151,6 +151,29 @@ agents:
 
 For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
 
+### Initial tool permissions
+
+Bindings expose a tool; `initialCard` supplies runtime authority. Components and agents accept a card with `lowerBound` and `upperBound`, each containing `positive` and `negative` permission lists. For an agent with a bound Git tool:
+
+```yaml
+agents:
+  RepositoryAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative:
+          - "tool(?component/git) @ ?agent : invoke : status --short --null"
+      upperBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative: []
+```
+
+This tool-permission fragment permits `status` with a matching `cwd`, including additional flags, but rejects calls containing both `short` and `null` regardless of their order or other flags. It does not grant filesystem access; supply the separate resource permissions required by the tool. Initial cards must also fit the deployer's delegable authority.
+
+Use primary command and long-option names in manifests. Runtime derivation can resolve aliases against durably selected metadata, but initial-card validation has no such definition context. Values are attached with `=`; `*` and `**` are anchored value globs, while an entire resource of `*` permits any command. Positive repeated-option constraints require a matching occurrence, not that all occurrences are allowed. See [Tool permission patterns](/next/concepts/golem-native-tools#tool-permission-patterns) for quoting, positional prefixes, denials, and opaque streams.
+
 ### Tool middleware
 
 Tool middleware has its own namespace under `tools.middleware`, so `middleware` is reserved and cannot be used as a tool name. A declaration selects one locally discovered implementation, optionally using `component` to disambiguate it, or one published release. Configuration in the declaration is consumer-owned and is not copied from a publisher:
