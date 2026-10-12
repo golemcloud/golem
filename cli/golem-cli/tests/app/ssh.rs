@@ -143,6 +143,32 @@ impl BlockingCli {
             String::from_utf8_lossy(&output.stderr).into_owned(),
         ))
     }
+
+    // Runs the CLI, sends it an interrupt after `wait`, and gives its exit status and stdout.
+    #[cfg(unix)]
+    fn run_and_interrupt(&self, args: &[&str], wait: Duration) -> anyhow::Result<(i32, String)> {
+        let child = std::process::Command::new(&self.path)
+            .arg("--config-dir")
+            .arg(&self.config_dir)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&self.working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        std::thread::sleep(wait);
+        let sent = std::process::Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()?;
+        anyhow::ensure!(sent.success(), "the interrupt was not sent");
+        let output = child.wait_with_output()?;
+        Ok((
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+        ))
+    }
 }
 
 #[test]
@@ -840,4 +866,147 @@ async fn ssh_prompt_feels_like_a_shell() {
         session.expect_eof()
     })
     .await;
+}
+
+// Starts an interactive session, runs `script`, and presses Ctrl+C when the command runs. The
+// command must stop: the session prints `printed`, the prompt shows status 130, and `next` runs
+// at once and prints `expected`. The command itself would run for minutes.
+#[cfg(unix)]
+async fn stop_a_command(
+    ctx: &TestContext,
+    agent: &'static str,
+    script: &'static str,
+    printed: Option<&'static str>,
+    next: &'static str,
+    expected: &'static str,
+) {
+    ctx.cli_interactive(["ssh", agent], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        // A quick command first settles the session's own fetch of the command names.
+        enter(session, "true")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+
+        enter(session, script)?;
+        session.expect_str("Ctrl+C to stop")?;
+        // The command has started when the stop arrives: a command that is stopped before it
+        // starts prints nothing.
+        std::thread::sleep(Duration::from_secs(2));
+        session.send("\u{3}")?;
+        session.set_expect_timeout(Some(Duration::from_secs(10)));
+        if let Some(printed) = printed {
+            session.expect_str(printed)?;
+        }
+        answer_cursor_query(session)?;
+        session.expect_str("[130]")?;
+
+        // The next command does not wait behind the stopped one.
+        enter(session, next)?;
+        session.expect_str(expected)?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+}
+
+#[cfg(unix)]
+#[ignore = "needs a bash whose `run` takes an input stream (release 0.3.0)"]
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_ctrl_c_stops_the_command() {
+    const WAITING: &str = r#"BashOwner("stop-waiting")"#;
+    const COMPUTING: &str = r#"BashOwner("stop-computing")"#;
+    const DIRECTORY: &str = r#"BashOwner("stop-directory")"#;
+    const COMMAND_MODE: &str = r#"BashOwner("stop-command-mode")"#;
+    const INPUT_END: &str = r#"BashOwner("input-end")"#;
+
+    let ctx = context().await;
+
+    // Each case has its own agent.
+    for agent in [WAITING, COMPUTING, DIRECTORY, COMMAND_MODE, INPUT_END] {
+        let made = ctx.cli(["--yes", "agent", "invoke", agent, "name"]).await;
+        assert!(made.success_or_dump());
+    }
+
+    // A command that waits: the output before the stop is printed, and the rest of the script
+    // does not run.
+    stop_a_command(
+        &ctx,
+        WAITING,
+        "printf 'sta%s\\n' rt; sleep 300; echo end",
+        Some("start\r\n"),
+        "printf 'aft%s\\n' er",
+        "after\r\n",
+    )
+    .await;
+
+    // A command that computes and never waits.
+    stop_a_command(
+        &ctx,
+        COMPUTING,
+        "while :; do :; done",
+        None,
+        "printf 'aft%s\\n' er",
+        "after\r\n",
+    )
+    .await;
+
+    // A stopped command still gives its directory to the session.
+    stop_a_command(
+        &ctx,
+        DIRECTORY,
+        "mkdir -p /tmp/ssh-stop && cd /tmp/ssh-stop && sleep 300",
+        None,
+        "printf 'in-%s\\n' \"$PWD\"",
+        "in-/tmp/ssh-stop\r\n",
+    )
+    .await;
+
+    // `-c` passes the output of the stopped command through and exits with its status. A first
+    // run has loaded the agent, so the second one reaches its command well inside the wait.
+    let made = ssh(&ctx, &[COMMAND_MODE, "-c", "true"], "").await;
+    assert_output(&made, 0, "", "");
+    let cli = BlockingCli::new(&ctx);
+    let (code, stdout) = tokio::task::spawn_blocking(move || {
+        cli.run_and_interrupt(
+            &["ssh", COMMAND_MODE, "-c", "printf 'sta%s\\n' rt; sleep 300"],
+            Duration::from_secs(8),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!((code, stdout.as_str()), (130, "start\n"));
+
+    // The end of the input does not stop a command: only a cancelled input does.
+    let output = tokio::time::timeout(
+        Duration::from_secs(90),
+        ctx.cli([
+            "--yes",
+            "--format",
+            "json",
+            "tool",
+            "invoke",
+            "--stdin",
+            "/dev/null",
+            "--agent",
+            INPUT_END,
+            "bash",
+            "--",
+            "run",
+            "--",
+            "sleep 2; printf 'do%s\\n' ne",
+        ]),
+    )
+    .await
+    .expect("the tool call did not finish");
+    assert!(output.success_or_dump());
+    assert!(
+        output.stdout_text().contains("done\\n"),
+        "{}",
+        output.stdout_text()
+    );
 }
