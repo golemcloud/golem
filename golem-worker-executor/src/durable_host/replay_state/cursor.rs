@@ -2352,8 +2352,9 @@ impl CursorTx<'_> {
                     .find_next_deleted_region(OplogIndex::INITIAL),
                 OplogIndex::NONE,
                 |entry, _, _| {
-                    matches!(entry, OplogEntry::Start { function_name, .. }
-                        if function_name == expected_name)
+                    matches!(entry, OplogEntry::Start { function_name, invocation_id, .. }
+                        if function_name == expected_name
+                            && *invocation_id == claim.expected_invocation_id())
                 },
                 |_, _, _| true,
                 (),

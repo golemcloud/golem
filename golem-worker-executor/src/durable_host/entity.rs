@@ -20,8 +20,8 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
-    ReconstructionReplayOutcome, ReplayAccessStartOutcome,
+    AccessClaimOptions, DurableCallSession, HistoricalReconstruction, InvocationIdSource,
+    LeaveIncompleteOnDrop, ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
@@ -1469,6 +1469,9 @@ where
         DurableFunctionType::WriteLocal,
         AccessClaimOptions {
             parent_start_index: Some(parent.start_index()),
+            // Replay claims the rejection together with the accepted entity `Start` by the tool
+            // attempt identity, which records no invocation id.
+            invocation_id: InvocationIdSource::Reserved(None),
             ..AccessClaimOptions::default()
         },
         async move |_| Ok(request),

@@ -22,7 +22,8 @@ use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
-    DurableDemandStream, ScopeReplayRecovery, demand_channel,
+    DurableDemandStream, InvocationIdSource, ScopeReplayRecovery, demand_channel,
+    reserve_import_invocation_id,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
@@ -950,11 +951,14 @@ pub(super) struct HttpConsumeBodyTask<Ctx> {
     /// the parent terminal, mirroring the P2 `end_http_request` span
     /// lifecycle. `None` for responses that did not come from `client::send`.
     response_state: Option<OpenP3HttpResponseState>,
+    /// The invocation id of the `consume-body` guest import that spawned the task.
+    invocation_id: InvocationIdSource,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> HttpConsumeBodyTask<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
@@ -962,6 +966,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
         trailers_delivery: Arc<HttpTrailersDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
+        invocation_id: InvocationIdSource,
         activity: TailActivity,
     ) -> Self {
         Self {
@@ -971,6 +976,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
             trailers_tx,
             trailers_delivery,
             response_state,
+            invocation_id,
             activity,
             _phantom: PhantomData,
         }
@@ -990,6 +996,7 @@ where
             trailers_tx,
             trailers_delivery,
             mut response_state,
+            invocation_id,
             activity,
             ..
         } = self;
@@ -1083,6 +1090,7 @@ where
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,
+                invocation_id,
                 ..Default::default()
             },
             DemandDeliveryMode::Deferred,
@@ -1849,6 +1857,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                     return Ok((stream, upstream_trailers));
                 }
             };
+        let invocation_id = {
+            let mut store_ctx = store.as_context_mut();
+            reserve_import_invocation_id(
+                durable_worker_ctx::<Ctx, U>(store_ctx.data_mut()),
+                response_state
+                    .as_ref()
+                    .and_then(|state| state.observational_owner),
+            )?
+        };
 
         // We surface trailers through our own future, so discard the built-in
         // trailers future.
@@ -1906,6 +1923,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             trailers_tx,
             trailers_delivery,
             response_state,
+            invocation_id,
             activity,
         ));
         Ok((stream, trailers))

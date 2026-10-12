@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::durability::reserve_invocation_id;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
 use crate::workerctx::ReplayAdmissionStage;
@@ -223,6 +224,9 @@ pub(super) struct BegunCallExecutionScope {
     /// Custom durable invocation whose physical execution this call observes. Captured once at
     /// initiation so asynchronous continuations never depend on ambient task context.
     pub(super) observational_owner: Option<OplogIndex>,
+    /// Invocation id of the guest call, recorded in every `Start` of the call; see
+    /// [`InvocationIdSource`].
+    pub(super) invocation_id: Option<uuid::Uuid>,
 }
 
 impl BegunCallExecutionScope {
@@ -649,6 +653,137 @@ pub(crate) struct AccessClaimOptions {
     pub(crate) scope_replay_recovery: ScopeReplayRecovery,
     pub(crate) host_internal_owner: Option<HostInternalCallOwner>,
     pub(crate) require_recorded_start: bool,
+    /// The invocation id this call records in its `Start`s and claims them by on replay.
+    pub(crate) invocation_id: InvocationIdSource,
+}
+
+/// Where an accessor call gets the invocation id it records in its `Start`s.
+///
+/// A guest call that reaches the durable call path through a concurrent guest import records the
+/// invocation id of that import (see [`reserve_invocation_id`]), and replay claims its `Start`s
+/// only by that id. Calls identified otherwise record none: host-internal children (by their
+/// owner), tool and entity invocations (by their attempt identity), calls observed inside a custom
+/// durable invocation (never claimed on replay), and work the host starts on its own.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum InvocationIdSource {
+    /// The call reserves the id of its guest import when it starts. This is correct only when the
+    /// import has made no `await` that lets the guest make another import call first.
+    #[default]
+    AtStart,
+    /// The id reserved earlier by the guest import that issued this call, with
+    /// [`reserve_access_invocation_id`] or [`reserve_import_invocation_id`]. `None` means the
+    /// import is not identified by an invocation id.
+    Reserved(Option<uuid::Uuid>),
+}
+
+/// Reserves the invocation id of the concurrent guest import that `store` belongs to. Host
+/// functions call it before their first `await` when they `await` before starting their durable
+/// call, or when a task they spawn makes the durable call.
+pub(crate) fn reserve_access_invocation_id<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<InvocationIdSource, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let observed_by_custom_invocation = store
+        .guest_task_context::<CustomInvocationContext>()
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .as_deref()
+        .and_then(CustomInvocationContext::current)
+        .is_some();
+    reserve_guest_import_invocation_id(store, get_ctx, observed_by_custom_invocation)
+        .map(InvocationIdSource::Reserved)
+}
+
+/// Reserves the invocation id of the concurrent guest import that `store` belongs to, for a host
+/// function that `await`s before it starts its first durable call. The durable calls the import
+/// starts later use this id.
+pub(crate) fn reserve_invocation_id_before_await<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    reserve_access_invocation_id(store, get_ctx).map(|_| ())
+}
+
+/// Reserves the invocation id of a synchronous guest import, which runs to completion inside the
+/// guest's call and so needs no import order check. A task the import spawns passes the result to
+/// its durable call.
+pub(crate) fn reserve_import_invocation_id<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    observational_owner: Option<OplogIndex>,
+) -> Result<InvocationIdSource, WorkerExecutorError> {
+    if observational_owner.is_some() || ctx.state.snapshotting_mode {
+        return Ok(InvocationIdSource::Reserved(None));
+    }
+    let Some(idempotency_key) = ctx.state.get_current_idempotency_key() else {
+        return Ok(InvocationIdSource::Reserved(None));
+    };
+    reserve_invocation_id(ctx, None, &idempotency_key, None)
+        .map(|invocation_id| InvocationIdSource::Reserved(Some(invocation_id)))
+}
+
+fn reserve_guest_import_invocation_id<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    observed_by_custom_invocation: bool,
+) -> Result<Option<uuid::Uuid>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    if observed_by_custom_invocation || !store.has_guest_visible_subtask() {
+        return Ok(None);
+    }
+    let activity = store.runtime_activity();
+    store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        if ctx.state.snapshotting_mode {
+            return Ok(None);
+        }
+        let Some(idempotency_key) = ctx.state.get_current_idempotency_key() else {
+            return Ok(None);
+        };
+        reserve_invocation_id(ctx, activity, &idempotency_key, None).map(Some)
+    })
+}
+
+/// Resolves the invocation id of an accessor call from its claim options. Runs before the call's
+/// first `await`.
+fn resolve_access_invocation_id<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    claim_options: &AccessClaimOptions,
+    observed_by_custom_invocation: bool,
+) -> Result<Option<uuid::Uuid>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    match claim_options.invocation_id {
+        InvocationIdSource::Reserved(invocation_id) => Ok(invocation_id),
+        InvocationIdSource::AtStart
+            if claim_options.host_internal_owner.is_some()
+                || claim_options.tool_invocation_identity.is_some()
+                || claim_options.entity_invocation_identity.is_some() =>
+        {
+            Ok(None)
+        }
+        InvocationIdSource::AtStart => reserve_guest_import_invocation_id(
+            store,
+            get_ctx,
+            observed_by_custom_invocation || claim_options.observational_owner.is_some(),
+        ),
+    }
 }
 
 /// An internal call belongs to the outer call, not to a guest completion. Keeping the outer
@@ -1317,6 +1452,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
+        let invocation_id = resolve_access_invocation_id(
+            store,
+            get_ctx,
+            &claim_options,
+            custom_invocation_scope.is_some(),
+        )?;
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
         if !is_live {
@@ -1331,7 +1472,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         let prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
+            Self::prepare_access_start(
+                ctx,
+                function_type,
+                claim_options,
+                custom_invocation_scope,
+                invocation_id,
+            )
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
@@ -1395,6 +1542,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
+        let invocation_id = resolve_access_invocation_id(
+            store,
+            get_ctx,
+            &claim_options,
+            custom_invocation_scope.is_some(),
+        )?;
         let (
             is_live,
             primary_runtime,
@@ -1474,7 +1627,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         drop(_boundary_guard);
         let mut prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
+            Self::prepare_access_start(
+                ctx,
+                function_type,
+                claim_options,
+                custom_invocation_scope,
+                invocation_id,
+            )
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
@@ -1690,6 +1849,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         custom_invocation_scope: Option<CustomInvocationScope>,
+        invocation_id: Option<uuid::Uuid>,
     ) -> Result<PreparedAccessStart<Pair, P, Ctx>, WorkerExecutorError> {
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
         let identity_count = usize::from(claim_options.request_identity.is_some())
@@ -1757,6 +1917,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             parent_start_index,
             atomic_region,
             observational_owner,
+            invocation_id,
         };
         let is_live = durable_execution_state.is_live;
         let unpersisted = durable_execution_state.snapshotting_mode;
@@ -1896,7 +2057,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "exact and entity-logical request identities were rejected during preparation"
             ),
         };
-        Ok(claim.with_observational_owner(execution_scope.observational_owner))
+        Ok(claim
+            .with_observational_owner(execution_scope.observational_owner)
+            .with_invocation_id(execution_scope.invocation_id))
     }
 
     async fn execute_access_start<T, D, Ctx, F>(
@@ -2214,6 +2377,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let function_type = retry.function_type().clone();
                 let parent_start_index = execution_scope.parent_start_index;
                 let observational_owner = execution_scope.observational_owner;
+                let invocation_id = execution_scope.invocation_id;
                 let span_started = Arc::new(std::sync::Mutex::new((OplogIndex::INITIAL, None)));
                 let built_span = span_started.clone();
                 let span_activity = span_observer.as_ref().map(|_| {
@@ -2241,7 +2405,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 timestamp: Timestamp::now_utc(),
                                 parent_start_index,
                                 function_name: Pair::HOST_FUNCTION_NAME,
-                                invocation_id: None,
+                                invocation_id,
                                 observational_owner,
                                 request: Some(request_payload),
                                 durable_function_type: function_type,
@@ -2387,6 +2551,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 &scope_name,
                                 &function_type,
                                 prepared.entity_parent_start_index,
+                                prepared.execution_scope.invocation_id,
                             )
                             .await
                             .map_err(|err| {
@@ -2494,6 +2659,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         &scope_name,
                         &function_type,
                         prepared.entity_parent_start_index,
+                        prepared.execution_scope.invocation_id,
                         prepared
                             .claim_options
                             .scope_replay_recovery
@@ -2567,7 +2733,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             &function_type,
                             prepared.entity_parent_start_index,
                         )
-                        .with_observational_owner(prepared.execution_scope.observational_owner),
+                        .with_observational_owner(prepared.execution_scope.observational_owner)
+                        .with_invocation_id(prepared.execution_scope.invocation_id),
                         prepared.store_continued_live(),
                     )
                     .await
@@ -2854,7 +3021,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: prepared.entity_parent_start_index,
                 function_name: scope_name,
-                invocation_id: None,
+                invocation_id: prepared.execution_scope.invocation_id,
                 observational_owner: prepared.execution_scope.observational_owner,
                 request: None,
                 durable_function_type: function_type,
@@ -3036,6 +3203,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .last()
                 .map(|region| region.begin_index),
             observational_owner,
+            // Direct calls hold the Store, so they start and claim in guest call order and need
+            // no invocation id.
+            invocation_id: None,
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
@@ -6242,6 +6412,7 @@ mod tests {
                     parent_start_index,
                     atomic_region: None,
                     observational_owner: None,
+                    invocation_id: None,
                 },
                 retry: InFunctionRetryController::new(
                     DurableFunctionType::ReadLocal,

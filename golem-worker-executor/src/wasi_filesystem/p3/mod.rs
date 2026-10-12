@@ -24,7 +24,7 @@ use std::time::Duration;
 use crate::durable_host::authorization::targets::CanonicalGuestPath;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_p3_view, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_read_access,
+    observe_function_call_store, reserve_invocation_id_before_await, run_read_access,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{
@@ -1974,6 +1974,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorStat> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, "")?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;
@@ -2035,6 +2037,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path_flags: types::PathFlags,
         path: String,
     ) -> FilesystemResult<types::DescriptorStat> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, &path)?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;

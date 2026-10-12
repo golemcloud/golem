@@ -29,6 +29,7 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{OplogError, OplogOps};
 use crate::services::{HasOplog, HasWorker};
+use crate::worker::suspension::GuestImportInvocationId;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
@@ -56,7 +57,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, warn};
 use wasmtime::AsContextMut;
-use wasmtime::component::{Access, Accessor, HasSelf, Resource, TerminalConsumption};
+use wasmtime::component::{
+    Access, Accessor, HasSelf, Resource, RuntimeActivityId, TerminalConsumption,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ActiveCustomInvocation {
@@ -148,18 +151,29 @@ impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
     }
 }
 
-fn next_custom_invocation_id(
+/// Takes the next ordinal of a parent custom invocation, or of the current agent or entity
+/// invocation when there is no parent, and derives the invocation id of a guest call from it.
+///
+/// The ordinals of a parent are taken in guest call order, which is the same in the live run and in
+/// every replay, so a call gets the same id each time. The id names the entity invocation of an
+/// entity Store, so calls of different Stores of one agent invocation never share an id.
+fn next_invocation_id(
     ordinals: &mut HashMap<Option<uuid::Uuid>, u64>,
     idempotency_key: &IdempotencyKey,
+    entity_parent_start_index: Option<OplogIndex>,
     parent_invocation_id: Option<uuid::Uuid>,
 ) -> anyhow::Result<uuid::Uuid> {
     let next = ordinals.entry(parent_invocation_id).or_default();
     let ordinal = *next;
     *next = ordinal
         .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("custom durable invocation ordinal overflow"))?;
+        .ok_or_else(|| anyhow::anyhow!("durable invocation ordinal overflow"))?;
 
-    let mut name = b"custom-durable-invocation\0".to_vec();
+    let mut name = b"durable-invocation\0".to_vec();
+    if let Some(entity) = entity_parent_start_index {
+        name.extend_from_slice(b"entity\0");
+        name.extend_from_slice(&entity.as_u64().to_be_bytes());
+    }
     match parent_invocation_id {
         Some(parent) => {
             name.extend_from_slice(b"parent\0");
@@ -171,6 +185,46 @@ fn next_custom_invocation_id(
 
     let id = IdempotencyKey::derived_from_bytes(idempotency_key, &name);
     Ok(uuid::Uuid::parse_str(&id.value).expect("derived idempotency keys are always UUIDs"))
+}
+
+/// Reserves the invocation id of a guest call under `parent_invocation_id` (`None` for the current
+/// agent or entity invocation). Every `Start` the call records carries the id, and replay claims
+/// those `Start`s by it.
+///
+/// `activity` is the concurrent guest import that makes the call. All durable calls of one import
+/// share the id it reserved first. That first reservation must happen before the guest makes
+/// another import call: concurrent imports reach their durable calls in an order that depends on
+/// host scheduling, and only the guest's call order is the same in every run.
+pub(crate) fn reserve_invocation_id<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    activity: Option<RuntimeActivityId>,
+    idempotency_key: &IdempotencyKey,
+    parent_invocation_id: Option<uuid::Uuid>,
+) -> Result<uuid::Uuid, WorkerExecutorError> {
+    let runtime = activity.zip(ctx.runtime_suspension.clone());
+    if let Some((activity, runtime)) = &runtime {
+        match runtime.guest_import_invocation_id(*activity) {
+            GuestImportInvocationId::Reserved(invocation_id) => return Ok(invocation_id),
+            GuestImportInvocationId::Reservable => {}
+            GuestImportInvocationId::Late => {
+                return Err(WorkerExecutorError::runtime(
+                    "a guest import reserved its durable invocation id after the guest made another import call",
+                ));
+            }
+        }
+    }
+    let entity_parent_start_index = ctx.entity_parent_start_index();
+    let invocation_id = next_invocation_id(
+        &mut ctx.state.custom_invocation_ordinals,
+        idempotency_key,
+        entity_parent_start_index,
+        parent_invocation_id,
+    )
+    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    if let Some((activity, runtime)) = runtime {
+        runtime.record_guest_import_invocation_id(activity, invocation_id);
+    }
+    Ok(invocation_id)
 }
 
 #[derive(Debug)]
@@ -1739,6 +1793,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
         // Capture attribution before the first await. The immutable Arc is the initiation-time
         // snapshot inherited by this host task and its continuations.
         let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+        let activity = accessor
+            .has_guest_visible_subtask()
+            .then(|| accessor.runtime_activity())
+            .flatten();
         let (
             request,
             function_name,
@@ -1831,11 +1889,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let idempotency_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("custom durability requires an active agent invocation")
             })?;
-            let invocation_id = next_custom_invocation_id(
-                &mut ctx.state.custom_invocation_ordinals,
-                &idempotency_key,
-                parent_invocation_id,
-            )?;
+            let invocation_id =
+                reserve_invocation_id(ctx, activity, &idempotency_key, parent_invocation_id)?;
             let child_initiation = parent_start_index
                 .and_then(|parent| ctx.state.active_custom_invocations.get(&parent))
                 .map(|parent| CustomChildInitiation::new(parent.initiating_children.clone()));
@@ -2859,48 +2914,48 @@ mod tests {
     }
 
     #[test]
-    fn custom_invocation_ids_are_stable_and_unique_within_the_root_namespace() {
+    fn invocation_ids_are_stable_and_unique_within_the_root_namespace() {
         let key = IdempotencyKey::new("00000000-0000-0000-0000-000000000001".to_string());
         let mut ordinals = HashMap::new();
 
-        let first = next_custom_invocation_id(&mut ordinals, &key, None).unwrap();
-        let second = next_custom_invocation_id(&mut ordinals, &key, None).unwrap();
+        let first = next_invocation_id(&mut ordinals, &key, None, None).unwrap();
+        let second = next_invocation_id(&mut ordinals, &key, None, None).unwrap();
 
         assert_eq!(
             first,
-            uuid::Uuid::parse_str("f3cb2923-34f5-584d-bb45-48cb55428349").unwrap()
+            uuid::Uuid::parse_str("5b176078-0911-58af-9505-3509ae220feb").unwrap()
         );
         assert_eq!(
             second,
-            uuid::Uuid::parse_str("3b57da08-b770-5852-9c6d-41753b19eea4").unwrap()
+            uuid::Uuid::parse_str("77214aba-a3b0-5b0c-b2f4-d360bbabfc31").unwrap()
         );
         assert_ne!(first, second);
 
         let mut replay_ordinals = HashMap::new();
         assert_eq!(
-            next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap(),
+            next_invocation_id(&mut replay_ordinals, &key, None, None).unwrap(),
             first
         );
         assert_eq!(
-            next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap(),
+            next_invocation_id(&mut replay_ordinals, &key, None, None).unwrap(),
             second
         );
     }
 
     #[test]
-    fn nested_custom_invocation_ordinals_do_not_shift_root_siblings() {
+    fn nested_invocation_ordinals_do_not_shift_root_siblings() {
         let key = IdempotencyKey::new("root-invocation".to_string());
         let mut live_ordinals = HashMap::new();
-        let outer = next_custom_invocation_id(&mut live_ordinals, &key, None).unwrap();
-        let nested = next_custom_invocation_id(&mut live_ordinals, &key, Some(outer)).unwrap();
-        let root_sibling = next_custom_invocation_id(&mut live_ordinals, &key, None).unwrap();
+        let outer = next_invocation_id(&mut live_ordinals, &key, None, None).unwrap();
+        let nested = next_invocation_id(&mut live_ordinals, &key, None, Some(outer)).unwrap();
+        let root_sibling = next_invocation_id(&mut live_ordinals, &key, None, None).unwrap();
 
         let mut replay_ordinals = HashMap::new();
-        let replayed_outer = next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap();
+        let replayed_outer = next_invocation_id(&mut replay_ordinals, &key, None, None).unwrap();
         // A completed outer invocation is replayed without executing its body, so the nested
         // namespace is intentionally untouched.
         let replayed_root_sibling =
-            next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap();
+            next_invocation_id(&mut replay_ordinals, &key, None, None).unwrap();
 
         assert_eq!(replayed_outer, outer);
         assert_eq!(replayed_root_sibling, root_sibling);
@@ -2909,23 +2964,48 @@ mod tests {
     }
 
     #[test]
-    fn custom_invocation_ids_are_scoped_by_top_level_idempotency_key() {
+    fn invocation_ids_are_scoped_by_top_level_idempotency_key() {
         let mut first_ordinals = HashMap::new();
-        let first = next_custom_invocation_id(
+        let first = next_invocation_id(
             &mut first_ordinals,
             &IdempotencyKey::new("first".to_string()),
+            None,
             None,
         )
         .unwrap();
         let mut second_ordinals = HashMap::new();
-        let second = next_custom_invocation_id(
+        let second = next_invocation_id(
             &mut second_ordinals,
             &IdempotencyKey::new("second".to_string()),
+            None,
             None,
         )
         .unwrap();
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn invocation_ids_of_an_entity_store_differ_from_the_primary_store() {
+        let key = IdempotencyKey::new("shared-caller-key".to_string());
+        let primary = next_invocation_id(&mut HashMap::new(), &key, None, None).unwrap();
+        let entity = next_invocation_id(
+            &mut HashMap::new(),
+            &key,
+            Some(OplogIndex::from_u64(7)),
+            None,
+        )
+        .unwrap();
+        let other_entity = next_invocation_id(
+            &mut HashMap::new(),
+            &key,
+            Some(OplogIndex::from_u64(9)),
+            None,
+        )
+        .unwrap();
+
+        assert_ne!(primary, entity);
+        assert_ne!(entity, other_entity);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallSpanObserver, Cancellable, DeferredCallReplayOutcome, DropPolicy,
     DurableCallSession, LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access,
-    finish_span_in_memory,
+    finish_span_in_memory, reserve_access_invocation_id,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -119,6 +119,10 @@ where
     U: Send + 'static,
     P: DropPolicy,
 {
+    // The live path awaits authorization before it starts the send, so the send reserves its
+    // invocation id first. The body transmission recorded after the send carries the same id.
+    let invocation_id = reserve_access_invocation_id(store, durable_worker_ctx::<Ctx, U>)
+        .map_err(HttpError::trap)?;
     // Replay must claim and restore the recorded outcome without rebuilding a permission target.
     // On the live path only the request head is inspected here; no body/resource ownership or
     // transmission state is consumed before admission.
@@ -207,11 +211,9 @@ where
                 "failed to serialize outgoing p3 HTTP request: {err}"
             )))
         })?;
-    // Concurrent sends share the durable identity of their records (same function name and
-    // durable function type), so both the send's batched-write scope and its host-call `Start`
-    // are made claim-safe by the request itself: the scope name carries a canonical digest of
-    // the request head, and the `Start` claim matches the recorded request payload by value.
-    // Sends with equal requests remain interchangeable and are claimed in oplog order.
+    // Concurrent sends are told apart by their invocation id. The scope name also carries a
+    // canonical digest of the request head, and the `Start` claim matches the recorded request
+    // payload by value, so a replayed send that differs from the recorded one is a divergence.
     let host_request = HostRequestP3HttpClientSend {
         request: serialized_request.clone(),
     };
@@ -228,6 +230,7 @@ where
         tool_invocation_identity: None,
         parent_start_index: None,
         observational_owner: None,
+        invocation_id,
         ..Default::default()
     };
     let span_seed = store.with(|mut access| {
@@ -438,6 +441,7 @@ where
                             store,
                             pending_transmission,
                             observational_owner,
+                            invocation_id,
                         );
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
@@ -472,6 +476,7 @@ where
                             store,
                             pending_transmission,
                             observational_owner,
+                            invocation_id,
                         );
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
@@ -523,7 +528,12 @@ where
                 .await
                 .map_err(HttpError::trap)?;
         }
-        start_transmission_recording::<Ctx, U>(store, pending_transmission, observational_owner);
+        start_transmission_recording::<Ctx, U>(
+            store,
+            pending_transmission,
+            observational_owner,
+            invocation_id,
+        );
         span.claim_closure();
         send_terminal
             .attach(store, delivery)
@@ -616,6 +626,7 @@ where
                     store,
                     pending_transmission,
                     observational_owner,
+                    invocation_id,
                 );
                 // The guest-visible error return below still crosses Wasmtime's lowering
                 // and terminal-consumption boundary: hand the token to the terminal
@@ -635,6 +646,7 @@ where
                     store,
                     pending_transmission,
                     observational_owner,
+                    invocation_id,
                 );
                 delivery.delivered();
             }
@@ -954,6 +966,7 @@ where
                 store,
                 pending_transmission,
                 observational_owner,
+                invocation_id,
             );
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
@@ -1054,6 +1067,7 @@ where
                 store,
                 pending_transmission,
                 observational_owner,
+                invocation_id,
             );
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead

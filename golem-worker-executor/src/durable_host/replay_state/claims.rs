@@ -26,6 +26,9 @@ pub(crate) enum StartClaim {
         function_name: HostFunctionName,
         function_type: DurableFunctionType,
         observational_owner: Option<OplogIndex>,
+        /// The invocation id of the guest call that recorded the `Start`; `None` for calls that
+        /// are identified by their order or by their owner.
+        invocation_id: Option<uuid::Uuid>,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<RequestClaimIdentity>,
@@ -37,6 +40,8 @@ pub(crate) enum StartClaim {
         function_type: DurableFunctionType,
         parent_start_index: OplogIndex,
         observational_owner: Option<OplogIndex>,
+        /// See [`Self::Unowned`].
+        invocation_id: Option<uuid::Uuid>,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<RequestClaimIdentity>,
@@ -59,6 +64,8 @@ pub(crate) enum StartClaim {
         function_type: DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
         observational_owner: Option<OplogIndex>,
+        /// The invocation id of the guest call that opened the scope; see [`Self::Unowned`].
+        invocation_id: Option<uuid::Uuid>,
     },
     /// Any top-level durable-call `Start`, whatever its function name and durable function type
     /// (the dynamic guest-facing durability read learns the identity from the claimed entry
@@ -77,6 +84,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             observational_owner: None,
+            invocation_id: None,
             matching_request: None,
         }
     }
@@ -92,6 +100,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             observational_owner: None,
+            invocation_id: None,
             matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
         }
     }
@@ -105,6 +114,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             observational_owner: None,
+            invocation_id: None,
             matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
                 request.clone(),
             ))),
@@ -122,6 +132,7 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
+            invocation_id: None,
             matching_request: None,
         }
     }
@@ -139,6 +150,7 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
+            invocation_id: None,
             matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
         }
     }
@@ -154,6 +166,7 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
+            invocation_id: None,
             matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
                 request.clone(),
             ))),
@@ -188,6 +201,7 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
+            invocation_id: None,
         }
     }
 
@@ -217,6 +231,39 @@ impl StartClaim {
             }
         }
         self
+    }
+
+    /// Requires the recorded `Start` to carry `invocation_id`, the invocation id of the guest call
+    /// that is claiming it.
+    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<uuid::Uuid>) -> Self {
+        match &mut self {
+            Self::Unowned {
+                invocation_id: expected,
+                ..
+            }
+            | Self::Owned {
+                invocation_id: expected,
+                ..
+            }
+            | Self::Scope {
+                invocation_id: expected,
+                ..
+            } => *expected = invocation_id,
+            Self::OwnedToolInvocation { .. } | Self::AnyUnownedCall => {
+                debug_assert!(invocation_id.is_none());
+            }
+        }
+        self
+    }
+
+    /// The invocation id the recorded `Start` must carry.
+    pub(super) fn expected_invocation_id(&self) -> Option<uuid::Uuid> {
+        match self {
+            Self::Unowned { invocation_id, .. }
+            | Self::Owned { invocation_id, .. }
+            | Self::Scope { invocation_id, .. } => *invocation_id,
+            Self::OwnedToolInvocation { .. } | Self::AnyUnownedCall => None,
+        }
     }
 
     /// See [`StartClaim::AnyUnownedCall`].
@@ -356,7 +403,7 @@ impl StartClaim {
             && self
                 .expected_function_type()
                 .is_none_or(|expected| durable_function_type == expected)
-            && invocation_id.is_none()
+            && *invocation_id == self.expected_invocation_id()
             && *observational_owner == self.expected_observational_owner()
             && request.is_some() == self.carries_request()
             && *parent_start_index == self.expected_parent_start_index())
@@ -366,6 +413,16 @@ impl StartClaim {
     /// `unexpected_oplog_entry` claim error. Worded per claim variant, matching exactly what each
     /// variant has always reported.
     pub(crate) fn expected_description(&self) -> String {
+        match self.expected_invocation_id() {
+            Some(invocation_id) => format!(
+                "{} with invocation id {invocation_id}",
+                self.expected_identity_description()
+            ),
+            None => self.expected_identity_description(),
+        }
+    }
+
+    fn expected_identity_description(&self) -> String {
         match self {
             Self::AnyUnownedCall => {
                 "Start { request: Some(..), parent_start_index: None }".to_string()
@@ -746,11 +803,13 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<uuid::Uuid>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         self.claim_scope_start_with_missing_recovery(
             expected_function_name,
             expected_function_type,
             parent_start_index,
+            invocation_id,
             true,
         )
         .await
@@ -762,11 +821,13 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<uuid::Uuid>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         self.claim_scope_start_with_missing_recovery(
             expected_function_name,
             expected_function_type,
             parent_start_index,
+            invocation_id,
             false,
         )
         .await
@@ -780,6 +841,7 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<uuid::Uuid>,
         readiness: impl Future<Output = Result<(), WorkerExecutorError>>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         match self
@@ -787,6 +849,7 @@ impl ReplayState {
                 expected_function_name,
                 expected_function_type,
                 parent_start_index,
+                invocation_id,
             )
             .await?
         {
@@ -797,6 +860,7 @@ impl ReplayState {
                     expected_function_name,
                     expected_function_type,
                     parent_start_index,
+                    invocation_id,
                 )
                 .await
             }
@@ -811,13 +875,15 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<uuid::Uuid>,
         recover_missing: bool,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         let claim = StartClaim::scope(
             expected_function_name,
             expected_function_type,
             parent_start_index,
-        );
+        )
+        .with_invocation_id(invocation_id);
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);

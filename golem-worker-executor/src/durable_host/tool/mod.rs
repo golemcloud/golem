@@ -36,7 +36,7 @@ pub use operation::{
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
@@ -6098,6 +6098,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         futures: Vec<Resource<FutureInvokeResultEntry>>,
     ) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6272,6 +6273,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<UnderlyingInvokeResultEntry>,
     ) -> anyhow::Result<Result<Option<TypedSchemaValue>, UnderlyingError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let accessor = accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(accessor.getter());
         let (plan, response_edge) = accessor.with(|mut access| {
             let entry = access.get().table().get(&self_)?;
@@ -6402,6 +6404,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6422,6 +6425,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Resource<FutureInvokeResultEntry>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6481,6 +6485,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()

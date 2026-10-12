@@ -20,7 +20,8 @@ use golem_common::model::entity::EntityInvocationId;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tokio::sync::Notify;
 use wasmtime::component::{
-    RuntimeActivityId, RuntimeInvalidation, RuntimeObservation, RuntimeObserver, RuntimeRunId,
+    RuntimeActivityId, RuntimeActivityKind, RuntimeInvalidation, RuntimeObservation,
+    RuntimeObserver, RuntimeRunId,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -768,6 +769,29 @@ impl<F: Future> Future for CoordinatedRpc<F> {
 pub(crate) struct RuntimeStore {
     owner: Arc<OwnerSuspension>,
     store_id: u64,
+    guest_imports: Mutex<GuestImports>,
+}
+
+/// The guest import calls of one Store, in the order the guest made them.
+///
+/// Wasmtime registers the activity of a concurrent guest import and polls the host future once
+/// inside the guest's call, before the guest can make another call. So the newest import activity
+/// is the only one that can still take the next invocation id in guest call order.
+#[derive(Default)]
+struct GuestImports {
+    latest: Option<RuntimeActivityId>,
+    invocation_ids: HashMap<RuntimeActivityId, uuid::Uuid>,
+}
+
+/// The invocation id of a guest import call, as far as the Store's import order allows.
+pub(crate) enum GuestImportInvocationId {
+    /// The call already reserved this id for an earlier durable call it made.
+    Reserved(uuid::Uuid),
+    /// The call is the guest's newest import, so it can reserve the next id now.
+    Reservable,
+    /// The guest made another import call after this one, so an id reserved now could be out
+    /// of guest call order.
+    Late,
 }
 
 impl RuntimeStore {
@@ -787,7 +811,37 @@ impl RuntimeStore {
             OwnerSuspension::invalidate(&mut state);
             store_id
         };
-        Arc::new(Self { owner, store_id })
+        Arc::new(Self {
+            owner,
+            store_id,
+            guest_imports: Mutex::new(GuestImports::default()),
+        })
+    }
+
+    pub(crate) fn guest_import_invocation_id(
+        &self,
+        activity: RuntimeActivityId,
+    ) -> GuestImportInvocationId {
+        let imports = self.guest_imports.lock().unwrap();
+        if let Some(invocation_id) = imports.invocation_ids.get(&activity) {
+            GuestImportInvocationId::Reserved(*invocation_id)
+        } else if imports.latest == Some(activity) {
+            GuestImportInvocationId::Reservable
+        } else {
+            GuestImportInvocationId::Late
+        }
+    }
+
+    pub(crate) fn record_guest_import_invocation_id(
+        &self,
+        activity: RuntimeActivityId,
+        invocation_id: uuid::Uuid,
+    ) {
+        self.guest_imports
+            .lock()
+            .unwrap()
+            .invocation_ids
+            .insert(activity, invocation_id);
     }
 
     pub(crate) fn timer(
@@ -1156,6 +1210,20 @@ impl Drop for SuspensionWait {
 
 impl RuntimeObserver for RuntimeStore {
     fn observe(&self, event: RuntimeObservation) {
+        match &event {
+            RuntimeObservation::ActivityStarted {
+                activity,
+                kind: RuntimeActivityKind::Import,
+            } => self.guest_imports.lock().unwrap().latest = Some(*activity),
+            RuntimeObservation::ActivityFinished { activity } => {
+                self.guest_imports
+                    .lock()
+                    .unwrap()
+                    .invocation_ids
+                    .remove(activity);
+            }
+            _ => {}
+        }
         let mut state = self.owner.state.lock().unwrap();
         match event {
             RuntimeObservation::ActivityStarted { activity, .. } => {
@@ -1317,6 +1385,46 @@ pub(crate) mod tests {
         assert_eq!(result.len(), count);
         assert!(result.windows(2).all(|pair| pair[0] < pair[1]));
         result
+    }
+
+    #[test]
+    fn only_the_newest_guest_import_can_reserve_an_invocation_id() {
+        let ids = runtime_ids(3);
+        let owner = OwnerSuspension::new();
+        let store = RuntimeStore::new(owner);
+        let started = |activity, kind| {
+            store.observe(RuntimeObservation::ActivityStarted { activity, kind });
+        };
+        started(ids[0], RuntimeActivityKind::Import);
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Reservable
+        ));
+
+        // Other activity kinds do not change the guest's import order.
+        started(ids[1], RuntimeActivityKind::Background);
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Reservable
+        ));
+
+        let invocation_id = uuid::Uuid::from_u128(7);
+        store.record_guest_import_invocation_id(ids[0], invocation_id);
+        started(ids[2], RuntimeActivityKind::Import);
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Reserved(id) if id == invocation_id
+        ));
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[1]),
+            GuestImportInvocationId::Late
+        ));
+
+        store.observe(RuntimeObservation::ActivityFinished { activity: ids[0] });
+        assert!(matches!(
+            store.guest_import_invocation_id(ids[0]),
+            GuestImportInvocationId::Late
+        ));
     }
 
     pub(crate) fn blocked_timer(

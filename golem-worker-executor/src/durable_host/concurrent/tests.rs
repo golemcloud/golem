@@ -2303,6 +2303,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2320,6 +2321,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         parent_start_index: None,
         atomic_region: None,
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2336,6 +2338,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: Some(idx(7)),
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 

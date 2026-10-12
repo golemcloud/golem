@@ -15,10 +15,10 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest,
-    HostRequestGolemToolInvocationRejected, HostRequestNoInput, HostRequestPollCount,
-    HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogErrorKind, OplogPayload,
-    PayloadId, RawOplogPayload,
+    HostRequestGolemToolInvocationRejected, HostRequestMonotonicClockDuration, HostRequestNoInput,
+    HostRequestPollCount, HostResponseMonotonicClockTimestamp,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostStreamKind, OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::ToolName;
@@ -8532,6 +8532,7 @@ async fn missing_scope_recovery_settles_then_switches_live_over_benign_suffix() 
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -8577,6 +8578,7 @@ async fn missing_scope_presence_check_does_not_switch_live() {
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -8604,6 +8606,7 @@ async fn existing_scope_claim_does_not_wait_for_missing_scope_recovery_readiness
         .claim_scope_start_or_recover_missing_when_ready(
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
             None,
             async { panic!("recovery readiness must not be polled for an existing scope") },
         )
@@ -8647,6 +8650,7 @@ async fn missing_scope_recovery_rejects_foreign_remote_write() {
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
             None,
+            None,
         )
         .await;
     let error = match result {
@@ -8677,6 +8681,7 @@ async fn missing_scope_recovery_rejects_discriminator_collision() {
         .claim_scope_start_or_recover_missing(
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
             None,
         )
         .await;
@@ -9815,4 +9820,112 @@ async fn missing_start_claim_is_divergence_at_a_top_level_custom_root() {
         "missing replay claim must be strict divergence: {error}"
     );
     reconstruction.body_settled();
+}
+
+fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u128>) -> OplogEntry {
+    OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name: HostFunctionName::P3MonotonicClockWaitFor,
+        invocation_id: invocation_id.map(uuid::Uuid::from_u128),
+        observational_owner: None,
+        request: Some(OplogPayload::Inline(Box::new(
+            HostRequestMonotonicClockDuration { duration_in_nanos }.into(),
+        ))),
+        durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
+    }
+}
+
+async fn claimed(rs: &ReplayState, claim: StartClaim) -> ReplayCallHandle {
+    match rs.claim_start_for_store(claim, false).await.unwrap() {
+        ReplayStartClaimOutcome::Claimed { handle, .. } => handle,
+        _ => panic!("the claim must find its Start"),
+    }
+}
+
+fn wait_for_claim(invocation_id: Option<u128>) -> StartClaim {
+    StartClaim::unowned(
+        &HostFunctionName::P3MonotonicClockWaitFor,
+        &DurableFunctionType::ReadLocal,
+    )
+    .with_invocation_id(invocation_id.map(uuid::Uuid::from_u128))
+}
+
+#[test]
+async fn concurrent_calls_claim_their_own_start_by_invocation_id_in_any_order() {
+    // A completed 300 ms wait and a pending 600 s watchdog, recorded in guest call order.
+    let rs = replay_state_over(vec![
+        noop(),
+        wait_for_start(300_000_000, Some(1)),
+        wait_for_start(600_000_000_000, Some(2)),
+        end_for(2, 0),
+    ])
+    .await;
+
+    // The watchdog's host task reaches its claim first.
+    let watchdog = claimed(&rs, wait_for_claim(Some(2))).await;
+    let nap = claimed(&rs, wait_for_claim(Some(1))).await;
+
+    assert_eq!(watchdog.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(nap.start_idx(), OplogIndex::from_u64(2));
+}
+
+#[test]
+async fn calls_with_equal_requests_claim_their_own_start_by_invocation_id() {
+    let rs = replay_state_over(vec![
+        noop(),
+        wait_for_start(1_000_000_000, Some(1)),
+        wait_for_start(1_000_000_000, Some(2)),
+        end_for(2, 0),
+    ])
+    .await;
+
+    let second = claimed(&rs, wait_for_claim(Some(2))).await;
+    let first = claimed(&rs, wait_for_claim(Some(1))).await;
+
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(first.start_idx(), OplogIndex::from_u64(2));
+}
+
+#[test]
+async fn a_call_without_invocation_id_never_claims_a_numbered_start() {
+    let rs = replay_state_over(vec![
+        noop(),
+        wait_for_start(300_000_000, Some(1)),
+        wait_for_start(300_000_000, None),
+    ])
+    .await;
+
+    let unnumbered = claimed(&rs, wait_for_claim(None)).await;
+
+    assert_eq!(unnumbered.start_idx(), OplogIndex::from_u64(3));
+}
+
+#[test]
+fn scope_claim_requires_the_recorded_invocation_id() {
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+    let scope_start = |invocation_id: Option<u128>| OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name: scope_name.clone(),
+        invocation_id: invocation_id.map(uuid::Uuid::from_u128),
+        observational_owner: None,
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
+    };
+    let claim = |invocation_id: Option<u128>| {
+        StartClaim::scope(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
+        .with_invocation_id(invocation_id.map(uuid::Uuid::from_u128))
+    };
+
+    assert!(claim(Some(1)).matches_start_identity(&scope_start(Some(1))));
+    assert!(!claim(Some(1)).matches_start_identity(&scope_start(Some(2))));
+    assert!(!claim(Some(1)).matches_start_identity(&scope_start(None)));
+    assert!(!claim(None).matches_start_identity(&scope_start(Some(1))));
 }
