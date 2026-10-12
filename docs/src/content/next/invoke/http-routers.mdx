@@ -1024,7 +1024,8 @@ are not shared storage. The equivalent environment variables are
 shows the shared volume wiring.
 
 For S3, configure worker-service with the same `initial_agent_files_bucket`,
-`object_prefix`, region, endpoint, and path-style settings as the other services.
+`object_prefix`, `namespace_prefixes`, region, endpoint, and path-style settings as the
+other services.
 Use the complete service configuration for the other required buckets. Grant
 worker-service read access, including ranged reads, and supply credentials through
 your deployment's secret mechanism. InMemory storage is not shared across processes;
