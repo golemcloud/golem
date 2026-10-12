@@ -1024,8 +1024,8 @@ impl ComponentCommandHandler {
             .map(|tool| tool.name.clone())
             .collect::<BTreeSet<_>>();
         // A default tool is left to the server when the server has a native tool with its name.
-        let unavailable_default_tools = app.default_tools_with_a_native_tool(&ambient_names);
-        let tool_declarations = app.deployed_tool_declarations(&unavailable_default_tools);
+        let native_default_tools = app.default_tools_with_a_native_tool(&ambient_names);
+        let tool_declarations = app.deployed_tool_declarations(&native_default_tools);
         let mut issues = Vec::new();
         let mut implementations = BTreeMap::<ToolName, Vec<DiscoveredToolImplementation>>::new();
 
@@ -1204,7 +1204,7 @@ impl ComponentCommandHandler {
             .collect::<BTreeMap<_, _>>();
         let resolved_agents = app.resolve_agents(&agent_components)?;
         let environment_tool_bindings =
-            app.deployed_environment_tool_bindings(&unavailable_default_tools);
+            app.deployed_environment_tool_bindings(&native_default_tools);
         let has_mcp_imports = app
             .mcp_imports(app.environment_name())
             .is_some_and(|imports| !imports.is_empty());
@@ -1216,7 +1216,6 @@ impl ComponentCommandHandler {
             app.selected_environment_source(),
             &implementations,
             &ambient_names,
-            &unavailable_default_tools,
             has_mcp_imports,
         );
         for agent_name in agent_components.keys() {
@@ -1229,7 +1228,6 @@ impl ComponentCommandHandler {
                     Some(agent.source()),
                     &implementations,
                     &ambient_names,
-                    &unavailable_default_tools,
                     has_mcp_imports,
                 );
             }
@@ -1263,7 +1261,6 @@ impl ComponentCommandHandler {
                     if let Ok(name) = ToolName::try_from(raw_name.as_str())
                         && !implementations.contains_key(&name)
                         && !ambient_names.contains(&name)
-                        && !unavailable_default_tools.contains(&name)
                     {
                         dynamic_agent_bindings
                             .entry(agent_name.clone())
@@ -1294,7 +1291,6 @@ impl ComponentCommandHandler {
                 Some(component.source()),
                 &implementations,
                 &ambient_names,
-                &unavailable_default_tools,
                 false,
             );
             used_tools.extend(
@@ -1375,6 +1371,7 @@ impl ComponentCommandHandler {
         let mut diffable_remote_tool_deployments = BTreeMap::new();
         let mut pending_remote_initial_files = Vec::new();
 
+        let manifest_environment_tool_bindings = app.environment_tool_bindings();
         for ambient in ambient_tools {
             if implementations.contains_key(&ambient.name)
                 || app.tool_declarations().contains_key(&ambient.name)
@@ -1389,39 +1386,58 @@ impl ComponentCommandHandler {
                 continue;
             }
 
-            let mut agent_bindings = BTreeMap::new();
-            for agent_name in agent_components.keys() {
-                let agent = resolved_agents.agent(agent_name);
-                let override_binding = agent
-                    .as_ref()
-                    .and_then(|agent| agent.tool_bindings().get(ambient.name.as_str()).cloned())
-                    .and_then(|state| {
-                        let agent = agent.as_ref().unwrap();
-                        resolve_tool_binding_input(
-                            &mut issues,
-                            &ambient.name,
-                            &ambient.definition,
-                            &ambient.owner_account_email,
-                            &state,
-                            "agents.tools",
-                            Some(agent_name),
-                            Some(agent.source()),
-                        )
-                    });
-                if let Some(binding) = override_binding {
-                    validate_effective_tool_binding(
+            // The server keeps its own environment binding for a native tool. When the native
+            // tool takes the place of a default tool, the environment binding that the manifest
+            // gives the tool goes to each agent type and to each bound component, so that its
+            // limits stay.
+            let manifest_environment_binding = native_default_tools
+                .contains(&ambient.name)
+                .then(|| manifest_environment_tool_bindings.get(ambient.name.as_str()))
+                .flatten()
+                .and_then(|state| {
+                    resolve_tool_binding_input(
                         &mut issues,
                         &ambient.name,
-                        Some(&ambient.environment_binding),
+                        &ambient.definition,
+                        &ambient.owner_account_email,
+                        state,
+                        "environments.tools",
                         None,
-                        &binding,
-                        false,
-                        agent_name,
-                        agent.as_ref().unwrap().source(),
-                    );
-                    agent_bindings.insert(agent_name.clone(), binding);
-                }
+                        app.selected_environment_source(),
+                    )
+                });
+            let manifest_environment_binding_path = format!(
+                "environments.{}.tools.{}",
+                app.environment_name(),
+                ambient.name
+            );
+            if manifest_environment_binding.is_some() {
+                log_action(
+                    "Applying",
+                    format!(
+                        "{} to each agent type, because the server keeps its own environment binding for its native tool {}",
+                        manifest_environment_binding_path.log_color_highlight(),
+                        ambient.name.as_str().log_color_highlight()
+                    ),
+                );
             }
+
+            let agent_bindings = native_tool_agent_bindings(
+                &mut issues,
+                ambient,
+                manifest_environment_binding
+                    .as_ref()
+                    .map(|binding| (binding, manifest_environment_binding_path.as_str())),
+                agent_components.keys().map(|agent_name| {
+                    let binding = resolved_agents.agent(agent_name).and_then(|agent| {
+                        agent
+                            .tool_bindings()
+                            .get(ambient.name.as_str())
+                            .map(|state| (state.clone(), agent.source().to_path_buf()))
+                    });
+                    (agent_name.clone(), binding)
+                }),
+            );
             let mut component_bindings = BTreeMap::new();
             for component_name in app.component_names() {
                 let component = app.component(component_name);
@@ -1443,6 +1459,12 @@ impl ComponentCommandHandler {
                     None,
                     Some(component.source()),
                 ) {
+                    let binding = match &manifest_environment_binding {
+                        Some(environment) => {
+                            environment_binding_through_owner(environment, Some(binding))
+                        }
+                        None => binding,
+                    };
                     component_bindings.insert(component_name.clone(), binding);
                 }
             }
@@ -2755,6 +2777,102 @@ impl ComponentCommandHandler {
     }
 }
 
+/// The agent-type bindings of a native tool of the server. An agent type gets the binding that
+/// the manifest gives it. When the manifest also gives the tool an environment binding
+/// (`manifest_environment_binding`, with its place in the manifest), each agent type gets that
+/// binding: as it is, or combined with its own.
+fn native_tool_agent_bindings(
+    issues: &mut Vec<ToolValidationIssue>,
+    native_tool: &golem_common::model::deployment::DeploymentPlanAmbientToolEntry,
+    manifest_environment_binding: Option<(&ToolBindingInput, &str)>,
+    agents: impl IntoIterator<
+        Item = (
+            AgentTypeName,
+            Option<(ToolBindingState, std::path::PathBuf)>,
+        ),
+    >,
+) -> BTreeMap<AgentTypeName, ToolBindingInput> {
+    let mut bindings = BTreeMap::new();
+    for (agent_name, own) in agents {
+        let own = own.and_then(|(state, source)| {
+            let binding = resolve_tool_binding_input(
+                issues,
+                &native_tool.name,
+                &native_tool.definition,
+                &native_tool.owner_account_email,
+                &state,
+                "agents.tools",
+                Some(&agent_name),
+                Some(&source),
+            )?;
+            validate_effective_tool_binding(
+                issues,
+                &native_tool.name,
+                Some(&native_tool.environment_binding),
+                None,
+                &binding,
+                false,
+                &agent_name,
+                &source,
+            );
+            if let Some((environment, path)) = manifest_environment_binding {
+                validate_effective_tool_binding(
+                    issues,
+                    &native_tool.name,
+                    Some(environment),
+                    Some(path),
+                    &binding,
+                    !state.secret_keys_revealable.is_empty(),
+                    &agent_name,
+                    &source,
+                );
+            }
+            Some(binding)
+        });
+        let binding = match manifest_environment_binding {
+            Some((environment, _)) => Some(environment_binding_through_owner(environment, own)),
+            None => own,
+        };
+        if let Some(binding) = binding {
+            bindings.insert(agent_name, binding);
+        }
+    }
+    bindings
+}
+
+/// The binding of one agent type or component for a native tool of the server, when the
+/// manifest gives the tool an environment binding. The server keeps its own environment binding
+/// for a native tool, so the environment binding of the manifest goes to each owner: as it is,
+/// or combined with the binding of the owner in the way that a deployment combines the two.
+fn environment_binding_through_owner(
+    environment: &ToolBindingInput,
+    owner: Option<ToolBindingInput>,
+) -> ToolBindingInput {
+    let Some(owner) = owner else {
+        return environment.clone();
+    };
+    let (effective, _) =
+        golem_common::model::diff::effective_tool_binding(Some(environment), Some(&owner))
+            .expect("two bindings give an effective binding");
+    let middleware = (environment.middleware.is_some() || owner.middleware.is_some()).then(|| {
+        golem_common::model::tool_middleware::compile::effective_installations(
+            Some(environment),
+            Some(&owner),
+        )
+    });
+    ToolBindingInput {
+        version: owner.version.or_else(|| environment.version.clone()),
+        parameters: effective.parameters,
+        account: owner.account.or_else(|| environment.account.clone()),
+        config_keys_readable: effective.config_keys_readable,
+        secret_keys_readable: effective.secret_keys_readable,
+        secret_keys_revealable: effective.secret_keys_revealable,
+        filesystem_access: effective.filesystem_access,
+        middleware,
+        middleware_merge_mode: owner.middleware_merge_mode,
+    }
+}
+
 fn validate_tool_binding_references<'a>(
     issues: &mut Vec<ToolValidationIssue>,
     names: impl IntoIterator<Item = &'a String>,
@@ -2763,7 +2881,6 @@ fn validate_tool_binding_references<'a>(
     source: Option<&std::path::Path>,
     implementations: &BTreeMap<ToolName, Vec<DiscoveredToolImplementation>>,
     ambient_names: &BTreeSet<ToolName>,
-    left_out_default_tools: &BTreeSet<ToolName>,
     allow_dynamic_tools: bool,
 ) {
     for raw_name in names {
@@ -2783,8 +2900,6 @@ fn validate_tool_binding_references<'a>(
             continue;
         }
         match ToolName::try_from(raw_name.as_str()) {
-            // The deployment goes on without this tool, so its bindings have no use in it.
-            Ok(tool_name) if left_out_default_tools.contains(&tool_name) => {}
             Ok(tool_name)
                 if implementations.contains_key(&tool_name)
                     || ambient_names.contains(&tool_name) => {}
@@ -3658,7 +3773,8 @@ mod component_config_tests {
 #[cfg(test)]
 mod tool_binding_tests {
     use super::{
-        effective_remote_tool_bindings, resolve_config_scope, resolve_dynamic_tool_binding_input,
+        effective_remote_tool_bindings, environment_binding_through_owner,
+        native_tool_agent_bindings, resolve_config_scope, resolve_dynamic_tool_binding_input,
         resolve_secret_scope, resolve_tool_binding_input, validate_effective_tool_binding,
         validate_tool_binding_references,
     };
@@ -3700,7 +3816,6 @@ mod tool_binding_tests {
             None,
             Some(Path::new("golem.yaml")),
             &BTreeMap::new(),
-            &BTreeSet::new(),
             &BTreeSet::new(),
             false,
         );
@@ -3757,8 +3872,8 @@ mod tool_binding_tests {
     }
 
     #[test]
-    fn a_binding_of_a_default_tool_that_is_left_out_is_not_an_unknown_reference() {
-        let left_out = BTreeSet::from([ToolName::try_from("bash").unwrap()]);
+    fn a_binding_of_a_native_tool_is_not_an_unknown_reference() {
+        let native = BTreeSet::from([ToolName::try_from("bash").unwrap()]);
         let names = ["bash".to_string()];
         let agent_name = AgentTypeName("ReviewAgent".to_string());
 
@@ -3775,8 +3890,7 @@ mod tool_binding_tests {
                 agent_name,
                 Some(Path::new("golem.yaml")),
                 &BTreeMap::new(),
-                &BTreeSet::new(),
-                &left_out,
+                &native,
                 false,
             );
             assert!(issues.is_empty(), "{field_prefix}");
@@ -3790,7 +3904,6 @@ mod tool_binding_tests {
                 agent_name,
                 Some(Path::new("golem.yaml")),
                 &BTreeMap::new(),
-                &BTreeSet::new(),
                 &BTreeSet::new(),
                 false,
             );
@@ -3815,7 +3928,6 @@ mod tool_binding_tests {
                 Some(Path::new("golem.yaml")),
                 &BTreeMap::new(),
                 &BTreeSet::new(),
-                &BTreeSet::new(),
                 allow_dynamic,
             );
             assert_eq!(issues.len(), 1);
@@ -3831,7 +3943,6 @@ mod tool_binding_tests {
             None,
             Some(Path::new("golem.yaml")),
             &BTreeMap::new(),
-            &BTreeSet::new(),
             &BTreeSet::new(),
             true,
         );
@@ -3860,6 +3971,246 @@ mod tool_binding_tests {
             middleware: None,
             middleware_merge_mode: None,
         }
+    }
+
+    fn config_keys(values: &[&str]) -> golem_common::model::tool::ConfigKeyScope {
+        golem_common::model::tool::ConfigKeyScope::Keys(
+            values
+                .iter()
+                .map(|value| CanonicalAgentConfigPath(vec![(*value).to_string()]))
+                .collect(),
+        )
+    }
+
+    fn middleware(name: &str) -> golem_common::model::tool_middleware::ToolMiddlewareInstallation {
+        golem_common::model::tool_middleware::ToolMiddlewareInstallation {
+            name: name.parse().unwrap(),
+            version: None,
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: Default::default(),
+        }
+    }
+
+    fn native_bash() -> golem_common::model::deployment::DeploymentPlanAmbientToolEntry {
+        golem_common::model::deployment::DeploymentPlanAmbientToolEntry {
+            release_id: golem_common::model::tool_release::ToolReleaseId::new(),
+            name: ToolName::try_from("bash").unwrap(),
+            version: golem_common::model::deployment::ToolVersion("1.0.0".into()),
+            source_digest: golem_common::model::diff::Hash::default(),
+            owner_account_id: golem_common::model::account::AccountId::new(),
+            owner_account_email: AccountEmail::new("native@example.com"),
+            metadata_version: golem_common::model::deployment::ToolMetadataVersion("1.0.0".into()),
+            metadata_digest: golem_common::model::diff::Hash::default(),
+            definition: Tool {
+                version: "1.0.0".to_string(),
+                requires_filesystem: false,
+                commands: CommandTree { nodes: Vec::new() },
+                schema: SchemaGraph::empty(),
+            },
+            provision: Default::default(),
+            environment_binding: ToolBindingInput {
+                filesystem_access: ToolFilesystemAccess::Allowed,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn agent_with(
+        name: &str,
+        binding: Option<ToolBindingState>,
+    ) -> (
+        AgentTypeName,
+        Option<(ToolBindingState, std::path::PathBuf)>,
+    ) {
+        (
+            AgentTypeName(name.to_string()),
+            binding.map(|state| (state, std::path::PathBuf::from("golem.yaml"))),
+        )
+    }
+
+    #[test]
+    fn a_native_tool_keeps_the_file_denial_of_the_manifest_for_every_agent_type() {
+        let denied = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Denied,
+            ..Default::default()
+        };
+        let mut issues = Vec::new();
+
+        let bindings = native_tool_agent_bindings(
+            &mut issues,
+            &native_bash(),
+            Some((&denied, "environments.local.tools.bash")),
+            [
+                agent_with("Plain", None),
+                agent_with(
+                    "Wide",
+                    Some(ToolBindingState {
+                        filesystem_access: ToolFilesystemAccess::Allowed,
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        );
+
+        // The server gives a native tool its own environment binding, which allows the files.
+        // So each agent type must carry the denial, also one with no binding of its own.
+        assert_eq!(bindings.len(), 2);
+        for binding in bindings.values() {
+            assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Denied);
+        }
+        // The agent type that asks for the files is told that it does not get them.
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
+        assert_eq!(issues[0].code, ToolValidationCode::ScopeOutsideEnvironment);
+    }
+
+    #[test]
+    fn a_native_tool_without_an_environment_binding_in_the_manifest_gets_only_agent_bindings() {
+        let mut issues = Vec::new();
+
+        let bindings = native_tool_agent_bindings(
+            &mut issues,
+            &native_bash(),
+            None,
+            [
+                agent_with("Plain", None),
+                agent_with(
+                    "Narrow",
+                    Some(ToolBindingState {
+                        filesystem_access: ToolFilesystemAccess::Denied,
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        );
+
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(
+            bindings.keys().collect::<Vec<_>>(),
+            [&AgentTypeName("Narrow".to_string())]
+        );
+        assert_eq!(
+            bindings.values().next().unwrap().filesystem_access,
+            ToolFilesystemAccess::Denied
+        );
+    }
+
+    #[test]
+    fn an_agent_type_without_a_binding_gets_the_environment_binding_of_the_manifest() {
+        let environment = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Denied,
+            secret_keys_readable: keys(&["github"]),
+            secret_keys_revealable: keys(&["github"]),
+            middleware: Some(vec![middleware("audit")]),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            environment_binding_through_owner(&environment, None),
+            environment
+        );
+    }
+
+    #[test]
+    fn a_denied_file_access_of_the_environment_holds_under_an_agent_type() {
+        let environment = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Denied,
+            ..Default::default()
+        };
+        let agent = ToolBindingInput {
+            filesystem_access: ToolFilesystemAccess::Allowed,
+            ..Default::default()
+        };
+
+        let binding = environment_binding_through_owner(&environment, Some(agent));
+
+        assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Denied);
+    }
+
+    #[test]
+    fn an_agent_type_gets_the_keys_that_its_binding_and_the_environment_binding_allow() {
+        let environment = ToolBindingInput {
+            config_keys_readable: config_keys(&["region", "tier"]),
+            secret_keys_readable: keys(&["github", "gitlab"]),
+            secret_keys_revealable: keys(&["github", "gitlab"]),
+            ..Default::default()
+        };
+        let agent = ToolBindingInput {
+            version: Some("1.0.0".to_string()),
+            config_keys_readable: config_keys(&["tier", "zone"]),
+            secret_keys_readable: keys(&["gitlab", "npm"]),
+            secret_keys_revealable: keys(&["gitlab", "npm"]),
+            filesystem_access: ToolFilesystemAccess::Allowed,
+            ..Default::default()
+        };
+
+        let binding = environment_binding_through_owner(&environment, Some(agent));
+
+        assert_eq!(binding.config_keys_readable, config_keys(&["tier"]));
+        assert_eq!(binding.secret_keys_readable, keys(&["gitlab"]));
+        assert_eq!(binding.secret_keys_revealable, keys(&["gitlab"]));
+        assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Allowed);
+        assert_eq!(binding.version.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn the_middleware_of_the_environment_binding_stays_under_an_agent_type() {
+        let environment = ToolBindingInput {
+            middleware: Some(vec![middleware("audit")]),
+            ..Default::default()
+        };
+        let names = |binding: &ToolBindingInput| {
+            binding.middleware.as_ref().map(|installations| {
+                installations
+                    .iter()
+                    .map(|installation| installation.name.to_string())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        // An agent type that lists no middleware keeps the list of the environment.
+        let plain =
+            environment_binding_through_owner(&environment, Some(ToolBindingInput::default()));
+        assert_eq!(names(&plain), Some(vec!["audit".to_string()]));
+
+        // Its own list goes before the list of the environment, which is the default mode.
+        let before = environment_binding_through_owner(
+            &environment,
+            Some(ToolBindingInput {
+                middleware: Some(vec![middleware("approve")]),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(
+            names(&before),
+            Some(vec!["approve".to_string(), "audit".to_string()])
+        );
+        assert_eq!(before.middleware_merge_mode, None);
+
+        // The replace mode of the agent type takes the list of the environment away.
+        let replaced = environment_binding_through_owner(
+            &environment,
+            Some(ToolBindingInput {
+                middleware: Some(vec![middleware("approve")]),
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(names(&replaced), Some(vec!["approve".to_string()]));
+        assert_eq!(
+            replaced.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+
+        // No middleware in the two bindings gives no list.
+        let none = environment_binding_through_owner(
+            &ToolBindingInput::default(),
+            Some(ToolBindingInput::default()),
+        );
+        assert_eq!(none.middleware, None);
     }
 
     #[test]

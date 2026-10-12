@@ -1125,12 +1125,13 @@ impl Application {
     }
 
     /// Environment-level tool bindings of a deployment: the binding of each default tool, with
-    /// the bindings that the manifest gives merged over them. A default tool that the
-    /// environment cannot use is not in the deployment, so it gets no binding, also not the one
-    /// that the manifest gives it.
+    /// the bindings that the manifest gives merged over them. A default tool that a native tool
+    /// of the server replaces gets no binding here: the server keeps its own environment binding
+    /// for a native tool, and the deployment gives the binding of the manifest
+    /// (`environment_tool_bindings`) to the agent types.
     pub fn deployed_environment_tool_bindings(
         &self,
-        unavailable_default_tools: &BTreeSet<ToolName>,
+        native_default_tools: &BTreeSet<ToolName>,
     ) -> BTreeMap<String, ToolBindingState> {
         let mut bindings = self
             .default_tools
@@ -1143,7 +1144,7 @@ impl Application {
             })
             .collect();
         self.apply_environment_tool_bindings(&mut bindings);
-        for name in unavailable_default_tools {
+        for name in native_default_tools {
             if self.default_tools.contains_key(name) {
                 bindings.remove(name.as_str());
             }
@@ -1255,16 +1256,16 @@ impl Application {
     }
 
     /// Tool declarations of a deployment: those of the manifest, and the default tools except
-    /// the ones that the environment cannot use.
+    /// the ones that a native tool of the server replaces.
     pub fn deployed_tool_declarations(
         &self,
-        unavailable_default_tools: &BTreeSet<ToolName>,
+        native_default_tools: &BTreeSet<ToolName>,
     ) -> BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>> {
         let mut declarations = self.tool_declarations.clone();
         declarations.extend(
             self.default_tools
                 .iter()
-                .filter(|(name, _)| !unavailable_default_tools.contains(*name))
+                .filter(|(name, _)| !native_default_tools.contains(*name))
                 .map(|(name, tool)| (name.clone(), tool.declaration.clone())),
         );
         declarations
@@ -7533,12 +7534,12 @@ bridge:
             .collect()
     }
 
-    fn deployed_tool_names(app: &Application, unavailable_default_tools: &[&str]) -> Vec<String> {
-        let unavailable_default_tools = unavailable_default_tools
+    fn deployed_tool_names(app: &Application, native_default_tools: &[&str]) -> Vec<String> {
+        let native_default_tools = native_default_tools
             .iter()
             .map(|name| ToolName::try_from(*name).unwrap())
             .collect();
-        app.deployed_tool_declarations(&unavailable_default_tools)
+        app.deployed_tool_declarations(&native_default_tools)
             .keys()
             .map(ToString::to_string)
             .collect()
@@ -7546,13 +7547,13 @@ bridge:
 
     fn environment_filesystem_access(
         app: &Application,
-        unavailable_default_tools: &[&str],
+        native_default_tools: &[&str],
     ) -> Vec<(String, ToolFilesystemAccess)> {
-        let unavailable_default_tools = unavailable_default_tools
+        let native_default_tools = native_default_tools
             .iter()
             .map(|name| ToolName::try_from(*name).unwrap())
             .collect();
-        app.deployed_environment_tool_bindings(&unavailable_default_tools)
+        app.deployed_environment_tool_bindings(&native_default_tools)
             .into_iter()
             .map(|(name, binding)| (name, binding.filesystem_access))
             .collect()
@@ -7604,7 +7605,7 @@ bridge:
     }
 
     #[test]
-    fn an_unavailable_default_tool_gets_no_environment_binding() {
+    fn a_default_tool_that_a_native_tool_replaces_gets_no_environment_binding_of_its_own() {
         let source = indoc! {r#"
             app: plain-app
             environments:
@@ -7620,9 +7621,14 @@ bridge:
         let (app, _dir) = load_app_for_env(source, "local", &[]);
         assert_eq!(environment_filesystem_access(&app, &["bash"]), []);
 
-        // The binding that the manifest gives would name a tool that is not in the deployment.
+        // The binding that the manifest gives stays readable: the deployment gives it to the
+        // agent types, because the server keeps its own environment binding for a native tool.
         let (app, _dir) = load_app_for_env(source, "explicit", &[]);
         assert_eq!(environment_filesystem_access(&app, &["bash"]), []);
+        let manifest_binding = &app.environment_tool_bindings()["bash"];
+        assert!(!manifest_binding.secret_keys_readable.is_empty());
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert!(app.environment_tool_bindings().is_empty());
     }
 
     #[test]
