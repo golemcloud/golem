@@ -14957,7 +14957,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
 }
 
 #[test]
-fn builtin_git_tool_runtime_provides_wasi_http(
+async fn builtin_git_tool_runtime_provides_wasi_http(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
@@ -14976,6 +14976,33 @@ fn builtin_git_tool_runtime_provides_wasi_http(
     assert!(
         imports.iter().any(|name| name.starts_with("wasi:http/")),
         "Git tool must import wasi:http for all future network transport; imports: {imports:?}"
+    );
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", git_tool.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definition = metadata
+        .tools
+        .iter()
+        .find(|definition| definition.name() == Some("git"))
+        .expect("git component exports the git tool");
+    let fetch = definition
+        .command_index_by_path(&["fetch".to_string()])
+        .expect("git exports fetch");
+    let annotations = definition.commands.nodes[fetch]
+        .body
+        .as_ref()
+        .expect("fetch has a body")
+        .annotations
+        .as_ref()
+        .expect("fetch has annotations");
+    assert!(
+        annotations.destructive,
+        "fetch can prune refs or forcibly replace branch and tag refs"
     );
     Ok(())
 }

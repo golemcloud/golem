@@ -807,7 +807,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       })
       .annotations({
         readOnly: false,
-        destructive: false,
+        destructive: true,
         idempotent: false,
         openWorld: true,
       })
