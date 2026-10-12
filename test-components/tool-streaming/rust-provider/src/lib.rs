@@ -54,6 +54,7 @@ pub trait ClockRace {
     async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError>;
     async fn polling_loop_vs_watchdog(&self) -> Result<String, ClockRaceError>;
     async fn follow_up(&self) -> Result<String, ClockRaceError>;
+    async fn read_clocks(&self) -> Result<u64, ClockRaceError>;
 }
 
 struct ClockRaceImpl;
@@ -110,6 +111,12 @@ impl ClockRace for ClockRaceImpl {
 
     async fn follow_up(&self) -> Result<String, ClockRaceError> {
         Ok("settled".to_string())
+    }
+
+    async fn read_clocks(&self) -> Result<u64, ClockRaceError> {
+        let wall = wasi::clocks::wall_clock::now();
+        let system = golem_rust::wasip3::clocks::system_clock::now();
+        Ok(wall.seconds.max(system.seconds.max(0) as u64))
     }
 }
 

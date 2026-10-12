@@ -983,55 +983,40 @@ export async function schemaValueToWitAsync(value: SchemaValue): Promise<WitSche
     handle: Pick<GuestSchemaValueStreamHandle, 'peek' | 'take'>;
     value: unknown;
   }> = [];
+  const streams: Array<Extract<SchemaValue, { tag: 'stream' }>> = [];
 
-  async function prepare(current: SchemaValue): Promise<void> {
+  function collectStreams(current: SchemaValue): void {
     switch (current.tag) {
-      case 'stream': {
-        const stream = current.handle.peek();
-        if (stream === undefined) {
-          throw new SchemaEncodeError('schema value stream was already transferred');
-        }
-        if (stream.kind === 'wrapped') return;
-
-        // Capability movement is intentionally serialized. Besides preserving
-        // deterministic ownership, this avoids starting sibling wraps after an
-        // earlier wrap has already failed.
-        current.handle.take();
-        const wrapped = await SchemaValueStream.wrap(stream.value);
-        current.handle = new GuestSchemaValueStreamHandle({
-          kind: 'wrapped',
-          value: wrapped,
-        });
-        newlyWrapped.push({ handle: current.handle, value: wrapped });
+      case 'stream':
+        streams.push(current);
         return;
-      }
       case 'record': {
-        for (const field of current.fields) await prepare(field);
+        for (const field of current.fields) collectStreams(field);
         return;
       }
       case 'tuple':
       case 'list':
       case 'fixed-list': {
-        for (const element of current.elements) await prepare(element);
+        for (const element of current.elements) collectStreams(element);
         return;
       }
       case 'variant':
-        if (current.payload !== undefined) await prepare(current.payload);
+        if (current.payload !== undefined) collectStreams(current.payload);
         return;
       case 'map':
         for (const entry of current.entries) {
-          await prepare(entry.key);
-          await prepare(entry.value);
+          collectStreams(entry.key);
+          collectStreams(entry.value);
         }
         return;
       case 'option':
-        if (current.value !== undefined) await prepare(current.value);
+        if (current.value !== undefined) collectStreams(current.value);
         return;
       case 'result':
-        if (current.result.value !== undefined) await prepare(current.result.value);
+        if (current.result.value !== undefined) collectStreams(current.result.value);
         return;
       case 'union':
-        await prepare(current.body);
+        collectStreams(current.body);
         return;
       default:
         return;
@@ -1039,7 +1024,21 @@ export async function schemaValueToWitAsync(value: SchemaValue): Promise<WitSche
   }
 
   try {
-    await prepare(value);
+    collectStreams(value);
+    for (const current of streams) {
+      const stream = current.handle.peek();
+      if (stream === undefined) {
+        throw new SchemaEncodeError('schema value stream was already transferred');
+      }
+      if (stream.kind === 'wrapped') continue;
+
+      // Only native streams need asynchronous preparation. Keep their movement
+      // serialized so a failed wrap never starts a later sibling wrap.
+      current.handle.take();
+      const wrapped = await SchemaValueStream.wrap(stream.value);
+      current.handle = new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: wrapped });
+      newlyWrapped.push({ handle: current.handle, value: wrapped });
+    }
     return schemaValueToWit(value);
   } catch (error) {
     // A successful wrap creates an owned WIT resource. If a subsequent wrap or

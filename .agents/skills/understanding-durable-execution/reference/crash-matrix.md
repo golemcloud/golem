@@ -161,7 +161,7 @@ concurrent-agent permit.
 | MCP returns `-32602`, presence read incomplete or quota-suspended | committed MCP call + incomplete `ReadRemote` presence `Start` | Repair the forced exact-source presence read without resending `tools/call`; ordinary atomic rollback remains able to roll both calls back | Separate durable presence observation |
 | Live attachment memory exhausted during incomplete replay | rejection persisted | The rejection is durable; later replays do not retry admission | `incomplete_tool_replay_persists_attachment_upgrade_rejection` |
 | Body traps | no entity terminal | Owner invocation fails; owner group drains; siblings blocked on the lane are fenced | `guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group` |
-| Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `completed_reconstruction_claim_blocks_concurrent_replay_to_live` |
+| Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `primary_publication_requires_completed_reconstruction_validation`, `incomplete_custom_durability_waits_for_completed_reconstruction` |
 
 ## Resharding and the oplog epoch fence (`worker/mod.rs::interrupt_and_retire`, `services/oplog/primary.rs`)
 

@@ -11,6 +11,7 @@ use brush_core::commands::ExecutionContext;
 use brush_core::extensions::{DefaultShellExtensions, ShellExtensions};
 use brush_core::{Error, ExecutionResult};
 use std::{
+    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -71,7 +72,12 @@ impl SimpleCommand for LegacyStdinProbe {
 struct ProbeInvoker;
 struct Prepared(String);
 impl CommandInvoker for ProbeInvoker {
-    fn prepare(&self, _: &str, argv: &[String]) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
+    fn prepare(
+        &self,
+        _: &str,
+        argv: &[String],
+        _: &HashMap<String, String>,
+    ) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
         let name = argv.first().map(String::as_str).unwrap_or("--help");
         if name == "--help" {
             return Err(CommandOutput {

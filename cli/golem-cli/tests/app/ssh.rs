@@ -498,6 +498,98 @@ async fn ssh_scripts_reach_sibling_tools_and_shared_files() {
     );
 }
 
+// A bound tool is not a child process of the shell, so it gets the shell's directory only
+// through an option that declares the `PWD` variable. Git has one.
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_tools_start_in_the_directory_of_the_script() {
+    let ctx = context().await;
+    let run = |args: Vec<&'static str>| {
+        let ctx = &ctx;
+        async move { ssh(ctx, &args, "").await }
+    };
+
+    // After `cd`, git needs no `-C`; `init`, `add` and `commit` take relative paths from there.
+    let committed = run(vec![
+        OWNER,
+        "-c",
+        "mkdir -p /tmp/ssh-cwd/repo && cd /tmp/ssh-cwd/repo && git init -b main . >/dev/null \
+         && git config user.name Ada >/dev/null && git config user.email ada@example.com >/dev/null \
+         && echo one > a.txt && git add a.txt >/dev/null && git commit -m first >/dev/null \
+         && echo two > b.txt && git status --short",
+    ])
+    .await;
+    assert_eq!(status(&committed), 0, "{}", committed.stderr_text());
+    assert!(
+        committed.stdout_text().contains("?? b.txt") && !committed.stdout_text().contains("a.txt"),
+        "{}",
+        committed.stdout_text()
+    );
+
+    // The same answer with the directory given by the session, by `-C`, and by a relative `-C`.
+    let by_path = run(vec![OWNER, "-c", "git -C /tmp/ssh-cwd/repo status --short"]).await;
+    assert_eq!(status(&by_path), 0, "{}", by_path.stderr_text());
+    assert_eq!(by_path.stdout_text(), committed.stdout_text());
+    for args in [
+        vec![
+            OWNER,
+            "--cwd",
+            "/tmp/ssh-cwd/repo",
+            "-c",
+            "git status --short",
+        ],
+        vec![
+            OWNER,
+            "--cwd",
+            "/tmp/ssh-cwd",
+            "-c",
+            "git -C repo status --short",
+        ],
+    ] {
+        let output = run(args.clone()).await;
+        assert_output(&output, 0, &by_path.stdout_text(), "");
+    }
+
+    // Git gets the directory even when it is gone, and says which one it was.
+    let gone = run(vec![
+        OWNER,
+        "-c",
+        "mkdir -p /tmp/ssh-cwd/gone && cd /tmp/ssh-cwd/gone && rmdir /tmp/ssh-cwd/gone && git status",
+    ])
+    .await;
+    assert_eq!(status(&gone), 1, "{}", gone.stdout_text());
+    assert!(
+        gone.stderr_text()
+            .contains("working directory does not exist: /tmp/ssh-cwd/gone"),
+        "{}",
+        gone.stderr_text()
+    );
+
+    // A direct invocation has no shell, so it starts at the root and never sees a local path.
+    let direct = ctx
+        .cli_with_input(
+            [
+                "--yes",
+                "tool",
+                "invoke",
+                "--agent",
+                OWNER,
+                "git",
+                "--",
+                "init",
+                "ssh-cwd-direct",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        direct.stdout_text().contains("in /ssh-cwd-direct/.git"),
+        "{}{}",
+        direct.stdout_text(),
+        direct.stderr_text()
+    );
+}
+
 #[test]
 #[timeout("20 minutes")]
 async fn ssh_reports_denied_operations() {
