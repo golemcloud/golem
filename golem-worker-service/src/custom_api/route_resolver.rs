@@ -20,6 +20,7 @@ use crate::config::RouteResolverConfig;
 use crate::custom_api::{
     OidcCallbackBehaviour, OidcPkceBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
 };
+use crate::ingress::TrustedIngress;
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
@@ -33,7 +34,6 @@ use golem_service_base::custom_api::{
     SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
 };
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -87,7 +87,7 @@ pub struct RouteResolver {
     generation: Arc<AtomicU64>,
     max_age: Duration,
     api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
-    trusted_ingress_addresses: Vec<IpAddr>,
+    trusted_ingress: TrustedIngress,
 }
 
 impl RouteResolver {
@@ -112,11 +112,7 @@ impl RouteResolver {
             generation: Arc::new(AtomicU64::new(0)),
             max_age: config.router_cache_ttl,
             api_definition_lookup,
-            trusted_ingress_addresses: config
-                .trusted_ingress_addresses
-                .iter()
-                .map(IpAddr::to_canonical)
-                .collect(),
+            trusted_ingress: TrustedIngress::new(&config.trusted_ingress_addresses),
         }
     }
 
@@ -147,7 +143,10 @@ impl RouteResolver {
         let domain = Domain(public_origin.authority.clone());
         debug!("Resolving router for domain: {domain}");
 
-        let domain_api = self.get_or_build_domain_api(&domain).await?;
+        let domain_api = match request.extensions().get::<AdmittedDomainApi>() {
+            Some(admitted) if admitted.domain == domain => admitted.api.clone(),
+            _ => self.get_or_build_domain_api(&domain).await?,
+        };
         if !domain_api.domain_exists {
             return Err(RouteResolverError::UnknownSite);
         }
@@ -179,15 +178,25 @@ impl RouteResolver {
         &self,
         request: &poem::Request,
     ) -> Result<super::http_envelope::Origin, String> {
-        let trusted = request
-            .remote_addr()
-            .as_socket_addr()
-            .is_some_and(|address| {
-                self.trusted_ingress_addresses
-                    .contains(&address.ip().to_canonical())
-            });
-        super::http_envelope::origin_from_request(request, trusted)
+        super::http_envelope::origin_from_request(request, self.trusted_ingress.is_trusted(request))
             .map_err(|_| "Invalid request origin".to_string())
+    }
+
+    /// Admits the domain's routing snapshot for the request and returns whether the domain has
+    /// an active HTTP API deployment. Route resolution of the same request reuses the admitted
+    /// snapshot, so the request fetches the domain's routes at most once.
+    pub async fn admit_domain(
+        &self,
+        request: &mut poem::Request,
+        domain: &Domain,
+    ) -> Result<bool, RouteResolverError> {
+        let api = self.get_or_build_domain_api(domain).await?;
+        let domain_exists = api.domain_exists;
+        request.extensions_mut().insert(AdmittedDomainApi {
+            domain: domain.clone(),
+            api,
+        });
+        Ok(domain_exists)
     }
 
     pub async fn invalidate_domain(&self, _domain: &Domain) {
@@ -595,6 +604,13 @@ fn bindings_overlap(
 fn mount_specificity(path: &[PathSegment]) -> impl Iterator<Item = bool> + '_ {
     path.iter()
         .map(|segment| matches!(segment, PathSegment::Literal { .. }))
+}
+
+/// A domain's routing snapshot, admitted for one request by [`RouteResolver::admit_domain`].
+#[derive(Clone)]
+pub struct AdmittedDomainApi {
+    domain: Domain,
+    api: Arc<DomainHttpApi>,
 }
 
 struct DomainHttpApi {

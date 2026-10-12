@@ -32,6 +32,8 @@ pub enum DomainRegistrationError {
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Domain is already registered: {0}")]
     DomainAlreadyExists(Domain),
+    #[error("Domain {0} is reserved and cannot be registered")]
+    DomainReserved(Domain),
     #[error(
         "Domain {domain} cannot be used for an HTTP API deployment. Only {direct_only_fragment}subdomains of {available_domain} may be used.",
         direct_only_fragment = if !allow_arbitrary_subdomains { "direct " } else { "" }
@@ -64,6 +66,7 @@ impl SafeDisplay for DomainRegistrationError {
             Self::DomainRegistrationByDomainNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DomainAlreadyExists(_) => self.to_string(),
+            Self::DomainReserved(_) => self.to_string(),
             Self::DomainNotValidForHttpApi { .. } => self.to_string(),
             Self::DomainNotValidForMcp { .. } => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),

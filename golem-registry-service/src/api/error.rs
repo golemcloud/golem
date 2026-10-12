@@ -203,6 +203,9 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::McpDeploymentMissingAgentType { .. } => {
             api::error_code::deployment_validation::MCP_MISSING_AGENT_TYPE
         }
+        DeployValidationError::DomainHasHttpApiAndMcpDeployments { .. } => {
+            api::error_code::deployment_validation::DOMAIN_HAS_HTTP_API_AND_MCP_DEPLOYMENTS
+        }
         DeployValidationError::ComponentNotFound(_) => {
             api::error_code::deployment_validation::COMPONENT_NOT_FOUND
         }
@@ -1247,6 +1250,10 @@ impl From<DomainRegistrationError> for ApiError {
                 Self::conflict(api::error_code::DOMAIN_ALREADY_EXISTS, error)
             }
 
+            DomainRegistrationError::DomainReserved(_) => {
+                Self::bad_request(api::error_code::DOMAIN_RESERVED, error)
+            }
+
             DomainRegistrationError::DomainNotValidForHttpApi { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
             }
@@ -1453,6 +1460,9 @@ impl From<HttpApiDeploymentError> for ApiError {
             HttpApiDeploymentError::HttpApiDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::HTTP_API_DEPLOYMENT_ALREADY_EXISTS, error)
             }
+            HttpApiDeploymentError::DomainHasMcpDeployment(_) => {
+                Self::conflict(api::error_code::DOMAIN_HAS_MCP_DEPLOYMENT, error)
+            }
             HttpApiDeploymentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
@@ -1496,6 +1506,9 @@ impl From<McpDeploymentError> for ApiError {
 
             McpDeploymentError::McpDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::MCP_DEPLOYMENT_ALREADY_EXISTS, error)
+            }
+            McpDeploymentError::DomainHasHttpApiDeployment(_) => {
+                Self::conflict(api::error_code::DOMAIN_HAS_HTTP_API_DEPLOYMENT, error)
             }
             McpDeploymentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)

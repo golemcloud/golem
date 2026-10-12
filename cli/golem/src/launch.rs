@@ -89,6 +89,7 @@ pub async fn launch_golem_services(
     let router = bind_router(
         &config.router.address,
         config.router.port,
+        None,
         startup_progress.clone(),
         &mut join_set,
     )

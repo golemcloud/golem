@@ -42,6 +42,7 @@ use golem_common::model::domain_registration::{
 use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use regex::Regex;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct DomainRegistrationService {
@@ -49,6 +50,7 @@ pub struct DomainRegistrationService {
     environment_service: Arc<EnvironmentService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     domain_matcher: DomainMatcher,
+    reserved_domains: ReservedDomains,
 }
 
 impl DomainRegistrationService {
@@ -63,6 +65,7 @@ impl DomainRegistrationService {
             environment_service,
             registry_change_notifier,
             domain_matcher: DomainMatcher::new(&config.available_domains)?,
+            reserved_domains: ReservedDomains::new(&config.reserved_domains)?,
         })
     }
 
@@ -97,6 +100,10 @@ impl DomainRegistrationService {
             return Err(DomainRegistrationError::DomainCannotBeProvisioned(
                 data.domain,
             ));
+        }
+
+        if self.reserved_domains.contains(&data.domain) {
+            return Err(DomainRegistrationError::DomainReserved(data.domain));
         }
 
         let domain_registration = DomainRegistration {
@@ -309,6 +316,30 @@ impl DomainRegistrationService {
     }
 }
 
+struct ReservedDomains {
+    hosts: HashSet<String>,
+}
+
+impl ReservedDomains {
+    fn new(reserved_domains: &[String]) -> anyhow::Result<Self> {
+        let hosts = reserved_domains
+            .iter()
+            .map(|domain| {
+                Domain::parse_host(domain).map_err(|error| {
+                    anyhow::anyhow!(
+                        "Invalid entry in domain_registration.reserved_domains: {error}"
+                    )
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(Self { hosts })
+    }
+
+    fn contains(&self, domain: &Domain) -> bool {
+        self.hosts.contains(&domain.host())
+    }
+}
+
 enum DomainMatcher {
     Unrestricted,
     Restricted {
@@ -465,7 +496,9 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::domain_registration::Domain;
 
-    use super::{AvailableDomainsConfig, DomainMatcher, RestrictedAvailableDomainsConfig};
+    use super::{
+        AvailableDomainsConfig, DomainMatcher, ReservedDomains, RestrictedAvailableDomainsConfig,
+    };
 
     fn domain(s: &str) -> Domain {
         Domain(s.to_string())
@@ -484,6 +517,49 @@ mod tests {
             },
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn reserved_domains_match_host_ignoring_case_port_and_trailing_dot() {
+        let reserved = ReservedDomains::new(&["API.golem.example.com".to_string()]).unwrap();
+        for candidate in [
+            "api.golem.example.com",
+            "Api.Golem.Example.Com",
+            "api.golem.example.com:443",
+            "api.golem.example.com:9881",
+            "api.golem.example.com.",
+        ] {
+            assert!(reserved.contains(&domain(candidate)), "{candidate}");
+        }
+        for candidate in [
+            "shop.golem.example.com",
+            "api.golem.example.com.evil.test",
+            "xapi.golem.example.com",
+            "golem.example.com",
+        ] {
+            assert!(!reserved.contains(&domain(candidate)), "{candidate}");
+        }
+    }
+
+    #[test]
+    fn empty_reserved_domains_reserve_nothing() {
+        let reserved = ReservedDomains::new(&[]).unwrap();
+        assert!(!reserved.contains(&domain("api.golem.example.com")));
+    }
+
+    #[test]
+    fn invalid_reserved_domain_is_rejected() {
+        for invalid in [
+            "",
+            ":9881",
+            "https://api.golem.example.com",
+            "api.example.com/",
+        ] {
+            assert!(
+                ReservedDomains::new(&[invalid.to_string()]).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

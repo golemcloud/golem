@@ -14,7 +14,7 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateHttpApiDeploymentError,
-    RegistryServiceDeleteHttpApiDeploymentError,
+    RegistryServiceCreateMcpDeploymentError, RegistryServiceDeleteHttpApiDeploymentError,
     RegistryServiceGetEnvironmentHttpApiDeploymentError, RegistryServiceGetHttpApiDeploymentError,
     RegistryServiceUpdateHttpApiDeploymentError,
 };
@@ -23,6 +23,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation, HttpApiDeploymentUpdate,
 };
+use golem_common::model::mcp_deployment::{McpDeploymentAgentOptions, McpDeploymentCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -780,6 +781,75 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
             RegistryServiceDeleteHttpApiDeploymentError::Error404(_)
         ))
     ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_domain_holds_an_http_api_deployment_or_an_mcp_deployment_not_both(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let domain = user.register_domain(&env.id).await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
+        domain: domain.clone(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-api".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )]),
+        webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+        openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
+    };
+    let mcp_deployment_creation = McpDeploymentCreation {
+        domain: domain.clone(),
+        agents: BTreeMap::from_iter([(
+            AgentTypeName("test-mcp".to_string()),
+            McpDeploymentAgentOptions::default(),
+        )]),
+        tools: BTreeMap::new(),
+    };
+
+    let http_api_deployment = client
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .await?;
+
+    let error = client
+        .create_mcp_deployment(&env.id.0, &mcp_deployment_creation)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceCreateMcpDeploymentError::Error409(body)) = error
+    else {
+        panic!("expected a domain kind conflict, got {error:?}")
+    };
+    assert_eq!(body.code, "DOMAIN_HAS_HTTP_API_DEPLOYMENT");
+
+    client
+        .delete_http_api_deployment(
+            &http_api_deployment.id.0,
+            http_api_deployment.revision.into(),
+        )
+        .await?;
+
+    client
+        .create_mcp_deployment(&env.id.0, &mcp_deployment_creation)
+        .await?;
+
+    let error = client
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceCreateHttpApiDeploymentError::Error409(body)) =
+        error
+    else {
+        panic!("expected a domain kind conflict, got {error:?}")
+    };
+    assert_eq!(body.code, "DOMAIN_HAS_MCP_DEPLOYMENT");
 
     Ok(())
 }

@@ -911,6 +911,37 @@ response head. A client timeout alone does not prove upstream cancellation. Keep
 HTTP/2 enabled: some pending live-file requests over HTTP/1 detect disconnect only
 at the exchange deadline.
 
+### Serving HTTP APIs and MCP on one port
+
+The worker-service custom request port (`custom_request_port`, 9006 by default) chooses
+the deployment by the request's host:
+
+- a domain with an HTTP API deployment is served by its routes, for every path;
+- a domain with an MCP deployment is served by its MCP endpoints: `/mcp`, `/mcp/oauth/*`
+  and `/.well-known/oauth-*`;
+- any other host gets `404`.
+
+A domain holds either an HTTP API deployment or an MCP deployment, not both; the registry
+rejects the second one. The MCP port (`mcp_port`, 9007 by default) still serves MCP
+deployments only, so an ingress can keep routing MCP domains to it.
+
+To serve the management API on the same public port, put a router in front that sends the
+management host to the management API and every other host to the custom request port, and
+point every name at the same address in DNS. Reserve the management host in the registry so
+that no environment can register it:
+
+```toml
+[domain_registration]
+reserved_domains = ["api.golem.example.com"]
+```
+
+A reserved domain is matched by host, ignoring case, port and a trailing dot. The registry
+checks it when a domain is registered; registrations that exist before the domain is
+reserved stay in place. The proxy in
+front of the port must not buffer server-sent events, must allow long-lived streams, and must
+pass the original host, either in `Host` (or `:authority`) or, from a trusted ingress, in
+`X-Forwarded-Host`. MCP requests use the same trusted ingress rule as HTTP API requests.
+
 ### Setting timeouts and resource budgets
 
 Tune worker-service's session settings to your workload. The defaults are:

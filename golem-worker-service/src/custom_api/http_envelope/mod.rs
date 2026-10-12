@@ -27,7 +27,7 @@ pub(super) enum HttpVersion {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum EnvelopeError {
+pub(crate) enum EnvelopeError {
     InvalidMethod,
     UnsupportedMethod,
     UnsupportedUpgrade,

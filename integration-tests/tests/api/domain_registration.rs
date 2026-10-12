@@ -22,6 +22,7 @@ use golem_common::model::domain_registration::{Domain, DomainRegistrationCreatio
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
 };
+use golem_test_framework::components::registry_service::RESERVED_DOMAIN;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::assert_eq;
@@ -318,6 +319,50 @@ async fn domain_can_be_reused_after_deletion(
         .await?;
 
     assert_eq!(second_domain_registration.domain, domain);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn reserved_domain_cannot_be_registered(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    for domain in [
+        RESERVED_DOMAIN.to_string(),
+        RESERVED_DOMAIN.to_uppercase(),
+        format!("{RESERVED_DOMAIN}:443"),
+    ] {
+        let error = client
+            .create_domain_registration(
+                &env.id.0,
+                &DomainRegistrationCreation {
+                    domain: Domain(domain.clone()),
+                },
+            )
+            .await
+            .unwrap_err();
+        let golem_client::Error::Item(RegistryServiceCreateDomainRegistrationError::Error400(body)) =
+            error
+        else {
+            panic!("expected a reserved domain error for {domain}, got {error:?}")
+        };
+        assert_eq!(body.code, "DOMAIN_RESERVED");
+    }
+
+    client
+        .create_domain_registration(
+            &env.id.0,
+            &DomainRegistrationCreation {
+                domain: Domain(format!("{}.{RESERVED_DOMAIN}", env.id)),
+            },
+        )
+        .await?;
 
     Ok(())
 }
