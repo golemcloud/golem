@@ -1693,7 +1693,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let delegation_surface = golem_common::model::card::agent_delegation_surface_from_wallet(
             &context,
-            self.state.agent_wallet_cards.values(),
+            self.authority_wallet_cards(),
         );
 
         AuthCtx::agent_with_permission_surfaces(
@@ -1702,6 +1702,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.agent_effective_surface(),
             delegation_surface,
         )
+    }
+
+    /// Wallet cards that grant authority: the Store's wallet without cards the owner worker has
+    /// revoked. Revocation events are drained by whichever of the owner's Stores reaches a
+    /// boundary first, so a Store's own wallet copy can still hold a card another Store revoked.
+    fn authority_wallet_cards(&self) -> impl Iterator<Item = &StoredCard> {
+        self.state
+            .agent_wallet_cards
+            .iter()
+            .filter(|(card_id, _)| !self.state.owner_revoked_card_ids.contains(card_id))
+            .map(|(_, card)| card)
     }
 
     pub(crate) fn agent_wallet_cards_snapshot(&self) -> Vec<StoredCard> {
@@ -2084,22 +2095,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
             }
         };
-        self.state.agent_effective_surface = match &self.runtime {
-            OwnerRuntime::Agent => {
-                golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
-                    &context,
-                    self.state.agent_wallet_cards.values(),
-                    self.state.invocation_scope_card.as_ref(),
-                )
-            }
-            OwnerRuntime::Entity(_) => {
-                let wallet = self
-                    .state
-                    .agent_wallet_cards
-                    .iter()
-                    .filter(|(card_id, _)| !self.state.owner_revoked_card_ids.contains(card_id))
-                    .map(|(_, card)| card);
-                match &self.state.inherited_invocation_scope {
+        let surface = {
+            let wallet = self.authority_wallet_cards();
+            match &self.runtime {
+                OwnerRuntime::Agent => {
+                    golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                        &context,
+                        wallet,
+                        self.state.invocation_scope_card.as_ref(),
+                    )
+                }
+                OwnerRuntime::Entity(_) => match &self.state.inherited_invocation_scope {
                     None => golem_common::model::card::agent_effective_surface_from_wallet(
                         &context, wallet,
                     ),
@@ -2111,9 +2117,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         )
                     }
                     Some(_) => golem_common::model::card::EffectiveSurface::default(),
-                }
+                },
             }
         };
+        self.state.agent_effective_surface = surface;
     }
 
     /// The invocation scope that bounds this Store's current invocation: the primary Store's
@@ -2129,10 +2136,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Brings an entity Store's authority up to date with its owner worker at a live boundary:
-    /// excludes cards revoked by any of the owner's Stores and checks inherited scope roots.
-    async fn synchronize_entity_authority(&mut self) -> Result<(), WorkerExecutorError> {
-        if !matches!(self.runtime, OwnerRuntime::Entity(_)) || !self.state.is_live() {
+    /// Brings a Store's authority up to date with its owner worker at a live boundary: excludes
+    /// cards revoked by any of the owner's Stores, drops or invalidates a scope whose roots they
+    /// revoked, and checks an entity Store's inherited scope roots.
+    async fn synchronize_owner_authority(&mut self) -> Result<(), WorkerExecutorError> {
+        if !self.state.is_live() {
             return Ok(());
         }
         let revoked =
@@ -2146,11 +2154,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Some(root_ids) => Some(self.state.card_service.check_cards(root_ids).await?),
             None => None,
         };
-        self.apply_entity_authority_synchronization(revoked, root_states);
+        self.apply_owner_authority_synchronization(revoked, root_states);
         Ok(())
     }
 
-    fn apply_entity_authority_synchronization(
+    fn apply_owner_authority_synchronization(
         &mut self,
         revoked: HashSet<CardId>,
         root_states: Option<HashMap<CardId, CardState>>,
@@ -2159,9 +2167,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if let Some(root_states) = &root_states {
                 scope.check_roots(root_states);
             }
-            scope.invalidate_if_roots_include(&revoked);
             scope.invalidate_if_roots_expired(Utc::now());
         }
+        let revoked_roots = self
+            .interested_card_ids()
+            .into_iter()
+            .filter(|card_id| revoked.contains(card_id))
+            .collect::<Vec<_>>();
+        self.clear_invocation_scope_if_roots_include(&revoked_roots);
         self.state.owner_revoked_card_ids = revoked;
         self.rederive_agent_effective_surface_from_wallet();
     }
@@ -2325,7 +2338,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         self.remove_expired_cards().await?;
         self.remove_expired_invocation_scope_roots().await?;
-        self.synchronize_entity_authority().await
+        self.synchronize_owner_authority().await
     }
 
     async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {

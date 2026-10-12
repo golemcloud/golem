@@ -613,11 +613,11 @@ where
         expired_scope_root_ids,
     )
     .await?;
-    synchronize_entity_authority_access(store, get_ctx).await
+    synchronize_owner_authority_access(store, get_ctx).await
 }
 
-/// Accessor form of `DurableWorkerCtx::synchronize_entity_authority`.
-async fn synchronize_entity_authority_access<T, D, Ctx>(
+/// Accessor form of `DurableWorkerCtx::synchronize_owner_authority`.
+async fn synchronize_owner_authority_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<(), WorkerExecutorError>
@@ -628,7 +628,7 @@ where
 {
     let Some((worker, card_service, unchecked_root_ids)) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
-        (matches!(ctx.runtime, OwnerRuntime::Entity(_)) && ctx.state.is_live()).then(|| {
+        ctx.state.is_live().then(|| {
             (
                 ctx.public_state.worker().clone(),
                 ctx.state.card_service.clone(),
@@ -648,7 +648,7 @@ where
         None => None,
     };
     store.with(|mut access| {
-        get_ctx(access.data_mut()).apply_entity_authority_synchronization(revoked, root_states);
+        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked, root_states);
     });
     Ok(())
 }
