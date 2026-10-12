@@ -911,6 +911,60 @@ impl TestContext {
         }
     }
 
+    /// Runs the CLI and closes the read end of its stdout once the CLI has printed nothing for
+    /// a while, as `head` does after it has read enough.
+    async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdout = child.stdout.take().unwrap();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), stdout.read(&mut buffer)).await {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(_)) => {}
+            }
+        }
+        drop(stdout);
+
+        let mut stderr = child.stderr.take().unwrap();
+        let mut stderr_bytes = Vec::new();
+        stderr.read_to_end(&mut stderr_bytes).await.unwrap();
+
+        RawOutput {
+            status: child.wait().await.unwrap(),
+            stdout: Vec::new(),
+            stderr: stderr_bytes,
+        }
+    }
+
     async fn cli_process_after<I, S>(
         &self,
         command_args: I,

@@ -311,6 +311,36 @@ pub fn stdout_closed() -> bool {
     STDOUT_CLOSED.load(Ordering::Relaxed)
 }
 
+/// Finds out without a write whether the reader of stdout has gone, and remembers it as
+/// [`stdout_closed`] does. Only a pipe or a socket whose peer has closed reports an error or a
+/// hang-up here; a terminal, a file and a pipe with a live reader do not.
+#[cfg(unix)]
+pub fn stdout_reader_gone() -> bool {
+    if stdout_closed() {
+        return true;
+    }
+    let gone = peer_gone(rustix::stdio::stdout());
+    if gone {
+        STDOUT_CLOSED.store(true, Ordering::Relaxed);
+    }
+    gone
+}
+
+#[cfg(unix)]
+fn peer_gone(fd: std::os::fd::BorrowedFd<'_>) -> bool {
+    use rustix::event::{PollFd, PollFlags, poll};
+
+    let mut fds = [PollFd::from_borrowed_fd(fd, PollFlags::OUT)];
+    matches!(poll(&mut fds, Some(&rustix::time::Timespec::default())), Ok(ready) if ready > 0)
+        && fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP)
+}
+
+/// Without an operating system query, a closed stdout is only noticed at the next write.
+#[cfg(not(unix))]
+pub fn stdout_reader_gone() -> bool {
+    stdout_closed()
+}
+
 fn line_bytes(line: impl Display) -> Vec<u8> {
     format!("{line}\n").into_bytes()
 }
@@ -752,6 +782,29 @@ mod tests {
             write_unless_closed(&closed, &mut out, b"line\n").unwrap();
             assert!(closed.load(Ordering::Relaxed));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_whose_reader_has_gone_is_detected_without_a_write() {
+        use std::os::fd::AsFd;
+
+        let (reader, writer) = std::io::pipe().unwrap();
+        assert!(!super::peer_gone(writer.as_fd()));
+        drop(reader);
+        assert!(super::peer_gone(writer.as_fd()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_and_a_live_socket_are_not_detected_as_gone() {
+        use std::os::fd::AsFd;
+
+        let file = tempfile::tempfile().unwrap();
+        assert!(!super::peer_gone(file.as_fd()));
+
+        let (live, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert!(!super::peer_gone(live.as_fd()));
     }
 
     #[test]

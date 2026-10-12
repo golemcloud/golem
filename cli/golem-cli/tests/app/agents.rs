@@ -277,6 +277,33 @@ async fn test_agent_stream_ends_when_stdout_is_closed() {
 #[test]
 #[tag(agents_streaming)]
 #[timeout("15 minutes")]
+async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let created = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+        .await;
+    assert!(created.success_or_dump());
+
+    let stream = tokio::time::timeout(
+        Duration::from_secs(40),
+        ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
+    )
+    .await
+    .expect("an idle agent stream kept running with a closed stdout");
+    assert_eq!(
+        stream.exit_code(),
+        Some(0),
+        "the idle agent stream with a closed stdout did not end with exit code 0: {}",
+        stream.stderr_text()
+    );
+    assert!(!stream.stderr_text().contains("panicked"));
+}
+
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
 async fn test_streaming_invocation_cli_end_to_end() {
     let ctx = streaming_invocation_context().await;
     let agent = streaming_agent(&Uuid::new_v4().to_string());
