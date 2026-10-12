@@ -18,7 +18,7 @@ use crate::command_handler::agent::parse_method_argument_schema_value;
 use crate::command_handler::log::render_command_output_document;
 use crate::context::Context;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
-use crate::log::{eprint_line, is_closed_pipe};
+use crate::log::{CLOSED_OUTPUT_EXIT_CODE, eprint_line, is_closed_pipe};
 use crate::model::agent::invocation_session::{
     AgentInvocationSessionEvent, AgentInvocationSessionEventKind,
 };
@@ -558,7 +558,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             result = &mut output_result_rx => {
                 match result {
                     Ok(Ok(())) => bail!("invocation output closed before completion"),
-                    Ok(Err(error)) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == 0) => {
+                    Ok(Err(error)) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == CLOSED_OUTPUT_EXIT_CODE) => {
                         input_cancelled.cancel();
                         input_rx.close();
                         let requests = cancel_open_streams(
@@ -1996,7 +1996,7 @@ async fn emit(output: &OutputChannel, job: OutputJob) -> anyhow::Result<()> {
         _ = output.interrupt.cancelled() => bail!(PipedExitCode(130)),
         result = completed => match result {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) if error == "broken-pipe" => bail!(PipedExitCode(0)),
+            Ok(Err(error)) if error == "broken-pipe" => bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE)),
             Ok(Err(error)) => bail!(error),
             Err(_) => bail!("invocation output closed before acknowledging a write"),
         },
@@ -2020,7 +2020,7 @@ fn write_output(
         if let Err(error) = write_and_flush(&mut stdout.lock(), &bytes) {
             let diagnostic = if error
                 .downcast_ref::<PipedExitCode>()
-                .is_some_and(|exit| exit.0 == 0)
+                .is_some_and(|exit| exit.0 == CLOSED_OUTPUT_EXIT_CODE)
             {
                 "broken-pipe".to_string()
             } else {
@@ -2067,7 +2067,7 @@ fn render_output_job(job: OutputJob, format: Format, colorize: bool) -> anyhow::
 fn write_and_flush(output: &mut impl Write, bytes: &[u8]) -> anyhow::Result<()> {
     if let Err(error) = output.write_all(bytes).and_then(|()| output.flush()) {
         if is_closed_pipe(&error) {
-            bail!(PipedExitCode(0));
+            bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE));
         }
         return Err(error.into());
     }
@@ -3070,7 +3070,10 @@ mod public_tests {
         );
         drop(tx);
         let error = write_output_to(rx, Format::Text, false, &mut BrokenOnFlush).unwrap_err();
-        assert_eq!(error.downcast_ref::<PipedExitCode>().unwrap().0, 0);
+        assert_eq!(
+            error.downcast_ref::<PipedExitCode>().unwrap().0,
+            CLOSED_OUTPUT_EXIT_CODE
+        );
         assert!(completed.blocking_recv().is_err());
     }
 }

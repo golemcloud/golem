@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-use super::{RawOutput, TestContext, cmd, flag};
+use super::{CLOSED_OUTPUT_EXIT, RawOutput, TestContext, cmd, flag};
 use crate::workspace_path;
 use axum::{
     Router,
@@ -445,10 +445,11 @@ fn assert_result(result: &BashResult, stdout: &str, stderr: &str, exit_code: u8)
 
 #[test]
 #[timeout("20 minutes")]
-async fn closed_stdout_keeps_the_exit_codes_of_tool_invoke_file_download_and_agent_list() {
+async fn closed_stdout_ends_tool_invoke_file_download_and_agent_list_with_the_exit_code_of_sigpipe()
+{
     let ctx = context().await;
 
-    // A tool that fails prints its failure and exits with status 1. A closed stdout must not change it.
+    // A tool that fails prints its failure to stdout, so a closed stdout ends the command.
     let tool_args = [
         flag::YES,
         "--format",
@@ -470,8 +471,8 @@ async fn closed_stdout_keeps_the_exit_codes_of_tool_invoke_file_download_and_age
     let failing_closed = ctx.cli_with_broken_stdout(tool_args).await;
     assert_eq!(
         failing_closed.exit_code(),
-        Some(1),
-        "a failing tool with a closed stdout changed its exit code: {}",
+        Some(CLOSED_OUTPUT_EXIT),
+        "a failing tool that reports to a closed stdout did not end with the exit code of SIGPIPE: {}",
         failing_closed.stderr_text()
     );
     assert!(!failing_closed.stderr_text().contains("panicked"));
@@ -499,8 +500,8 @@ async fn closed_stdout_keeps_the_exit_codes_of_tool_invoke_file_download_and_age
     let download_closed = ctx.cli_with_broken_stdout(download_args).await;
     assert_eq!(
         download_closed.exit_code(),
-        Some(0),
-        "the download into a closed pipe did not end with success: {}",
+        Some(CLOSED_OUTPUT_EXIT),
+        "the download into a closed pipe did not end with the exit code of SIGPIPE: {}",
         download_closed.stderr_text()
     );
     assert!(!download_closed.stderr_text().contains("panicked"));
@@ -514,8 +515,8 @@ async fn closed_stdout_keeps_the_exit_codes_of_tool_invoke_file_download_and_age
     .expect("the refreshing agent list kept running with a closed stdout");
     assert_eq!(
         list_closed.exit_code(),
-        Some(0),
-        "the refreshing agent list into a closed pipe did not end with success: {}",
+        Some(CLOSED_OUTPUT_EXIT),
+        "the refreshing agent list into a closed pipe did not end with the exit code of SIGPIPE: {}",
         list_closed.stderr_text()
     );
     assert!(!list_closed.stderr_text().contains("panicked"));

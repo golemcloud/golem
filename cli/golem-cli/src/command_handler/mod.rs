@@ -49,8 +49,9 @@ use crate::command_handler::ssh::NOT_RUN_EXIT;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{
-    Output, RawOutputReservation, TracingSuppression, ignore_closed_pipe, log_anyhow_error, logln,
-    print_bytes, print_line, set_log_output,
+    Output, RawOutputReservation, TracingSuppression, end_on_closed_pipe,
+    keep_running_on_closed_output, log_anyhow_error, logln, print_bytes, print_line,
+    set_log_output, watch_for_closed_stdout,
 };
 use crate::model::format::Format;
 use crate::{command_name, init_tracing};
@@ -181,6 +182,18 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
+                // A server must outlive the reader of its console. Any other command ends once
+                // nobody reads its output.
+                #[cfg(feature = "server-commands")]
+                let is_server = matches!(command.subcommand, GolemCliSubcommand::Server { .. });
+                #[cfg(not(feature = "server-commands"))]
+                let is_server = false;
+                if is_server {
+                    keep_running_on_closed_output();
+                } else {
+                    watch_for_closed_stdout();
+                }
+
                 // `golem ssh` follows ssh: 255 says that the command did not run, whatever
                 // stopped it.
                 let follows_ssh = matches!(command.subcommand, GolemCliSubcommand::Ssh { .. });
@@ -230,7 +243,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 .await;
 
                 logln("");
-                ignore_closed_pipe(error.print());
+                end_on_closed_pipe(error.print());
 
                 match ctx {
                     Ok(ctx) => {
@@ -249,7 +262,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             } => {
                 init_tracing(fallback_command.global_flags.verbosity(), false);
                 debug_log_parse_error(&error, &fallback_command);
-                ignore_closed_pipe(error.print());
+                end_on_closed_pipe(error.print());
 
                 Ok(clamp_exit_code(error.exit_code()))
             }

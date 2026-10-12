@@ -14,7 +14,6 @@
 
 use crate::command_handler::agent::parse_worker_error;
 use crate::command_handler::agent::stream_output::AgentStreamOutput;
-use crate::log::{stdout_closed, stdout_reader_gone};
 use crate::model::agent::AgentLogStreamOptions;
 use crate::model::format::Format;
 use anyhow::{Context, anyhow};
@@ -44,9 +43,6 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info, trace};
 use url::Url;
 use uuid::Uuid;
-
-/// How often a stream that waits for events checks that the reader of stdout is still there.
-const STDOUT_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 struct InsecureServerCertVerifier {
@@ -151,12 +147,8 @@ impl AgentConnection {
     /// reconnect. If there was an idempotency_key goal, and it has been reached, the loop
     /// exits.
     pub async fn run_forever(self) -> anyhow::Result<()> {
-        while !self.goal_reached.load(Ordering::Acquire) && !stdout_closed() {
-            let result = tokio::select! {
-                result = self.run() => result,
-                () = Self::wait_for_stdout_reader_gone() => return Ok(()),
-            };
-            if let Err(error) = result
+        while !self.goal_reached.load(Ordering::Acquire) {
+            if let Err(error) = self.run().await
                 && error
                     .downcast_ref::<crate::error::service::ServiceError>()
                     .is_some_and(|error| error.is_previous_invocation_failed())
@@ -168,18 +160,6 @@ impl AgentConnection {
         }
 
         Ok(())
-    }
-
-    /// Completes once the reader of stdout has gone, so that a stream with no event to print
-    /// still ends.
-    async fn wait_for_stdout_reader_gone() {
-        let mut interval = time::interval(STDOUT_WATCH_INTERVAL);
-        loop {
-            interval.tick().await;
-            if stdout_reader_gone() {
-                return;
-            }
-        }
     }
 
     /// Connects to the worker event stream and outputs incoming messages until the connection is dropped
@@ -456,13 +436,8 @@ impl AgentConnection {
                         },
                     }
 
-                    if stdout_closed() {
-                        goal_reached.store(true, Ordering::Release);
-                    }
-
                     if goal_reached.load(Ordering::Acquire) {
-                        // Early return from the stream as the goal of observing a given idempotency key has been reached,
-                        // or as nobody reads the output any more
+                        // Early return from the stream as the goal of observing a given idempotency key has been reached
                         Err(tungstenite::error::Error::ConnectionClosed)
                     } else {
                         Ok(())

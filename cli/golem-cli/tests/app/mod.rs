@@ -321,6 +321,9 @@ pub struct Output {
     output: Vec<CommandOutput>,
 }
 
+/// Exit code that a shell shows for a process that SIGPIPE has ended.
+pub(crate) const CLOSED_OUTPUT_EXIT: i32 = 141;
+
 #[derive(Clone, Copy)]
 enum ClosedStream {
     Stdout,
@@ -553,6 +556,7 @@ struct TestContext {
     startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
     server_log: Option<PathBuf>,
+    server_stdout_closed: bool,
     env: HashMap<String, String>,
 }
 
@@ -644,6 +648,7 @@ impl TestContext {
             startup_ports: None,
             server_process: None,
             server_log,
+            server_stdout_closed: false,
             env,
         };
 
@@ -1244,7 +1249,15 @@ impl TestContext {
                 .stderr(Stdio::from(log_file_stderr));
         }
 
-        self.server_process = Some(command.spawn().unwrap());
+        if self.server_stdout_closed {
+            command.stdout(Stdio::piped());
+        }
+
+        let mut server_process = command.spawn().unwrap();
+        if self.server_stdout_closed {
+            drop(server_process.stdout.take());
+        }
+        self.server_process = Some(server_process);
 
         {
             let start = Instant::now();

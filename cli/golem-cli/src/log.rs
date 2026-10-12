@@ -278,52 +278,56 @@ impl Write for TracingWriter {
     }
 }
 
-static STDOUT_CLOSED: AtomicBool = AtomicBool::new(false);
-static STDERR_CLOSED: AtomicBool = AtomicBool::new(false);
+/// Exit code that a shell shows for a process that SIGPIPE has ended.
+pub const CLOSED_OUTPUT_EXIT_CODE: u8 = 141;
+
+static KEEP_RUNNING_ON_CLOSED_OUTPUT: AtomicBool = AtomicBool::new(false);
 
 pub fn is_closed_pipe(error: &std::io::Error) -> bool {
     error.kind() == ErrorKind::BrokenPipe
 }
 
-/// Writes the bytes and flushes, unless the reader of the stream has already closed the pipe.
-/// A write that finds the pipe closed is dropped, and so are all later writes: the command goes
-/// on and ends with its own exit code. Any other write error is returned.
-fn write_unless_closed(
-    closed: &AtomicBool,
-    out: &mut impl Write,
-    bytes: &[u8],
-) -> std::io::Result<()> {
-    if closed.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-    match out.write_all(bytes).and_then(|()| out.flush()) {
-        Err(error) if is_closed_pipe(&error) => {
-            closed.store(true, Ordering::Relaxed);
-            Ok(())
-        }
-        result => result,
+/// Makes a closed output drop the text instead of ending the process, for a command that
+/// serves requests and must outlive the reader of its console.
+pub fn keep_running_on_closed_output() {
+    KEEP_RUNNING_ON_CLOSED_OUTPUT.store(true, Ordering::Relaxed);
+}
+
+/// Ends the process with [`CLOSED_OUTPUT_EXIT_CODE`], as SIGPIPE would, once the reader of
+/// stdout or stderr has gone. Returns only for a command that keeps running.
+pub fn end_for_closed_output() {
+    if !KEEP_RUNNING_ON_CLOSED_OUTPUT.load(Ordering::Relaxed) {
+        std::process::exit(CLOSED_OUTPUT_EXIT_CODE.into());
     }
 }
 
-/// Whether the reader of stdout has closed the pipe. A command that prints a long or endless
-/// result stops when this is true, because nobody reads the rest.
-pub fn stdout_closed() -> bool {
-    STDOUT_CLOSED.load(Ordering::Relaxed)
+/// What happened to bytes written to a standard stream.
+#[derive(Debug, PartialEq, Eq)]
+enum Written {
+    Done,
+    ReaderGone,
 }
 
-/// Finds out without a write whether the reader of stdout has gone, and remembers it as
-/// [`stdout_closed`] does. Only a pipe or a socket whose peer has closed reports an error or a
-/// hang-up here; a terminal, a file and a pipe with a live reader do not.
+fn outcome_of(result: std::io::Result<()>) -> std::io::Result<Written> {
+    match result {
+        Ok(()) => Ok(Written::Done),
+        Err(error) if is_closed_pipe(&error) => Ok(Written::ReaderGone),
+        Err(error) => Err(error),
+    }
+}
+
+/// Writes the bytes and flushes. A pipe whose reader has gone is reported as such; any other
+/// write error is returned.
+fn write_and_flush(out: &mut impl Write, bytes: &[u8]) -> std::io::Result<Written> {
+    outcome_of(out.write_all(bytes).and_then(|()| out.flush()))
+}
+
+/// Finds out without a write whether the reader of stdout has gone. Only a pipe or a socket
+/// whose peer has closed reports an error or a hang-up here; a terminal, a file, a pipe with a
+/// live reader and a socket whose peer only stopped writing do not.
 #[cfg(unix)]
 pub fn stdout_reader_gone() -> bool {
-    if stdout_closed() {
-        return true;
-    }
-    let gone = peer_gone(rustix::stdio::stdout());
-    if gone {
-        STDOUT_CLOSED.store(true, Ordering::Relaxed);
-    }
-    gone
+    peer_gone(rustix::stdio::stdout())
 }
 
 #[cfg(unix)]
@@ -335,11 +339,28 @@ fn peer_gone(fd: std::os::fd::BorrowedFd<'_>) -> bool {
         && fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP)
 }
 
-/// Without an operating system query, a closed stdout is only noticed at the next write.
-#[cfg(not(unix))]
-pub fn stdout_reader_gone() -> bool {
-    stdout_closed()
+/// How often the watch for a closed stdout asks the operating system.
+#[cfg(unix)]
+const STDOUT_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Ends the process when the reader of stdout has gone, also while the command writes nothing.
+/// Where the operating system cannot be asked, the process ends at its next write.
+#[cfg(unix)]
+pub fn watch_for_closed_stdout() {
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(STDOUT_WATCH_INTERVAL);
+        loop {
+            interval.tick().await;
+            if stdout_reader_gone() {
+                end_for_closed_output();
+                return;
+            }
+        }
+    });
 }
+
+#[cfg(not(unix))]
+pub fn watch_for_closed_stdout() {}
 
 fn line_bytes(line: impl Display) -> Vec<u8> {
     format!("{line}\n").into_bytes()
@@ -358,24 +379,17 @@ impl StandardStream {
             Self::Stderr => "stderr",
         }
     }
-
-    fn closed(self) -> &'static AtomicBool {
-        match self {
-            Self::Stdout => &STDOUT_CLOSED,
-            Self::Stderr => &STDERR_CLOSED,
-        }
-    }
 }
 
 fn try_write_to(stream: StandardStream, bytes: &[u8]) -> std::io::Result<()> {
-    match stream {
-        StandardStream::Stdout => {
-            write_unless_closed(stream.closed(), &mut std::io::stdout().lock(), bytes)
-        }
-        StandardStream::Stderr => {
-            write_unless_closed(stream.closed(), &mut std::io::stderr().lock(), bytes)
-        }
+    let written = match stream {
+        StandardStream::Stdout => write_and_flush(&mut std::io::stdout().lock(), bytes),
+        StandardStream::Stderr => write_and_flush(&mut std::io::stderr().lock(), bytes),
+    }?;
+    if written == Written::ReaderGone {
+        end_for_closed_output();
     }
+    Ok(())
 }
 
 /// A write error other than a closed pipe panics, as `println!` does.
@@ -385,46 +399,45 @@ fn write_to(stream: StandardStream, bytes: &[u8]) {
     }
 }
 
-/// Like `println!`, but drops the line when the reader of stdout has gone.
+/// Like `println!`, but ends the process when the reader of stdout has gone.
 pub fn print_line(line: impl Display) {
     write_to(StandardStream::Stdout, &line_bytes(line));
 }
 
-/// Like `eprintln!`, but drops the line when the reader of stderr has gone.
+/// Like `eprintln!`, but ends the process when the reader of stderr has gone.
 pub fn eprint_line(line: impl Display) {
     write_to(StandardStream::Stderr, &line_bytes(line));
 }
 
-/// Like `print!`, but drops the text when the reader of stdout has gone.
+/// Like `print!`, but ends the process when the reader of stdout has gone.
 pub fn print_text(text: impl Display) {
     write_to(StandardStream::Stdout, text.to_string().as_bytes());
 }
 
-/// Like `eprint!`, but drops the text when the reader of stderr has gone.
+/// Like `eprint!`, but ends the process when the reader of stderr has gone.
 pub fn eprint_text(text: impl Display) {
     write_to(StandardStream::Stderr, text.to_string().as_bytes());
 }
 
-/// Writes raw bytes to stdout, dropping them when the reader has gone. Any other write error
-/// panics.
+/// Writes raw bytes to stdout, ending the process when the reader has gone. Any other write
+/// error panics.
 pub fn print_bytes(bytes: &[u8]) {
     write_to(StandardStream::Stdout, bytes);
 }
 
-/// Writes raw bytes to stdout, dropping them when the reader has gone. Any other write error is
-/// returned.
+/// Writes raw bytes to stdout, ending the process when the reader has gone. Any other write
+/// error is returned.
 pub fn try_print_bytes(bytes: &[u8]) -> std::io::Result<()> {
     try_write_to(StandardStream::Stdout, bytes)
 }
 
-/// Handles the outcome of a library call that printed a message by itself. A closed pipe is
-/// ignored, so that the command goes on to end with its own exit code. Any other write error
-/// panics.
-pub fn ignore_closed_pipe(result: std::io::Result<()>) {
-    if let Err(error) = result
-        && !is_closed_pipe(&error)
-    {
-        panic!("failed printing a message: {error}");
+/// Handles the outcome of a library call that printed a message by itself: a closed pipe ends
+/// the process, any other write error panics.
+pub fn end_on_closed_pipe(result: std::io::Result<()>) {
+    match outcome_of(result) {
+        Ok(Written::Done) => {}
+        Ok(Written::ReaderGone) => end_for_closed_output(),
+        Err(error) => panic!("failed printing a message: {error}"),
     }
 }
 
@@ -734,12 +747,11 @@ impl LogColorize for Utf8PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        error_message_for_output, ignore_closed_pipe, line_bytes, message_for_output,
-        write_unless_closed,
+        Written, error_message_for_output, line_bytes, message_for_output, outcome_of,
+        write_and_flush,
     };
     use anyhow::anyhow;
     use std::io::{Error, ErrorKind, Write};
-    use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
 
     #[derive(Default)]
@@ -747,12 +759,10 @@ mod tests {
         fail_with: Option<ErrorKind>,
         fail_on_flush: bool,
         written: Vec<u8>,
-        write_calls: usize,
     }
 
     impl Write for FakeWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.write_calls += 1;
             match self.fail_with {
                 Some(kind) if !self.fail_on_flush => Err(Error::from(kind)),
                 _ => {
@@ -771,17 +781,56 @@ mod tests {
     }
 
     #[test]
-    fn a_write_to_a_closed_pipe_is_dropped_and_remembered() {
+    fn a_write_to_a_pipe_whose_reader_has_gone_reports_the_gone_reader() {
         for fail_on_flush in [false, true] {
-            let closed = AtomicBool::new(false);
             let mut out = FakeWriter {
                 fail_with: Some(ErrorKind::BrokenPipe),
                 fail_on_flush,
                 ..Default::default()
             };
-            write_unless_closed(&closed, &mut out, b"line\n").unwrap();
-            assert!(closed.load(Ordering::Relaxed));
+            assert_eq!(
+                write_and_flush(&mut out, b"line\n").unwrap(),
+                Written::ReaderGone
+            );
         }
+    }
+
+    #[test]
+    fn any_other_write_error_is_returned() {
+        for fail_on_flush in [false, true] {
+            let mut out = FakeWriter {
+                fail_with: Some(ErrorKind::PermissionDenied),
+                fail_on_flush,
+                ..Default::default()
+            };
+            let error = write_and_flush(&mut out, b"line\n").unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        }
+    }
+
+    #[test]
+    fn a_normal_write_produces_the_exact_line() {
+        let mut out = FakeWriter::default();
+        assert_eq!(
+            write_and_flush(&mut out, &line_bytes("  indented line")).unwrap(),
+            Written::Done
+        );
+        assert_eq!(out.written, b"  indented line\n");
+    }
+
+    #[test]
+    fn the_result_of_a_library_print_tells_a_gone_reader_from_another_error() {
+        assert_eq!(outcome_of(Ok(())).unwrap(), Written::Done);
+        assert_eq!(
+            outcome_of(Err(Error::from(ErrorKind::BrokenPipe))).unwrap(),
+            Written::ReaderGone
+        );
+        assert_eq!(
+            outcome_of(Err(Error::from(ErrorKind::PermissionDenied)))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied
+        );
     }
 
     #[cfg(unix)]
@@ -807,48 +856,15 @@ mod tests {
         assert!(!super::peer_gone(live.as_fd()));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_write_after_the_reader_closed_is_skipped() {
-        let closed = AtomicBool::new(true);
-        let mut out = FakeWriter::default();
-        write_unless_closed(&closed, &mut out, b"line\n").unwrap();
-        assert_eq!(out.write_calls, 0);
-    }
+    fn a_socket_whose_peer_stopped_writing_but_still_reads_is_not_detected_as_gone() {
+        use std::net::Shutdown;
+        use std::os::fd::AsFd;
 
-    #[test]
-    fn any_other_write_error_is_returned_and_does_not_close_the_stream() {
-        for fail_on_flush in [false, true] {
-            let closed = AtomicBool::new(false);
-            let mut out = FakeWriter {
-                fail_with: Some(ErrorKind::PermissionDenied),
-                fail_on_flush,
-                ..Default::default()
-            };
-            let error = write_unless_closed(&closed, &mut out, b"line\n").unwrap_err();
-            assert_eq!(error.kind(), ErrorKind::PermissionDenied);
-            assert!(!closed.load(Ordering::Relaxed));
-        }
-    }
-
-    #[test]
-    fn a_normal_write_produces_the_exact_line() {
-        let closed = AtomicBool::new(false);
-        let mut out = FakeWriter::default();
-        write_unless_closed(&closed, &mut out, &line_bytes("  indented line")).unwrap();
-        assert_eq!(out.written, b"  indented line\n");
-        assert!(!closed.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn a_message_printed_by_a_library_ignores_only_a_closed_pipe() {
-        ignore_closed_pipe(Ok(()));
-        ignore_closed_pipe(Err(Error::from(ErrorKind::BrokenPipe)));
-        assert!(
-            std::panic::catch_unwind(|| {
-                ignore_closed_pipe(Err(Error::from(ErrorKind::PermissionDenied)))
-            })
-            .is_err()
-        );
+        let (ours, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        peer.shutdown(Shutdown::Write).unwrap();
+        assert!(!super::peer_gone(ours.as_fd()));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::app::{TestContext, cmd, flag, merge_into_manifest};
+use crate::app::{CLOSED_OUTPUT_EXIT, TestContext, cmd, flag, merge_into_manifest};
 use crate::{crate_path, workspace_path};
 use std::path::PathBuf;
 
@@ -267,8 +267,8 @@ async fn test_agent_stream_ends_when_stdout_is_closed() {
     let stream = stream.expect("the agent stream kept running with a closed stdout");
     assert_eq!(
         stream.exit_code(),
-        Some(0),
-        "the agent stream with a closed stdout did not end with exit code 0: {}",
+        Some(CLOSED_OUTPUT_EXIT),
+        "the agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
         stream.stderr_text()
     );
     assert!(!stream.stderr_text().contains("panicked"));
@@ -294,8 +294,8 @@ async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
     .expect("an idle agent stream kept running with a closed stdout");
     assert_eq!(
         stream.exit_code(),
-        Some(0),
-        "the idle agent stream with a closed stdout did not end with exit code 0: {}",
+        Some(CLOSED_OUTPUT_EXIT),
+        "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
         stream.stderr_text()
     );
     assert!(!stream.stderr_text().contains("panicked"));
@@ -870,8 +870,9 @@ async fn test_streaming_invocation_cli_end_to_end() {
     assert!(sibling_error.exit_code().is_some_and(|code| code != 0));
     assert_eq!(
         sibling_error_closed_stderr.exit_code(),
-        sibling_error.exit_code(),
-        "a failed invocation with a closed stderr changed its exit code"
+        Some(CLOSED_OUTPUT_EXIT),
+        "a failed invocation that reports to a closed stderr did not end with the exit code of SIGPIPE: {}",
+        sibling_error_closed_stderr.stderr_text()
     );
 
     let broken_pipe_agent = streaming_agent(&Uuid::new_v4().to_string());
@@ -885,10 +886,10 @@ async fn test_streaming_invocation_cli_end_to_end() {
             "raw",
         ])
         .await;
-    assert!(
-        broken_pipe.success(),
-        "broken stdout pipe was treated as failure (exit {:?}): {}",
+    assert_eq!(
         broken_pipe.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "a closed stdout did not end the invocation with the exit code of SIGPIPE: {}",
         broken_pipe.stderr_text()
     );
     assert!(!broken_pipe.stderr_text().contains("Broken pipe"));
@@ -903,10 +904,10 @@ async fn test_streaming_invocation_cli_end_to_end() {
                 format,
             ])
             .await;
-        assert!(
-            oplog_broken_pipe.success(),
-            "broken stdout pipe of the {format} oplog was treated as failure (exit {:?}): {}",
+        assert_eq!(
             oplog_broken_pipe.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "a closed stdout did not end the {format} oplog with the exit code of SIGPIPE: {}",
             oplog_broken_pipe.stderr_text()
         );
         assert!(

@@ -27,9 +27,9 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
-    is_closed_pipe, log_action, log_error, log_error_action, log_failed_to, log_warn,
-    log_warn_action, logln, message_for_output, stdout_closed, try_print_bytes,
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, end_for_closed_output,
+    error_message_for_output, is_closed_pipe, log_action, log_error, log_error_action,
+    log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
@@ -850,9 +850,6 @@ impl AgentCommandHandler {
                         attribution: entry.attribution,
                         entry: entry.entry,
                     })?;
-                    if stdout_closed() {
-                        return Ok(());
-                    }
                 }
             }
 
@@ -1055,6 +1052,7 @@ impl AgentCommandHandler {
                     .downcast_ref::<std::io::Error>()
                     .is_some_and(is_closed_pipe) =>
             {
+                end_for_closed_output();
                 return Ok(());
             }
             Err(error) => return Err(error),
@@ -1092,7 +1090,10 @@ impl AgentCommandHandler {
                 })();
                 match drawn {
                     Ok(()) => {}
-                    Err(error) if is_closed_pipe(&error) => return Ok(()),
+                    Err(error) if is_closed_pipe(&error) => {
+                        end_for_closed_output();
+                        return Ok(());
+                    }
                     Err(error) => return Err(error.into()),
                 }
 
@@ -1107,7 +1108,10 @@ impl AgentCommandHandler {
             Err(error)
                 if error
                     .downcast_ref::<std::io::Error>()
-                    .is_some_and(is_closed_pipe) => {}
+                    .is_some_and(is_closed_pipe) =>
+            {
+                end_for_closed_output()
+            }
             other => other?,
         }
         result

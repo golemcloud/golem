@@ -1,5 +1,5 @@
 use crate::app::{
-    TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
+    CLOSED_OUTPUT_EXIT, TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
     extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
     placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
     seed_full_extracted_metadata,
@@ -85,79 +85,97 @@ async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
     );
 }
 
-#[test]
-async fn closed_stderr_keeps_the_exit_code_of_a_failed_command(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-
-    let usage_error = ctx
-        .cli_with_broken_stderr(["--no-such-flag", cmd::NEW])
-        .await;
-    assert_eq!(
-        usage_error.exit_code(),
-        Some(2),
-        "a usage error with a closed stderr changed its exit code"
-    );
-
-    let missing_input = ctx.cli_with_broken_stderr([flag::YES, cmd::NEW]).await;
-    assert_eq!(
-        missing_input.exit_code(),
-        Some(2),
-        "a missing input with a closed stderr changed its exit code"
-    );
-
-    let no_manifest = ctx.cli_with_broken_stderr([cmd::BUILD]).await;
-    assert_eq!(
-        no_manifest.exit_code(),
-        Some(1),
-        "a failed command with a closed stderr changed its exit code"
-    );
+enum Closed {
+    Stdout,
+    Stderr,
 }
 
-async fn assert_closed_stdout_ends_with_success(ctx: &TestContext, args: &[&str]) {
-    let outputs = ctx.cli_with_broken_stdout(args.iter().copied()).await;
-    assert_eq!(
-        outputs.exit_code(),
-        Some(0),
-        "{args:?} with a closed stdout did not end with exit code 0: {}",
-        outputs.stderr_text()
-    );
-    assert!(!outputs.stderr_text().contains("panicked"));
-    assert!(!outputs.stderr_text().contains("Broken pipe"));
+async fn exit_code_with_closed(
+    ctx: &TestContext,
+    closed: Closed,
+    args: &[&str],
+) -> (Option<i32>, String) {
+    let outputs = match closed {
+        Closed::Stdout => ctx.cli_with_broken_stdout(args.iter().copied()).await,
+        Closed::Stderr => ctx.cli_with_broken_stderr(args.iter().copied()).await,
+    };
+    (outputs.exit_code(), outputs.stderr_text())
 }
 
 #[test]
-async fn closed_stdout_keeps_the_exit_code_of_a_failed_command(_tracing: &Tracing) {
-    let ctx = TestContext::new();
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.server_stdout_closed = true;
+    ctx.start_server().await;
 
-    let usage_error = ctx
-        .cli_with_broken_stdout(["--no-such-flag", cmd::NEW])
-        .await;
-    assert_eq!(
-        usage_error.exit_code(),
-        Some(2),
-        "a usage error with a closed stdout changed its exit code"
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let server = ctx.server_process.as_mut().unwrap();
+    assert!(
+        server.try_wait().unwrap().is_none(),
+        "the server ended after the reader of its stdout had gone"
     );
-
-    let no_manifest = ctx.cli_with_broken_stdout([cmd::BUILD]).await;
-    assert_eq!(
-        no_manifest.exit_code(),
-        Some(1),
-        "a failed command with a closed stdout changed its exit code: {}",
-        no_manifest.stderr_text()
-    );
-    assert!(!no_manifest.stderr_text().contains("panicked"));
 }
 
 #[test]
-async fn closed_stdout_ends_the_help_of_clap_with_its_exit_code(_tracing: &Tracing) {
+async fn a_command_that_writes_to_a_closed_stdout_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
     let ctx = TestContext::new();
-    assert_closed_stdout_ends_with_success(&ctx, &["--help"]).await;
+
+    // `build` prints its failure line, and `new` its missing input, to stdout in text format.
+    for args in [
+        &[cmd::BUILD][..],
+        &[flag::YES, cmd::NEW][..],
+        &["--help"][..],
+        &[cmd::COMPLETION, "bash"][..],
+    ] {
+        let (code, stderr) = exit_code_with_closed(&ctx, Closed::Stdout, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stdout: {stderr}"
+        );
+        assert!(!stderr.contains("panicked"));
+        assert!(!stderr.contains("Broken pipe"));
+    }
 }
 
 #[test]
-async fn closed_stdout_ends_shell_completion_without_a_panic(_tracing: &Tracing) {
+async fn a_command_that_writes_to_a_closed_stderr_ends_with_the_exit_code_of_sigpipe(
+    _tracing: &Tracing,
+) {
     let ctx = TestContext::new();
-    assert_closed_stdout_ends_with_success(&ctx, &[cmd::COMPLETION, "bash"]).await;
+
+    // `build` prints the hint about the missing manifest to stderr.
+    for args in [
+        &["--no-such-flag", cmd::NEW][..],
+        &[flag::YES, cmd::NEW][..],
+        &[cmd::BUILD][..],
+    ] {
+        let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, args).await;
+        assert_eq!(
+            code,
+            Some(CLOSED_OUTPUT_EXIT),
+            "{args:?} with a closed stderr"
+        );
+    }
+}
+
+#[test]
+async fn a_command_that_does_not_write_to_the_closed_stream_keeps_its_own_exit_code(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    // A usage error of clap goes to stderr only.
+    let (code, _) =
+        exit_code_with_closed(&ctx, Closed::Stdout, &["--no-such-flag", cmd::NEW]).await;
+    assert_eq!(code, Some(2), "a usage error with a closed stdout");
+
+    // The completion script goes to stdout only.
+    let (code, _) = exit_code_with_closed(&ctx, Closed::Stderr, &[cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(0), "completion with a closed stderr");
 }
 
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
