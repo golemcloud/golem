@@ -13,6 +13,7 @@ import (
 	_ "agent-sdk-go/agents/httpcall/impl"
 	_ "agent-sdk-go/agents/kvstore/impl"
 	_ "agent-sdk-go/agents/ledger/impl"
+	_ "agent-sdk-go/agents/pgstore/impl"
 	_ "agent-sdk-go/agents/promises/impl"
 	_ "agent-sdk-go/agents/richtypes/impl"
 	_ "agent-sdk-go/agents/rpccaller/impl"

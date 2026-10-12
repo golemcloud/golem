@@ -24,6 +24,7 @@ pub mod durability;
 pub mod http;
 pub mod keyvalue;
 pub mod promise;
+pub mod rdbms;
 pub mod retry;
 pub mod revert;
 pub mod rich_types;
