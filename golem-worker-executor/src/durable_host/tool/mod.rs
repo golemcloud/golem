@@ -6216,6 +6216,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             (None, None)
         };
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        // The middleware may exit while this asynchronous call is still being admitted. Until the
+        // rejection is recorded or the accepted child execution is spawned, nothing else keeps the
+        // entity Store from settling, so the admission itself counts as tail work.
+        let admission_activity =
+            accessor.with(|mut access| access.get().tail_work_tracker().activity());
         let dispatch = dispatch_tool_attempt(
             accessor,
             attempt,
@@ -6245,6 +6250,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
                 spawn_tool_execution(accessor, *accepted, stdout, stderr).await?,
             ),
         };
+        drop(admission_activity);
         let result = accessor.with(|mut access| {
             access.get().table().push(UnderlyingInvokeResultEntry {
                 state,
