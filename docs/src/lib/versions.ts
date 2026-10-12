@@ -25,11 +25,12 @@ export type Version = {
 }
 
 export const VERSIONS: readonly Version[] = [
-  { slug: "v1.5", label: "v1.5", status: "current" },
+  { slug: "v1.6", label: "v1.6", status: "current" },
+  { slug: "v1.5", label: "v1.5", status: "legacy" },
   { slug: "next", label: "Next", status: "unreleased" },
 ] as const
 
-export const DEFAULT_VERSION: string = "v1.5"
+export const DEFAULT_VERSION: string = "v1.6"
 
 export const VERSION_SLUGS: readonly string[] = VERSIONS.map(v => v.slug)
 
