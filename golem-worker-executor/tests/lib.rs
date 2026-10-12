@@ -347,6 +347,18 @@ test_component!(
     "golem-it:tool-streaming-effect-caller"
 );
 test_component!(
+    tool_streaming_go_provider,
+    "tool_streaming_go_provider",
+    "golem_it_tool_streaming_go_provider",
+    "golem-it:tool-streaming-go-provider"
+);
+test_component!(
+    tool_streaming_go_caller,
+    "tool_streaming_go_caller",
+    "golem_it_tool_streaming_go_caller",
+    "golem-it:tool-streaming-go-caller"
+);
+test_component!(
     snapshot_sqlite_effect,
     "snapshot_sqlite_effect",
     "golem_it_snapshot_sqlite_effect",

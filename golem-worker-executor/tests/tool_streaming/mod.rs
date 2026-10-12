@@ -175,6 +175,14 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("large_dynamic_memory")]
     PrecompiledComponent
 );
