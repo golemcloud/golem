@@ -113,6 +113,30 @@ async fn closed_stderr_keeps_the_exit_code_of_a_failed_command(_tracing: &Tracin
     );
 }
 
+async fn assert_closed_stdout_ends_with_success(ctx: &TestContext, args: &[&str]) {
+    let outputs = ctx.cli_with_broken_stdout(args.iter().copied()).await;
+    assert_eq!(
+        outputs.exit_code(),
+        Some(0),
+        "{args:?} with a closed stdout did not end with exit code 0: {}",
+        outputs.stderr_text()
+    );
+    assert!(!outputs.stderr_text().contains("panicked"));
+    assert!(!outputs.stderr_text().contains("Broken pipe"));
+}
+
+#[test]
+async fn closed_stdout_ends_the_help_of_clap_with_its_exit_code(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    assert_closed_stdout_ends_with_success(&ctx, &["--help"]).await;
+}
+
+#[test]
+async fn closed_stdout_ends_shell_completion_without_a_panic(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    assert_closed_stdout_ends_with_success(&ctx, &[cmd::COMPLETION, "bash"]).await;
+}
+
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
 /// command help go to stderr with exit code 2.
 #[test]
