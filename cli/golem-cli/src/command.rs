@@ -776,7 +776,7 @@ pub enum GolemCliSubcommand {
     /// interactive command; the global `--format` flag is ignored.
     ///
     /// `deploy` binds the bash tool to every agent type, with access to the agent's files,
-    /// unless the environment leaves it out of `defaultTools` in the application manifest or
+    /// unless the environment leaves it out of `tools.defaults` in the application manifest or
     /// the manifest declares `tools.bash` itself.
     ///
     /// Each command is one call of the tool's `run` operation in a fresh shell: variables,

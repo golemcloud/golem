@@ -195,7 +195,8 @@ async fn ssh_validates_the_tool_before_running() {
 #[test]
 #[timeout("20 minutes")]
 async fn ssh_needs_no_bash_in_the_manifest_unless_default_tools_are_off() {
-    let mut ctx = builtin_bash::context_without_bash_in_the_manifest("defaultTools: []").await;
+    let mut ctx =
+        builtin_bash::context_without_bash_in_the_manifest("tools:\n      defaults: []").await;
     ctx.add_env_var("GOLEM_CLI_AGENT_HINTS", "0");
 
     // With the default tools off there is no bash to connect to.
@@ -268,7 +269,7 @@ async fn ssh_needs_no_bash_in_the_manifest_unless_default_tools_are_off() {
     builtin_bash::write_manifest_without_bash(
         &ctx,
         "",
-        &format!("defaultTools: [bash]\n    {NO_SECRETS_FOR_BASH}"),
+        &NO_SECRETS_FOR_BASH.replacen("tools:", "tools:\n      defaults: [bash]", 1),
     );
     let limited = builtin_bash::deploy(&ctx).await;
     assert!(limited.stdout_contains("kind: keys"));

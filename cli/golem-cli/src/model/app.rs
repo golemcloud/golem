@@ -803,7 +803,9 @@ fn unknown_default_tool_names<'a>(
 #[derive(Clone, Debug)]
 struct DefaultTool {
     declaration: WithSource<app_raw::ToolDeclaration>,
-    environment_binding: app_raw::ToolBinding,
+    /// The binding of the tool for the environment: the binding that each default tool has,
+    /// with the binding that the manifest gives the tool over it.
+    environment_binding: ToolBindingState,
 }
 
 #[derive(Clone, Debug)]
@@ -1119,9 +1121,17 @@ impl Application {
 
     /// The environment-level tool bindings that the manifest gives for the selected environment.
     pub fn environment_tool_bindings(&self) -> BTreeMap<String, ToolBindingState> {
-        let mut bindings = BTreeMap::new();
-        self.apply_environment_tool_bindings(&mut bindings);
-        bindings
+        self.selected_environment()
+            .tools
+            .iter()
+            .flat_map(|tools| &tools.bindings)
+            .map(|(name, binding)| {
+                (
+                    name.clone(),
+                    ToolBindingState::from_binding(binding.clone()),
+                )
+            })
+            .collect()
     }
 
     /// Environment-level tool bindings of a deployment: the binding of each default tool, with
@@ -1133,37 +1143,15 @@ impl Application {
         &self,
         native_default_tools: &BTreeSet<ToolName>,
     ) -> BTreeMap<String, ToolBindingState> {
-        let mut bindings = self
-            .default_tools
-            .iter()
-            .map(|(name, tool)| {
-                (
-                    name.to_string(),
-                    ToolBindingState::from_binding(tool.environment_binding.clone()),
-                )
-            })
-            .collect();
-        self.apply_environment_tool_bindings(&mut bindings);
-        for name in native_default_tools {
-            if self.default_tools.contains_key(name) {
+        let mut bindings = self.environment_tool_bindings();
+        for (name, tool) in &self.default_tools {
+            if native_default_tools.contains(name) {
                 bindings.remove(name.as_str());
+            } else {
+                bindings.insert(name.to_string(), tool.environment_binding.clone());
             }
         }
         bindings
-    }
-
-    fn apply_environment_tool_bindings(&self, bindings: &mut BTreeMap<String, ToolBindingState>) {
-        for (name, binding) in self
-            .selected_environment()
-            .tools
-            .iter()
-            .flat_map(|tools| &tools.bindings)
-        {
-            bindings
-                .entry(name.clone())
-                .or_default()
-                .apply(binding.clone());
-        }
     }
 
     pub fn universal_tool_middleware(&self) -> Result<Vec<ToolMiddlewareInstallation>, String> {
@@ -4674,8 +4662,11 @@ mod app_builder {
             let Some(environment) = self.environments.get(selected_environment) else {
                 return;
             };
-            let default_tools =
-                super::selected_default_tools(environment.default_tools.as_ref(), DEFAULT_TOOLS);
+            let environment_tools = environment.tools.as_ref();
+            let default_tools = super::selected_default_tools(
+                environment_tools.and_then(|tools| tools.defaults.as_ref()),
+                DEFAULT_TOOLS,
+            );
             let source = self
                 .environment_sources
                 .get(selected_environment)
@@ -4686,6 +4677,18 @@ mod app_builder {
                     .expect("default tool names are valid tool names");
                 if self.tool_declarations.contains_key(&tool_name) {
                     continue;
+                }
+                // A binding without scopes reads the config keys and secrets that its agent
+                // reads.
+                let mut environment_binding =
+                    super::ToolBindingState::from_binding(app_raw::ToolBinding {
+                        filesystem_access: Some(default_tool.filesystem_access),
+                        ..Default::default()
+                    });
+                if let Some(binding) =
+                    environment_tools.and_then(|tools| tools.bindings.get(default_tool.name))
+                {
+                    environment_binding.apply(binding.clone());
                 }
                 self.default_tools.insert(
                     tool_name,
@@ -4703,12 +4706,7 @@ mod app_builder {
                                 ..Default::default()
                             },
                         ),
-                        // A binding without scopes reads the config keys and secrets that its
-                        // agent reads.
-                        environment_binding: app_raw::ToolBinding {
-                            filesystem_access: Some(default_tool.filesystem_access),
-                            ..Default::default()
-                        },
+                        environment_binding,
                     },
                 );
             }
@@ -5449,11 +5447,14 @@ mod app_builder {
             let mut issues = Vec::new();
             for (environment_name, environment) in &self.environments {
                 for name in super::unknown_default_tool_names(
-                    environment.default_tools.as_ref(),
+                    environment
+                        .tools
+                        .as_ref()
+                        .and_then(|tools| tools.defaults.as_ref()),
                     DEFAULT_TOOLS,
                 ) {
                     validation.add_error(format!(
-                        "Environment {environment_name} selects '{name}' in defaultTools, which is not a default tool. The default tools are: {}",
+                        "Environment {environment_name} selects '{name}' in tools.defaults, which is not a default tool. The default tools are: {}",
                         DEFAULT_TOOLS
                             .iter()
                             .map(|tool| tool.name)
@@ -7719,7 +7720,8 @@ bridge:
                 server: local
               none:
                 server: local
-                defaultTools: []
+                tools:
+                  defaults: []
         "#};
         let bash = ToolName::try_from("bash").unwrap();
         let native = BTreeSet::from([bash.clone(), ToolName::try_from("native-search").unwrap()]);
@@ -7823,20 +7825,29 @@ bridge:
             environments:
               local:
                 server: local
-                defaultTools: []
+                tools:
+                  defaults: []
               staging:
                 server: local
-                defaultTools: "*"
+                tools:
+                  defaults: "*"
               listed:
                 server: local
-                defaultTools: [bash]
+                tools:
+                  defaults: [bash]
+              restricted:
+                server: local
+                tools:
+                  defaults: [bash]
+                  bash:
+                    filesystemAccess: denied
         "#};
 
         let (app, _dir) = load_app_for_env(source, "local", &[]);
         assert_eq!(deployed_releases(&app), []);
         assert_eq!(environment_filesystem_access(&app, &[]), []);
 
-        for environment in ["staging", "listed"] {
+        for environment in ["staging", "listed", "restricted"] {
             let (app, _dir) = load_app_for_env(source, environment, &[]);
             assert_eq!(
                 deployed_releases(&app),
@@ -7844,6 +7855,20 @@ bridge:
                 "{environment}"
             );
         }
+
+        // The selection and the binding of a default tool are in one block. The selection is
+        // not a binding.
+        let (app, _dir) = load_app_for_env(source, "restricted", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Denied)]
+        );
+        let (app, _dir) = load_app_for_env(source, "listed", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+        assert!(app.environment_tool_bindings().is_empty());
     }
 
     #[test]
@@ -7891,13 +7916,13 @@ bridge:
                 server: local
               staging:
                 server: local
-                defaultTools: [bash, grep]
+                tools:
+                  defaults: [bash, grep]
         "#});
 
         assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Environment staging selects 'grep'")),
+            errors.iter().any(|error| error
+                .contains("Environment staging selects 'grep' in tools.defaults")),
             "{errors:?}"
         );
         assert!(

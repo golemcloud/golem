@@ -434,7 +434,7 @@ async fn an_mcp_import_cannot_supply_a_tool_with_the_name_of_a_default_tool() {
     assert!(says(&prefixed, "environment tool grant setup"));
 
     // Without the default tool, the imported tool keeps the name.
-    write_manifest("defaultTools: []", "");
+    write_manifest("tools:\n      defaults: []", "");
     let imported_only = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(imported_only.success_or_dump());
     assert!(!imported_only.stdout_contains(clash) && !imported_only.stderr_contains(clash));

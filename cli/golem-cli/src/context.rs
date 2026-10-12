@@ -1088,7 +1088,6 @@ mod test {
                 deployment: None,
                 version: None,
                 tools: None,
-                default_tools: None,
             },
         }
     }

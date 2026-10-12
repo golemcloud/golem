@@ -20,10 +20,12 @@ environment:
 ```yaml
 environments:
   production:
-    defaultTools: []
+    tools:
+      defaults: []
 ```
 
-`defaultTools` is `"*"` for all default tools, which is also the default, or a list of their names.
+`tools.defaults` is `"*"` for all default tools, which is also the default, or a list of their
+names.
 
 A binding for `bash` under an environment merges with the default and applies to every agent type
 of that environment. A key scope in the binding (`[]` for none, or a list of paths for some) limits

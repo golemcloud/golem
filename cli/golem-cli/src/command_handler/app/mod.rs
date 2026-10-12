@@ -1152,7 +1152,7 @@ impl AppCommandHandler {
                     format!(
                         "default tool {}, which needs the grant above. To deploy without the tool, leave it out of {} for the environment in the application manifest.",
                         name.as_str().log_color_highlight(),
-                        "defaultTools".log_color_highlight()
+                        "tools.defaults".log_color_highlight()
                     ),
                 );
             }
@@ -1177,7 +1177,7 @@ impl AppCommandHandler {
                     log_warn(format!(
                         "The grant plan has the default tool {}. If the server does not have the release of this tool, leave the tool out of {} for the environment in the application manifest.",
                         name.as_str().log_color_highlight(),
-                        "defaultTools".log_color_highlight()
+                        "tools.defaults".log_color_highlight()
                     ));
                 }
                 return Err(DeployError::PrepareError(error));
@@ -2273,7 +2273,7 @@ impl AppCommandHandler {
             return Ok(());
         }
         bail!(
-            "{}. A default tool keeps its name: give the import a prefix, exclude the tool from the import, or leave the default tool out of defaultTools for the environment",
+            "{}. A default tool keeps its name: give the import a prefix, exclude the tool from the import, or leave the default tool out of tools.defaults for the environment",
             clashes
                 .iter()
                 .map(|(index, name)| format!(
