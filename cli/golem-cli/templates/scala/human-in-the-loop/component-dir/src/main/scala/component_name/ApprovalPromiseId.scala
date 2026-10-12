@@ -1,21 +1,22 @@
 package component_name
 
-import golem.HostApi
+import golem.{HostApi, Uuid}
 import golem.host.js.{JsAgentId, JsComponentId, JsPromiseId, JsUuid}
 import zio.blocks.schema.Schema
 
 import scala.scalajs.js
 
-// Decimal strings preserve the unsigned 64-bit host fields across agent RPC.
 final case class ApprovalPromiseId(
-  componentIdHighBits: String,
-  componentIdLowBits: String,
+  componentId: Uuid,
   agentId: String,
   oplogIdx: String
 ) {
   def toHost: HostApi.PromiseId =
     JsPromiseId(
-      JsAgentId(JsComponentId(JsUuid(js.BigInt(componentIdHighBits), js.BigInt(componentIdLowBits))), agentId),
+      JsAgentId(
+        JsComponentId(JsUuid(js.BigInt(componentId.highBits.toString), js.BigInt(componentId.lowBits.toString))),
+        agentId
+      ),
       js.BigInt(oplogIdx)
     )
 }
@@ -25,8 +26,7 @@ object ApprovalPromiseId {
 
   def fromHost(id: HostApi.PromiseId): ApprovalPromiseId =
     ApprovalPromiseId(
-      id.agentId.componentId.uuid.highBits.toString,
-      id.agentId.componentId.uuid.lowBits.toString,
+      Uuid(BigInt(id.agentId.componentId.uuid.highBits.toString), BigInt(id.agentId.componentId.uuid.lowBits.toString)),
       id.agentId.agentId,
       id.oplogIdx.toString
     )
