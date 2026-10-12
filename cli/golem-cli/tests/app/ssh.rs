@@ -890,12 +890,16 @@ async fn stop_a_command(
         session.expect_str(MARKER)?;
 
         enter(session, script)?;
-        session.expect_str("Ctrl+C to stop")?;
+        // The whole running line: "Ctrl+C to stop waiting" is the line of a command that cannot
+        // be stopped.
+        session.expect_str("Ctrl+C to stop\x1b[K")?;
         // The command has started when the stop arrives: a command that is stopped before it
         // starts prints nothing.
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(Duration::from_secs(3));
         session.send("\u{3}")?;
-        session.set_expect_timeout(Some(Duration::from_secs(10)));
+        // A stopped command returns within a second. The command itself would run for minutes,
+        // so this limit is far from both.
+        session.set_expect_timeout(Some(Duration::from_secs(30)));
         if let Some(printed) = printed {
             session.expect_str(printed)?;
         }

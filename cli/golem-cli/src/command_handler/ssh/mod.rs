@@ -139,7 +139,8 @@ enum LiveFingerprint {
 /// How long the editor waits for a helper script before it gives up on it.
 const HELPER_WAIT: Duration = Duration::from_secs(3);
 
-/// How long Ctrl+C waits for the answer to its cancel request.
+/// How long Ctrl+C waits for one answer: the result of a stopped command, the lookup of that
+/// result, or the answer to a cancel request.
 const CANCEL_WAIT: Duration = Duration::from_secs(5);
 
 /// How long a prompt waits to learn what the agent is doing before it is drawn without that.
@@ -774,7 +775,8 @@ impl SshCommandHandler {
                     LiveFingerprint::Unread => self.agent_state(session).await.2,
                 }
             };
-            // Read next to the call, so the command does not wait for it.
+            // Read next to the call, so the command starts at once. The result waits for this
+            // read, which gives up after `STATUS_WAIT`.
             return tokio::join!(
                 self.submit_live(session, command_path, input, key, ticker),
                 fingerprint
