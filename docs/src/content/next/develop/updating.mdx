@@ -212,6 +212,12 @@ Alternatively, you can update all agents when deploying the updated component:
 golem deploy --update-agents manual
 ```
 
+### When a manual update fails
+
+The target revision loads the snapshot when the agent starts on it. Golem writes `SuccessfulUpdate` only after the load is complete. When the load returns an error, Golem writes one `FailedUpdate` and starts the agent again on its source revision. This is also true when the agent exits during the load: the details of the `FailedUpdate` say that the agent exited during the snapshot load.
+
+When an interrupt stops the load, for example a suspension of the agent or a move of the agent to another executor, Golem writes no `FailedUpdate` and no `SuccessfulUpdate`. The update stays pending, and the next start of the agent loads the snapshot again.
+
 ## Failure codes
 
 When an update fails, Golem writes a `FailedUpdate` entry. For the causes below, the details of the entry start with a code. The cause of the failure follows the code and its text. `golem agent get <AGENT_ID>` shows the details in the update history of the agent, and `golem agent oplog <AGENT_ID>` shows them as the error of the `FAILED UPDATE` entry. In each case, the agent stays on its source revision.

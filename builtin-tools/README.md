@@ -87,8 +87,8 @@ registry/executor startup inventories and are ambient, so they have no top-level
 declaration. See `golem-native-tool/README.md` for that path.
 
 The default tools are the exception: the CLI selects, grants and binds them for every deployment.
-An environment chooses them with `defaultTools`: all of them by default, `[]` for none, or a list
-of names. `bash` is the only one; see `bash/README.md`.
+An environment chooses them with `tools.defaults`: all of them by default, `[]` for none, or a
+list of names. `bash` is the only one; see `bash/README.md`.
 The list is `DEFAULT_TOOLS` in `golem-common/src/base_model/tool.rs`. An entry there must name a
 release that `BUILTIN_EXPORTS` provisions, at the same version.
 

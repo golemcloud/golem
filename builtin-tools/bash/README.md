@@ -20,10 +20,12 @@ environment:
 ```yaml
 environments:
   production:
-    defaultTools: []
+    tools:
+      defaults: []
 ```
 
-`defaultTools` is `"*"` for all default tools, which is also the default, or a list of their names.
+`tools.defaults` is `"*"` for all default tools, which is also the default, or a list of their
+names.
 
 A binding for `bash` under an environment merges with the default and applies to every agent type
 of that environment. A key scope in the binding (`[]` for none, or a list of paths for some) limits
@@ -58,10 +60,11 @@ agents:
         filesystemAccess: allowed
 ```
 
-`golem deploy` makes the grant for the default tool without a question. With `--plan` or `--stage`
-it makes no grant: an environment that has none yet is planned or staged without the tool, and the
-next normal deployment adds it. If the server does not have the release, the CLI prints one warning
-and deploys without the tool.
+The grant for the default tool is a part of the grant plan of `golem deploy`: the plan shows it,
+and a normal deployment makes it after the confirmation (`--yes` gives it). With `--plan` or
+`--stage` no grant is made: on an environment that has none yet, `--plan` shows the grant plan and
+stops there, and `--stage` is refused, until one normal deployment makes the grant. If the server
+does not have the release, the deployment stops and removes no grant.
 
 An agent that exists already gets the tool on its next call after the deployment, as long as its
 component revision is part of that deployment. An agent on an older revision gets it when the agent

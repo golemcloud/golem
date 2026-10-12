@@ -1023,7 +1023,17 @@
     "toolFilesystemAccess": { "enum": ["unset", "allowed", "denied"] },
     "environmentTools": {
       "type": "object",
-      "properties": { "middleware": { "type": "array", "items": { "$ref": "#/definitions/toolMiddlewareInstallation" } } },
+      "properties": {
+        "middleware": { "type": "array", "items": { "$ref": "#/definitions/toolMiddlewareInstallation" } },
+        "defaults": {
+          "oneOf": [
+            { "const": "*" },
+            { "type": "array", "items": { "type": "string", "not": { "const": "*" } } }
+          ],
+          "default": "*",
+          "description": "The default built-in tools that the CLI adds to every deployment of this environment and binds to every agent type: `\"*\"` for all of them, `[]` for none, or a list of their names. `bash`, with access to the agent's files, is the only default tool now. A binding with the name of a default tool in this object sets what that tool may read. A tool that the manifest declares under `tools` is never replaced."
+        }
+      },
       "additionalProperties": { "$ref": "#/definitions/environmentToolBinding" }
     },
     "secretKeyMergeMode": {
@@ -1342,24 +1352,6 @@
         },
         "tools": {
           "$ref": "#/definitions/environmentTools"
-        },
-        "defaultTools": {
-          "oneOf": [
-            {
-              "const": "*"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "not": {
-                  "const": "*"
-                }
-              }
-            }
-          ],
-          "default": "*",
-          "description": "The default built-in tools that the CLI adds to every deployment of this environment and binds to every agent type: `\"*\"` for all of them, `[]` for none, or a list of their names. `bash`, with access to the agent's files, is the only default tool now. A tool that the manifest declares under `tools` is never replaced."
         }
       }
     },

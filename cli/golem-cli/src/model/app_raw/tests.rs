@@ -914,8 +914,10 @@ fn arb_environment_model() -> BoxedStrategy<Environment> {
                     cli,
                     deployment,
                     version,
-                    tools: None,
-                    default_tools,
+                    tools: default_tools.map(|defaults| EnvironmentTools {
+                        defaults: Some(defaults),
+                        ..Default::default()
+                    }),
                 }
             },
         )
@@ -1781,6 +1783,12 @@ fn environment_default_tools_schema_and_serde_agree() {
     let names = |names: &[&str]| {
         ManifestDefaultTools::Names(names.iter().map(|name| name.to_string()).collect())
     };
+    let defaults = |app: &Application| {
+        app.environments["local"]
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.defaults.clone())
+    };
     for (value, expected) in [
         (None, None),
         (
@@ -1795,11 +1803,11 @@ fn environment_default_tools_schema_and_serde_agree() {
         ),
     ] {
         if let Some(value) = value {
-            json["environments"]["local"]["defaultTools"] = value;
+            json["environments"]["local"]["tools"]["defaults"] = value;
         }
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json), "{json}");
         let app: Application = serde_json::from_value(json.clone()).unwrap();
-        assert_eq!(app.environments["local"].default_tools, expected);
+        assert_eq!(defaults(&app), expected);
     }
     for value in [
         serde_json::json!(true),
@@ -1807,11 +1815,37 @@ fn environment_default_tools_schema_and_serde_agree() {
         serde_json::json!("bash"),
         serde_json::json!(["*"]),
         serde_json::json!(0),
+        serde_json::json!({"filesystemAccess": "denied"}),
     ] {
-        json["environments"]["local"]["defaultTools"] = value;
-        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        json["environments"]["local"]["tools"]["defaults"] = value;
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json), "{json}");
         assert!(serde_json::from_value::<Application>(json.clone()).is_err());
     }
+
+    // The selection and the binding of a default tool are in one block. The selection is not a
+    // binding, and it is written back in its place.
+    json["environments"]["local"]["tools"] = serde_json::json!({
+        "defaults": ["bash"],
+        "bash": {"filesystemAccess": "denied"}
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json), "{json}");
+    let app: Application = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(defaults(&app), Some(names(&["bash"])));
+    let tools = app.environments["local"].tools.as_ref().unwrap();
+    assert_eq!(tools.bindings.keys().collect::<Vec<_>>(), ["bash"]);
+    assert_eq!(
+        serde_json::to_value(tools).unwrap(),
+        json["environments"]["local"]["tools"]
+    );
+
+    // An environment has no field of its own for the selection.
+    let mut json = serde_json::json!({"app": "test", "environments": {
+        "local": {"server": "local", "defaultTools": []}
+    }});
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+    assert!(serde_json::from_value::<Application>(json.clone()).is_err());
+    json["environments"]["local"] = serde_json::json!({"server": "local"});
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json));
 }
 
 #[test]

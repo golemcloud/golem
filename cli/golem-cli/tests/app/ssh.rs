@@ -2,7 +2,7 @@
 // Licensed under the Golem Source License v1.1
 
 use super::builtin_bash::{self, OWNER, invoke};
-use super::{InteractiveSession, RawOutput, TestContext};
+use super::{InteractiveSession, Output, RawOutput, TestContext};
 use golem_cli::fs;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -195,27 +195,42 @@ async fn ssh_validates_the_tool_before_running() {
 #[test]
 #[timeout("20 minutes")]
 async fn ssh_needs_no_bash_in_the_manifest_unless_default_tools_are_off() {
-    let mut ctx = builtin_bash::context_without_bash_in_the_manifest("defaultTools: []").await;
+    let mut ctx =
+        builtin_bash::context_without_bash_in_the_manifest("tools:\n      defaults: []").await;
     ctx.add_env_var("GOLEM_CLI_AGENT_HINTS", "0");
 
     // With the default tools off there is no bash to connect to.
     let off = ssh(&ctx, &[OWNER, "-c", "printf ok"], "").await;
     assert_not_run(&off, "`bash` is not bound to");
 
-    // A plan does not create the grant that the tool needs: it leaves the tool out, together
-    // with the bindings that the environment and an agent type give it.
+    let says =
+        |output: &Output, text: &str| output.stdout_contains(text) || output.stderr_contains(text);
+
+    // The tool needs a grant, as each tool of the registry does. A plan shows the grant and
+    // stops there, and a staged deployment is refused: these runs make no grant.
     builtin_bash::write_manifest_without_bash(&ctx, ONE_SECRET_FOR_BASH, NO_SECRETS_FOR_BASH);
     let planned = ctx.cli(["deploy", "--plan"]).await;
     assert!(planned.success_or_dump());
-    assert!(planned.stdout_contains("Skipping default tool bash"));
+    assert!(says(&planned, "environment tool grant reconciliation"));
+    assert!(says(&planned, "default tool bash"));
+    assert!(says(&planned, "Planning stopped"));
+    let staged = ctx.cli(["deploy", "--stage"]).await;
+    assert!(!staged.success());
+    assert!(says(
+        &staged,
+        "requires environment tool or tool middleware grant changes"
+    ));
     let still_off = ssh(&ctx, &[OWNER, "-c", "printf ok"], "").await;
     assert_not_run(&still_off, "`bash` is not bound to");
     builtin_bash::write_manifest_without_bash(&ctx, "", "");
 
-    // A deployment adds the tool, and the agents that exist already get it: the one with a
-    // sibling binding and the one that the manifest does not list at all.
+    // A deployment makes the grant as a step of its grant plan and adds the tool. The agents
+    // that exist already get it: the one with a sibling binding and the one that the manifest
+    // does not list at all.
     let deployed = builtin_bash::deploy(&ctx).await;
-    assert!(deployed.stdout_contains("Granted default tool bash"));
+    assert!(says(&deployed, "environment tool grant reconciliation"));
+    assert!(says(&deployed, "default tool bash"));
+    assert!(says(&deployed, "environment tool grant setup"));
     // Its binding is the only change of this deployment: the files, and the config keys and
     // secrets that the agent reads.
     assert!(deployed.stdout_contains("filesystemAccess: allowed"));
@@ -254,7 +269,7 @@ async fn ssh_needs_no_bash_in_the_manifest_unless_default_tools_are_off() {
     builtin_bash::write_manifest_without_bash(
         &ctx,
         "",
-        &format!("defaultTools: [bash]\n    {NO_SECRETS_FOR_BASH}"),
+        &NO_SECRETS_FOR_BASH.replacen("tools:", "tools:\n      defaults: [bash]", 1),
     );
     let limited = builtin_bash::deploy(&ctx).await;
     assert!(limited.stdout_contains("kind: keys"));

@@ -35,6 +35,10 @@ pub enum DeployValidationError {
         security_scheme: SecuritySchemeName,
     },
     #[error(
+        "MCP import {index} supplies a tool named '{tool_name}', which is the name of a default tool and of a tool of this deployment; give the import a prefix, exclude the tool from the import, or deploy without that tool"
+    )]
+    McpImportToolHasDefaultToolName { index: u32, tool_name: String },
+    #[error(
         "Agent type {missing_agent_type} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
     )]
     HttpApiDeploymentMissingAgentType {

@@ -529,7 +529,7 @@ impl<'de> Deserialize<'de> for ManifestDefaultTools {
             ))),
             RawManifestKeyScope::Keys(names) if names.iter().any(|name| name == "*") => {
                 Err(serde::de::Error::custom(
-                    "'*' must be used as the whole value of defaultTools, not as a list entry",
+                    "'*' must be used as the whole value of defaults, not as a list entry",
                 ))
             }
             RawManifestKeyScope::Keys(names) => Ok(Self::Names(names)),
@@ -1358,10 +1358,6 @@ pub struct Environment {
     pub version: Option<AppVersionSourceOverride>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tools: Option<EnvironmentTools>,
-    /// The tools that the CLI adds to every deployment of this environment: all default tools
-    /// when absent.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub default_tools: Option<ManifestDefaultTools>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1369,6 +1365,10 @@ pub struct Environment {
 pub struct EnvironmentTools {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub middleware: Vec<ToolMiddlewareInstallation>,
+    /// The default tools that the CLI adds to every deployment of this environment: all of
+    /// them when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<ManifestDefaultTools>,
     #[serde(flatten)]
     pub bindings: IndexMap<String, ToolBinding>,
 }
@@ -1380,10 +1380,17 @@ impl<'de> Deserialize<'de> for EnvironmentTools {
     {
         let value = IndexMap::<String, serde_json::Value>::deserialize(deserializer)?;
         let mut middleware = Vec::new();
+        let mut defaults = None;
         let mut bindings = IndexMap::new();
         for (name, value) in value {
             if name == "middleware" {
                 middleware = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            } else if name == "defaults" {
+                defaults = Some(serde_json::from_value(value).map_err(|error| {
+                    serde::de::Error::custom(format!(
+                        "defaults selects the default tools of the environment: {error}"
+                    ))
+                })?);
             } else {
                 let binding: ToolBinding =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
@@ -1397,6 +1404,7 @@ impl<'de> Deserialize<'de> for EnvironmentTools {
         }
         Ok(Self {
             middleware,
+            defaults,
             bindings,
         })
     }

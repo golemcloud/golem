@@ -67,6 +67,14 @@ pub struct McpImportPreview {
     pub filtered: Vec<(usize, Diagnostic)>,
 }
 
+/// What the registry reads from the MCP imports of a deployment before it commits it.
+#[derive(Debug, Default)]
+pub struct DeploymentMcpImportDiscovery {
+    pub warnings: Vec<DeployValidationWarning>,
+    /// The imported tools that have a reserved name: the index of the import, and the name.
+    pub reserved_name_conflicts: Vec<(u32, String)>,
+}
+
 #[derive(Clone, Debug)]
 pub enum ResolvedTool {
     Native(Box<RegisteredTool>),
@@ -109,31 +117,54 @@ pub struct McpImportResolver {
 }
 
 impl McpImportResolver {
-    pub async fn deployment_warnings(
+    /// Reads the tools of the MCP imports of a deployment that is about to be committed.
+    /// `reserved_names` are the names among `native_names` that an import must not supply: an
+    /// imported tool with such a name is a conflict, and not a tool that the native tool
+    /// shadows with a warning. An import that cannot be read gives a warning and no conflict.
+    pub async fn deployment_discovery(
         &self,
         environment_id: EnvironmentId,
         imports: Vec<McpImportDeployment>,
         native_names: Vec<String>,
+        reserved_names: &BTreeSet<String>,
         auth: AuthCtx,
-    ) -> Vec<DeployValidationWarning> {
+    ) -> DeploymentMcpImportDiscovery {
         if imports.is_empty() {
-            return Vec::new();
+            return DeploymentMcpImportDiscovery::default();
         }
+        // A reserved name is left out of the native names, so that an imported tool with that
+        // name stays in the result and can be found there.
+        let native_names = native_names
+            .into_iter()
+            .filter(|name| !reserved_names.contains(name))
+            .collect();
         match self
             .preview(environment_id, imports, native_names, auth)
             .await
         {
-            Ok(preview) => preview
-                .diagnostics
-                .into_iter()
-                .map(|(index, diagnostic)| {
-                    DeployValidationWarning::McpImportDiscovery(McpImportDiscovery {
-                        import_index: Some(index as u32),
-                        upstream_tool_name: Some(diagnostic.upstream_name),
-                        reason: diagnostic.reason,
+            Ok(preview) => DeploymentMcpImportDiscovery {
+                reserved_name_conflicts: preview
+                    .tools
+                    .iter()
+                    .filter_map(|(index, tool)| {
+                        let name = tool.definition.name()?;
+                        reserved_names
+                            .contains(name)
+                            .then(|| (*index as u32, name.to_string()))
                     })
-                })
-                .collect(),
+                    .collect(),
+                warnings: preview
+                    .diagnostics
+                    .into_iter()
+                    .map(|(index, diagnostic)| {
+                        DeployValidationWarning::McpImportDiscovery(McpImportDiscovery {
+                            import_index: Some(index as u32),
+                            upstream_tool_name: Some(diagnostic.upstream_name),
+                            reason: diagnostic.reason,
+                        })
+                    })
+                    .collect(),
+            },
             Err(error) => {
                 let (import_index, error) = match error {
                     McpImportResolverError::SourceUnavailable {
@@ -142,15 +173,18 @@ impl McpImportResolver {
                     } => (Some(import_index as u32), *error),
                     other => (None, other),
                 };
-                vec![DeployValidationWarning::McpImportDiscovery(
-                    McpImportDiscovery {
-                        import_index,
-                        upstream_tool_name: None,
-                        reason: format!(
-                            "Deployment discovery unavailable; tools will be fetched on demand: {error}"
-                        ),
-                    },
-                )]
+                DeploymentMcpImportDiscovery {
+                    warnings: vec![DeployValidationWarning::McpImportDiscovery(
+                        McpImportDiscovery {
+                            import_index,
+                            upstream_tool_name: None,
+                            reason: format!(
+                                "Deployment discovery unavailable; tools will be fetched on demand: {error}"
+                            ),
+                        },
+                    )],
+                    reserved_name_conflicts: Vec::new(),
+                }
             }
         }
     }

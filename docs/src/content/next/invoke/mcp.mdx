@@ -253,6 +253,9 @@ with `-`, so `search_items` becomes `catalog-search-items`. Use either `include`
 `exclude`, not both. Application tools and the selected environment's ambient native
 tools take precedence over imports; among imports, earlier entries win. Imports do
 not need top-level `tools` declarations.
+The name of a [default tool](/next/app-manifest#default-tools), such as `bash`, is
+reserved: when the deployment has a tool with that name, a deployment is refused if an
+import lists a tool with the same name at deploy time.
 The optional `version` selects the MCP protocol revision, not a tool release.
 The supported import protocol is currently `2026-07-28` Streamable HTTP.
 
