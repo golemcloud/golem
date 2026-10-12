@@ -118,11 +118,12 @@ async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracin
 }
 
 #[test]
-async fn a_command_that_writes_to_a_closed_stdout_ends_with_the_exit_code_of_sigpipe(
+async fn a_command_whose_stdout_has_no_reader_ends_with_the_exit_code_of_sigpipe(
     _tracing: &Tracing,
 ) {
     let ctx = TestContext::new();
 
+    // The reader is gone before the command starts: the watch or the first write to stdout ends it.
     // `build` prints its failure line, and `new` its missing input, to stdout in text format.
     for args in [
         &[cmd::BUILD][..],
@@ -168,7 +169,8 @@ async fn a_command_that_does_not_write_to_the_closed_stream_keeps_its_own_exit_c
 ) {
     let ctx = TestContext::new();
 
-    // A usage error of clap goes to stderr only.
+    // A usage error of clap goes to stderr only, and a command line that does not parse starts no
+    // watch of stdout.
     let (code, _) =
         exit_code_with_closed(&ctx, Closed::Stdout, &["--no-such-flag", cmd::NEW]).await;
     assert_eq!(code, Some(2), "a usage error with a closed stdout");

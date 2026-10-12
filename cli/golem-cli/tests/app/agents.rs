@@ -274,6 +274,79 @@ async fn test_agent_stream_ends_when_stdout_is_closed() {
     assert!(!stream.stderr_text().contains("panicked"));
 }
 
+/// The reader takes the first part of the output and then goes away, as `head` does.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_after_the_first_output_ends_the_command_with_the_exit_code_of_sigpipe()
+ {
+    let ctx = streaming_invocation_context().await;
+
+    // An oplog that is much longer than the buffer of a pipe, so that the CLI is still printing
+    // when the reader leaves. The entry of a call holds its argument.
+    let oplog_agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+    let long_argument = format!("\"{}\"", "x".repeat(300_000));
+    let created = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &oplog_agent,
+            "bug_golem1265",
+            &long_argument,
+        ])
+        .await;
+    assert!(created.success_or_dump());
+    let complete = ctx.cli([cmd::AGENT, "oplog", &oplog_agent]).await;
+    assert!(complete.success_or_dump());
+    let complete_size: usize = complete.stdout().map(|line| line.len() + 1).sum();
+    assert!(
+        complete_size > 500_000,
+        "the oplog is too short to still be printing when the reader leaves: {complete_size} bytes"
+    );
+
+    let oplog = tokio::time::timeout(
+        Duration::from_secs(60),
+        ctx.cli_closing_stdout_after_bytes([cmd::AGENT, "oplog", &oplog_agent], 1),
+    )
+    .await
+    .expect("agent oplog kept running after the reader had left");
+    assert_eq!(
+        oplog.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "agent oplog after the reader left did not end with the exit code of SIGPIPE: {}",
+        oplog.stderr_text()
+    );
+    assert!(!oplog.stderr_text().contains("panicked"));
+    assert!(!oplog.stderr_text().contains("Broken pipe"));
+
+    // The invocation delivers its first byte and then waits for more.
+    let invoke_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let invoked = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_closing_stdout_after_bytes(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &invoke_agent,
+                "produce_byte_then_wait",
+                "--stdout-format",
+                "raw",
+            ],
+            1,
+        ),
+    )
+    .await
+    .expect("agent invoke kept running after the reader had left");
+    assert_eq!(
+        invoked.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "agent invoke after the reader left did not end with the exit code of SIGPIPE: {}",
+        invoked.stderr_text()
+    );
+    assert!(!invoked.stderr_text().contains("panicked"));
+    assert!(!invoked.stderr_text().contains("Broken pipe"));
+}
+
 #[test]
 #[tag(agents_streaming)]
 #[timeout("15 minutes")]

@@ -324,6 +324,14 @@ pub struct Output {
 /// Exit code that a shell shows for a process that SIGPIPE has ended.
 pub(crate) const CLOSED_OUTPUT_EXIT: i32 = 141;
 
+/// When the reader of a closed output pipe goes away.
+#[derive(Clone, Copy)]
+enum CloseWhen {
+    AtSpawn,
+    Quiet,
+    AfterBytes(usize),
+}
+
 #[derive(Clone, Copy)]
 enum ClosedStream {
     Stdout,
@@ -837,7 +845,7 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.cli_with_closed_stream(command_args, ClosedStream::Stdout)
+        self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::AtSpawn)
             .await
     }
 
@@ -846,12 +854,44 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.cli_with_closed_stream(command_args, ClosedStream::Stderr)
+        self.cli_closing_output(command_args, ClosedStream::Stderr, CloseWhen::AtSpawn)
             .await
     }
 
-    /// Runs the CLI and closes the read end of one of its output pipes directly after the spawn.
-    async fn cli_with_closed_stream<I, S>(&self, command_args: I, closed: ClosedStream) -> RawOutput
+    /// Closes the read end of stdout once the CLI has printed nothing for a while, as `head`
+    /// does after it has read enough.
+    async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(command_args, ClosedStream::Stdout, CloseWhen::Quiet)
+            .await
+    }
+
+    /// Closes the read end of stdout once the CLI has printed at least `bytes` bytes, as
+    /// `head -c` does. The result holds the bytes that were read before the close.
+    async fn cli_closing_stdout_after_bytes<I, S>(&self, command_args: I, bytes: usize) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.cli_closing_output(
+            command_args,
+            ClosedStream::Stdout,
+            CloseWhen::AfterBytes(bytes),
+        )
+        .await
+    }
+
+    /// Runs the CLI, closes the read end of one of its output pipes when `when` says so, then
+    /// collects the other pipe and the exit status.
+    async fn cli_closing_output<I, S>(
+        &self,
+        command_args: I,
+        closed: ClosedStream,
+        when: CloseWhen,
+    ) -> RawOutput
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -887,12 +927,42 @@ impl TestContext {
             .spawn()
             .unwrap();
 
+        let mut read_before_close = Vec::new();
         let mut open_stream: Pin<Box<dyn AsyncRead + Send>> = match closed {
             ClosedStream::Stdout => {
-                drop(child.stdout.take());
+                let mut stdout = child.stdout.take().unwrap();
+                let mut buffer = [0u8; 4096];
+                match when {
+                    CloseWhen::AtSpawn => {}
+                    CloseWhen::Quiet => loop {
+                        match tokio::time::timeout(Duration::from_secs(5), stdout.read(&mut buffer))
+                            .await
+                        {
+                            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                            Ok(Ok(_)) => {}
+                        }
+                    },
+                    CloseWhen::AfterBytes(bytes) => {
+                        tokio::time::timeout(Duration::from_secs(120), async {
+                            while read_before_close.len() < bytes {
+                                let count = stdout.read(&mut buffer).await.unwrap();
+                                assert!(
+                                    count > 0,
+                                    "the CLI ended after {} of {bytes} bytes",
+                                    read_before_close.len()
+                                );
+                                read_before_close.extend_from_slice(&buffer[..count]);
+                            }
+                        })
+                        .await
+                        .expect("the CLI did not print enough output before the reader left");
+                    }
+                }
+                drop(stdout);
                 Box::pin(child.stderr.take().unwrap())
             }
             ClosedStream::Stderr => {
+                assert!(matches!(when, CloseWhen::AtSpawn));
                 drop(child.stderr.take());
                 Box::pin(child.stdout.take().unwrap())
             }
@@ -905,7 +975,7 @@ impl TestContext {
         match closed {
             ClosedStream::Stdout => RawOutput {
                 status,
-                stdout: Vec::new(),
+                stdout: read_before_close,
                 stderr: open_bytes,
             },
             ClosedStream::Stderr => RawOutput {
@@ -913,60 +983,6 @@ impl TestContext {
                 stdout: open_bytes,
                 stderr: Vec::new(),
             },
-        }
-    }
-
-    /// Runs the CLI and closes the read end of its stdout once the CLI has printed nothing for
-    /// a while, as `head` does after it has read enough.
-    async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        self.rewrite_local_http_domain_ports();
-
-        let mut args = vec![
-            "--config-dir".to_string(),
-            self.config_dir.path().to_str().unwrap().to_string(),
-        ];
-        args.extend(
-            command_args
-                .into_iter()
-                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
-        );
-
-        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
-        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
-
-        let mut child = Command::new(&self.golem_cli_path)
-            .args(args)
-            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
-            .envs(&self.env)
-            .current_dir(&working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-
-        let mut stdout = child.stdout.take().unwrap();
-        let mut buffer = [0u8; 4096];
-        loop {
-            match tokio::time::timeout(Duration::from_secs(5), stdout.read(&mut buffer)).await {
-                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
-                Ok(Ok(_)) => {}
-            }
-        }
-        drop(stdout);
-
-        let mut stderr = child.stderr.take().unwrap();
-        let mut stderr_bytes = Vec::new();
-        stderr.read_to_end(&mut stderr_bytes).await.unwrap();
-
-        RawOutput {
-            status: child.wait().await.unwrap(),
-            stdout: Vec::new(),
-            stderr: stderr_bytes,
         }
     }
 
