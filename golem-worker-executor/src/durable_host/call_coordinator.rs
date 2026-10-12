@@ -648,9 +648,8 @@ where
         None => None,
     };
     store.with(|mut access| {
-        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked, root_states);
-    });
-    Ok(())
+        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked, root_states)
+    })
 }
 
 /// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent

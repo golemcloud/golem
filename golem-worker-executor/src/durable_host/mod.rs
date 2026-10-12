@@ -2109,14 +2109,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     None => golem_common::model::card::agent_effective_surface_from_wallet(
                         &context, wallet,
                     ),
-                    Some(scope) if scope.live_roots().is_some() => {
+                    Some(scope) => {
                         golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
                             &context,
                             wallet,
                             Some(&scope.card),
                         )
                     }
-                    Some(_) => golem_common::model::card::EffectiveSurface::default(),
                 },
             }
         };
@@ -2137,8 +2136,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     /// Brings a Store's authority up to date with its owner worker at a live boundary: excludes
-    /// cards revoked by any of the owner's Stores, drops or invalidates a scope whose roots they
-    /// revoked, and checks an entity Store's inherited scope roots.
+    /// cards revoked by any of the owner's Stores, removes a scope whose roots they revoked, and
+    /// checks an entity Store's inherited scope roots.
     async fn synchronize_owner_authority(&mut self) -> Result<(), WorkerExecutorError> {
         if !self.state.is_live() {
             return Ok(());
@@ -2154,20 +2153,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Some(root_ids) => Some(self.state.card_service.check_cards(root_ids).await?),
             None => None,
         };
-        self.apply_owner_authority_synchronization(revoked, root_states);
-        Ok(())
+        self.apply_owner_authority_synchronization(revoked, root_states)
     }
 
     fn apply_owner_authority_synchronization(
         &mut self,
         revoked: HashSet<CardId>,
         root_states: Option<HashMap<CardId, CardState>>,
-    ) {
-        if let Some(scope) = &mut self.state.inherited_invocation_scope {
-            if let Some(root_states) = &root_states {
-                scope.check_roots(root_states);
+    ) -> Result<(), WorkerExecutorError> {
+        let remove_inherited_scope = match &mut self.state.inherited_invocation_scope {
+            Some(scope) => {
+                let all_live = match &root_states {
+                    Some(root_states) => scope.check_roots(root_states)?,
+                    None => true,
+                };
+                !all_live || scope.roots_expired(Utc::now())
             }
-            scope.invalidate_if_roots_expired(Utc::now());
+            None => false,
+        };
+        if remove_inherited_scope {
+            self.state.inherited_invocation_scope = None;
         }
         let revoked_roots = self
             .interested_card_ids()
@@ -2177,6 +2182,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.clear_invocation_scope_if_roots_include(&revoked_roots);
         self.state.owner_revoked_card_ids = revoked;
         self.rederive_agent_effective_surface_from_wallet();
+        Ok(())
     }
 
     fn interested_card_ids(&self) -> Vec<CardId> {
@@ -2248,13 +2254,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     fn clear_invocation_scope_if_roots_include(&mut self, card_ids: &[CardId]) -> bool {
-        let inherited_scope_invalidated = self
+        let inherited_scope_removed = self
             .state
             .inherited_invocation_scope
-            .as_mut()
-            .is_some_and(|scope| {
-                scope.invalidate_if_roots_include(&card_ids.iter().copied().collect())
-            });
+            .as_ref()
+            .is_some_and(|scope| scope.roots_include(&card_ids.iter().copied().collect()));
+        if inherited_scope_removed {
+            self.state.inherited_invocation_scope = None;
+        }
         let (scope_changed, handles) = remove_invocation_scope_for_revoked_roots(
             &mut self.state.invocation_scope_card,
             &mut self.state.invocation_scope_handles,
@@ -2268,7 +2275,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if scope_changed {
             self.state.invocation_scope_root_cards.clear();
         }
-        scope_changed || inherited_scope_invalidated
+        scope_changed || inherited_scope_removed
     }
 
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
@@ -6959,77 +6966,58 @@ fn owner_revoked_card_ids(status: &golem_common::model::AgentStatusRecord) -> Ha
         .collect()
 }
 
-/// Invocation scope inherited by an entity Store. Its roots are checked at the entity Store's
-/// first live authority boundary. Until then, and after any root is revoked or expires, the
-/// entity Store's effective surface is empty, so an invalid scope never falls back to the wallet.
+/// Invocation scope an entity Store inherits from the Store that started its invocation. Tool and
+/// middleware code acts as if it were inlined in the owner agent, so the inherited scope follows
+/// the primary Store's rules: it applies as soon as it is installed, its roots are checked at the
+/// entity Store's first live authority boundary, and a revoked or expired root removes the scope.
 #[derive(Clone, Debug)]
 struct InheritedInvocationScope {
     card: ScopeCard,
-    roots: InheritedScopeRoots,
-}
-
-#[derive(Clone, Debug)]
-enum InheritedScopeRoots {
-    Unchecked,
-    Live(BTreeMap<CardId, StoredCard>),
-    Invalid,
+    /// The live root cards, once checked at a live authority boundary.
+    roots: Option<BTreeMap<CardId, StoredCard>>,
 }
 
 impl InheritedInvocationScope {
     fn unchecked(card: ScopeCard) -> Self {
-        Self {
-            card,
-            roots: InheritedScopeRoots::Unchecked,
-        }
+        Self { card, roots: None }
     }
 
     fn unchecked_root_ids(&self) -> Option<Vec<CardId>> {
-        matches!(self.roots, InheritedScopeRoots::Unchecked)
+        self.roots
+            .is_none()
             .then(|| self.card.root_card_ids.clone())
     }
 
     fn live_roots(&self) -> Option<&BTreeMap<CardId, StoredCard>> {
-        match &self.roots {
-            InheritedScopeRoots::Live(roots) => Some(roots),
-            InheritedScopeRoots::Unchecked | InheritedScopeRoots::Invalid => None,
-        }
+        self.roots.as_ref()
     }
 
-    fn check_roots(&mut self, card_states: &HashMap<CardId, CardState>) {
-        if !matches!(self.roots, InheritedScopeRoots::Unchecked) {
-            return;
+    /// Records the checked root cards and returns whether every root is live. As in the primary
+    /// Store after replay, a root that the card service does not know is an error.
+    fn check_roots(
+        &mut self,
+        card_states: &HashMap<CardId, CardState>,
+    ) -> Result<bool, WorkerExecutorError> {
+        if self.roots.is_some() {
+            return Ok(true);
         }
-        self.roots = match live_scope_root_cards_from_states(Some(&self.card), card_states) {
-            Ok(roots) if roots.len() == self.card.root_card_ids.len() => {
-                InheritedScopeRoots::Live(roots)
-            }
-            Ok(_) | Err(_) => InheritedScopeRoots::Invalid,
-        };
+        let roots = live_scope_root_cards_from_states(Some(&self.card), card_states)?;
+        let all_live = roots.len() == self.card.root_card_ids.len();
+        self.roots = Some(roots);
+        Ok(all_live)
     }
 
-    /// Returns whether the scope became invalid.
-    fn invalidate_if_roots_include(&mut self, card_ids: &HashSet<CardId>) -> bool {
-        let affected = !matches!(self.roots, InheritedScopeRoots::Invalid)
-            && self
-                .card
-                .root_card_ids
-                .iter()
-                .any(|root_id| card_ids.contains(root_id));
-        if affected {
-            self.roots = InheritedScopeRoots::Invalid;
-        }
-        affected
+    fn roots_include(&self, card_ids: &HashSet<CardId>) -> bool {
+        self.card
+            .root_card_ids
+            .iter()
+            .any(|root_id| card_ids.contains(root_id))
     }
 
-    /// Returns whether the scope became invalid.
-    fn invalidate_if_roots_expired(&mut self, now: DateTime<Utc>) -> bool {
-        let expired = self
-            .live_roots()
-            .is_some_and(|roots| !expired_wallet_card_ids_at(roots, now).is_empty());
-        if expired {
-            self.roots = InheritedScopeRoots::Invalid;
-        }
-        expired
+    fn roots_expired(&self, now: DateTime<Utc>) -> bool {
+        self.roots
+            .as_ref()
+            .is_some_and(|roots| !expired_wallet_card_ids_at(roots, now).is_empty())
     }
 }
 
@@ -8632,18 +8620,23 @@ mod tests {
     }
 
     #[test]
-    fn inherited_scope_is_live_only_when_every_root_is_live() {
+    fn inherited_scope_roots_are_checked_once_and_unknown_roots_are_errors() {
         let first = CardId(Uuid::from_u128(1));
         let second = CardId(Uuid::from_u128(2));
         let live = |card_id| CardState::Live(Box::new(concrete_card(card_id)));
+        let unchecked =
+            || InheritedInvocationScope::unchecked(invocation_scope_card(vec![first, second]));
 
-        let mut scope =
-            InheritedInvocationScope::unchecked(invocation_scope_card(vec![first, second]));
+        let mut scope = unchecked();
         assert_eq!(scope.unchecked_root_ids(), Some(vec![first, second]));
-        scope.check_roots(&HashMap::from([
-            (first, live(first)),
-            (second, live(second)),
-        ]));
+        assert!(
+            scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, live(second))
+                ]))
+                .unwrap()
+        );
         assert_eq!(
             scope
                 .live_roots()
@@ -8651,53 +8644,56 @@ mod tests {
             Some(vec![first, second])
         );
         assert_eq!(scope.unchecked_root_ids(), None);
+        assert!(scope.check_roots(&HashMap::new()).unwrap());
 
-        for second_state in [CardState::Revoked, CardState::Unknown] {
-            let mut scope =
-                InheritedInvocationScope::unchecked(invocation_scope_card(vec![first, second]));
-            scope.check_roots(&HashMap::from([
-                (first, live(first)),
-                (second, second_state),
-            ]));
-            assert!(matches!(scope.roots, InheritedScopeRoots::Invalid));
-        }
+        let mut scope = unchecked();
+        assert!(
+            !scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, CardState::Revoked)
+                ]))
+                .unwrap()
+        );
 
-        let mut scope =
-            InheritedInvocationScope::unchecked(invocation_scope_card(vec![first, second]));
-        scope.check_roots(&HashMap::from([(first, live(first))]));
-        assert!(matches!(scope.roots, InheritedScopeRoots::Invalid));
+        let mut scope = unchecked();
+        assert!(
+            scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, CardState::Unknown)
+                ]))
+                .is_err()
+        );
+        let mut scope = unchecked();
+        assert!(
+            scope
+                .check_roots(&HashMap::from([(first, live(first))]))
+                .is_err()
+        );
     }
 
     #[test]
-    fn inherited_scope_becomes_invalid_on_root_revocation_or_expiry_and_stays_invalid() {
+    fn inherited_scope_detects_revoked_and_expired_roots() {
         let root = CardId(Uuid::from_u128(1));
         let unrelated = CardId(Uuid::from_u128(2));
         let now = Utc::now();
-        let live_scope = |expires_at| InheritedInvocationScope {
+        let scope = InheritedInvocationScope {
             card: invocation_scope_card(vec![root]),
-            roots: InheritedScopeRoots::Live(BTreeMap::from([(
+            roots: Some(BTreeMap::from([(
                 root,
-                concrete_card_expiring_at(root, expires_at),
+                concrete_card_expiring_at(root, Some(now + chrono::Duration::seconds(60))),
             )])),
         };
 
-        let mut scope = live_scope(None);
-        assert!(!scope.invalidate_if_roots_include(&HashSet::from([unrelated])));
-        assert!(scope.live_roots().is_some());
-        assert!(scope.invalidate_if_roots_include(&HashSet::from([root])));
-        assert!(matches!(scope.roots, InheritedScopeRoots::Invalid));
-        let live = CardState::Live(Box::new(concrete_card(root)));
-        scope.check_roots(&HashMap::from([(root, live)]));
-        assert!(matches!(scope.roots, InheritedScopeRoots::Invalid));
-
-        let mut scope = live_scope(Some(now + chrono::Duration::seconds(60)));
-        assert!(!scope.invalidate_if_roots_expired(now));
-        assert!(scope.invalidate_if_roots_expired(now + chrono::Duration::seconds(60)));
-        assert!(matches!(scope.roots, InheritedScopeRoots::Invalid));
-
-        let mut scope = InheritedInvocationScope::unchecked(invocation_scope_card(vec![root]));
-        assert!(scope.invalidate_if_roots_include(&HashSet::from([root])));
-        assert!(matches!(scope.roots, InheritedScopeRoots::Invalid));
+        assert!(!scope.roots_include(&HashSet::from([unrelated])));
+        assert!(scope.roots_include(&HashSet::from([root])));
+        assert!(!scope.roots_expired(now));
+        assert!(scope.roots_expired(now + chrono::Duration::seconds(60)));
+        assert!(
+            !InheritedInvocationScope::unchecked(invocation_scope_card(vec![root]))
+                .roots_expired(now + chrono::Duration::seconds(60))
+        );
     }
 
     #[test]

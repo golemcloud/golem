@@ -40,8 +40,9 @@ There is no inverse projection from inner to outer permissions.
 
 ### Authority in entity Stores
 
-An entity Store authorizes with the owner's wallet and the invocation scope of the Store that
-started its invocation. The scope is resident state: `EntityInvocationDurability::from_started_request`
+Invariant: tool and middleware code acts as if it were inlined in the owner agent. An entity Store
+has no authority of its own; it authorizes with the owner's wallet and the invocation scope of the
+Store that started its invocation, under the same rules as the primary Store. The scope is resident state: `EntityInvocationDurability::from_started_request`
 captures `current_invocation_scope_card` from the calling Store (the primary's admitted scope or an
 entity's inherited one) into `EntityInvocationScope`, live and on replay, because the calling Store
 has reinstalled its own scope from recorded data by then. Nothing about the scope is added to the
@@ -49,16 +50,18 @@ entity `Start`.
 
 - `set_entity_invocation_scope` installs the card as `inherited_invocation_scope`, separate from
   `invocation_scope_card`, so `self_wallet` never hands the caller's scope to middleware code.
-- The inherited roots start `Unchecked`. The entity's first live authority boundary checks them
-  with the card service. Until they are `Live`, and after any root is revoked or expires, the entity
-  surface is empty: an invalid scope fails closed and never falls back to the bare wallet.
+- The inherited scope applies as soon as it is installed. The entity's first live authority
+  boundary checks its roots with the card service; an unknown root is an error, as in the primary
+  Store after replay. A revoked or expired root removes the inherited scope, as it removes the
+  primary's scope, and descendants started later inherit no scope.
 - `rederive_agent_effective_surface_from_wallet` re-derives entity surfaces too. Card events are
   consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary
   every Store, primary or entity, runs `synchronize_owner_authority`: it excludes every card the
   worker status lists as revoked or pending revocation from its effective and delegation surfaces
-  (`authority_wallet_cards`), and drops (primary) or invalidates (entity) a scope with a revoked
-  root. Without it, a revocation drained by a middleware Store left the card authorizing the
+  (`authority_wallet_cards`), and removes a scope with a revoked root. Without it, a revocation drained by a middleware Store left the card authorizing the
   primary's own calls.
+- Removing a scope also removes its upper restrictions, so the Store continues with its wallet
+  authority. This is the primary Store's policy, which entity Stores follow.
 - Known gap: Stores reconcile revocations recorded or pending in the owner status, but
   cross-Store wallet updates and owner-wide card-interest registration remain incomplete. Card
   installs and transfers drained by another Store do not reach an existing entity Store's wallet
