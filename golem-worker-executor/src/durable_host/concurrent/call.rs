@@ -2313,6 +2313,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         } else {
             None
         };
+        if replay.is_some()
+            && let Some(hook) = &admission_hook
+        {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::AfterStart)
+                .await;
+        }
 
         // Build the request between the scope open and the host-call `Start` write/claim. It runs
         // on replay too so positional side entries written by the builder are consumed in the same

@@ -568,12 +568,18 @@ impl Fixture {
                     .count();
                 let expected_open = usize::from(watchdog_ms > 0);
                 let expected_completed = usize::from(nap_ms > 0);
+                // Without an initial wait the send and the watchdog start concurrently, so the
+                // watchdog's `Start` can still be on its way to the oplog.
+                if open_waits == expected_open && completed_waits == expected_completed {
+                    return Ok(oplog);
+                }
                 anyhow::ensure!(
-                    open_waits == expected_open && completed_waits == expected_completed,
+                    Instant::now() < deadline,
                     "in-flight window has {open_waits} open and {completed_waits} completed waits, \
                      expected {expected_open} open and {expected_completed} completed"
                 );
-                return Ok(oplog);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                continue;
             }
             anyhow::ensure!(
                 sends.len() <= 1 && Instant::now() < deadline,
@@ -587,17 +593,16 @@ impl Fixture {
     /// replayed wait can pass its claim before the gates are in place.
     fn arm_watchdog_first_gates(&self, worker_id: &AgentId) -> WatchdogFirstGates {
         let wait = |stage| {
-            self.executor
-                .gate_next_replay_access_admission(worker_id, "monotonic-clock::wait-for", stage)
+            self.executor.gate_next_replay_access_admission(
+                worker_id,
+                "monotonic-clock::wait-for",
+                stage,
+            )
         };
         WatchdogFirstGates {
             first_wait: wait(ReplayAdmissionStage::BeforeScope),
             second_wait: wait(ReplayAdmissionStage::BeforeScope),
-            second_wait_claimed: self.executor.gate_next_replay_access_admission(
-                worker_id,
-                "monotonic-clock::now",
-                ReplayAdmissionStage::BeforeDeferredStart,
-            ),
+            second_wait_claimed: wait(ReplayAdmissionStage::AfterStart),
         }
     }
 
@@ -763,8 +768,8 @@ impl Fixture {
 struct WatchdogFirstGates {
     first_wait: ReplayAdmissionGateHandle,
     second_wait: ReplayAdmissionGateHandle,
-    /// The internal clock read of a `wait-for` runs after the wait claimed its own `Start`. While
-    /// the first wait is held, the only wait that can reach it is the second one.
+    /// While the first wait is held before its claim, the only wait that can claim a `Start` is
+    /// the second one.
     second_wait_claimed: ReplayAdmissionGateHandle,
 }
 
