@@ -22,6 +22,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::oplog::PublicUpdateDescription;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     OplogErrorKind, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
 };
@@ -47,6 +48,7 @@ use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotUploadConfig, OplogConfig, SnapshotPolicy,
 };
+use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -3853,6 +3855,95 @@ async fn manual_update_on_idle_with_failing_load(
     Ok(())
 }
 
+struct SnapshotLoadKeyValueService {
+    inner: Arc<dyn KeyValueService>,
+    entered: tokio::sync::mpsc::UnboundedSender<String>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait::async_trait]
+impl KeyValueService for SnapshotLoadKeyValueService {
+    async fn get(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        if bucket == "snapshot-load" {
+            self.entered.send(key.clone())?;
+            self.release.acquire().await?.forget();
+        }
+        self.inner.get(environment_id, bucket, key).await
+    }
+
+    async fn delete(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<()> {
+        self.inner.delete(environment_id, bucket, key).await
+    }
+
+    async fn delete_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Arc<[String]>,
+    ) -> anyhow::Result<()> {
+        self.inner.delete_many(environment_id, bucket, keys).await
+    }
+
+    async fn exists(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<bool> {
+        self.inner.exists(environment_id, bucket, key).await
+    }
+
+    async fn get_keys(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+    ) -> anyhow::Result<Vec<String>> {
+        self.inner.get_keys(environment_id, bucket).await
+    }
+
+    async fn get_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Arc<[String]>,
+    ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
+        self.inner.get_many(environment_id, bucket, keys).await
+    }
+
+    async fn set(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+        outgoing_value: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .set(environment_id, bucket, key, outgoing_value)
+            .await
+    }
+
+    async fn set_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key_values: Arc<[(String, Vec<u8>)]>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .set_many(environment_id, bucket, key_values)
+            .await
+    }
+}
+
 /// The update agent of a manual update test, on revision 2 with `f1` called once, so its state is
 /// 150. The env of the agent steers the load of the target revision 3 (`LOAD_SNAPSHOT`).
 async fn manual_update_agent_with_load(
@@ -3893,7 +3984,7 @@ async fn manual_update_agent_with_load(
 }
 
 /// An interrupt during the snapshot load of a manual update leaves the update pending. The load is
-/// held at its wall-clock read while the interrupt arrives. The resume waits until the interrupted
+/// held at its key-value read while the interrupt arrives. The resume waits until the interrupted
 /// start has unloaded the agent: a resume while the agent is still loaded starts nothing. The next
 /// start loads the snapshot again, and only that load applies the update.
 #[test]
@@ -3905,14 +3996,31 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let (entered, mut loads) = tokio::sync::mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let release_service = release.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_service: Some(Arc::new(move |inner| {
+                Arc::new(SnapshotLoadKeyValueService {
+                    inner,
+                    entered: entered.clone(),
+                    release: release_service.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     let http_server = TestHttpServer::start().await;
     let (component, agent_id, worker_id, target) = manual_update_agent_with_load(
         &executor,
         &context,
         agent_update_v2,
         &http_server,
-        "read-clock",
+        "read-key",
     )
     .await?;
     let before_update = executor
@@ -3920,11 +4028,14 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
         .await?;
 
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let mut first_load = executor.gate_next_wall_clock_now(&owned_agent_id).await?;
+    let snapshot_key = before_update.clone().into_typed::<u64>()?.to_string();
     executor
         .manual_update_worker(&worker_id, target.revision, false)
         .await?;
-    tokio::time::timeout(Duration::from_secs(30), first_load.entered()).await?;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(30), loads.recv()).await?,
+        Some(snapshot_key.clone())
+    );
     executor
         .interrupt_loaded_worker(
             &worker_id,
@@ -3933,7 +4044,7 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
             ),
         )
         .await?;
-    first_load.release();
+    release.add_permits(1);
     let interrupted = executor
         .wait_for_status(
             &worker_id,
@@ -3949,6 +4060,11 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
     .await?;
 
     executor.resume(&worker_id, false).await?;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(30), loads.recv()).await?,
+        Some(snapshot_key)
+    );
+    release.add_permits(1);
     executor
         .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
         .await?;
