@@ -424,7 +424,7 @@ An [MCP import](/next/invoke/mcp#importing-tools-from-another-mcp-server) cannot
 
 An ambient native tool of the server with the name of a default tool takes the place of the default tool, because it can be another version of the tool. The CLI then makes no grant and no binding for the default tool, and it prints one line that says so. A binding named `bash` under an agent type then narrows the native tool.
 
-The grant for a default tool needs no confirmation and is not part of the grant plan. `golem deploy --plan` and `golem deploy --stage` make no grant, so an environment without the grant is planned or staged without the tool, and the next normal deployment adds it. If the server does not have the release, the CLI prints one warning and the deployment continues without the tool.
+The grant for a default tool is a part of the environment tool grant plan, as for every other registry release. A normal `golem deploy` shows the plan, asks for confirmation (`--yes` gives it) and makes the grant before it builds the deployment. `golem deploy --plan` and `golem deploy --stage` make no grant: on an environment that has no grant for the tool yet, `--plan` shows the grant plan and stops there, and `--stage` is refused. One normal deployment makes the grant. If the server does not have the release, the deployment stops and removes no grant; to deploy without the tool, leave it out of `defaultTools`.
 
 An agent that exists already gets a default tool on its next call after the deployment, as long as the deployment contains the agent's component revision. An agent on an older component revision gets it when the agent is updated, for example with `golem deploy --update-agents auto`.
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{TestContext, cmd, flag};
+use crate::app::{Output, TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
 use chrono::{DateTime, Utc};
 use golem_cli::fs;
@@ -627,11 +627,14 @@ environments:
         anyhow::Ok(grants.remove(0))
     };
 
+    let says =
+        |output: &Output, text: &str| output.stdout_contains(text) || output.stderr_contains(text);
+
     // The default tool gets an automatic grant that follows the coordinates of its release.
     fs::write_str(ctx.cwd_path_join("golem.yaml"), manifest(""))?;
     let deployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(deployed.success_or_dump());
-    assert!(deployed.stdout_contains("Granted default tool bash"));
+    assert!(says(&deployed, "environment tool grant setup"));
     let granted = only_grant().await?;
     assert!(granted.grant.automatic);
     assert!(granted.grant.follow_coordinates);
@@ -658,34 +661,23 @@ environments:
         let read_only = ctx.cli([flag::YES, cmd::DEPLOY, run]).await;
         assert!(read_only.success_or_dump(), "{run}");
         for unexpected in [
-            "Skipping default tool bash",
             "delete remote tool bash",
             "Planning stopped",
+            "requires environment tool or tool middleware grant changes",
         ] {
-            assert!(
-                !read_only.stdout_contains(unexpected) && !read_only.stderr_contains(unexpected),
-                "{run}: {unexpected}"
-            );
+            assert!(!says(&read_only, unexpected), "{run}: {unexpected}");
         }
         let unchanged = only_grant().await?;
         assert_eq!(unchanged.grant.id, granted.grant.id);
         assert!(!unchanged.grant.follow_coordinates, "{run}");
     }
 
-    // A deployment changes the mode of the grant. The release was granted before, so the
-    // deployment has no line about a new grant and no grant plan.
+    // A deployment changes the mode of the grant as a step of its grant plan. The release was
+    // granted before, so the plan has no new grant for the default tool.
     let redeployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(redeployed.success_or_dump());
-    for unexpected in [
-        "Granted default tool bash",
-        "Skipping default tool bash",
-        "Planning environment tool grant reconciliation",
-    ] {
-        assert!(
-            !redeployed.stdout_contains(unexpected) && !redeployed.stderr_contains(unexpected),
-            "{unexpected}"
-        );
-    }
+    assert!(says(&redeployed, "environment tool grant reconciliation"));
+    assert!(!says(&redeployed, "default tool bash"));
     let following = only_grant().await?;
     assert_eq!(following.grant.id, granted.grant.id);
     assert!(following.grant.automatic);

@@ -1232,7 +1232,6 @@ impl Application {
         })
     }
 
-    /// The default tools whose release the environment has no grant for.
     /// The default tools that the deployment leaves to the server, because the server has a
     /// native tool with the same name.
     pub fn default_tools_with_a_native_tool(
@@ -1243,20 +1242,6 @@ impl Application {
             .keys()
             .filter(|name| native_tool_names.contains(*name))
             .cloned()
-            .collect()
-    }
-
-    pub fn default_tools_without_grant(
-        &self,
-        is_granted: impl Fn(&golem_common::model::tool_release::ToolReleaseReference) -> bool,
-    ) -> BTreeSet<ToolName> {
-        self.default_tool_release_references()
-            .filter(|(_, release)| {
-                !release
-                    .to_release_reference()
-                    .is_ok_and(|reference| is_granted(&reference))
-            })
-            .map(|(name, _)| name.clone())
             .collect()
     }
 
@@ -7716,27 +7701,6 @@ bridge:
         assert!(
             app.resolve_remote_tool_provision(&ToolName::try_from("bash").unwrap())
                 .is_ok()
-        );
-    }
-
-    #[test]
-    fn a_default_tool_without_a_grant_is_unavailable() {
-        let source = indoc! {r#"
-            app: plain-app
-            environments:
-              local:
-                server: local
-        "#};
-        let (app, _dir) = load_app_for_env(source, "local", &[]);
-        let bash_reference = default_bash_release().to_release_reference().unwrap();
-
-        assert_eq!(
-            app.default_tools_without_grant(|_| false),
-            BTreeSet::from([ToolName::try_from("bash").unwrap()])
-        );
-        assert_eq!(
-            app.default_tools_without_grant(|reference| reference == &bash_reference),
-            BTreeSet::new()
         );
     }
 

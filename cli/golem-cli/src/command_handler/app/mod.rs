@@ -38,7 +38,7 @@ use crate::command_handler::app::tool_middleware::{
 use crate::command_handler::app::version_strategy::{ResolvedAppVersionSource, compute_version};
 use crate::command_handler::template::EnvVarRenderer;
 use crate::context::Context;
-use crate::error::service::{MapServiceError, ServiceError, ServiceErrorKind};
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch, Match};
@@ -310,41 +310,24 @@ impl ToolGrantReconciliationPlan {
         self.creations.iter().chain(&self.reference_updates)
     }
 
-    /// Takes the grant that `reference` needs out of the plan. Returns `None` when the plan
-    /// has no such grant to create or to update.
-    fn take_upsert(&mut self, reference: &ToolReleaseReference) -> Option<PlannedGrant> {
-        let planned = if let Some(grant) = self.reference_update_grants.remove(reference) {
+    /// Lets each of `references` use the grant that the environment has for its release in the
+    /// other reference mode. This is for a run that changes no grant: the release is granted,
+    /// and a deployment accepts a grant in either mode. The plan still shows the change of
+    /// mode that a deployment makes.
+    fn reuse_grants_in_other_reference_mode<'a>(
+        &mut self,
+        references: impl IntoIterator<Item = &'a ToolReleaseReference>,
+    ) {
+        for reference in references {
+            let Some(grant) = self.reference_update_grants.remove(reference) else {
+                continue;
+            };
             self.reference_updates.retain(|update| update != reference);
             self.deletions
                 .retain(|deletion| *deletion != grant.grant.id);
-            PlannedGrant::ReferenceUpdate(Box::new(grant))
-        } else if self.creations.contains(reference) {
-            self.creations.retain(|creation| creation != reference);
-            PlannedGrant::Creation
-        } else {
-            return None;
-        };
-        let taken = tool_grant_plan_entry(EnvironmentToolGrantPlanAction::Create, reference, None);
-        self.view.entries.retain(|entry| {
-            !(matches!(
-                entry.action,
-                EnvironmentToolGrantPlanAction::Create
-                    | EnvironmentToolGrantPlanAction::UpdateReference
-            ) && entry.release_id == taken.release_id
-                && entry.account == taken.account
-                && entry.name == taken.name
-                && entry.version == taken.version)
-        });
-        Some(planned)
+            self.resolved_grants.insert(reference.clone(), grant);
+        }
     }
-}
-
-/// A grant that a reference needs and that a plan would make.
-enum PlannedGrant {
-    /// The environment has no grant of the release.
-    Creation,
-    /// The environment has a grant of the release, in the other reference mode.
-    ReferenceUpdate(Box<EnvironmentToolGrantWithDetails>),
 }
 
 fn tool_grant_plan_entry(
@@ -440,68 +423,16 @@ fn build_tool_grant_reconciliation_plan(
     }
 }
 
-/// What became of the grant that a default tool needs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DefaultToolGrantOutcome {
-    Granted,
-    /// The run must not change grants.
-    NotGranted,
-    /// The server did not make the grant; the text is its reason.
-    Refused(String),
-}
-
-/// Settles the grants that the default tools need, apart from the plan: such a grant is made
-/// without a question, and a tool that cannot get one is left out of the deployment instead of
-/// failing it. A grant of the release in the other reference mode makes the release available:
-/// a run that must not change grants uses it as it is, and another run changes its mode, or
-/// uses it as it is when the mode cannot be changed.
-/// Returns the outcome for each default tool that had no grant of its release.
-async fn settle_default_tool_grants<F, Fut>(
-    plan: &mut ToolGrantReconciliationPlan,
+/// The default tools for which the plan makes a grant.
+fn default_tools_to_grant(
+    plan: &ToolGrantReconciliationPlan,
     default_tools: &[(ToolName, ToolReleaseReference)],
-    may_change_grants: bool,
-    mut create_grant: F,
-) -> Vec<(ToolName, DefaultToolGrantOutcome)>
-where
-    F: FnMut(ToolReleaseReference) -> Fut,
-    Fut: Future<Output = anyhow::Result<EnvironmentToolGrantWithDetails>>,
-{
-    let mut outcomes = Vec::new();
-    for (name, reference) in default_tools {
-        let Some(planned) = plan.take_upsert(reference) else {
-            continue;
-        };
-        let existing = match planned {
-            PlannedGrant::ReferenceUpdate(grant) if !may_change_grants => {
-                plan.resolved_grants.insert(reference.clone(), *grant);
-                continue;
-            }
-            PlannedGrant::Creation if !may_change_grants => {
-                outcomes.push((name.clone(), DefaultToolGrantOutcome::NotGranted));
-                continue;
-            }
-            PlannedGrant::ReferenceUpdate(grant) => Some(grant),
-            PlannedGrant::Creation => None,
-        };
-        match (create_grant(reference.clone()).await, existing) {
-            (Ok(grant), existing) => {
-                plan.resolved_grants.insert(reference.clone(), grant);
-                if existing.is_none() {
-                    outcomes.push((name.clone(), DefaultToolGrantOutcome::Granted));
-                }
-            }
-            // The release stays granted in its present reference mode, which a deployment
-            // accepts. A later run changes the mode.
-            (Err(_), Some(existing)) => {
-                plan.resolved_grants.insert(reference.clone(), *existing);
-            }
-            (Err(error), None) => outcomes.push((
-                name.clone(),
-                DefaultToolGrantOutcome::Refused(format!("{error:#}")),
-            )),
-        }
-    }
-    outcomes
+) -> Vec<ToolName> {
+    default_tools
+        .iter()
+        .filter(|(_, reference)| plan.creations.contains(reference))
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 impl AppCommandHandler {
@@ -1170,14 +1101,19 @@ impl AppCommandHandler {
             .plan_tool_grant_reconciliation(&environment, Some(&native_default_tools))
             .await
             .map_err(DeployError::PrepareError)?;
-        self.settle_default_tool_grants(
-            &environment,
-            &mut tool_grant_plan,
-            !config.stage && !config.plan,
-            &native_default_tools,
-        )
-        .await
-        .map_err(DeployError::PrepareError)?;
+        let default_tool_references = self
+            .default_tool_grant_references(&native_default_tools)
+            .await
+            .map_err(DeployError::PrepareError)?;
+        if config.stage || config.plan {
+            tool_grant_plan.reuse_grants_in_other_reference_mode(
+                default_tool_references
+                    .iter()
+                    .map(|(_, reference)| reference),
+            );
+        }
+        let default_tools_to_grant =
+            default_tools_to_grant(&tool_grant_plan, &default_tool_references);
         let requires_access_changes = tool_grant_plan.requires_access_changes()
             || tool_middleware_grant_plan.requires_access_changes();
         let has_tool_grant_changes =
@@ -1210,6 +1146,16 @@ impl AppCommandHandler {
                 .log_handler()
                 .log_output(tool_grant_plan.view.clone())
                 .map_err(DeployError::PrepareError)?;
+            for name in &default_tools_to_grant {
+                log_action(
+                    "Including",
+                    format!(
+                        "default tool {}, which needs the grant above. To deploy without the tool, leave it out of {} for the environment in the application manifest.",
+                        name.as_str().log_color_highlight(),
+                        "defaultTools".log_color_highlight()
+                    ),
+                );
+            }
         }
         if grant_execution == GrantExecutionDecision::RejectStage {
             return Err(DeployError::PrepareError(anyhow!(
@@ -1223,9 +1169,19 @@ impl AppCommandHandler {
             )
             .await
             .map_err(DeployError::PrepareError)?;
-            self.validate_tool_grant_reconciliation(&environment, &tool_grant_plan)
+            if let Err(error) = self
+                .validate_tool_grant_reconciliation(&environment, &tool_grant_plan)
                 .await
-                .map_err(DeployError::PrepareError)?;
+            {
+                for name in &default_tools_to_grant {
+                    log_warn(format!(
+                        "The grant plan has the default tool {}. If the server does not have the release of this tool, leave the tool out of {} for the environment in the application manifest.",
+                        name.as_str().log_color_highlight(),
+                        "defaultTools".log_color_highlight()
+                    ));
+                }
+                return Err(DeployError::PrepareError(error));
+            }
         }
         if grant_execution == GrantExecutionDecision::StopAfterPlan {
             log_warn_action(
@@ -2328,93 +2284,22 @@ impl AppCommandHandler {
         );
     }
 
-    /// Gives the environment the grants that the default tools need, and reports each default
-    /// tool that the deployment goes on without.
-    async fn settle_default_tool_grants(
+    /// The default tools of the deployment that need a grant, each with its release.
+    async fn default_tool_grant_references(
         &self,
-        environment: &ResolvedEnvironmentIdentity,
-        plan: &mut ToolGrantReconciliationPlan,
-        may_change_grants: bool,
         native_default_tools: &BTreeSet<ToolName>,
-    ) -> anyhow::Result<()> {
-        let default_tools = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
-                .some_or_err()?
-                .application()
-                .default_tool_release_references()
-                .filter(|(name, _)| !native_default_tools.contains(*name))
-                .map(|(name, release)| {
-                    let reference = release.to_release_reference().map_err(anyhow::Error::msg)?;
-                    Ok((name.clone(), reference))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?
-        };
-        if default_tools.is_empty() {
-            return Ok(());
-        }
-
-        let clients = self.ctx.golem_clients().await?;
-        let outcomes =
-            settle_default_tool_grants(plan, &default_tools, may_change_grants, |release| {
-                let grants = &clients.environment_tool_grants;
-                async move {
-                    grants
-                        .create_environment_tool_grant(
-                            &environment.environment_id.0,
-                            &EnvironmentToolGrantCreation {
-                                release,
-                                automatic: true,
-                            },
-                        )
-                        .await
-                        .map_service_error()
-                        .map_err(|error| match &error.kind {
-                            ServiceErrorKind::ErrorResponse(response)
-                                if !response.errors.is_empty() =>
-                            {
-                                anyhow!(response.errors.join("; "))
-                            }
-                            _ => anyhow!(error),
-                        })
-                }
+    ) -> anyhow::Result<Vec<(ToolName, ToolReleaseReference)>> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        app_ctx
+            .some_or_err()?
+            .application()
+            .default_tool_release_references()
+            .filter(|(name, _)| !native_default_tools.contains(*name))
+            .map(|(name, release)| {
+                let reference = release.to_release_reference().map_err(anyhow::Error::msg)?;
+                Ok((name.clone(), reference))
             })
-            .await;
-
-        for (name, outcome) in outcomes {
-            let release = default_tools
-                .iter()
-                .find(|(default_tool, _)| default_tool == &name)
-                .map(|(_, reference)| match reference {
-                    ToolReleaseReference::ById(reference) => reference.release_id.to_string(),
-                    ToolReleaseReference::ByCoordinates(reference) => format!(
-                        "{}/{}@{}",
-                        reference.account, reference.name, reference.version
-                    ),
-                })
-                .unwrap_or_default()
-                .log_color_highlight();
-            let name = name.as_str().log_color_highlight();
-            match outcome {
-                DefaultToolGrantOutcome::Granted => {
-                    log_action("Granted", format!("default tool {name} to the environment"))
-                }
-                DefaultToolGrantOutcome::NotGranted => log_warn_action(
-                    "Skipping",
-                    format!(
-                        "default tool {name}: the environment has no grant for it yet, and --plan and --stage do not create one. A deployment without these flags adds the tool."
-                    ),
-                ),
-                DefaultToolGrantOutcome::Refused(reason) => log_warn_action(
-                    "Skipping",
-                    format!(
-                        "default tool {name}: the server did not grant its release {release} to the environment ({reason}). The deployment continues without the tool. To stop this message, leave the tool out of {} for the environment in the application manifest.",
-                        "defaultTools".log_color_highlight()
-                    ),
-                ),
-            }
-        }
-        Ok(())
+            .collect()
     }
 
     async fn plan_tool_middleware_grant_reconciliation(
@@ -4583,12 +4468,12 @@ fn render_tool_middleware_publication_plan_entry(
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultToolGrantOutcome, GrantExecutionDecision, build_tool_grant_reconciliation_plan,
-        canonical_mcp_diagnostic_name, duplicate_component_matches, grant_execution_decision,
-        mcp_tools_named_like_default_tools, register_ambient_tool_name,
+        GrantExecutionDecision, build_tool_grant_reconciliation_plan,
+        canonical_mcp_diagnostic_name, default_tools_to_grant, duplicate_component_matches,
+        grant_execution_decision, mcp_tools_named_like_default_tools, register_ambient_tool_name,
         render_tool_middleware_publication_plan_entry, resolve_agent_secret_defaults_without_value,
         resolve_mcp_import_env_vars, resolve_secret_defaults, resolved_mcp_diagnostics,
-        settle_default_tool_grants, should_resolve_mcp_imports,
+        should_resolve_mcp_imports,
     };
     use crate::command_handler::template::EnvVarRenderer;
     use crate::fuzzy::Match;
@@ -4924,66 +4809,6 @@ mod tests {
         (name, reference)
     }
 
-    #[test]
-    async fn a_default_tool_is_granted_and_leaves_no_plan_entry() {
-        let (name, reference) = default_bash();
-        let created = grant(
-            "bash",
-            "0.2.1",
-            "builtin-tool-owner@golem.cloud",
-            true,
-            true,
-        );
-        let mut plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
-
-        let outcomes = settle_default_tool_grants(
-            &mut plan,
-            &[(name.clone(), reference.clone())],
-            true,
-            |requested| {
-                assert_eq!(requested, reference);
-                let created = created.clone();
-                async move { Ok(created) }
-            },
-        )
-        .await;
-
-        assert_eq!(outcomes, [(name, DefaultToolGrantOutcome::Granted)]);
-        assert!(!plan.has_changes());
-        assert!(!plan.requires_access_changes());
-        assert_eq!(
-            plan.resolved_grants
-                .get(&reference)
-                .map(|grant| grant.grant.id),
-            Some(created.grant.id)
-        );
-    }
-
-    #[test]
-    async fn a_refused_default_tool_grant_is_reported_and_does_not_stop_the_deployment() {
-        let (name, reference) = default_bash();
-        let mut plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
-
-        let outcomes = settle_default_tool_grants(
-            &mut plan,
-            &[(name.clone(), reference.clone())],
-            true,
-            |_| async { Err(anyhow::anyhow!("Referenced tool release not found")) },
-        )
-        .await;
-
-        assert_eq!(
-            outcomes,
-            [(
-                name,
-                DefaultToolGrantOutcome::Refused("Referenced tool release not found".to_string())
-            )]
-        );
-        assert!(!plan.has_changes());
-        assert!(!plan.requires_access_changes());
-        assert!(plan.resolved_grants.get(&reference).is_none());
-    }
-
     fn default_bash_grant_pinned_by_id() -> EnvironmentToolGrantWithDetails {
         grant(
             "bash",
@@ -4994,8 +4819,75 @@ mod tests {
         )
     }
 
+    fn decision(
+        plan: &super::ToolGrantReconciliationPlan,
+        stage: bool,
+        plan_only: bool,
+    ) -> GrantExecutionDecision {
+        grant_execution_decision(
+            stage,
+            plan_only,
+            plan.requires_access_changes(),
+            plan.has_changes(),
+        )
+    }
+
     #[test]
-    async fn a_read_only_run_uses_a_default_tool_grant_that_is_pinned_by_id() {
+    fn the_grant_of_a_default_tool_is_a_part_of_the_plan() {
+        let (name, reference) = default_bash();
+        let plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
+
+        assert_eq!(plan.creations, std::slice::from_ref(&reference));
+        assert_eq!(plan.view.entries.len(), 1);
+        assert_eq!(
+            plan.view.entries[0].action,
+            EnvironmentToolGrantPlanAction::Create
+        );
+        assert_eq!(
+            default_tools_to_grant(&plan, &[(name.clone(), reference)]),
+            [name]
+        );
+        assert_eq!(
+            decision(&plan, false, false),
+            GrantExecutionDecision::ConfirmApply
+        );
+        assert_eq!(
+            decision(&plan, false, true),
+            GrantExecutionDecision::StopAfterPlan
+        );
+        assert_eq!(
+            decision(&plan, true, false),
+            GrantExecutionDecision::RejectStage
+        );
+    }
+
+    #[test]
+    fn a_default_tool_that_is_granted_is_not_in_the_plan() {
+        let (name, reference) = default_bash();
+        let existing = grant(
+            "bash",
+            "0.2.1",
+            "builtin-tool-owner@golem.cloud",
+            true,
+            true,
+        );
+        let plan = build_tool_grant_reconciliation_plan(
+            std::slice::from_ref(&reference),
+            std::slice::from_ref(&existing),
+        );
+
+        assert!(!plan.has_changes());
+        assert!(default_tools_to_grant(&plan, &[(name, reference.clone())]).is_empty());
+        assert_eq!(
+            plan.resolved_grants
+                .get(&reference)
+                .map(|grant| grant.grant.id),
+            Some(existing.grant.id)
+        );
+    }
+
+    #[test]
+    fn a_read_only_run_uses_a_default_tool_grant_that_is_pinned_by_id() {
         let (name, reference) = default_bash();
         let pinned = default_bash_grant_pinned_by_id();
         let mut plan = build_tool_grant_reconciliation_plan(
@@ -5004,13 +4896,8 @@ mod tests {
         );
         assert_eq!(plan.reference_updates, std::slice::from_ref(&reference));
 
-        let outcomes =
-            settle_default_tool_grants(&mut plan, &[(name, reference.clone())], false, |_| async {
-                panic!("a grant must not be changed")
-            })
-            .await;
+        plan.reuse_grants_in_other_reference_mode([&reference]);
 
-        assert!(outcomes.is_empty(), "{outcomes:?}");
         let used = plan
             .resolved_grants
             .get(&reference)
@@ -5018,81 +4905,67 @@ mod tests {
         assert_eq!(used.grant.id, pinned.grant.id);
         assert!(!used.grant.follow_coordinates);
         assert!(plan.deletions.is_empty());
-        assert!(!plan.has_changes());
         assert!(!plan.requires_access_changes());
+        // The plan still shows the change of mode that a deployment makes.
+        assert_eq!(plan.view.entries.len(), 1);
+        assert_eq!(
+            plan.view.entries[0].action,
+            EnvironmentToolGrantPlanAction::UpdateReference
+        );
+        assert!(default_tools_to_grant(&plan, &[(name, reference)]).is_empty());
         for (stage, plan_only) in [(true, false), (false, true)] {
             assert_eq!(
-                grant_execution_decision(
-                    stage,
-                    plan_only,
-                    plan.requires_access_changes(),
-                    plan.has_changes()
-                ),
+                decision(&plan, stage, plan_only),
                 GrantExecutionDecision::ContinueReadOnly
             );
         }
     }
 
     #[test]
-    async fn a_deployment_changes_the_reference_mode_of_a_default_tool_grant_with_no_plan_entry() {
-        let (name, reference) = default_bash();
-        let pinned = default_bash_grant_pinned_by_id();
-        let mut following = pinned.clone();
-        following.grant.follow_coordinates = true;
-        let mut plan = build_tool_grant_reconciliation_plan(
-            std::slice::from_ref(&reference),
-            std::slice::from_ref(&pinned),
+    fn a_read_only_run_makes_no_grant_for_a_default_tool() {
+        let (_, reference) = default_bash();
+        let mut plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
+
+        plan.reuse_grants_in_other_reference_mode([&reference]);
+
+        assert!(plan.resolved_grants.get(&reference).is_none());
+        assert_eq!(plan.creations, std::slice::from_ref(&reference));
+        assert_eq!(
+            decision(&plan, false, true),
+            GrantExecutionDecision::StopAfterPlan
         );
-
-        let outcomes = settle_default_tool_grants(
-            &mut plan,
-            &[(name, reference.clone())],
-            true,
-            |requested| {
-                assert_eq!(requested, reference);
-                let following = following.clone();
-                async move { Ok(following) }
-            },
-        )
-        .await;
-
-        assert!(outcomes.is_empty(), "{outcomes:?}");
-        let used = plan
-            .resolved_grants
-            .get(&reference)
-            .expect("the release is granted");
-        assert_eq!(used.grant.id, pinned.grant.id);
-        assert!(used.grant.follow_coordinates);
-        assert!(plan.deletions.is_empty());
-        assert!(!plan.has_changes());
-        assert!(!plan.requires_access_changes());
+        assert_eq!(
+            decision(&plan, true, false),
+            GrantExecutionDecision::RejectStage
+        );
     }
 
     #[test]
-    async fn a_default_tool_keeps_its_grant_when_the_reference_mode_cannot_be_changed() {
-        let (name, reference) = default_bash();
-        let pinned = default_bash_grant_pinned_by_id();
+    fn only_the_given_references_use_a_grant_in_the_other_reference_mode() {
+        let (_, reference) = default_bash();
+        let manifest_reference = ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+            account: AccountEmail::new("publisher@example.com"),
+            name: ToolName::try_from("search").unwrap(),
+            version: "1.2.0".to_string(),
+        });
         let mut plan = build_tool_grant_reconciliation_plan(
-            std::slice::from_ref(&reference),
-            std::slice::from_ref(&pinned),
+            &[reference.clone(), manifest_reference.clone()],
+            &[
+                default_bash_grant_pinned_by_id(),
+                grant("search", "1.2.0", "publisher@example.com", true, false),
+            ],
         );
+        assert_eq!(plan.reference_updates.len(), 2);
 
-        let outcomes =
-            settle_default_tool_grants(&mut plan, &[(name, reference.clone())], true, |_| async {
-                Err(anyhow::anyhow!("not allowed to change grants"))
-            })
-            .await;
+        plan.reuse_grants_in_other_reference_mode([&reference]);
 
-        assert!(outcomes.is_empty(), "{outcomes:?}");
-        let used = plan
-            .resolved_grants
-            .get(&reference)
-            .expect("the release is granted");
-        assert_eq!(used.grant.id, pinned.grant.id);
-        assert!(!used.grant.follow_coordinates);
-        assert!(plan.deletions.is_empty());
-        assert!(!plan.has_changes());
-        assert!(!plan.requires_access_changes());
+        assert_eq!(plan.reference_updates, [manifest_reference]);
+        assert_eq!(plan.deletions.len(), 1);
+        assert!(plan.requires_access_changes());
+        assert_eq!(
+            decision(&plan, true, false),
+            GrantExecutionDecision::RejectStage
+        );
     }
 
     #[test]
@@ -5105,75 +4978,6 @@ mod tests {
             [(1, "bash".to_string())]
         );
         assert!(mcp_tools_named_like_default_tools(imported, &BTreeSet::new()).is_empty());
-    }
-
-    #[test]
-    async fn a_run_that_must_not_change_grants_leaves_a_default_tool_out() {
-        let (name, reference) = default_bash();
-        let mut plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
-
-        let outcomes = settle_default_tool_grants(
-            &mut plan,
-            &[(name.clone(), reference.clone())],
-            false,
-            |_| async { panic!("a grant must not be created") },
-        )
-        .await;
-
-        assert_eq!(outcomes, [(name, DefaultToolGrantOutcome::NotGranted)]);
-        assert!(plan.resolved_grants.get(&reference).is_none());
-        for (stage, plan_only) in [(true, false), (false, true)] {
-            assert_eq!(
-                grant_execution_decision(
-                    stage,
-                    plan_only,
-                    plan.requires_access_changes(),
-                    plan.has_changes()
-                ),
-                GrantExecutionDecision::ContinueReadOnly
-            );
-        }
-    }
-
-    #[test]
-    async fn settling_default_tools_keeps_existing_grants_and_manifest_grants() {
-        let (name, reference) = default_bash();
-        let existing = grant(
-            "bash",
-            "0.2.1",
-            "builtin-tool-owner@golem.cloud",
-            true,
-            true,
-        );
-        let manifest_reference = ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
-            account: AccountEmail::new("publisher@example.com"),
-            name: ToolName::try_from("search").unwrap(),
-            version: "1.2.0".to_string(),
-        });
-        let mut plan = build_tool_grant_reconciliation_plan(
-            &[reference.clone(), manifest_reference.clone()],
-            std::slice::from_ref(&existing),
-        );
-
-        let outcomes =
-            settle_default_tool_grants(&mut plan, &[(name, reference.clone())], true, |_| async {
-                panic!("the default tool is already granted")
-            })
-            .await;
-
-        assert_eq!(outcomes, []);
-        assert_eq!(plan.creations, [manifest_reference]);
-        assert_eq!(plan.view.entries.len(), 1);
-        assert_eq!(
-            plan.view.entries[0].action,
-            EnvironmentToolGrantPlanAction::Create
-        );
-        assert_eq!(
-            plan.resolved_grants
-                .get(&reference)
-                .map(|grant| grant.grant.id),
-            Some(existing.grant.id)
-        );
     }
 
     fn grant(

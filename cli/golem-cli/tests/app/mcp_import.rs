@@ -1,4 +1,4 @@
-use crate::app::{TestContext, cmd, flag};
+use crate::app::{Output, TestContext, cmd, flag};
 use crate::workspace_path;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
@@ -417,19 +417,21 @@ async fn an_mcp_import_cannot_supply_a_tool_with_the_name_of_a_default_tool() {
         .unwrap();
     };
     let clash = "MCP import 0 supplies a tool named 'bash', which is the name of a default tool";
+    let says =
+        |output: &Output, text: &str| output.stdout_contains(text) || output.stderr_contains(text);
 
     // The default tool and the imported tool want the same name: nothing is deployed or granted.
     write_manifest("", "");
     let refused = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(!refused.success());
-    assert!(refused.stdout_contains(clash) || refused.stderr_contains(clash));
-    assert!(!refused.stdout_contains("Granted default tool bash"));
+    assert!(says(&refused, clash));
+    assert!(!says(&refused, "environment tool grant"));
 
-    // A prefix gives the imported tool another name.
+    // A prefix gives the imported tool another name, and the default tool gets its grant.
     write_manifest("", "prefix: remote");
     let prefixed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(prefixed.success_or_dump());
-    assert!(prefixed.stdout_contains("Granted default tool bash"));
+    assert!(says(&prefixed, "environment tool grant setup"));
 
     // Without the default tool, the imported tool keeps the name.
     write_manifest("defaultTools: []", "");

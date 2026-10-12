@@ -1023,11 +1023,8 @@ impl ComponentCommandHandler {
             .iter()
             .map(|tool| tool.name.clone())
             .collect::<BTreeSet<_>>();
-        // A default tool is left out of the deployment, instead of failing it, when it has no
-        // grant, and when the server has a native tool with its name.
-        let mut unavailable_default_tools = app
-            .default_tools_without_grant(|reference| resolved_tool_grants.get(reference).is_some());
-        unavailable_default_tools.extend(app.default_tools_with_a_native_tool(&ambient_names));
+        // A default tool is left to the server when the server has a native tool with its name.
+        let unavailable_default_tools = app.default_tools_with_a_native_tool(&ambient_names);
         let tool_declarations = app.deployed_tool_declarations(&unavailable_default_tools);
         let mut issues = Vec::new();
         let mut implementations = BTreeMap::<ToolName, Vec<DiscoveredToolImplementation>>::new();
