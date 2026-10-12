@@ -108,6 +108,15 @@ inputs rather than a verified HTTP fix. Node HTTP unfinished-response cleanup ne
 `wasm-rquickjs` fix as well. This change supplies no SDK generator patch or runtime version update,
 and does not claim that either dependency fixes the HTTP reproducer.
 
+### Git differential test prerequisites
+
+`cargo make prepare-git-differential-tests` builds the checksum-pinned native Git reference with
+HTTP support. On Debian/Ubuntu, install `build-essential`, `libcurl4-openssl-dev`, `libssl-dev`,
+`libexpat1-dev`, and `zlib1g-dev` first. Node.js and `tar` with xz support are also required.
+Do not disable curl to bypass missing headers: the differential suite uses Git's HTTP transport.
+The `git-network-probe` fixture imports the tool's source files, so its npm install also installs
+the sibling tool's locked dependencies before bundling; a warm tool `node_modules` is not required.
+
 ## Adding a component-implemented built-in tool
 
 1. Add a standalone tool component source and build it through its Golem application manifest. Do

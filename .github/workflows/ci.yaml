@@ -520,6 +520,11 @@ jobs:
       - name: Install browser WASM target
         if: matrix.group.shard == 'bridge_gen_rust'
         run: rustup target add wasm32-unknown-unknown
+      - name: Install native Git build dependencies
+        if: matrix.group.shard == 'core'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qqy --no-install-recommends build-essential libcurl4-openssl-dev libssl-dev libexpat1-dev zlib1g-dev
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.49.0
         with:
