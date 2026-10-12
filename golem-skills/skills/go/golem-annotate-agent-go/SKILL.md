@@ -102,7 +102,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 	Name:        "InventoryAgent",
 	Description: "Tracks per-warehouse stock levels",
 	HTTP: &golem.Mount{
-		Path: "/warehouses/{warehouseID}", // {warehouseID} binds ID.WarehouseID
+		Path: "/warehouses/{warehouseId}", // {warehouseId} binds ID.WarehouseID
 		CORS: []string{"*"},
 	},
 })

@@ -61,12 +61,14 @@ the forms of a same-component `MethodDef` — call, trigger, schedule, async —
 its `Must` variant, and `MustGet<Agent>` beside `Get<Agent>`. An external client runs in
 an ordinary Go program, where a panic is not a trap, so it returns errors only.
 
-A Go identifier becomes a schema name spelled as Go would spell it unexported: the
-leading word is lower-cased whole (`engine.SchemaName`: `ID` is `id`, `APIKey` is
-`apiKey`, `UserID` is `userID`). The generators go the other way with golint's list of
-initialisms (`cli/golem-cli/src/bridge_gen/go/go.rs`): `user-id` is `UserID`, and an
-agent's id struct is `<Agent>ID`. A generated name need not map back to its schema name,
-because the wire form is positional.
+A Go identifier becomes a schema name in the lowerCamelCase the other SDKs use, with each
+initialism as one word (`engine.SchemaName`: `ID` is `id`, `APIKey` is `apiKey`, `UserID`
+is `userId`, `UserIDs` is `userIds`). Schemas are compared by field name (a secret shared
+by agents in two languages, a tool middleware edge), so `OwnerAgentID` in Go and
+`ownerAgentId` in TS or Rust must be the same field. The generators go the other way with
+golint's list of initialisms (`cli/golem-cli/src/bridge_gen/go/go.rs`): `owner-agent-id`
+and `ownerAgentId` are `OwnerAgentID`, which maps back to `ownerAgentId`, and an agent's
+id struct is `<Agent>ID`.
 
 ## Prerequisites
 

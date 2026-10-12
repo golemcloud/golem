@@ -56,8 +56,10 @@ func TestStructFieldsAndSchemaName(t *testing.T) {
 		t.Fatalf("fields = %+v", fs)
 	}
 	for in, want := range map[string]string{
-		"": "", "X": "x", "Name": "name", "ID": "id", "APIKey": "apiKey",
-		"UserID": "userID", "URLPath": "urlPath", "HTTP2Server": "http2Server", "AmountCents": "amountCents",
+		"": "", "X": "x", "Name": "name", "ID": "id", "APIKey": "apiKey", "SKU": "sku",
+		"UserID": "userId", "OwnerAgentID": "ownerAgentId", "URLPath": "urlPath", "HTTP2Server": "http2Server",
+		"AmountCents": "amountCents", "UserIDs": "userIds", "URLs": "urls", "IDsList": "idsList",
+		"ABTest": "abTest", "OAuthToken": "oAuthToken", "Base64URL": "base64Url", "MaxResults": "maxResults",
 	} {
 		if got := engine.SchemaName(in); got != want {
 			t.Errorf("SchemaName(%q) = %q, want %q", in, got, want)

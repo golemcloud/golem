@@ -17,6 +17,8 @@ package engine
 import (
 	"fmt"
 	"reflect"
+	"strings"
+	"unicode"
 )
 
 // Field is one exported struct field, in declaration order. Declaration
@@ -71,21 +73,50 @@ func (d *Engine) StructFields(t reflect.Type) []Field {
 	return out
 }
 
-// SchemaName is the schema name of an exported Go identifier: the identifier
-// as Go would spell it unexported. The leading word is lower-cased whole, so an
-// initialism stays one word: ID is id, APIKey is apiKey and UserID is userID.
+// SchemaName is the schema name of an exported Go identifier, in the lowerCamelCase
+// that the other SDKs use. The identifier splits into words at its case changes,
+// and an initialism is one word, with a plural "s" (IDs). The first word is
+// lower-cased whole, and each later word keeps only its first letter upper-case:
+// ID is id, APIKey is apiKey, UserID is userId, URLPath is urlPath and UserIDs is
+// userIds.
 func SchemaName(s string) string {
-	b := []byte(s)
-	n := 0
-	for n < len(b) && b[n] >= 'A' && b[n] <= 'Z' {
-		n++
+	var b strings.Builder
+	for i, word := range identifierWords([]rune(s)) {
+		for j, r := range word {
+			if i > 0 && j == 0 {
+				b.WriteRune(unicode.ToUpper(r))
+			} else {
+				b.WriteRune(unicode.ToLower(r))
+			}
+		}
 	}
-	// In URLPath the P starts the next word, so it stays upper-case.
-	if n > 1 && n < len(b) && b[n] >= 'a' && b[n] <= 'z' {
-		n--
+	return b.String()
+}
+
+// identifierWords splits a Go identifier at its case changes. A new word starts
+// at an upper-case letter after a lower-case letter or a digit, and at the last
+// upper-case letter of a run that a lower-case letter follows (the P of URLPath),
+// unless that lower-case letter is a lone plural "s" (the D of IDs).
+func identifierWords(r []rune) [][]rune {
+	var words [][]rune
+	start := 0
+	for i := 1; i < len(r); i++ {
+		if !unicode.IsUpper(r[i]) {
+			continue
+		}
+		prev := r[i-1]
+		boundary := unicode.IsLower(prev) || unicode.IsDigit(prev)
+		if unicode.IsUpper(prev) && i+1 < len(r) && unicode.IsLower(r[i+1]) {
+			plural := r[i+1] == 's' && (i+2 == len(r) || !unicode.IsLower(r[i+2]))
+			boundary = !plural
+		}
+		if boundary {
+			words = append(words, r[start:i])
+			start = i
+		}
 	}
-	for i := range n {
-		b[i] += 'a' - 'A'
+	if start < len(r) {
+		words = append(words, r[start:])
 	}
-	return string(b)
+	return words
 }

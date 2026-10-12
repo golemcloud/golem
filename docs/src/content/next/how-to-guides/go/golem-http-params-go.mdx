@@ -8,7 +8,7 @@ Binding is **metadata only** and declared on the definition: the mount `Path` on
 
 ## Steps
 
-1. **Name fields to match wire names.** A path/query/header variable refers to an input field by its schema name: the Go field name with its leading word lower-cased whole, so `MaxResults` is `maxResults`, `SKU` is `sku`, `UserID` is `userID` and `APIKey` is `apiKey`.
+1. **Name fields to match wire names.** A path/query/header variable refers to an input field by its schema name: the Go field name in lowerCamelCase with each initialism as one word, so `MaxResults` is `maxResults`, `SKU` is `sku`, `UserID` is `userId` and `APIKey` is `apiKey`.
 2. **Bind path variables** by putting `{name}` in the mount path (binds `ID` fields) or an endpoint path suffix (binds method input fields).
 3. **Bind query and header values** inline (`?name={field}`) or with `golem.Query` / `golem.Header`.
 4. **Leave body fields unbound** on body-carrying verbs; they arrive as JSON.
@@ -69,7 +69,7 @@ type DataIn struct {
 }
 
 var GetData = Agent.Method[DataIn, Data]("getData", golem.HTTP(golem.GET("/data",
-		golem.Header("X-Request-Id", "requestID"),
+		golem.Header("X-Request-Id", "requestId"),
 		golem.Header("Authorization", "token"),
 	)))
 ```
@@ -133,7 +133,7 @@ Handlers return their output value; the platform maps it to a response. In Go:
 | `float32`, `float64` | number |
 | `bool` | boolean |
 | `[]T` | array |
-| struct | object keyed by schema names (`MaxResults` → `maxResults`, `UserID` → `userID`) |
+| struct | object keyed by schema names (`MaxResults` → `maxResults`, `UserID` → `userId`) |
 | `*T` | value or `null` |
 | `map[K]V` | object / WIT map |
 
@@ -142,7 +142,7 @@ Handlers return their output value; the platform maps it to a response. In Go:
 - A variable can bind an input field from **exactly one** of path/query/header — binding it more than once is a definition error.
 - Bindable path/query/header fields must be scalar; non-scalars go in the body.
 - Bodyless verbs (`GET`, `HEAD`) must bind every input field.
-- Field references on the wire use the schema name, whose leading word is lower-cased whole (`SKU` → `sku`, `RequestID` → `requestID`).
+- Field references on the wire use the schema name, the field name in lowerCamelCase with each initialism as one word (`SKU` → `sku`, `RequestID` → `requestId`).
 - A raw (non-JSON) body is a single body field of type `golem.UnstructuredBinary[M]` or `golem.UnstructuredText[L]`; `M`/`L` is `golem.AnyMimeType`/`golem.AnyLanguage` or a marker type whose `MimeTypes()`/`Languages()` lists what is accepted. Any other body is a JSON object keyed by the schema names.
 
 ### Related Guides

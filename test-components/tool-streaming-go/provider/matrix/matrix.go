@@ -41,7 +41,7 @@ type Result struct {
 	WeightedSize     int64
 	LabelSummary     string
 	Principal        string
-	OwnerAgentId     string
+	OwnerAgentID     string
 }
 
 type Rejection struct {
@@ -85,6 +85,6 @@ var _ = Inspect.Handle(func(_ *tool.Context, a InspectArgs) (Result, error) {
 		WeightedSize:     int64(a.Request.Dimensions.Width)*int64(a.Request.Dimensions.Height)*a.Multiplier + int64(len(a.Request.Labels)),
 		LabelSummary:     strings.Join(labels, "|"),
 		Principal:        principalName(a.Caller),
-		OwnerAgentId:     golem.MustGetSelfMetadata().AgentID.AgentID,
+		OwnerAgentID:     golem.MustGetSelfMetadata().AgentID.AgentID,
 	}, nil
 })
