@@ -12952,3 +12952,373 @@ async fn a_session_write_through_a_retired_producer_is_an_error_not_a_panic() {
         "the session must be told the producer needs recovery, got: {error}"
     );
 }
+
+/// A byte input that holds `bytes` as one batch of its producer, in a local session, with the
+/// store that produces it.
+async fn tool_stdin_holding(
+    bytes: Vec<u8>,
+) -> (
+    Arc<TestOplog>,
+    Arc<DurableStreamStore>,
+    StreamSession,
+    DurableStreamHandle,
+) {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: vec![],
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 1,
+        handle: handle.clone(),
+        role: SessionStreamRole::Input,
+    };
+    let session_key =
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone());
+    persist_local_mapping(&producer, session_key.clone(), &mapping).await;
+    let streams = open_local_session(producer.clone(), oplog.clone(), session_key, [mapping])
+        .await
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+    if !bytes.is_empty() {
+        producer
+            .write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(bytes),
+            )
+            .await
+            .unwrap();
+    }
+    (oplog, producer, streams, handle)
+}
+
+/// The reader of a tool body's stdin over `handle`, as the body gets it.
+async fn tool_stdin_reader(
+    streams: &StreamSession,
+    handle: &DurableStreamHandle,
+) -> DurableToolStdinProducer {
+    DurableToolStdinProducer::new(
+        streams
+            .endpoint(handle.clone(), 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+        Arc::new(|| false),
+    )
+}
+
+impl PartialEq for ToolStdinDelivery {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Chunk(left), Self::Chunk(right)) => left == right,
+            (Self::Cancelled, Self::Cancelled) => true,
+            (Self::End(left), Self::End(right)) => {
+                std::mem::discriminant(left) == std::mem::discriminant(right)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// One read of a tool body's stdin by the body's guest: what the guest gets, and the
+/// observation that is recorded when the guest takes it.
+async fn guest_read_of_tool_stdin(
+    stdin: &mut DurableToolStdinProducer,
+    body: OplogIndex,
+) -> (ToolStdinDelivery, Option<PendingConsumerObservation>) {
+    let read = stdin
+        .input
+        .input
+        .receive_observed(
+            None,
+            None,
+            StreamConsumerObservation::Guest {
+                parent_start_index: Some(body),
+            },
+            MAX_PACKED_U8_STREAM_ITEM_SIZE,
+        )
+        .await;
+    let item = stdin.input.finish_receive_as_item(read).unwrap();
+    let cancelled_by_producer = stdin.cancelled_by_producer.load(Ordering::Acquire);
+    (
+        tool_stdin_delivery(item, cancelled_by_producer, false).unwrap(),
+        stdin.input.pending_observation.take(),
+    )
+}
+
+/// The guest takes what a read delivered: its observation is recorded, as a read observer does
+/// it, and the record is durable when this returns.
+async fn take_as_the_guest(
+    stdin: &DurableToolStdinProducer,
+    observation: PendingConsumerObservation,
+) {
+    let identity = identity();
+    let streams = stdin.input.input.streams.clone();
+    let replay = ReplayState::new_for_owner(
+        OwnedAgentId {
+            environment_id: identity.environment_id,
+            agent_id: identity.agent_id,
+        },
+        streams.oplog.clone(),
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+    )
+    .await
+    .unwrap();
+    let (result, receiver) = oneshot::channel();
+    let (cleanup_sink, mut cleanup) = mpsc::unbounded_channel();
+    let settled = PrepareInputObservation {
+        observation,
+        streams,
+        replay,
+        activity: crate::durable_host::tail_work::TailWorkTracker::new().activity(),
+        result,
+        runtime_teardown: Arc::new(|| false),
+        cleanup_sink,
+        trap_context: DurableCallTrapContext {
+            retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+        },
+        live_call_permit: LiveCallPermit::new(Arc::new(std::sync::atomic::AtomicUsize::new(0))),
+    }
+    .prepare()
+    .await
+    .unwrap();
+    receiver.await.unwrap().unwrap()(TerminalConsumption::Delivered).unwrap();
+    let DropEvent::AwaitCompletionMarker { mut receipt, .. } = cleanup.recv().await.unwrap() else {
+        panic!("the record of an observation is joined by cleanup");
+    };
+    crate::durable_host::concurrent::await_marker_receipt(receipt.as_mut().unwrap())
+        .await
+        .unwrap();
+    settled.await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_tool_stdin_chunk_is_recorded_when_the_reader_takes_it() {
+    let (oplog, _producer, streams, handle) = tool_stdin_holding(vec![17, 23, 91, 44, 60]).await;
+    let body = OplogIndex::from_u64(7);
+    let mut stdin = tool_stdin_reader(&streams, &handle).await;
+    let before = oplog.current_oplog_index().await;
+
+    let (delivery, observation) = guest_read_of_tool_stdin(&mut stdin, body).await;
+    assert_eq!(
+        delivery,
+        ToolStdinDelivery::Chunk(vec![17, 23, 91, 44, 60]),
+        "the body gets what the client sent as one chunk"
+    );
+    assert_eq!(
+        oplog.current_oplog_index().await,
+        before,
+        "nothing is recorded while only the host has the chunk"
+    );
+
+    take_as_the_guest(&stdin, observation.expect("a guest read is observed")).await;
+    assert_eq!(oplog.current_oplog_index().await, before.next());
+    assert_eq!(
+        oplog.read(before.next()).await.entity_attribution(),
+        golem_common::model::oplog::EntityAttribution::Agent,
+        "the record keeps the attribution of the call's session"
+    );
+    let StreamSessionRecord::ConsumerItemValue(record) =
+        streams.session_record_at(before.next()).await.unwrap()
+    else {
+        panic!("expected the record of the chunk");
+    };
+    assert_eq!(record.value, vec![17, 23, 91, 44, 60]);
+    assert!(record.packed_u8);
+    assert_eq!(
+        record.observation,
+        StreamConsumerObservation::Guest {
+            parent_start_index: Some(body)
+        }
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_cancelled_tool_stdin_gives_one_cancelled_item_and_then_the_end() {
+    let (oplog, producer, streams, handle) = tool_stdin_holding(vec![]).await;
+    producer
+        .cancel_open(
+            None,
+            handle.stream_id,
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::Cancelled,
+            None,
+        )
+        .await
+        .unwrap();
+    let body = OplogIndex::from_u64(7);
+    let mut stdin = tool_stdin_reader(&streams, &handle).await;
+    let before = oplog.current_oplog_index().await;
+
+    let (delivery, observation) = guest_read_of_tool_stdin(&mut stdin, body).await;
+    assert_eq!(delivery, ToolStdinDelivery::Cancelled);
+    take_as_the_guest(&stdin, observation.expect("the terminal is observed")).await;
+    let StreamSessionRecord::ConsumerTerminal(record) =
+        streams.session_record_at(before.next()).await.unwrap()
+    else {
+        panic!("expected the record of the terminal");
+    };
+    assert_eq!(
+        record.observation,
+        StreamConsumerObservation::Guest {
+            parent_start_index: Some(body)
+        }
+    );
+    assert_eq!(oplog.current_oplog_index().await, before.next());
+
+    // The input has ended: a later read gets the end of the stream and records nothing.
+    assert!(matches!(
+        stdin.input.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::End)
+    ));
+    assert_eq!(oplog.current_oplog_index().await, before.next());
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_clean_end_of_tool_stdin_gives_no_item() {
+    let (_oplog, producer, streams, handle) = tool_stdin_holding(vec![]).await;
+    producer
+        .end(None, handle.stream_id, 0, StreamEndResult::Ok)
+        .await
+        .unwrap();
+    let body = OplogIndex::from_u64(7);
+    let mut stdin = tool_stdin_reader(&streams, &handle).await;
+
+    let (delivery, observation) = guest_read_of_tool_stdin(&mut stdin, body).await;
+    assert_eq!(delivery, ToolStdinDelivery::End(StreamResult::Dropped));
+    assert!(observation.is_some(), "the end is observed like an item");
+    assert!(!stdin.cancelled_by_producer.load(Ordering::Acquire));
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_forwarded_tool_stdin_is_read_as_the_host_reads_it() {
+    let (oplog, _producer, streams, handle) = tool_stdin_holding(vec![17, 23]).await;
+    let mut stdin = tool_stdin_reader(&streams, &handle).await;
+    let before = oplog.current_oplog_index().await;
+
+    // A host pipe gives no capacity, so the read is the host's own.
+    let Some(DurableInputEvent::Item(SchemaValue::U8(first))) =
+        stdin.input.receive_value(None).await.unwrap()
+    else {
+        panic!("expected a byte");
+    };
+    assert_eq!(first, 17);
+    assert!(
+        oplog.current_oplog_index().await > before,
+        "a host read is recorded when the host takes it"
+    );
+    let StreamSessionRecord::ConsumerItemValue(record) =
+        streams.session_record_at(before.next()).await.unwrap()
+    else {
+        panic!("expected the record of the host read");
+    };
+    assert_eq!(record.observation, StreamConsumerObservation::Host);
+    assert_eq!(
+        tool_stdin_delivery(
+            DurableInputItem::Value(SchemaValue::U8(first)),
+            false,
+            false
+        )
+        .unwrap(),
+        ToolStdinDelivery::Chunk(vec![17])
+    );
+}
+
+#[test]
+fn an_input_that_was_cancelled_reads_as_cancelled_unless_the_reader_asked_to_finish() {
+    let cancelled = || DurableInputItem::Terminal(StreamResult::Cancelled);
+    assert_eq!(
+        tool_stdin_delivery(cancelled(), false, true).unwrap(),
+        ToolStdinDelivery::End(StreamResult::Cancelled),
+        "the reader asked for this answer"
+    );
+    assert_eq!(
+        tool_stdin_delivery(cancelled(), false, false).unwrap(),
+        ToolStdinDelivery::Cancelled,
+        "`Cancelled` as a result answers only a request to finish"
+    );
+    assert!(
+        tool_stdin_delivery(DurableInputItem::Value(SchemaValue::U16(7)), false, false).is_err()
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_tool_stdin_has_a_recorded_guest_read_where_a_guest_took_one() {
+    let (oplog, _producer, streams, handle) = tool_stdin_holding(vec![17, 23, 91]).await;
+    let body = OplogIndex::from_u64(7);
+    let mut stdin = tool_stdin_reader(&streams, &handle).await;
+    assert!(
+        !stdin.input.input.has_recorded_guest_read(|_| true),
+        "a reader that read nothing has no recorded read"
+    );
+
+    let (_, observation) = guest_read_of_tool_stdin(&mut stdin, body).await;
+    take_as_the_guest(&stdin, observation.expect("a guest read is observed")).await;
+    let record = oplog.current_oplog_index().await;
+    drop(stdin);
+
+    // A later attempt of the call opens the reader again, and finds the read in its journal.
+    let again = tool_stdin_reader(&streams, &handle).await;
+    assert!(
+        again
+            .input
+            .input
+            .has_recorded_guest_read(|index| index == record),
+        "the read that the guest took is a place where a replay stops"
+    );
+    assert!(
+        !again
+            .input
+            .input
+            .has_recorded_guest_read(|index| index != record),
+        "the reader has no other recorded read"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_read_that_the_host_took_is_not_a_recorded_guest_read() {
+    let (_oplog, _producer, streams, handle) = tool_stdin_holding(vec![17, 23]).await;
+    let mut stdin = tool_stdin_reader(&streams, &handle).await;
+    assert!(matches!(
+        stdin.input.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::Item(SchemaValue::U8(17)))
+    ));
+    drop(stdin);
+
+    let again = tool_stdin_reader(&streams, &handle).await;
+    assert!(
+        !again.input.input.has_recorded_guest_read(|_| true),
+        "a host record is a hint and does not stop a replay"
+    );
+}

@@ -216,6 +216,28 @@ execution and draining join. The shared byte drain compares historical bytes and
 writes or republication, independent of batching, and appends only the live suffix. Ordinary methods
 still register outputs when returning. Requested output declarations participate in retry identity.
 
+Who reads the stdin of a native external call depends on the body. A component body reads the
+durable input itself (`DurableToolStdinProducer`): each chunk and the terminal that its guest takes
+is one guest observation, recorded at the consumption boundary, so a replay releases it at the same
+place among the body's other recorded calls. The parent of the observation is the entity `Start`,
+unless the read happens inside an open custom or batched scope. The records stay in the session of
+the call and keep its attribution, because one session has one attribution
+(`durable_stream/index.rs::apply_session_attribution`); the cursor reads the body from the
+observation's parent. The scan for a body's recorded work does not count these records, so
+`execute_accepted_tool_call_inner` asks the endpoint (`has_recorded_guest_read`) before it treats an
+incomplete body as not started. A guest read asks for up to `MAX_PACKED_U8_STREAM_ITEM_SIZE` bytes.
+The size is fixed and never configured: a replay that asked for less would cut a recorded chunk in
+another place. In the replay of a completed body a read past the recorded journal stays pending,
+because a read with no record delivered nothing before the body's `End`. A cancel by the client
+reads as one `cancelled` item and then the end; a clean end gives no item. A body that cancels a
+pending read cancels the input as its consumer, and a later read gets the end. A reader that is
+dropped without a pending read cancels nothing, also when a failed attempt drops it, so a later
+attempt of the call finds the stdin as the client left it; the end of the session cancels what
+nobody read. The cost: a dropped reader gives no backpressure, because its bus subscription is gone,
+so every byte that the client still sends is journaled in the oplog until the call ends. A reader
+that is kept and not read holds the client back as usual. A native body reads an in-memory
+attachment that a host task fills, and its reads are host records.
+
 The ownership layers are deliberately local. `DurableStreamStore` is the existing per-worker
 journal/index store; it still owns queue admission, serialized local mutations, durable commit and
 post-commit publication, and reports `StreamStoreError`. A per-invocation `StreamSession` runtime

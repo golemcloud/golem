@@ -947,6 +947,16 @@ async fn write_chunk(stdout: &mut OutputStream, chunk: Vec<u8>) -> bool {
     stdout.write(chunk).await.is_ok()
 }
 
+/// What one read of stdin gave, in the words that the tests of `streaming run` look for.
+fn stdin_read_name(item: Option<Result<Vec<u8>, ByteStreamFailure>>) -> String {
+    match item {
+        Some(Ok(chunk)) => format!("chunk {}", chunk.len()),
+        None => "eof".to_string(),
+        Some(Err(ByteStreamFailure::Cancelled)) => "cancelled".to_string(),
+        Some(Err(other)) => format!("failed:{other:?}"),
+    }
+}
+
 async fn stream_through_http(
     mode: String,
     mut stdin: InputStream,
@@ -1582,6 +1592,15 @@ impl Streaming for StreamingImpl {
                 | "stream-failure-success"
                 | "stdin-or-clock"
                 | "stdin-or-spin"
+                | "stdin-or-tick"
+                | "stdin-while-ticking"
+                | "stdin-one-chunk-while-ticking"
+                | "stdin-stops-a-script"
+                | "stdin-chunk-then-clock"
+                | "clock-with-unread-stdin"
+                | "stdin-read-after-cancelled"
+                | "stdin-read-after-own-cancel"
+                | "stdin-dropped-after-a-chunk"
         ) {
             if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
                 for byte in MARKER {
@@ -1599,7 +1618,7 @@ impl Streaming for StreamingImpl {
             "empty" => {}
             // The read of stdin and the work run side by side. The first to end is written to
             // stdout: how stdin ended, or that the work ended first.
-            "stdin-or-clock" | "stdin-or-spin" => {
+            "stdin-or-clock" | "stdin-or-spin" | "stdin-or-tick" => {
                 let read = async {
                     match stdin.next().await {
                         None => "stdin-eof".to_string(),
@@ -1613,6 +1632,10 @@ impl Streaming for StreamingImpl {
                         golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
                             .await;
                         "clock".to_string()
+                    } else if mode == "stdin-or-tick" {
+                        // A short wait that ends while the read of stdin is still pending.
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(50_000_000).await;
+                        "tick".to_string()
                     } else {
                         // Computes without a host call and lets the other task run in between,
                         // like an interpreter between two commands.
@@ -1627,6 +1650,157 @@ impl Streaming for StreamingImpl {
                 };
                 let outcome = (read, work).race().await;
                 summary.output_closed = !write_chunk(&mut stdout, outcome.into_bytes()).await;
+            }
+            // One task reads stdin and notes, for each chunk and for the end, how many ticks
+            // were complete. The other makes short waits one after the other, each a tick, and
+            // stops after the tick in which it sees that the reading stopped. The two are
+            // joined, so no pending wait is dropped. `stdin-one-chunk-while-ticking` stops
+            // reading after the first chunk and ticks three more times.
+            "stdin-while-ticking" | "stdin-one-chunk-while-ticking" => {
+                let one_chunk = mode == "stdin-one-chunk-while-ticking";
+                let ticks = Cell::new(0_u64);
+                let reading = Cell::new(true);
+                let read = async {
+                    let mut lines = Vec::new();
+                    loop {
+                        let line = match stdin.next().await {
+                            Some(Ok(chunk)) => format!("chunk {}", chunk.len()),
+                            None => "eof".to_string(),
+                            Some(Err(ByteStreamFailure::Cancelled)) => "cancelled".to_string(),
+                            Some(Err(other)) => format!("failed:{other:?}"),
+                        };
+                        let chunk = line.starts_with("chunk");
+                        lines.push(format!("{line} after {}\n", ticks.get()));
+                        if !chunk || one_chunk {
+                            break;
+                        }
+                    }
+                    reading.set(false);
+                    lines
+                };
+                let tick = async {
+                    let mut ticks_after_reading = 0;
+                    loop {
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000).await;
+                        ticks.set(ticks.get() + 1);
+                        if !reading.get() {
+                            if !one_chunk || ticks_after_reading == 3 {
+                                break;
+                            }
+                            ticks_after_reading += 1;
+                        }
+                    }
+                };
+                let (lines, ()) = (read, tick).join().await;
+                for line in lines {
+                    if !write_chunk(&mut stdout, line.into_bytes()).await {
+                        summary.output_closed = true;
+                        break;
+                    }
+                }
+            }
+            // A guard waits on a clock of ten minutes and reads stdin next to it. When stdin is
+            // cancelled, the guard drops its wait, keeps the place of the stop with a durable
+            // call of its own, and ends the script. The script makes two short waits, writes a
+            // line after each, and then waits for five minutes.
+            "stdin-stops-a-script" => {
+                let lines = Cell::new(0_u64);
+                let guard = async {
+                    let cancelled = async {
+                        loop {
+                            match stdin.next().await {
+                                Some(Ok(_)) => {}
+                                Some(Err(ByteStreamFailure::Cancelled)) => break true,
+                                Some(Err(_)) | None => std::future::pending::<()>().await,
+                            }
+                        }
+                    };
+                    let time_limit = async {
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                            .await;
+                        false
+                    };
+                    if (cancelled, time_limit).race().await {
+                        let place = golem_rust::durability::Durability::<u64, String>::new(
+                            "golem-it",
+                            "stop-place",
+                            golem_rust::durability::DurableFunctionType::ReadLocal,
+                            &(),
+                        )
+                        .run_infallible(|| lines.get());
+                        format!("stopped after {place}")
+                    } else {
+                        "time-limit".to_string()
+                    }
+                };
+                let script = async {
+                    for line in ["first\n", "second\n"] {
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000).await;
+                        if !write_chunk(&mut stdout, line.as_bytes().to_vec()).await {
+                            return "output-closed".to_string();
+                        }
+                        lines.set(lines.get() + 1);
+                    }
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(300_000_000_000).await;
+                    "script-ended".to_string()
+                };
+                let outcome = (guard, script).race().await;
+                summary.output_closed = !write_chunk(&mut stdout, outcome.into_bytes()).await;
+            }
+            // Reads stdin once, writes what the read gave, and then waits on a clock of five
+            // seconds. It does not read stdin again.
+            "stdin-chunk-then-clock" => {
+                let line = format!("{}\n", stdin_read_name(stdin.next().await));
+                if write_chunk(&mut stdout, line.into_bytes()).await {
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(5_000_000_000).await;
+                    summary.output_closed = !write_chunk(&mut stdout, b"woke".to_vec()).await;
+                } else {
+                    summary.output_closed = true;
+                }
+            }
+            // Ends its stdout, and then waits on a clock of twenty seconds. It never reads stdin,
+            // so it holds no stream that is in use while it waits.
+            "clock-with-unread-stdin" => {
+                let _ = stdout.finish().await;
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+                return Ok(summary);
+            }
+            // Reads stdin until a read gives something else than a chunk, and then reads once
+            // more. It writes what the two reads gave.
+            "stdin-read-after-cancelled" => {
+                let first = loop {
+                    match stdin.next().await {
+                        Some(Ok(_)) => {}
+                        other => break stdin_read_name(other),
+                    }
+                };
+                let again = stdin_read_name(stdin.next().await);
+                summary.output_closed =
+                    !write_chunk(&mut stdout, format!("{first}, then {again}").into_bytes()).await;
+            }
+            // Gives up a pending read of stdin when a short wait ends first, and then reads
+            // once more. It writes which of the two ended first and what the second read gave.
+            "stdin-read-after-own-cancel" => {
+                let read = async { stdin_read_name(stdin.next().await) };
+                let tick = async {
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(50_000_000).await;
+                    "tick".to_string()
+                };
+                let first = (read, tick).race().await;
+                let again = stdin_read_name(stdin.next().await);
+                summary.output_closed =
+                    !write_chunk(&mut stdout, format!("{first}, then {again}").into_bytes()).await;
+            }
+            // Reads stdin once, drops its reader with no read pending, and goes on for a second.
+            "stdin-dropped-after-a-chunk" => {
+                let line = format!("{}\n", stdin_read_name(stdin.next().await));
+                drop(stdin);
+                if write_chunk(&mut stdout, line.into_bytes()).await {
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(1_000_000_000).await;
+                    summary.output_closed = !write_chunk(&mut stdout, b"done".to_vec()).await;
+                } else {
+                    summary.output_closed = true;
+                }
             }
             "binary" => {
                 summary.output_closed =

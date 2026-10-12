@@ -309,6 +309,22 @@ skipped; entity-slot registration, owner-lane acquisition and handoff are unchan
 deadlocking a filesystem-capable body behind a session stream whose progress does not use its
 lane.
 
+The stdin of a `SessionJournal` call has no attachment when the body is a component.
+`NativeToolTask::run` passes the `DurableInputEndpoint` on (`ToolCallStdin::Durable`), and
+`invoke_tool_sidecar` builds the body's stdin reader on it in the body's Store
+(`ToolBodyStdin::Durable`, `DurableToolStdinProducer`). What the body's guest takes is its own
+recorded guest observation, so stdin keeps its place among the body's other recorded calls in a
+replay; `streams.md` has the rules of that reader. There is no host task, no buffer, no
+attachment memory charge and no attachment metadata for this stdin. A body that forwards this
+stdin to another tool is read by the host there, with host records. A native body
+(`EntityActivationSource::Host`) keeps the attachment: `create_native_underlying_stdin` starts
+the host task that reads the durable input and fills it. That task's source ends when the tool's
+side of the stdin goes away, and a cancel that the source reports without being asked reaches the
+tool as `cancelled`, not as a clean end. The records of a component body's reads keep the
+session's attribution, so `has_visible_scope_descendant` does not see them: an incomplete body
+with a recorded read of this stdin is run as a started body, not through the empty-scope shortcut
+of `enter_incomplete_live_repair_before_body_access`.
+
 ### Scheduling
 
 `EntitySlot` (`worker/entity_slot.rs`) only registers active invocations and "never grants
