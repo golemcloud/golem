@@ -25,6 +25,7 @@ use crate::durable_host::concurrent::{
     DurableDemandStream, InvocationIdSource, ScopeReplayRecovery, demand_channel,
     reserve_import_invocation_id,
 };
+use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
@@ -1857,7 +1858,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                     return Ok((stream, upstream_trailers));
                 }
             };
-        let invocation_id = {
+        // A consume-body inside a custom durable invocation is not claimed on replay, whichever
+        // invocation observed the send, so it takes no ordinal from the root counter.
+        let observed_by_custom_invocation = store
+            .as_context_mut()
+            .guest_task_context::<CustomInvocationContext>()?
+            .as_deref()
+            .and_then(CustomInvocationContext::current)
+            .is_some();
+        let invocation_id = if observed_by_custom_invocation {
+            InvocationIdSource::Reserved(None)
+        } else {
             let mut store_ctx = store.as_context_mut();
             reserve_import_invocation_id(
                 durable_worker_ctx::<Ctx, U>(store_ctx.data_mut()),
