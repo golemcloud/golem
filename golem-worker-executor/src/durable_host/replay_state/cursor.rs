@@ -1934,6 +1934,155 @@ impl CursorTx<'_> {
         Ok(StartClaimAttempt::Missing)
     }
 
+    /// Reports what the replay-visible oplog holds for the call named `function_name` that the
+    /// call started at `parent_start_index` made under its own `Start`, and the index of that
+    /// call's `Start` when it is recorded. `enclosing` is the parent's own parent. Nothing is
+    /// consumed.
+    ///
+    /// The scan respects the replay target and fork/revert deleted regions. It ends where the
+    /// record of the parent's call tree ends: at the parent's terminal while the child is not
+    /// found, at the terminal of the call that encloses the parent, or at the end of the
+    /// invocation when no call encloses it.
+    ///
+    /// It starts in the replay buffer, where the entries that follow the cursor may already be,
+    /// and reads the oplog from where the buffer ends.
+    pub(super) async fn recorded_child(
+        &self,
+        parent_start_index: OplogIndex,
+        enclosing: Option<OplogIndex>,
+        function_name: &HostFunctionName,
+    ) -> (RecordedChild, Option<OplogIndex>) {
+        let replay_target = self.cursor.replay_target();
+        let mut child = None;
+        let mut next = parent_start_index.next();
+        let mut classify = |index: OplogIndex, entry: &OplogEntry| {
+            if self.st.skipped_regions.is_in_deleted_region(index) {
+                return None;
+            }
+            let terminal_of = terminal_start_index(entry);
+            match child {
+                Some(child) if terminal_of == Some(child) => return Some(RecordedChild::Closed),
+                None if terminal_of == Some(parent_start_index) => {
+                    return Some(RecordedChild::Missing);
+                }
+                None if matches!(
+                    entry,
+                    OplogEntry::Start {
+                        parent_start_index: Some(parent),
+                        function_name: name,
+                        ..
+                    } if *parent == parent_start_index && name == function_name
+                ) =>
+                {
+                    child = Some(index);
+                    return None;
+                }
+                _ => {}
+            }
+            let record_ends = match enclosing {
+                Some(enclosing) => terminal_of == Some(enclosing),
+                None => matches!(entry, OplogEntry::AgentInvocationFinished { .. }),
+            };
+            record_ends.then(|| child.map_or(RecordedChild::Missing, |_| RecordedChild::Open))
+        };
+
+        let first = next;
+        for (index, entry) in self
+            .st
+            .replay_buffer
+            .iter()
+            .skip_while(|(index, _)| *index < first)
+        {
+            if *index != next || *index > replay_target {
+                break;
+            }
+            if let Some(recorded) = classify(*index, entry) {
+                return (recorded, child);
+            }
+            next = index.next();
+        }
+        // The child is recorded right after its parent unless other work came in between, so
+        // the first read is small.
+        let mut chunk = 8;
+        while next <= replay_target {
+            let available = u64::from(replay_target) - u64::from(next) + 1;
+            let entries = self
+                .cursor
+                .oplog
+                .read_exact(next, chunk.min(available))
+                .await;
+            let last_read = *entries.last_key_value().unwrap().0;
+            for (index, entry) in &entries {
+                if *index > replay_target {
+                    break;
+                }
+                if let Some(recorded) = classify(*index, entry) {
+                    return (recorded, child);
+                }
+            }
+            next = last_read.next();
+            chunk = (chunk * 8).min(CHUNK_SIZE);
+        }
+        (
+            child.map_or(RecordedChild::Missing, |_| RecordedChild::Open),
+            child,
+        )
+    }
+
+    /// Claims the recorded `Start` of the call that the call just claimed at
+    /// `parent_start_index` made under its own `Start`, when replay makes that inner call before
+    /// it resolves the outer one: when the inner call has a recorded terminal, or has none and
+    /// `child.claim_open` is set. Returns `None` in every other case; the caller then resolves
+    /// the outer call first, as it does for a record that ends before the inner call.
+    ///
+    /// This runs in the transaction that claimed the parent. A caller that waited for a second
+    /// operation to claim the inner call could be dropped by the guest in between, and a body
+    /// that returns then leaves a recorded `Start` unclaimed.
+    pub(super) async fn claim_recorded_child(
+        &mut self,
+        parent_start_index: OplogIndex,
+        parent: &OplogEntry,
+        child: &RecordedChildClaim,
+        observational_owner: Option<OplogIndex>,
+    ) -> Result<Option<ReplayCallHandle>, WorkerExecutorError> {
+        if parent_start_index >= self.cursor.replay_target() {
+            return Ok(None);
+        }
+        let (recorded, child_index) = self
+            .recorded_child(
+                parent_start_index,
+                start_parent(parent),
+                &child.function_name,
+            )
+            .await;
+        let child_index = match (recorded, child_index) {
+            (RecordedChild::Closed, Some(index)) => index,
+            (RecordedChild::Open, Some(index)) if child.claim_open => index,
+            _ => return Ok(None),
+        };
+        let claim = StartClaim::owned(
+            &child.function_name,
+            &child.function_type,
+            parent_start_index,
+        )
+        .with_observational_owner(observational_owner);
+        match self.claim_start(&claim).await? {
+            StartClaimAttempt::Claimed(handle, _) => Ok(Some(handle)),
+            StartClaimAttempt::Blocked(_) if child_index > self.cursor.last_replayed_index() => {
+                // A delivery marker of another call lies between the cursor and the inner call.
+                // The marker holds back claims that could belong to a call the guest makes after
+                // that delivery. This `Start` names its parent, and only the parent's own inner
+                // call can be it, so it is claimed ahead of the cursor like any other `Start`
+                // found by a scan.
+                self.st.claimed_starts.insert(child_index);
+                self.register_claimed_start(child_index, Some(parent_start_index))
+                    .await
+                    .map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Returns the latest `Start` matching this claim in a jump-deleted region. An incomplete
     /// entity Store uses this to continue live locally while sibling Stores finish replaying the
     /// surviving owner-oplog tail; the latest match ensures an earlier abandoned attempt cannot
@@ -2932,6 +3081,38 @@ impl ReplayState {
             next = last_read.next();
         }
         None
+    }
+
+    /// [`CursorTx::recorded_child`] for a parent that is read from the oplog.
+    #[cfg(test)]
+    pub(crate) async fn recorded_child(
+        &self,
+        parent_start_index: OplogIndex,
+        function_name: &HostFunctionName,
+    ) -> Result<RecordedChild, WorkerExecutorError> {
+        let function_name = function_name.clone();
+        self.run_owned_cursor_op(move |state| async move {
+            state
+                .with_tx(async |tx| {
+                    let enclosing = match tx.cursor.oplog.read(parent_start_index).await {
+                        OplogEntry::Start {
+                            parent_start_index, ..
+                        } => parent_start_index,
+                        entry => {
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("Start at {parent_start_index}"),
+                                format!("{entry:?}"),
+                            ));
+                        }
+                    };
+                    Ok(tx
+                        .recorded_child(parent_start_index, enclosing, &function_name)
+                        .await
+                        .0)
+                })
+                .await
+        })
+        .await
     }
 
     /// Waits until the replay cursor is blocked on a record in `root`'s call tree that no still

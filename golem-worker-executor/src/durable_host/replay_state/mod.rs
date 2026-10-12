@@ -179,7 +179,9 @@ mod resolution;
 mod rollback;
 
 use abandoned::AbandonedStarts;
-pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
+pub(crate) use claims::{
+    CustomStartClaimOutcome, RecordedChildClaim, ReplayStartClaimOutcome, StartClaim,
+};
 #[cfg(test)]
 use rollback::atomic_rollback_region;
 pub use rollback::suffix_rollback_region;
@@ -330,6 +332,18 @@ struct ReplayCursor {
 pub(super) enum CompletionMarker {
     Delivered(OplogIndex),
     Discarded(OplogIndex),
+}
+
+/// What the replay-visible oplog holds for a call that a host function makes under its own
+/// `Start`. See [`CursorTx::recorded_child`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordedChild {
+    /// No such `Start` is recorded.
+    Missing,
+    /// The `Start` is recorded and has no terminal.
+    Open,
+    /// The `Start` is recorded with its `End` or `Cancelled`.
+    Closed,
 }
 
 /// Ownership of the cursor gate after a guest observation record has been consumed. Only its

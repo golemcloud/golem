@@ -9508,3 +9508,441 @@ async fn missing_start_claim_is_divergence_at_a_top_level_custom_root() {
     );
     reconstruction.body_settled();
 }
+
+fn owned_start_named(name: HostFunctionName, parent: u64) -> OplogEntry {
+    let mut entry = start_named(name);
+    let OplogEntry::Start {
+        parent_start_index, ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *parent_start_index = Some(OplogIndex::from_u64(parent));
+    entry
+}
+
+async fn recorded_clock_read_under(rs: &ReplayState, parent: u64) -> RecordedChild {
+    rs.recorded_child(
+        OplogIndex::from_u64(parent),
+        &HostFunctionName::MonotonicClockNow,
+    )
+    .await
+    .unwrap()
+}
+
+#[test]
+async fn a_recorded_child_call_is_found_with_or_without_its_terminal() {
+    let no_child = replay_state_over(vec![noop(), start_now()]).await;
+    assert_eq!(
+        recorded_clock_read_under(&no_child, 2).await,
+        RecordedChild::Missing
+    );
+
+    let open = replay_state_over(vec![noop(), start_now(), start_with_parent(2)]).await;
+    assert_eq!(
+        recorded_clock_read_under(&open, 2).await,
+        RecordedChild::Open
+    );
+
+    let ended = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 7),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&ended, 2).await,
+        RecordedChild::Closed
+    );
+
+    let cancelled = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        cancelled_for(3),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&cancelled, 2).await,
+        RecordedChild::Closed
+    );
+}
+
+#[test]
+async fn a_child_call_is_not_found_under_another_parent_or_another_name() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        start_with_parent(3),
+        end_for(4, 7),
+        owned_start_named(HostFunctionName::MonotonicClockResolution, 2),
+        end_for(6, 8),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&rs, 2).await,
+        RecordedChild::Missing,
+        "the clock read of a sibling and a call of another name are not this call's clock read"
+    );
+    assert_eq!(
+        recorded_clock_read_under(&rs, 3).await,
+        RecordedChild::Closed
+    );
+}
+
+#[test]
+async fn a_child_call_is_not_found_in_a_deleted_region_or_past_the_replay_target() {
+    let (rs, oplog) = replay_state_and_oplog_over(vec![noop(), start_now()]).await;
+    let child = oplog.add(start_with_parent(2)).await.unwrap();
+    assert_eq!(
+        recorded_clock_read_under(&rs, 2).await,
+        RecordedChild::Missing,
+        "an entry past the replay target is not part of the replayed record"
+    );
+    rs.set_replay_target(child).await.unwrap();
+    assert_eq!(recorded_clock_read_under(&rs, 2).await, RecordedChild::Open);
+
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 7),
+        noop(),
+    ])
+    .await;
+    rs.register_replay_jump(vec![OplogRegion::from_range(3..=4)])
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded_clock_read_under(&rs, 2).await,
+        RecordedChild::Missing
+    );
+}
+
+#[test]
+async fn the_search_for_a_child_call_ends_with_its_parent_and_with_the_enclosing_call() {
+    // Nothing of a call is recorded after its terminal, nor after the terminal of the call that
+    // encloses it, nor after the end of its invocation. The search must not read on from there.
+    let after_the_parent = replay_state_over(vec![
+        noop(),
+        start_now(),
+        cancelled_for(2),
+        start_with_parent(2),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&after_the_parent, 2).await,
+        RecordedChild::Missing
+    );
+
+    let after_the_enclosing_call = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(2, 7),
+        start_with_parent(3),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&after_the_enclosing_call, 3).await,
+        RecordedChild::Missing
+    );
+
+    let after_the_invocation = replay_state_over(vec![
+        noop(),
+        start_now(),
+        invocation_finished(),
+        start_with_parent(2),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&after_the_invocation, 2).await,
+        RecordedChild::Missing
+    );
+
+    let terminal_after_the_parent = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        cancelled_for(2),
+        cancelled_for(3),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&terminal_after_the_parent, 2).await,
+        RecordedChild::Closed,
+        "the child's terminal may follow the terminal of its parent"
+    );
+}
+
+#[test]
+async fn a_child_call_is_found_after_the_cursor_stepped_over_it() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 7),
+        end_for(2, 8),
+    ])
+    .await;
+    let parent = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    // The parent's terminal is reached only past the child, which nobody claimed yet.
+    rs.drain_awaited_terminals().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert_eq!(
+        recorded_clock_read_under(&rs, 2).await,
+        RecordedChild::Closed
+    );
+    drop(parent);
+}
+
+#[test]
+async fn the_search_for_a_child_call_crosses_read_chunks() {
+    let mut entries = vec![noop(), start_now()];
+    entries.extend(std::iter::repeat_with(noop).take(CHUNK_SIZE as usize * 2 + 3));
+    entries.push(start_with_parent(2));
+    entries.extend(std::iter::repeat_with(noop).take(CHUNK_SIZE as usize + 3));
+    entries.push(end_for(CHUNK_SIZE * 2 + 6, 7));
+    let rs = replay_state_over(entries).await;
+    assert_eq!(
+        recorded_clock_read_under(&rs, 2).await,
+        RecordedChild::Closed
+    );
+}
+
+#[test]
+async fn an_open_child_call_is_reported_where_the_record_of_its_parent_ends() {
+    // The call that encloses the parent ends while the child has no terminal. Nothing of the
+    // child is recorded after that, whatever follows.
+    let at_the_enclosing_terminal = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        start_with_parent(3),
+        end_for(2, 7),
+        end_for(4, 8),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&at_the_enclosing_terminal, 3).await,
+        RecordedChild::Open
+    );
+
+    let at_the_end_of_the_invocation = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        invocation_finished(),
+        end_for(3, 8),
+    ])
+    .await;
+    assert_eq!(
+        recorded_clock_read_under(&at_the_end_of_the_invocation, 2).await,
+        RecordedChild::Open
+    );
+}
+
+/// Claims the next top-level clock read with `claim`, and with it the clock read recorded
+/// under it.
+async fn claim_with_inner_clock_read(
+    rs: &ReplayState,
+    claim: StartClaim,
+    claim_open: bool,
+) -> (ReplayCallHandle, Option<ReplayCallHandle>) {
+    let (outcome, inner) = rs
+        .claim_start_with_recorded_child_for_store(
+            claim,
+            false,
+            Some(RecordedChildClaim {
+                function_name: HostFunctionName::MonotonicClockNow,
+                function_type: DurableFunctionType::ReadLocal,
+                claim_open,
+            }),
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = outcome else {
+        panic!("the outer call is recorded");
+    };
+    (handle, inner)
+}
+
+async fn claim_with_recorded_clock_read(
+    rs: &ReplayState,
+    claim_open: bool,
+) -> (ReplayCallHandle, Option<ReplayCallHandle>) {
+    let claim = StartClaim::unowned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+    );
+    claim_with_inner_clock_read(rs, claim, claim_open).await
+}
+
+async fn end_of(rs: &ReplayState, call: ReplayCallHandle) -> OplogIndex {
+    match rs.await_resolution(call).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => end_idx,
+        other => panic!("expected a completed call, got {other:?}"),
+    }
+}
+
+#[test]
+async fn the_claim_of_a_call_claims_its_recorded_inner_call() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 7),
+        end_for(2, 8),
+    ])
+    .await;
+
+    let (outer, inner) = claim_with_recorded_clock_read(&rs, false).await;
+    assert_eq!(outer.start_idx(), OplogIndex::from_u64(2));
+    let inner = inner.expect("the inner call is claimed with the outer one");
+    assert_eq!(inner.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(end_of(&rs, inner).await, OplogIndex::from_u64(4));
+    assert_eq!(end_of(&rs, outer).await, OplogIndex::from_u64(5));
+}
+
+#[test]
+async fn an_inner_call_that_was_dropped_with_its_claim_stays_claimed() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 7),
+    ])
+    .await;
+
+    // The caller is dropped right after the claim: both handles go, nothing else runs.
+    drop(claim_with_recorded_clock_read(&rs, false).await);
+    rs.drain_awaited_terminals().await.unwrap();
+
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn an_inner_call_without_a_terminal_is_claimed_only_where_the_store_never_goes_live() {
+    let record = || vec![noop(), start_now(), start_with_parent(2)];
+
+    let can_go_live = replay_state_over(record()).await;
+    let (_outer, inner) = claim_with_recorded_clock_read(&can_go_live, false).await;
+    assert!(inner.is_none());
+    // The inner `Start` is left for the claim that follows the outer call's resolution.
+    let later = can_go_live
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(later.start_idx(), OplogIndex::from_u64(3));
+
+    let never_live = replay_state_over(record()).await;
+    let (_outer, inner) = claim_with_recorded_clock_read(&never_live, true).await;
+    assert_eq!(
+        inner.map(|inner| inner.start_idx()),
+        Some(OplogIndex::from_u64(3))
+    );
+}
+
+#[test]
+async fn a_call_without_a_recorded_inner_call_is_claimed_alone() {
+    let ended = replay_state_over(vec![noop(), start_now(), end_for(2, 8)]).await;
+    let (outer, inner) = claim_with_recorded_clock_read(&ended, true).await;
+    assert!(inner.is_none());
+    assert_eq!(end_of(&ended, outer).await, OplogIndex::from_u64(3));
+
+    let last_entry = replay_state_over(vec![noop(), start_now()]).await;
+    let (_outer, inner) = claim_with_recorded_clock_read(&last_entry, true).await;
+    assert!(inner.is_none());
+}
+
+#[test]
+async fn an_inner_call_behind_the_delivery_marker_of_another_call_is_claimed_with_its_parent() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_resolution(),
+        start_now(),
+        end_for(2, 1),
+        delivered_for(2),
+        start_with_parent(3),
+        end_for(6, 7),
+        end_for(3, 8),
+    ])
+    .await;
+    let ReplayStartClaimOutcome::Claimed { handle: other, .. } = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("the other call is recorded");
+    };
+
+    let (outer, inner) = claim_with_recorded_clock_read(&rs, false).await;
+    assert_eq!(outer.start_idx(), OplogIndex::from_u64(3));
+    let inner = inner.expect("the marker of another call does not hold back the inner call");
+    assert_eq!(inner.start_idx(), OplogIndex::from_u64(6));
+
+    // The cursor still stops at the marker until the guest takes the other call's completion.
+    rs.await_resolution(other).await.unwrap();
+    assert!(rs.last_replayed_index() < OplogIndex::from_u64(5));
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    barrier.acknowledge();
+    assert_eq!(end_of(&rs, inner).await, OplogIndex::from_u64(7));
+    assert_eq!(end_of(&rs, outer).await, OplogIndex::from_u64(8));
+}
+
+#[test]
+async fn the_claim_of_a_retained_call_claims_its_retained_inner_call() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_resolution(),
+        start_now(),
+        start_with_parent(3),
+        end_for(4, 7),
+        end_for(3, 8),
+        end_for(2, 9),
+    ])
+    .await;
+    let other = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    // The other call's terminal lies past both `Start`s: reaching it steps over them.
+    assert_eq!(end_of(&rs, other).await, OplogIndex::from_u64(7));
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let (outer, inner) = claim_with_recorded_clock_read(&rs, false).await;
+    assert_eq!(outer.start_idx(), OplogIndex::from_u64(3));
+    let inner = inner.expect("the retained inner call is claimed with the retained outer one");
+    assert_eq!(inner.start_idx(), OplogIndex::from_u64(4));
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(end_of(&rs, inner).await, OplogIndex::from_u64(5));
+    assert_eq!(end_of(&rs, outer).await, OplogIndex::from_u64(6));
+}

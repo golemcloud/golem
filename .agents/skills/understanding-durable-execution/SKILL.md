@@ -603,8 +603,12 @@ remain durable and identity-validated, but End returns the recorded result direc
 There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless
 replay-tail gate. A Store-holding reader must never wait for progress whose only producer needs
 that Store's event loop. P3 `monotonic-clock::wait-for` records its outer Start first and owns the
-internal `now` read as a child. It resolves the outer replay before the child: a cancelled outer
-wait parks without issuing the child, while an incomplete outer wait owns cancellation cleanup
+internal `now` read as a child. On replay the claim of the outer Start also claims the recorded
+child, in the same cursor transaction, when the child has a recorded terminal, or has none in a
+Store that never goes live (a completed entity body); that child is then replayed before the outer
+call is resolved, so a wait that the guest dropped leaves no recorded read unclaimed. In every
+other case the outer replay is resolved before the child: a cancelled outer wait without a
+recorded child parks without issuing it, while an incomplete outer wait owns cancellation cleanup
 before reconstructing the deadline from recorded `now + duration`. A completed outer requires
 a recorded completed child. Cancelling after the child's End settles the outer wait without an
 internal delivery marker. Only the outer wait has a real guest-delivery boundary.

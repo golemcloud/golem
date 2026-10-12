@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
+use crate::durable_host::replay_state::{RecordedChildClaim, ReplayStartClaimOutcome, StartClaim};
 use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
 use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{
@@ -649,6 +649,14 @@ pub(crate) struct AccessClaimOptions {
     pub(crate) scope_replay_recovery: ScopeReplayRecovery,
     pub(crate) host_internal_owner: Option<HostInternalCallOwner>,
     pub(crate) require_recorded_start: bool,
+    /// The call that this call's host function makes under its own `Start` (see
+    /// [`RecordedChildClaim`]). Set through
+    /// [`DurableCallSession::start_access_with_recorded_child`], which returns the handle of the
+    /// inner `Start` that the claim took.
+    pub(crate) recorded_child: Option<RecordedChildClaim>,
+    /// The recorded `Start` of this call, when the claim of its outer call already took it. The
+    /// call then replays that `Start` and claims nothing.
+    pub(crate) claimed_start: Option<ReplayCallHandle>,
 }
 
 /// An internal call belongs to the outer call, not to a guest completion. Keeping the outer
@@ -656,6 +664,20 @@ pub(crate) struct AccessClaimOptions {
 pub(crate) struct HostInternalCallOwner {
     start_index: OplogIndex,
     execution_scope: CallExecutionScope,
+}
+
+/// How a host-internal call relates to the record of its outer call.
+pub(crate) enum HostInternalReplay {
+    /// Nothing is known of the internal call's record: it replays that record when there is
+    /// one, and runs anew when there is none. This is the first run, and a replay in which the
+    /// outer call is completed where the record ends.
+    Any,
+    /// The outer call completed in the record, so the internal call must have completed there
+    /// too.
+    Completed,
+    /// The claim of the outer call took the internal call's recorded `Start`. The internal call
+    /// replays that record; its terminal need not be there.
+    Claimed(ReplayCallHandle),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -738,6 +760,9 @@ struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
     persisted: bool,
     request_upload: PendingUpload,
     replay: Option<ReplayCallHandle>,
+    /// The inner `Start` that the replay claim took with this call's own `Start`; see
+    /// [`AccessClaimOptions::recorded_child`].
+    recorded_child: Option<ReplayCallHandle>,
     execution_scope: CallExecutionScope,
     retry: InFunctionRetryController,
     opened_scope: Option<AccessOpenedScope>,
@@ -1201,7 +1226,39 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
-        let mut handle = Self::start_access_with_options_and_span_builder(
+        Self::start_access_with_recorded_child(
+            store,
+            get_ctx,
+            function_type,
+            claim_options,
+            None,
+            build_request,
+        )
+        .await
+        .map(|(handle, _)| handle)
+    }
+
+    /// [`Self::start_access_with_options`] for a host function that makes `recorded_child` under
+    /// its own `Start`. On replay the claim of this call's `Start` also claims the recorded
+    /// `Start` of that inner call, when replay makes the inner call first (see
+    /// [`RecordedChildClaim`]), and its handle is returned for
+    /// [`HostInternalReplay::Claimed`].
+    pub(crate) async fn start_access_with_recorded_child<T, D, Ctx, F>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        mut claim_options: AccessClaimOptions,
+        recorded_child: Option<RecordedChildClaim>,
+        build_request: F,
+    ) -> Result<(Self, Option<ReplayCallHandle>), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
+    {
+        claim_options.recorded_child = recorded_child;
+        let (mut handle, recorded_child) = Self::start_access_with_options_and_span_builder(
             store,
             get_ctx,
             function_type,
@@ -1214,7 +1271,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         handle
             .supersede_prior_completion_delivery(store, get_ctx)
             .await?;
-        Ok(handle)
+        Ok((handle, recorded_child))
     }
 
     /// Starts an accessor call with metadata prepared before its immutable `Start` is appended.
@@ -1232,7 +1289,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
-        let mut handle = Self::start_access_with_options_and_span_builder(
+        let (mut handle, _) = Self::start_access_with_options_and_span_builder(
             store,
             get_ctx,
             function_type,
@@ -1273,7 +1330,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             + Send
             + 'static,
     {
-        let mut handle = Self::start_access_with_options_and_span_builder(
+        let (mut handle, _) = Self::start_access_with_options_and_span_builder(
             store,
             get_ctx,
             function_type,
@@ -1297,7 +1354,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_request: F,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> Result<(Self, Option<ReplayCallHandle>), WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -1349,7 +1406,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         )
         .await
         {
-            Ok(executed) => {
+            Ok(mut executed) => {
+                let recorded_child = executed.recorded_child.take();
                 let result = store.with(|mut access| {
                     let ctx = get_ctx(access.data_mut());
                     Self::finish_access_start(ctx, executed)
@@ -1357,7 +1415,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if result.is_ok() {
                     start_guard.disarm();
                 }
-                result
+                result.map(|handle| (handle, recorded_child))
             }
             Err((err, cleanup)) => {
                 store.with(|mut access| {
@@ -1537,6 +1595,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     persisted: false,
                     request_upload: PendingUpload::already_durable(),
                     replay: Some(handle),
+                    recorded_child: None,
                     execution_scope: execution_scope.finish(start_idx, atomic_lease),
                     retry,
                     opened_scope: None,
@@ -1717,7 +1776,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             });
         }
 
-        let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
+        let mut durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
+        if claim_options.claimed_start.is_some() {
+            // The recorded `Start` is already claimed, so this call replays it, also when the
+            // Store went live after the claim.
+            durable_execution_state.is_live = false;
+        }
         let atomic_region = ctx
             .state
             .active_atomic_regions
@@ -1986,11 +2050,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             }
         }
 
+        let mut recorded_child = None;
+
         // Claim before building the request. Concurrent replay may have reached the shared live
         // tail while this Store was waiting to run; observing that transition in the claim's
         // cursor transaction lets an incomplete entity continuation build with live semantics.
         // Missing claims while the cursor remains replaying are still strict divergence.
-        let replay = if !is_live {
+        let replay = if !is_live && let Some(claimed) = prepared.claim_options.claimed_start.take()
+        {
+            // The claim of the outer call already took this call's recorded `Start`.
+            Some(claimed)
+        } else if !is_live {
             loop {
                 let claim =
                     Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)
@@ -2008,11 +2078,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     });
                     (observer, Arc::new(activity))
                 });
-                let outcome = prepared
+                let (outcome, child) = prepared
                     .replay_state
-                    .claim_start_for_store_observed(
+                    .claim_start_with_recorded_child_for_store(
                         claim,
                         store_continued_live,
+                        prepared.claim_options.recorded_child.clone(),
                         move |index, entry| {
                             if let Some((observer, _activity)) = &observer {
                                 observer.clone().started(index, entry, true);
@@ -2029,7 +2100,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         )
                     })?;
                 match outcome {
-                    ReplayStartClaimOutcome::Claimed { handle, .. } => break Some(handle),
+                    ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                        recorded_child = child;
+                        break Some(handle);
+                    }
                     outcome @ (ReplayStartClaimOutcome::ReplayEnded
                     | ReplayStartClaimOutcome::DeletedRegion
                     | ReplayStartClaimOutcome::StoreAlreadyLive) => {
@@ -2181,6 +2255,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     persisted: false,
                     request_upload: PendingUpload::already_durable(),
                     replay: None,
+                    recorded_child: None,
                     execution_scope: execution_scope.finish(start_idx, atomic_lease),
                     retry,
                     opened_scope: scope_start,
@@ -2283,6 +2358,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     persisted: true,
                     request_upload,
                     replay: None,
+                    recorded_child: None,
                     execution_scope: execution_scope.finish(start_idx, atomic_lease),
                     retry,
                     opened_scope: scope_start,
@@ -2310,6 +2386,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 persisted: false,
                 request_upload: PendingUpload::already_durable(),
                 replay: Some(replay),
+                recorded_child,
                 execution_scope: execution_scope.finish(start_idx, atomic_lease),
                 retry,
                 opened_scope: scope_start,
@@ -3528,7 +3605,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         owner: HostInternalCallOwner,
-        completed_parent: bool,
+        replay: HostInternalReplay,
         request: Pair::Req,
         function_type: DurableFunctionType,
         live_action: A,
@@ -3545,6 +3622,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeDeferredStart)
                 .await;
         }
+        let (claimed_start, completed_parent) = match replay {
+            HostInternalReplay::Any => (None, false),
+            HostInternalReplay::Completed => (None, true),
+            HostInternalReplay::Claimed(claimed) => (Some(claimed), false),
+        };
         if completed_parent
             && store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live())
         {
@@ -3558,6 +3640,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             observational_owner: owner.execution_scope.observational_owner,
             host_internal_owner: Some(owner),
             require_recorded_start: completed_parent,
+            claimed_start,
             ..Default::default()
         };
         let mut call = Self::start_access_with_options(
