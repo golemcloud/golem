@@ -114,7 +114,7 @@ async fn go_atomic_region_with_outgoing_http(
 
 /// A cross-agent RPC inside an atomic region settles, so the region closes
 /// normally. This is the pattern the `golem-atomic-block-go` skill documents, and
-/// it is what distinguishes GOL-486 from a general atomic-region problem.
+/// it shows that only outbound HTTP keeps a Go atomic region from closing.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -152,8 +152,7 @@ async fn go_atomic_region_with_rpc(
 /// A durable clock read (`time.Now()` = wall + monotonic host calls) inside an
 /// atomic region, immediately followed by an outbound HTTP call: both settle and
 /// the region closes. Pins down that positional clock calls inside a region do
-/// not interfere with the HTTP scope's completion (measured 24/24 while
-/// diagnosing GOL-486).
+/// not interfere with the HTTP scope's completion.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]

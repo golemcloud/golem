@@ -1072,7 +1072,6 @@ async fn test_streaming_invocation_cli_end_to_end() {
 #[test]
 #[tag(agents_streaming)]
 #[timeout("20 minutes")]
-#[ignore = "after the test proxy drops the first WebSocket, the executor fails the agent (a durable input producer returns Cancelled without finish) and the session never tells the client, so the bridge waits until the time limit"]
 async fn test_go_generated_streaming_bridge_end_to_end() {
     let ctx = streaming_invocation_context().await;
     let bridge_root = ctx.cwd_path_join("go-streaming-bridge");
@@ -1256,7 +1255,6 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
 #[test]
 #[tag(agents_streaming)]
 #[timeout("30 minutes")]
-#[ignore = "after the test proxy drops the first WebSocket, the executor fails the agent (a durable input producer returns Cancelled without finish) and the session never tells the client, so the bridge waits until the time limit"]
 async fn test_generated_streaming_bridges_end_to_end() {
     let ctx = streaming_invocation_context().await;
 

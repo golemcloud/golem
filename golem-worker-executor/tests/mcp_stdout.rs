@@ -60,7 +60,6 @@ fn observation(source: McpImportSource, names: &[&str]) -> McpImportObservation 
 }
 
 #[test]
-#[ignore = "the replay of the completed MCP call stalls after the executor restart"]
 #[timeout("2m")]
 async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_content(
     last_unique_id: &LastUniqueId,
