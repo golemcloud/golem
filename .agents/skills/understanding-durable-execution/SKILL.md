@@ -400,6 +400,56 @@ children to be dropped first, so socket cleanup need not scan unrelated subscrip
 not revalidate HTTP, UDP or TCP input pollables. Exported P2 `pollable.ready` remains a nonblocking
 live probe, as verified by `tests/api/p2_ready.rs`.
 
+### Primary DB/KV completion before stop
+
+An accepted stop does not cancel already-entered primary DB/KV backend work. A completed success
+or final error keeps its required durable completion and cleanup under their existing owners before
+guest execution observes the typed stop. Eligible retry-delay interruption remains unchanged. It can leave
+`Start` incomplete, without a fabricated `End` or `Cancelled`. Not every entered import must produce
+a terminal record. The current call is not the whole guest invocation or open transaction. An
+unstarted commit is not required, but an already-entered commit or rollback keeps its required
+finalization.
+
+`tests/api/interruption/host/db_kv.rs` witnesses serialized KV set and scripted PostgreSQL execute
+in both agent modes, plus an entered durable commit with awaited cleanup. The tests hold the
+provider through stop acceptance, then verify its effect and completion before physical release.
+Enabled byte-time continues while the concurrent-agent permit is held and stops through its
+existing window closure. Durable recovery passes admission and reconstructs the same invocation
+key without repeating recorded completed effects. Ephemeral failure remains terminal; a fresh
+invocation can use the released capacity.
+
+A provider, transaction finalizer or cleanup that never finishes can retain the runtime and permit
+indefinitely. Enabled metering and accounting continue until the existing window closes. Only excess
+under the applied `allowOverage` revision is billable. Earlier `hardLimit` usage never becomes billable
+retrospectively. These witnesses observe accounting deltas, not overage charges. They do not prove
+every SQL/KV operation, pending entity-provider survival, concurrent P3 sibling completion, stop
+before every next import, or external exactly-once effects. They assert lifecycle, accounting and
+effects, not release-metric attribution.
+
+### Observing physical release
+
+Read the [resource release metric catalogue](../../../golem-worker-executor/resource-release-metrics.md)
+when interpreting stop latency, unfinished cleanup or retained failure. The existing Prometheus
+registry reports owner facts; metrics do not own interruption, cleanup, billing or recovery.
+Acceptance and signal publication are not physical release. Observe primary execution quiescence,
+actual Store destruction, reservation return, filesystem drain/deletion and permit Drop separately.
+Billing closes before the existing permit release. Store destruction does not prove OS page
+reclamation, and a retained MemoryGrant keeps its receipt and end-to-end interval unfinished.
+
+Duration histograms contain only completed endpoints. Unfinished counts and oldest ages retain
+pending or failed receipts; collection advances age without another timer, including with billing
+disabled. A deadline or dropped observer does not complete a receipt. `released_with_failure`
+records physical completion with retained failed health, not successful cleanup. Repair does not
+erase failure history. Stage series count receipts, while `end_to_end` counts intervals; do not
+sum them as a worker count. The host-exit histogram covers only entered `p3_tcp_receive` drivers,
+not DB/KV calls. Histogram boundaries are not release deadlines, and the catalogue defines no
+global quota-detection timestamp or universal release bound.
+
+Metric labels aggregate process-local observations without account or invocation IDs. A shared
+process's cause/stage delta alone cannot attribute an event to a particular invocation when other
+work can update the same series. Use an existing isolated registry attached to real owners for
+attributable owner tests; keep that evidence distinct from real-Worker DB/KV composition.
+
 ### Blobstore and filesystem guest observation
 
 Live blobstore provider futures in `durable_host/blobstore/{mod,container}.rs` select the composed
