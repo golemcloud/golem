@@ -1,0 +1,845 @@
+import { Tabs, Callout } from "nextra/components"
+
+# Make Custom HTTP APIs for your Golem App
+
+Golem's [gateway](/v1.6/operate/architecture#the-gateway) service not only exposes the [low-level REST API for invocations](/v1.6/invoke/http)
+but also provides a way to expose agent methods as HTTP APIs.
+
+In Golem 1.5, HTTP endpoints are defined **directly in agent code** using language-native decorators and macros — no YAML route definitions or scripting languages needed.
+
+For raw streaming request/response handling, framework-owned routing, or static and
+live file mappings, see [HTTP routers and file serving](/v1.6/invoke/http-routers).
+Complete code-first endpoints take precedence over those mounted fallback behaviors.
+
+## Mount Points
+
+Every agent that wants to expose HTTP endpoints must first define a **mount point** — the base URL prefix under which all its endpoints are available. The mount path can contain placeholders like `{name}` that map to the agent's constructor parameters.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+export const Tasks = defineAgent({
+  name: 'Tasks',
+  id: { name: z.string() },
+  http: http.mount('/task-agents/{name}'),
+  methods: {
+    // ...
+  },
+});
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const Tasks = defineAgent({
+  name: "Tasks",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/task-agents/{name}"),
+  methods: {
+    // ...
+  },
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[agent_definition(mount = "/task-agents/{name}")]
+pub trait Tasks {
+    fn new(name: String) -> Self;
+    // ...
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@agentDefinition(mount = "/task-agents/{name}")
+trait Tasks extends BaseAgent {
+  // ...
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.agent
+#derive.mount("/task-agents/{name}")
+pub(all) struct Tasks {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+If there are multiple agent constructor parameters, they all have to be mapped in the mount path.
+
+## Endpoints
+
+Once the mount is defined, individual agent methods can be exposed as HTTP **endpoints**. Each endpoint specifies an HTTP method and a path suffix relative to the mount point. Path placeholders are mapped to method parameters. Parameters not mapped through the path or headers are taken from the request body.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+createTask: method({
+  input: { request: CreateTaskRequest },
+  returns: Task,
+  http: http.post('/tasks'),
+}),
+
+getTasks: method({ input: {}, returns: z.array(Task), http: http.get('/tasks') }),
+
+completeTask: method({
+  input: { id: z.number() },
+  returns: Task.nullable(),
+  http: http.post('/tasks/{id}/complete'),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+createTask: method({
+  input: { request: CreateTaskRequest },
+  success: Task,
+  http: [Http.post("/tasks")],
+}),
+
+getTasks: method({ input: {}, success: Schema.Array(Task), http: [Http.get("/tasks")] }),
+
+completeTask: method({
+  input: { id: Schema.Number },
+  success: Schema.NullOr(Task),
+  http: [Http.post("/tasks/{id}/complete")],
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[endpoint(post = "/tasks")]
+fn create_task(&mut self, request: CreateTaskRequest) -> Task;
+
+#[endpoint(get = "/tasks")]
+fn get_tasks(&self) -> Vec<Task>;
+
+#[endpoint(post = "/tasks/{id}/complete")]
+fn complete_task(&mut self, id: usize) -> Option<Task>;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@endpoint(method = "POST", path = "/tasks")
+def createTask(request: CreateTaskRequest): Future[Task]
+
+@endpoint(method = "GET", path = "/tasks")
+def getTasks(): Future[Array[Task]]
+
+@endpoint(method = "POST", path = "/tasks/{id}/complete")
+def completeTask(id: Int): Future[Option[Task]]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.endpoint(post = "/tasks")
+pub fn Tasks::create_task(self : Self, request : CreateTaskRequest) -> Task {
+  // ...
+}
+
+#derive.endpoint(get = "/tasks")
+pub fn Tasks::get_tasks(self : Self) -> Array[Task] {
+  // ...
+}
+
+#derive.endpoint(post = "/tasks/{id}/complete")
+pub fn Tasks::complete_task(self : Self, id : UInt32) -> Option[Task] {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+Supported HTTP methods: `get`, `post`, `put`, `delete`, `patch`, `head`, `options`, `connect`, `trace`, and `custom` (for arbitrary method strings, TypeScript only).
+
+### Query Parameters
+
+Query parameters can be bound to method parameters using standard HTTP query syntax in the endpoint path:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+search: method({
+  input: { query: z.string(), limit: z.number() },
+  returns: z.array(SearchResult),
+  http: http.get('/search?q={query}&limit={limit}'),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+search: method({
+  input: { category: Schema.String, limit: Schema.Number, offset: Schema.Number },
+  success: Schema.Array(Item),
+  http: [Http.get("/search/{category}?limit={limit}&offset={offset}")],
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[endpoint(get = "/search/{category}?limit={limit}&offset={offset}")]
+fn search(&self, category: String, limit: u64, offset: u64) -> Vec<Item>;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@endpoint(method = "GET", path = "/search/{category}?limit={limit}&offset={offset}")
+def search(category: String, limit: Int, offset: Int): Future[Array[Item]]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.endpoint(get = "/search/{category}?limit={limit}&offset={offset}")
+pub fn MyAgent::search(self : Self, category : String, limit : UInt64, offset : UInt64) -> Array[Item] {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+### Header Mapping
+
+Custom HTTP headers can be mapped to function parameters:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+example: method({
+  input: { location: z.string(), name: z.string() },
+  returns: z.string(),
+  http: http.get('/example', { headers: { 'X-Foo': 'location', 'X-Bar': 'name' } }),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+example: method({
+  input: { location: Schema.String, name: Schema.String },
+  success: Schema.String,
+  http: [
+    Http.get("/example", {
+      headers: { "X-Foo": "location", "X-Bar": "name" } as const,
+    }),
+  ],
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[endpoint(get = "/example", headers("X-Foo" = "location", "X-Bar" = "name"))]
+fn example(&self, location: String, name: String) -> String;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@endpoint(method = "GET", path = "/example")
+def example(@header("X-Foo") location: String, @header("X-Bar") name: String): Future[String]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.endpoint(get = "/example")
+#derive.endpoint_header("X-Foo", "location")
+#derive.endpoint_header("X-Bar", "name")
+pub fn ExampleAgent::example(self : Self, location : String, name : String) -> String {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+### Catch-all Path Segments
+
+The `{*variable}` syntax captures all remaining path segments. It must be the last segment in the path:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+serveFile: method({
+  input: { rest: z.string() },
+  returns: FileData,
+  http: http.get('/files/{*rest}'),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+serveFile: method({
+  input: { rest: Schema.String },
+  success: FileData,
+  http: [Http.get("/files/{*rest}")],
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[endpoint(get = "/rest/{*tail}")]
+fn catch_all(&self, tail: String) -> String;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@endpoint(method = "GET", path = "/files/{*path}")
+def serveFile(path: String): Future[FileData]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.endpoint(get = "/files/{*path}")
+pub fn MyAgent::serve_file(self : Self, path : String) -> FileData {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+### Response Conventions
+
+Return types control the HTTP response:
+
+| Return type | HTTP response |
+|-------------|---------------|
+| A value (e.g. `Task`) | `200 OK` with JSON body |
+| `Option<T>` / `T \| null` | `Some`/non-null → `200`; `None`/`null` → `404 Not Found` |
+| `Result<T, E>` | `Ok` → `200`; `Err` → `400 Bad Request` with JSON error |
+| `void` / `()` | `204 No Content` |
+
+### Binary Request Bodies
+
+Use the `UnstructuredBinary` type to receive raw binary data in the request body:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+upload: method({
+  input: { file: s.unstructuredBinary() },
+  returns: z.number(),
+  http: http.post('/upload'),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+upload: method({
+  input: {
+    file: Unstructured.UnstructuredBinary({
+      restrictions: [{ mimeType: "application/octet-stream" }],
+    }),
+  },
+  success: Schema.Number,
+  http: [Http.post("/upload")],
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[endpoint(post = "/upload")]
+fn upload(&mut self, file: UnstructuredBinary<String>) -> u64;
+```
+
+`String` implements `AllowedMimeTypes` and accepts any MIME type. Use an enum deriving `AllowedMimeTypes` to restrict accepted values.
+</Tabs.Tab>
+<Tabs.Tab>
+The current Scala SDK does not expose the removed `UnstructuredBinary`/`BinarySegment` API. Use a supported structured byte-array parameter, or handle raw binary in another supported SDK.
+</Tabs.Tab>
+<Tabs.Tab>
+The current MoonBit SDK does not yet expose a user-facing unstructured-binary wrapper. `Bytes` is structured binary data and does not opt an endpoint into the raw unstructured-binary body mapping.
+</Tabs.Tab>
+</Tabs>
+
+## CORS
+
+CORS can be configured at the **mount level** (applies to all endpoints) and optionally overridden per **endpoint**:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+export const MyAgent = defineAgent({
+  name: 'MyAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}', { cors: ['https://app.example.com'] }),
+  methods: {
+    // All endpoints inherit the mount-level CORS setting
+
+    // This endpoint adds additional allowed origins
+    getPublic: method({ input: {}, returns: Data, http: http.get('/public', { cors: ['*'] }) }),
+  },
+});
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const MyAgent = defineAgent({
+  name: "MyAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/api/{name}", { cors: ["https://app.example.com"] }),
+  methods: {
+    getPublic: method({
+      input: {},
+      success: Data,
+      http: [Http.get("/public", { cors: ["*"] })],
+    }),
+  },
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[agent_definition(mount = "/api/{name}", cors = ["https://app.example.com"])]
+pub trait MyAgent {
+    // All endpoints inherit the mount-level CORS setting
+
+    #[endpoint(get = "/public", cors = ["*"])]
+    fn get_public(&self) -> Data;
+    // This endpoint adds additional allowed origins
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@agentDefinition(mount = "/api/{name}", cors = Array("https://app.example.com"))
+trait MyAgent extends BaseAgent {
+  // All endpoints inherit the mount-level CORS setting
+
+  @endpoint(method = "GET", path = "/public", cors = Array("*"))
+  def getPublic(): Future[Data]
+  // This endpoint adds additional allowed origins
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.agent
+#derive.mount("/api/{name}")
+#derive.mount_cors("https://app.example.com")
+pub(all) struct MyAgent {
+  // ...
+}
+
+// All endpoints inherit the mount-level CORS setting
+
+#derive.endpoint(get = "/public")
+#derive.endpoint_cors("*")
+pub fn MyAgent::get_public(self : Self) -> Data {
+  // This endpoint adds additional allowed origins
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+Per-endpoint CORS settings are unioned with the mount-level settings.
+
+## Authentication
+
+Golem API gateway has built-in authentication support. Authentication can be enabled at the mount level or per endpoint using `auth = true`. See [the API authentication page](/v1.6/invoke/making-custom-apis/authentication) for setup details.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+export const SecureAgent = defineAgent({
+  name: 'SecureAgent',
+  id: { name: z.string() },
+  http: http.mount('/secure/{name}', { auth: true }), // require auth on all endpoints
+  methods: {
+    // ...
+  },
+});
+
+// Or per-endpoint:
+adminOnly: method({
+  input: { principal: s.principal() }, // principal contains the authenticated user's identity
+  returns: AdminData,
+  http: http.get('/admin', { auth: true }),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const SecureAgent = defineAgent({
+  name: "SecureAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/secure/{name}", { auth: true }),
+  methods: {
+    adminOnly: method({
+      input: {},
+      success: AdminData,
+      http: [Http.get("/admin", { auth: true })],
+    }),
+  },
+})
+```
+
+The handler can read the authenticated caller with `yield* Principal.Principal`; it does not need to be part of the method input.
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+// Mount-level: all endpoints require auth
+#[agent_definition(mount = "/secure/{name}", auth = true)]
+pub trait SecureAgent {
+    // ...
+}
+
+// Or per-endpoint:
+#[endpoint(get = "/admin", auth = true)]
+fn admin_only(&self, principal: Principal) -> AdminData;
+// principal contains the authenticated user's identity
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+// Mount-level: all endpoints require auth
+@agentDefinition(mount = "/secure/{name}", auth = true)
+trait SecureAgent extends BaseAgent {
+  // ...
+}
+
+// Or per-endpoint:
+@endpoint(method = "GET", path = "/admin", auth = true)
+def adminOnly(principal: Principal): Future[AdminData]
+// principal contains the authenticated user's identity
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+// Mount-level: all endpoints require auth
+#derive.agent
+#derive.mount("/secure/{name}")
+#derive.mount_auth(true)
+pub(all) struct SecureAgent {
+  // ...
+}
+
+// Or per-endpoint:
+#derive.endpoint(get = "/admin")
+#derive.endpoint_auth(true)
+pub fn SecureAgent::admin_only(self : Self, principal : Principal) -> AdminData {
+  // principal contains the authenticated user's identity
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+When authentication is enabled, agent constructors and methods can optionally receive a `Principal` parameter containing information about the authenticated caller.
+
+## Phantom Agents
+
+Endpoints can be served by **phantom agents** — separate instances with the same constructor parameters and an additional UUID. Without an explicit selector, `phantomAgent: true` creates a fresh phantom for each ordinary HTTP request. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. Phantom identity is distinct from the agent's durable or ephemeral execution mode; a durable phantom can retain state and be addressed again by its UUID.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+export const Gateway = defineAgent({
+  name: 'Gateway',
+  id: { name: z.string() },
+  http: http.mount('/gateway/{name}', { phantomAgent: true }),
+  methods: {
+    // A new instance is created per request
+  },
+});
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const Gateway = defineAgent({
+  name: "Gateway",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/gateway/{name}", { phantomAgent: true }),
+  methods: {
+    // A new instance is created per request
+  },
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[agent_definition(mount = "/gateway/{name}", phantom_agent = true)]
+pub trait Gateway {
+    // A new instance is created per request
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@agentDefinition(mount = "/gateway/{name}", phantomAgent = true)
+trait Gateway extends BaseAgent {
+  // A new instance is created per request
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.agent
+#derive.mount("/gateway/{name}")
+#derive.mount_phantom(true)
+pub(all) struct Gateway {
+  // A new instance is created per request
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+### Selecting a known phantom UUID
+
+A mount can declare a path or query selector to address an exact phantom instead of choosing a fresh one. For example, `/decisions/d7/state?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782` addresses that phantom of `DecisionAgent("d7")`. The UUID is scoped to the component and constructor parameters: using the same UUID with `d8` selects a different agent.
+
+Selection is **not cloning**. If the selected UUID has not been used, Golem follows normal agent creation. To copy existing state, fork through the SDK or [Durable Streams fork operation](/v1.6/develop/durable-stream-forks), then select the resulting phantom UUID. Subsequent requests with the same constructor parameters and UUID reconnect to that instance.
+
+The following mount fragments declare an optional query selector. Omit the optional flag to make it required:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+http: http.mount('/decisions/{decision}', {
+  phantomId: http.phantomId.query('instance', { optional: true }),
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+http: Http.mount('/decisions/{decision}', {
+  phantomId: Http.phantomId.query('instance', { optional: true }),
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[agent_definition(
+    mount = "/decisions/{decision}",
+    phantom_id(query = "instance", optional = true)
+)]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@agentDefinition(
+  mount = "/decisions/{decision}",
+  phantomIdQuery = "instance",
+  phantomIdOptional = true
+)
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.mount("/decisions/{decision}")
+#derive.mount_phantom_id(query = "instance", optional = true)
+```
+</Tabs.Tab>
+</Tabs>
+
+For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to phantom selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
+
+| Request | Result |
+| --- | --- |
+| Valid UUID supplied | Select that exact phantom. |
+| Optional selector omitted | Select the original agent, **even with `phantomAgent: true`**. |
+| Required query selector omitted | `400 Bad Request`. |
+| Required path selector omitted | No matching route (`404`). |
+| Empty, malformed, or repeated query selector (even repeated identical UUIDs) | `400 Bad Request`. |
+
+Uppercase UUIDs are accepted and returned links use canonical lowercase spelling. A selector must belong to the mount; it cannot collide with endpoint inputs or protocol controls. Optional path expansion must not introduce ambiguous routes. Explicit selectors are supported only on durable, non-router mounts without filesystem exposure (including static bindings).
+
+Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Without a declared selector, all existing original, fresh-phantom, ephemeral and Durable Streams session-selection policies remain unchanged.
+
+## Customizing Durable Stream Routes
+
+An endpoint with stream inputs or outputs is exposed as a [Durable Streams](/v1.6/invoke/durable-streams) URL family. By default, each URL uses the canonical method parameter name (and `$result` for a direct stream result), JSON streams use `application/json`, byte streams use `application/octet-stream`, external writes and both deletion operations are enabled, and the worker-service defaults control admission.
+
+Route metadata can customize that HTTP surface without changing the agent method or the durable stream itself:
+
+| Customization | Effect |
+| --- | --- |
+| Slot `name` | Replaces the canonical slot name in the public URL and OpenAPI document. The canonical name remains the source selector in metadata and is not also accepted as a URL alias. |
+| Slot `contentType` | Replaces `application/octet-stream` for a direct `stream<u8>` slot. Ordinary reads and metadata, append negotiation, and OpenAPI use the custom MIME type; SSE remains `text/event-stream` with base64 data. |
+| `allowExternalWrites: false` | Removes `POST` from writable input slots. |
+| `allowStreamDelete: false` | Removes `DELETE` from stream URLs. |
+| `allowInvocationDelete: false` | Removes `DELETE` from invocation-session URLs. |
+| Reader limit | Caps concurrent admitted live readers (long-poll and SSE) per stream for this route. |
+| Append limit | Caps admitted append requests per second per stream for this route. |
+
+Disabled operations return `405 Method Not Allowed` with an `Allow` header that lists only the enabled methods. Admission exhaustion returns `429 Too Many Requests` with `Retry-After: 1`. Limits are maintained independently for each deployed route and worker-service node; they do not replace executor protocol limits or form a cluster-wide quota.
+
+<Callout type="info">
+  These options preserve the official Durable Streams wire protocol: they choose
+  URL names, an opaque byte-stream media type, optional protocol operations, and
+  stricter gateway admission. Custom media types are supported only for direct
+  byte streams (`stream<u8>`) and must be concrete non-text, non-JSON types
+  without parameters or wildcards. JSON-shaped streams remain
+  `application/json`. Native `text/plain` for `stream<string>` is not supported;
+  use the JSON representation so byte sub-offset forks cannot split a UTF-8
+  value.
+</Callout>
+
+Only `$result` has an implicit canonical name. Other slot selectors must identify an existing top-level input or output slot. Public names must be unique across the route, and canonical selectors must remain valid and unique even when a public name is supplied.
+
+The same route customization looks like this in each SDK:
+
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-durable-stream-route-customization">
+<Tabs.Tab>
+```typescript
+http: http.post('/events', {
+  durableStreams: {
+    slots: [
+      { source: 'input', slot: 'input', name: 'uploads' },
+      {
+        source: 'output',
+        slot: '$result',
+        name: 'events',
+        contentType: 'application/vnd.example.events',
+      },
+    ],
+    allowExternalWrites: true,
+    allowStreamDelete: false,
+    allowInvocationDelete: false,
+    load: {
+      maxConcurrentReadersPerStream: 8,
+      maxAppendRequestsPerSecondPerStream: 25,
+    },
+  },
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+http: [Http.post('/events', {
+  durableStreams: {
+    slots: [
+      { source: 'input', slot: 'input', name: 'uploads' },
+      {
+        source: 'output',
+        slot: '$result',
+        name: 'events',
+        contentType: 'application/vnd.example.events',
+      },
+    ],
+    allowExternalWrites: true,
+    allowStreamDelete: false,
+    allowInvocationDelete: false,
+    load: {
+      maxConcurrentReadersPerStream: 8,
+      maxAppendRequestsPerSecondPerStream: 25,
+    },
+  },
+})],
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[endpoint(
+    post = "/events",
+    durable_streams(
+        input("input", name = "uploads"),
+        output(
+            "$result",
+            name = "events",
+            content_type = "application/vnd.example.events"
+        ),
+        allow_external_writes = true,
+        allow_stream_delete = false,
+        allow_invocation_delete = false,
+        max_concurrent_readers_per_stream = 8,
+        max_append_requests_per_second_per_stream = 25,
+    )
+)]
+fn events(&mut self, input: AgentStream<u8>) -> AgentStream<u8>;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@endpoint(method = "POST", path = "/events")
+@durableStreamSlot(source = "input", slot = "input", name = "uploads")
+@durableStreamSlot(
+  source = "output",
+  slot = "$result",
+  name = "events",
+  contentType = "application/vnd.example.events"
+)
+@durableStreams(
+  allowExternalWrites = true,
+  allowStreamDelete = false,
+  allowInvocationDelete = false,
+  maxConcurrentReadersPerStream = 8,
+  maxAppendRequestsPerSecondPerStream = 25
+)
+def events(
+  input: golem.schema.AgentStream[golem.UByte]
+): Future[golem.schema.AgentStream[golem.UByte]]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.endpoint(post = "/events")
+#derive.durable_stream_slot(input = "input", name = "uploads")
+#derive.durable_stream_slot(
+  output = "$result",
+  name = "events",
+  content_type = "application/vnd.example.events",
+)
+#derive.durable_streams(
+  allow_external_writes = true,
+  allow_stream_delete = false,
+  allow_invocation_delete = false,
+  max_concurrent_readers_per_stream = 8,
+  max_append_requests_per_second_per_stream = 25,
+)
+pub fn MyAgent::events(
+  self : Self,
+  input : @schema.AgentStream[Byte],
+) -> @schema.AgentStream[Byte] {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+## Deployments
+
+To make the code-first routes accessible, a deployment section is needed in the application manifest (`golem.yaml`). This maps agents to domains per environment:
+
+```yaml
+httpApi:
+  deployments:
+    local:
+    - subdomain: app-name  # resolves to app-name.localhost:9006 by default
+      agents:
+        Tasks: {}
+```
+
+You can specify which agents to deploy to which (sub)domains, organized by environment (e.g. `local`, `staging`, `prod`).
+
+## Deploying the API
+
+Once the deployment is configured in `golem.yaml`, deploy with:
+
+```shell
+golem deploy
+```
+
+## OpenAPI Specification
+
+Golem automatically generates an OpenAPI specification from the code-first route definitions. Each deployment exposes `openapi.yaml` and `openapi.json` endpoints:
+
+```shell
+curl http://app-name.localhost:9006/openapi.yaml
+```
+
+This returns an OpenAPI 3.1 specification describing the deployed endpoints, including path parameters and request/response schemas. Download this deployment-specific document when generating an HTTP client; the Golem management API specification does not describe your agents' routes.
+
+Methods with stream parameters or results appear as Durable Streams URL families:
+
+- `PUT {base}` creates a server-assigned session and returns its URL in `Location`.
+- `PUT`, `GET`, `HEAD`, and `DELETE` on `{base}/invocations/{session}` create, inspect, or cooperatively cancel a session.
+- Each stream has a concrete path under `{base}/invocations/{session}/streams/`. Input streams support `POST` for appending; output streams do not. `DELETE` cancels and tombstones an individual stream.
+
+The document includes the schema and direction of every slot, with `x-golem-route-mode: durable-streams` and `x-golem-stream-slot` metadata. Without a public name override, the direct result slot is spelled `%24result` in the OpenAPI path. JSON reads return arrays of the element type; byte streams use their configured media type. Reads also support long-poll and SSE through the `live` query parameter. SSE returns `text/event-stream`, so clients need an SSE parser rather than a JSON response parser; byte-stream SSE data is base64 encoded and declares `Stream-SSE-Data-Encoding: base64`.
+
+Non-stream arguments belong to session creation and retain their path, query, header, or body bindings. Create the session before appending when the method requires body or header arguments. Append operations document producer retry headers and `Stream-Closed` for atomic closure. JSON array bodies are batches; an array-valued message needs an outer batch array. Empty append bodies are valid only when closing the stream.
+
+## Troubleshooting
+See the [troubleshooting page](/v1.6/invoke/making-custom-apis/troubleshooting) for some common issues and their solutions.

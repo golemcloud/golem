@@ -17,7 +17,7 @@
 package example.integrationtests
 
 import golem.runtime.annotations.agentImplementation
-import golem.schema.AgentStream
+import golem.schema.{AgentStream, UnstructuredBinary, UnstructuredText}
 import zio.blocks.streams.Stream
 
 import scala.annotation.unused
@@ -78,4 +78,18 @@ final class CatalogAgentImpl(
 final class WebhookAgentImpl(@unused private val key: String) extends WebhookAgent {
   override def receive(payload: String): Future[String] =
     Future.successful(s"Received: $payload")
+}
+
+@agentImplementation()
+final class RawFilesAgentImpl(@unused private val key: String) extends RawFilesAgent {
+  override def binary(name: String): Future[Either[String, Option[UnstructuredBinary[String]]]] =
+    Future.successful(name match {
+      case "data.bin" =>
+        Right(Some(UnstructuredBinary.fromInline("raw-binary-body".getBytes("UTF-8"), "application/octet-stream")))
+      case "missing" => Right(None)
+      case other     => Left(s"cannot read $other")
+    })
+
+  override def text(name: String): Future[Option[UnstructuredText["en" | "de"]]] =
+    Future.successful(Option.when(name == "note")(UnstructuredText.fromInline("raw text body", "en")))
 }

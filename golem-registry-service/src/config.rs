@@ -1027,7 +1027,14 @@ mod tests {
             ..Default::default()
         });
         let mut tasks = tokio::task::JoinSet::new();
-        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("operation_timeout"));
         assert!(!database.exists());
         assert!(tasks.is_empty());
@@ -1099,7 +1106,14 @@ mod tests {
         });
         config.mcp_oauth.timeout = Duration::ZERO;
         let mut tasks = tokio::task::JoinSet::new();
-        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("invalid OAuth limits"));
         assert!(!database.exists());
         assert!(tasks.is_empty());

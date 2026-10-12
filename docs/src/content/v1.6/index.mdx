@@ -1,0 +1,28 @@
+import { Cards } from "nextra/components"
+import { BookOpen, Code, LibraryBig, Rocket, SquareFunction, Terminal } from "lucide-react"
+import { GolemIcon } from "@/components/golem-logo"
+
+# Golem documentation
+
+Golem is an open-source runtime for AI agents. Each agent is a long-lived, isolated instance with its own memory and filesystem that survives crashes, restarts, and deployments without repeating finished work. The same deployment runs the agents' tools, such as a shell, Node.js, npm, and the TypeScript compiler, and serves what they produce: APIs, web front-ends, files, and live streams. Permission cards limit what each agent may do.
+
+You can run Golem on your machine from a single binary, on your own infrastructure, or on Golem Cloud.
+
+## Get started
+
+<Cards num={3}>
+  <Cards.Card title="What is Golem?" href="/v1.6/what-is-golem" icon={<GolemIcon />} />
+  <Cards.Card title="Quickstart" href="/v1.6/quickstart" icon={<Rocket />} />
+  <Cards.Card title="Concepts" href="/v1.6/concepts/agents" icon={<BookOpen />} />
+</Cards>
+
+Comparing Golem with a durable execution engine, an actor platform, an agent framework, or a sandbox service? Read [How Golem compares](/v1.6/comparison).
+
+## Guides and references
+
+<Cards num={2}>
+  <Cards.Card title="Develop" href="/v1.6/develop" icon={<Code />} />
+  <Cards.Card title="Invoke" href="/v1.6/invoke" icon={<SquareFunction />} />
+  <Cards.Card title="CLI" href="/v1.6/cli" icon={<Terminal />} />
+  <Cards.Card title="REST API" href="/v1.6/rest-api" icon={<LibraryBig />} />
+</Cards>
