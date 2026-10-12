@@ -29,9 +29,19 @@ const VALIDATION_ONLY_REPOSITORY_KEY: &str = concat!(
 );
 
 #[derive(Clone, Copy)]
-enum LocalPlatform {
+pub(crate) enum LocalPlatform {
     MacOs,
     Other,
+}
+
+impl LocalPlatform {
+    pub(crate) fn native() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Other
+        }
+    }
 }
 
 struct LocalDefaults {
@@ -70,17 +80,24 @@ pub(crate) fn prepare(
     agent_root: Option<&Path>,
     environment: impl figment::Provider,
 ) -> anyhow::Result<(FilesystemStorageConfig, FilesystemSnapshotsConfig)> {
-    let platform = if cfg!(target_os = "macos") {
-        LocalPlatform::MacOs
-    } else {
-        LocalPlatform::Other
-    };
+    let platform = LocalPlatform::native();
     prepare_with_defaults(
         data_dir,
         config_file,
         local_defaults(platform, agent_root, data_dir),
         environment,
     )
+}
+
+fn root_default(mode: &str, root: Option<Box<Path>>) -> Option<Box<Path>> {
+    match mode {
+        "Temporary" => None,
+        _ => root,
+    }
+}
+
+fn repository_key_needed(mode: &str, configured: bool) -> bool {
+    mode == "Managed" && !configured
 }
 
 fn prepare_with_defaults(
@@ -110,20 +127,19 @@ fn prepare_with_defaults(
         }
     }
     figment = figment.merge(environment);
-    if figment.extract_inner::<String>("filesystem_storage.mode.type")? != "Temporary"
-        && let Some(root) = defaults.root
-    {
+    let storage_mode = figment.extract_inner::<String>("filesystem_storage.mode.type")?;
+    if let Some(root) = root_default(&storage_mode, defaults.root) {
         // Root defaults must not introduce a config table for Temporary storage.
         figment = figment.join(Serialized::defaults(serde_json::json!({
             "filesystem_storage": { "mode": { "config": { "root": root } } }
         })));
     }
     let storage = figment.extract_inner("filesystem_storage")?;
-    if figment.extract_inner::<String>("filesystem_snapshots.type")? == "Managed"
-        && figment
-            .find_value("filesystem_snapshots.config.repository_key")
-            .is_err()
-    {
+    let snapshots_mode = figment.extract_inner::<String>("filesystem_snapshots.type")?;
+    let configured_key = figment
+        .find_value("filesystem_snapshots.config.repository_key")
+        .is_ok();
+    if repository_key_needed(&snapshots_mode, configured_key) {
         if figment
             .find_value("filesystem_snapshots.config")?
             .as_dict()
@@ -214,6 +230,36 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), contents).unwrap();
         file
+    }
+
+    #[test]
+    fn root_default_follows_the_selected_mode_without_configuration_io() {
+        let root = std::path::Path::new("requested-agents");
+        ["Directory", "ManagedXfs", "ReflinkXfs", "Apfs"]
+            .into_iter()
+            .for_each(|mode| {
+                assert_eq!(
+                    super::root_default(mode, Some(root.into())).as_deref(),
+                    Some(root)
+                );
+                assert!(super::root_default(mode, None).is_none());
+            });
+        assert!(super::root_default("Temporary", Some(root.into())).is_none());
+        assert!(super::root_default("Temporary", None).is_none());
+    }
+
+    #[test]
+    fn repository_key_need_depends_only_on_mode_and_key_presence() {
+        [
+            ("Managed", false, true),
+            ("Managed", true, false),
+            ("Disabled", false, false),
+            ("Disabled", true, false),
+        ]
+        .into_iter()
+        .for_each(|(mode, configured, expected)| {
+            assert_eq!(super::repository_key_needed(mode, configured), expected);
+        });
     }
 
     #[test]

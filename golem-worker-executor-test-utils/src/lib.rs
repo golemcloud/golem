@@ -4419,26 +4419,13 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
     reflink_xfs_root: PathBuf,
     filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
-    run_production_context_bootstrap(
+    start_with_filesystem_snapshots_on_unaccounted_storage(
         deps,
         context,
-        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
-            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
-        }),
-        TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.mode = FilesystemStorageMode::ReflinkXfs {
-                    root: reflink_xfs_root.clone(),
-                };
-                config.resource_usage_metering.filesystem = false;
-                config.filesystem_snapshots = filesystem_snapshots.clone();
-                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
-                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
-            })),
-            ..Default::default()
+        FilesystemStorageMode::ReflinkXfs {
+            root: reflink_xfs_root.into_boxed_path(),
         },
-        None,
+        filesystem_snapshots,
         "Timeout waiting for reflink XFS filesystem snapshot server to start",
     )
     .await
@@ -4450,10 +4437,27 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
 pub async fn start_with_filesystem_snapshots_on_apfs(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
-    root: PathBuf,
+    root: Box<Path>,
     filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let root = root.into_boxed_path();
+    start_with_filesystem_snapshots_on_unaccounted_storage(
+        deps,
+        context,
+        FilesystemStorageMode::Apfs { root },
+        filesystem_snapshots,
+        "Timeout waiting for APFS filesystem snapshot server to start",
+    )
+    .await
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn start_with_filesystem_snapshots_on_unaccounted_storage(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    mode: FilesystemStorageMode,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+    timeout_message: &'static str,
+) -> anyhow::Result<TestWorkerExecutor> {
     run_production_context_bootstrap(
         deps,
         context,
@@ -4462,7 +4466,7 @@ pub async fn start_with_filesystem_snapshots_on_apfs(
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.mode = FilesystemStorageMode::Apfs { root: root.clone() };
+                config.filesystem_storage.mode = mode.clone();
                 config.resource_usage_metering.filesystem = false;
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -4471,7 +4475,7 @@ pub async fn start_with_filesystem_snapshots_on_apfs(
             ..Default::default()
         },
         None,
-        "Timeout waiting for APFS filesystem snapshot server to start",
+        timeout_message,
     )
     .await
 }

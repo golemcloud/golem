@@ -2056,7 +2056,7 @@ impl SandboxFilesystemAllocationReader for SandboxFilesystemAllocationObserver {
 }
 
 impl SandboxFilesystem {
-    fn root_directory_state(&self) -> Arc<Mutex<Option<Arc<NativeRootHandles>>>> {
+    fn root_directory_state(&self) -> Arc<Mutex<Option<NativeRootHandles>>> {
         Arc::clone(&self.root.directory)
     }
 }
@@ -2068,9 +2068,7 @@ fn node_path(node: &SandboxNode) -> PathBuf {
     }
 }
 
-fn admit_root(
-    root: &Arc<Mutex<Option<Arc<NativeRootHandles>>>>,
-) -> std::io::Result<Arc<NativeRootHandles>> {
+fn admit_root(root: &Arc<Mutex<Option<NativeRootHandles>>>) -> std::io::Result<NativeRootHandles> {
     root.lock()
         .expect("sandbox filesystem root descriptor lock poisoned")
         .as_ref()
@@ -2083,27 +2081,20 @@ fn admit_root(
         })
 }
 
-fn admitted_directory(root: &Arc<NativeRootHandles>) -> Arc<cap_std::fs::Dir> {
-    #[cfg(target_os = "macos")]
-    return Arc::clone(&root.directory);
-    #[cfg(not(target_os = "macos"))]
-    return Arc::clone(root);
-}
-
 fn directory_for_admitted(
-    root: &Arc<NativeRootHandles>,
+    root: &NativeRootHandles,
     target: &SandboxPath,
 ) -> std::io::Result<Arc<cap_std::fs::Dir>> {
     match &target.base {
         SandboxPathBase::Directory(directory) => {
             directory.host().cloned().map_err(std::io::Error::other)
         }
-        SandboxPathBase::Root => Ok(admitted_directory(root)),
+        SandboxPathBase::Root => Ok(root.directory()),
     }
 }
 
 fn directory_for(
-    root: &Arc<Mutex<Option<Arc<NativeRootHandles>>>>,
+    root: &Arc<Mutex<Option<NativeRootHandles>>>,
     target: &SandboxPath,
 ) -> std::io::Result<Arc<cap_std::fs::Dir>> {
     match &target.base {
@@ -2111,7 +2102,7 @@ fn directory_for(
             directory.host().cloned().map_err(std::io::Error::other)
         }
         SandboxPathBase::Root => {
-            let directory = admitted_directory(&admit_root(root)?);
+            let directory = admit_root(root)?.directory();
             #[cfg(test)]
             if benchmark_disable_root_capability_reuse() {
                 return directory.try_clone().map(Arc::new);
@@ -4093,7 +4084,7 @@ mod tests {
             .unwrap();
         let state = filesystem.root_directory_state();
         let admitted = admit_root(&state).unwrap();
-        let metadata = admitted.seed_flusher.metadata().unwrap();
+        let metadata = admitted.pair.seed_flusher.metadata().unwrap();
         assert!(metadata.is_file());
         assert_eq!(cap_fs_ext::MetadataExt::nlink(&metadata), 0);
         assert!(
@@ -4113,7 +4104,7 @@ mod tests {
             filesystem.root(),
         )
         .unwrap();
-        assert!(admitted.seed_flusher.metadata().unwrap().is_file());
+        assert!(admitted.pair.seed_flusher.metadata().unwrap().is_file());
         drop(admitted);
         SandboxFilesystem::delete_and_verify(filesystem)
             .await
@@ -4147,16 +4138,7 @@ mod tests {
         let lifecycle = Arc::new(AsyncMutex::new(()))
             .try_lock_owned()
             .expect("new name-mode test filesystem lease must be available");
-        let native_root = match NativeRoot::new(root.clone(), directory) {
-            Ok(native_root) => native_root,
-            Err(error) => {
-                let rollback =
-                    remove_and_verify_blocking(&root, "roll back name-mode test filesystem");
-                panic!(
-                    "failed to initialize name-mode test filesystem: {error}; rollback: {rollback:?}"
-                )
-            }
-        };
+        let native_root = NativeRoot::new(root.clone(), directory);
         SandboxFilesystem::new(
             native_root,
             LeaseState {

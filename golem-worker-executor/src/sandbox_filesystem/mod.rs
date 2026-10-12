@@ -553,20 +553,8 @@ enum NativeFileIdentity {
     Scripted(String),
 }
 
-enum AppendCoordinatorAction {
-    Reuse(Arc<AsyncMutex<()>>),
-    Allocate,
-}
-
 fn keep_append_coordinator(strong_count: usize) -> bool {
     strong_count != 0
-}
-
-fn decide_append_coordinator(existing: Option<Arc<AsyncMutex<()>>>) -> AppendCoordinatorAction {
-    match existing {
-        Some(coordinator) => AppendCoordinatorAction::Reuse(coordinator),
-        None => AppendCoordinatorAction::Allocate,
-    }
 }
 
 #[cfg(test)]
@@ -598,17 +586,14 @@ impl AppendCoordinatorRegistry {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         coordinators.retain(|_, coordinator| keep_append_coordinator(coordinator.strong_count()));
         let observed = coordinators.get(&identity).and_then(Weak::upgrade);
-        match decide_append_coordinator(observed) {
-            AppendCoordinatorAction::Reuse(coordinator) => coordinator,
-            AppendCoordinatorAction::Allocate => {
-                let coordinator = Arc::new(AsyncMutex::new(()));
-                coordinators.insert(identity, Arc::downgrade(&coordinator));
-                #[cfg(test)]
-                self.allocations
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                coordinator
-            }
-        }
+        observed.unwrap_or_else(|| {
+            let coordinator = Arc::new(AsyncMutex::new(()));
+            coordinators.insert(identity, Arc::downgrade(&coordinator));
+            #[cfg(test)]
+            self.allocations
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            coordinator
+        })
     }
 
     #[cfg(test)]
@@ -646,37 +631,69 @@ pub(crate) struct AppendCoordinationCounts {
 }
 
 struct NativeRoot {
-    path: PathBuf,
-    directory: Arc<Mutex<Option<Arc<NativeRootHandles>>>>,
+    path: Box<Path>,
+    directory: Arc<Mutex<Option<NativeRootHandles>>>,
+}
+
+#[derive(Clone)]
+struct NativeRootHandles {
+    #[cfg(target_os = "macos")]
+    pair: Arc<MacRootHandles>,
+    #[cfg(not(target_os = "macos"))]
+    directory: Arc<cap_std::fs::Dir>,
 }
 
 /// One admission keeps the directory and its unlinked regular flush descriptor alive together.
 #[cfg(target_os = "macos")]
-struct NativeRootHandles {
+struct MacRootHandles {
     directory: Arc<cap_std::fs::Dir>,
     seed_flusher: cap_std::fs::File,
 }
 
-#[cfg(not(target_os = "macos"))]
-type NativeRootHandles = cap_std::fs::Dir;
+impl NativeRootHandles {
+    fn directory(&self) -> Arc<cap_std::fs::Dir> {
+        #[cfg(target_os = "macos")]
+        let directory = &self.pair.directory;
+        #[cfg(not(target_os = "macos"))]
+        let directory = &self.directory;
+        Arc::clone(directory)
+    }
+}
 
 impl NativeRoot {
+    #[cfg(target_os = "macos")]
     fn new(path: PathBuf, directory: File) -> std::io::Result<Self> {
         let directory = Arc::new(cap_std::fs::Dir::from_std_file(directory));
-        #[cfg(target_os = "macos")]
         let seed_flusher = tree_copy::finalize_operation(
             || CapabilityTempFile::new(&directory)?.into_unlinked(),
             || rustix::fs::fsync(directory.as_ref()).map_err(std::io::Error::from),
         )?;
-        #[cfg(target_os = "macos")]
-        let directory = Arc::new(NativeRootHandles {
-            directory,
-            seed_flusher,
-        });
-        Ok(Self {
+        Ok(Self::from_handles(
             path,
-            directory: Arc::new(Mutex::new(Some(directory))),
-        })
+            NativeRootHandles {
+                pair: Arc::new(MacRootHandles {
+                    directory,
+                    seed_flusher,
+                }),
+            },
+        ))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn new(path: PathBuf, directory: File) -> Self {
+        Self::from_handles(
+            path,
+            NativeRootHandles {
+                directory: Arc::new(cap_std::fs::Dir::from_std_file(directory)),
+            },
+        )
+    }
+
+    fn from_handles(path: PathBuf, handles: NativeRootHandles) -> Self {
+        Self {
+            path: path.into_boxed_path(),
+            directory: Arc::new(Mutex::new(Some(handles))),
+        }
     }
 
     fn close(&self) {
@@ -1589,6 +1606,10 @@ fn record_capability_copy_parent(base: &cap_std::fs::Dir, parent: &CapabilityCop
     }
 }
 
+fn temporary_copy_name() -> Box<Path> {
+    PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path()
+}
+
 struct CapabilityTempFile<'a> {
     directory: &'a cap_std::fs::Dir,
     name: Option<Box<Path>>,
@@ -1598,8 +1619,7 @@ struct CapabilityTempFile<'a> {
 impl<'a> CapabilityTempFile<'a> {
     fn new(directory: &'a cap_std::fs::Dir) -> std::io::Result<Self> {
         loop {
-            let name =
-                PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path();
+            let name = temporary_copy_name();
             let mut options = cap_std::fs::OpenOptions::new();
             options
                 .read(true)
@@ -1622,15 +1642,13 @@ impl<'a> CapabilityTempFile<'a> {
 
     #[cfg(target_os = "macos")]
     fn from_clone(directory: &'a cap_std::fs::Dir, source: &File) -> std::io::Result<Self> {
-        let name = std::iter::repeat_with(|| {
-            PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path()
-        })
-        .find_map(|name| match apfs::clone_file(source, directory, &name) {
-            Ok(()) => Some(Ok(name)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
-            Err(error) => Some(Err(error)),
-        })
-        .expect("an unbounded clone-name iterator must return a result")?;
+        let name = std::iter::repeat_with(temporary_copy_name)
+            .find_map(|name| match apfs::clone_file(source, directory, &name) {
+                Ok(()) => Some(Ok(name)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            })
+            .expect("an unbounded clone-name iterator must return a result")?;
         let mut options = cap_std::fs::OpenOptions::new();
         options.read(true).follow(cap_fs_ext::FollowSymlinks::No);
         let file = open_cloned_file(
@@ -1650,6 +1668,20 @@ impl<'a> CapabilityTempFile<'a> {
 
     fn as_file_mut(&mut self) -> &mut cap_std::fs::File {
         &mut self.file
+    }
+
+    fn sync_ordinary(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            rustix::fs::fsync(&self.file).map_err(std::io::Error::from)
+        }
+        #[cfg(not(unix))]
+        {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "ordinary seed file sync is unavailable on this platform",
+            ))
+        }
     }
 
     fn cleanup(&mut self) -> std::io::Result<()> {
@@ -1715,10 +1747,10 @@ fn open_cloned_file(
     open: impl FnOnce() -> std::io::Result<cap_std::fs::File>,
     remove: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<cap_std::fs::File> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(open)) {
-        Ok(Ok(file)) => Ok(file),
-        failed => tree_copy::finish_unwinding(failed, remove),
-    }
+    tree_copy::finalize_observed_operation(open, |opened| match opened {
+        Ok(Ok(_)) => Ok(()),
+        _ => remove(),
+    })
 }
 
 pub(crate) fn set_file_permissions(file: &File, read_only: bool) -> std::io::Result<()> {

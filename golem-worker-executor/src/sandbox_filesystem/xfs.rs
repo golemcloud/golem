@@ -1519,14 +1519,8 @@ impl ManagedProvisioning {
         let assignment_result = assign_project(&root_fd, project_id).map_err(|error| {
             FilesystemStorageError::io("assign managed XFS project", &root, error)
         });
-        let native_root = NativeRoot::new(root, root_fd).map_err(|error| {
-            FilesystemStorageError::io(
-                "initialize fresh managed runtime directory",
-                &cleanup_path,
-                error,
-            )
-        });
-        let mut lease = LeaseState {
+        let native_root = NativeRoot::new(root, root_fd);
+        let lease = LeaseState {
             lifecycle: lifecycle.expect("managed XFS lifecycle owner must exist"),
             cleanup: NativeCleanup::Managed(Box::new(ManagedProjectCleanup {
                 project: ProjectCleanup::new(
@@ -1537,13 +1531,6 @@ impl ManagedProvisioning {
                 ),
                 _parent: parent,
             })),
-        };
-        let native_root = match native_root {
-            Ok(native_root) => native_root,
-            Err(error) => {
-                let cleanup = lease.cleanup.delete().await;
-                return Err(creation_error_after_cleanup(error, cleanup));
-            }
         };
         let created = SandboxFilesystem::new(
             native_root,

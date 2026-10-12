@@ -1156,8 +1156,8 @@ This policy applies only to macOS seed synchronization. Native cloning and byte 
 unchanged. Linux seed synchronization and explicit guest flush operations keep their existing
 behavior. XFS remains the validated, supported production copy-on-write path. The policy does
 not guarantee seed, snapshot capture, blob upload or worker recovery time. See
-[macOS seed synchronization](../../../docs/src/content/next/operate/filesystem_snapshots.mdx#macos-seed-synchronization)
-for the operator policy.
+[macOS seed synchronization](../../../golem-worker-executor/worker-executor-walkthrough.html#macos-seed-synchronization)
+for the internal policy.
 
 `Apfs` states `AgentAccounting::Unaccounted`, as `ReflinkXfs` does. All disk limits resolve to
 `Unlimited`; the mode has no project quotas or per-agent usage reports, and filesystem metering

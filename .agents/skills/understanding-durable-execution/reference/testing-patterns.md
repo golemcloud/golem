@@ -225,7 +225,7 @@ entity shutdown cases in `src/services/active_agents/tests.rs` and
 ## Filesystem snapshots on APFS
 
 For the macOS seed synchronization policy, see
-[macOS seed synchronization](../../../../docs/src/content/next/operate/filesystem_snapshots.mdx#macos-seed-synchronization).
+[macOS seed synchronization](../../../../golem-worker-executor/worker-executor-walkthrough.html#macos-seed-synchronization).
 Changes to macOS seed synchronization must cover `Apfs`, `Directory` and `Temporary`: plain
 native `fsync` for each seeded regular file and the required scoped namespace `fsync` calls.
 Each fresh macOS filesystem has one precreated, unlinked regular-file descriptor owned by

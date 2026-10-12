@@ -422,13 +422,30 @@ mod tests {
             FilesystemSnapshotsConfig, FilesystemStorageMode, GolemConfig,
         };
 
+        #[derive(Clone, Copy)]
+        enum Scenario {
+            Defaults,
+            ManifestRoot,
+            ArgumentRoot,
+            TomlRoot,
+            EnvironmentRoot,
+        }
+        use Scenario::*;
+        let platform = crate::filesystem_config::LocalPlatform::native();
+        let macos = matches!(platform, crate::filesystem_config::LocalPlatform::MacOs);
         [
-            (false, false, false, false),
-            (true, false, false, false),
-            (true, true, false, false),
-            (true, true, true, false),
-            (true, true, true, true),
-        ].into_iter().for_each(|(has_manifest_root, has_argument_root, has_toml_root, has_environment_root)| {
+            Defaults,
+            ManifestRoot,
+            ArgumentRoot,
+            TomlRoot,
+            EnvironmentRoot,
+        ]
+        .into_iter()
+        .for_each(|scenario| {
+            let has_manifest_root = !matches!(scenario, Defaults);
+            let has_argument_root = matches!(scenario, ArgumentRoot | TomlRoot | EnvironmentRoot);
+            let has_toml_root = matches!(scenario, TomlRoot | EnvironmentRoot);
+            let has_environment_root = matches!(scenario, EnvironmentRoot);
             let data = tempfile::tempdir().unwrap();
             let manifest = local_server(LocalServer {
                 data_dir: Some(data.path().to_path_buf()),
@@ -436,66 +453,133 @@ mod tests {
                 ..LocalServer::default()
             });
             let arguments: &[&str] = if has_argument_root {
-                &["golem", "server", "run", "--agent-filesystem-root", "argument-agents"]
+                &[
+                    "golem",
+                    "server",
+                    "run",
+                    "--agent-filesystem-root",
+                    "argument-agents",
+                ]
             } else {
                 &["golem", "server", "run"]
             };
             let GolemCliCommandParseResult::FullMatch(command) =
                 GolemCliCommand::try_parse_from_lenient(arguments.iter().copied(), false)
-            else { panic!("expected a parsed server command"); };
-            let GolemCliSubcommand::Server { subcommand: ServerSubcommand::Run { args } } = command.subcommand
-            else { panic!("expected server run arguments"); };
-            assert_eq!(args.agent_filesystem_root.as_deref(), has_argument_root.then_some(Path::new("argument-agents")));
+            else {
+                panic!("expected a parsed server command");
+            };
+            let GolemCliSubcommand::Server {
+                subcommand: ServerSubcommand::Run { args },
+            } = command.subcommand
+            else {
+                panic!("expected server run arguments");
+            };
+            assert_eq!(
+                args.agent_filesystem_root.as_deref(),
+                has_argument_root.then_some(Path::new("argument-agents"))
+            );
             let launch = launch_args_from_run_args_and_local_server(
-                &args, Some(&manifest), ResourceUsageMeteringConfig::default(),
-            ).unwrap();
+                &args,
+                Some(&manifest),
+                ResourceUsageMeteringConfig::default(),
+            )
+            .unwrap();
             let requested = if has_argument_root {
                 Some(Path::new("argument-agents"))
-            } else { manifest.agent_filesystem_root.as_deref() };
+            } else {
+                manifest.agent_filesystem_root.as_deref()
+            };
             assert_eq!(launch.agent_filesystem_root.as_deref(), requested);
             let config_file = data.path().join("worker-executor.toml").into_boxed_path();
             if has_toml_root {
-                std::fs::write(&config_file, "[filesystem_storage.mode]\ntype = \"Apfs\"\n[filesystem_storage.mode.config]\nroot = \"toml-agents\"\n[filesystem_snapshots]\ntype = \"Managed\"\n").unwrap();
+                std::fs::write(
+                    &config_file,
+                    concat!(
+                        "[filesystem_storage.mode]\n",
+                        "type = \"Apfs\"\n",
+                        "[filesystem_storage.mode.config]\n",
+                        "root = \"toml-agents\"\n",
+                        "[filesystem_snapshots]\n",
+                        "type = \"Managed\"\n",
+                    ),
+                )
+                .unwrap();
             }
             let environment = if has_environment_root {
                 serde_json::json!({"filesystem_storage": {"mode": {"config": {"root": "env-agents"}}}})
-            } else { serde_json::json!({}) };
-            let configure = |config: &mut GolemConfig| crate::launch::configure_filesystem(
-                config, &launch, &config_file, figment::providers::Serialized::defaults(environment.clone()),
-            );
+            } else {
+                serde_json::json!({})
+            };
+            let configure = |config: &mut GolemConfig| {
+                crate::launch::configure_filesystem(
+                    config,
+                    &launch,
+                    &config_file,
+                    figment::providers::Serialized::defaults(environment.clone()),
+                )
+            };
             let mut first = GolemConfig::default();
             configure(&mut first).unwrap();
-            let expected_root = if has_environment_root {
-                Some(PathBuf::from("env-agents"))
+            let expected_root: Option<Box<Path>> = if has_environment_root {
+                Some(Box::from(Path::new("env-agents")))
             } else if has_toml_root {
-                Some(PathBuf::from("toml-agents"))
+                Some(Box::from(Path::new("toml-agents")))
             } else if let Some(root) = requested {
-                Some(root.to_path_buf())
-            } else if cfg!(target_os = "macos") {
-                Some(data.path().join("agents"))
-            } else { None };
-            let expected_mode = if has_toml_root || cfg!(target_os = "macos") {
-                FilesystemStorageMode::Apfs { root: expected_root.unwrap().into_boxed_path() }
+                Some(Box::from(root))
+            } else if macos {
+                Some(data.path().join("agents").into_boxed_path())
+            } else {
+                None
+            };
+            let expected_mode = if has_toml_root || macos {
+                FilesystemStorageMode::Apfs {
+                    root: expected_root.unwrap(),
+                }
             } else if let Some(root) = expected_root {
-                FilesystemStorageMode::Directory { root: root.into_boxed_path() }
-            } else { FilesystemStorageMode::Temporary };
+                FilesystemStorageMode::Directory { root }
+            } else {
+                FilesystemStorageMode::Temporary
+            };
             assert_eq!(first.filesystem_storage.mode, expected_mode);
             let mut second = GolemConfig::default();
             configure(&mut second).unwrap();
-            assert_eq!(second.filesystem_storage.mode, first.filesystem_storage.mode);
-            let key_path = data.path().join("filesystem-snapshots.repository-key").into_boxed_path();
-            if has_toml_root || cfg!(target_os = "macos") {
-                let FilesystemSnapshotsConfig::Managed(first) = first.filesystem_snapshots else { panic!("expected managed snapshots"); };
-                let FilesystemSnapshotsConfig::Managed(second) = second.filesystem_snapshots else { panic!("expected managed snapshots"); };
-                assert_eq!(first.repository_key().bytes(), second.repository_key().bytes());
+            assert_eq!(
+                second.filesystem_storage.mode,
+                first.filesystem_storage.mode
+            );
+            let key_path = data
+                .path()
+                .join("filesystem-snapshots.repository-key")
+                .into_boxed_path();
+            if has_toml_root || macos {
+                let FilesystemSnapshotsConfig::Managed(first) = first.filesystem_snapshots else {
+                    panic!("expected managed snapshots");
+                };
+                let FilesystemSnapshotsConfig::Managed(second) = second.filesystem_snapshots else {
+                    panic!("expected managed snapshots");
+                };
+                assert_eq!(
+                    first.repository_key().bytes(),
+                    second.repository_key().bytes()
+                );
                 assert_eq!(std::fs::read(&key_path).unwrap().len(), 128);
-                #[cfg(unix)] {
+                #[cfg(unix)]
+                {
                     use std::os::unix::fs::PermissionsExt as _;
-                    assert_eq!(std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777, 0o600);
+                    assert_eq!(
+                        std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
                 }
             } else {
-                assert!(matches!(first.filesystem_snapshots, FilesystemSnapshotsConfig::Disabled(_)));
-                assert!(matches!(second.filesystem_snapshots, FilesystemSnapshotsConfig::Disabled(_)));
+                assert!(matches!(
+                    first.filesystem_snapshots,
+                    FilesystemSnapshotsConfig::Disabled(_)
+                ));
+                assert!(matches!(
+                    second.filesystem_snapshots,
+                    FilesystemSnapshotsConfig::Disabled(_)
+                ));
                 assert!(!key_path.exists());
             }
             assert!(!data.path().join("blobs").exists());

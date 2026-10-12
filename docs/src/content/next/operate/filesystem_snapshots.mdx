@@ -68,9 +68,9 @@ When no `repository_key` is configured, the local server generates a 64-byte rep
 
 The snapshots use the executor's blob storage. On the local server, this is file system blob storage at `<data_dir>/blobs`. There is no separate destination for filesystem snapshots.
 
-APFS does not enforce per-agent disk limits or provide filesystem usage metering. Keep `[resource_usage_metering] filesystem = false`. Agents share the volume's free space, and an agent can fill the volume.
+APFS does not enforce per-agent disk limits or provide filesystem usage metering. Keep `[resource_usage_metering] filesystem = false`. Agents share the volume's free space, and an agent can fill the volume. Free-space checks and the byte targets in `[filesystem_storage.pressure]` use volume-wide observations. APFS volumes in one container share free bytes, so byte targets are approximate. APFS reports synthetic object counts, so configured object-count targets always pass.
 
-APFS keeps the volume's native filename spelling and case-sensitive or case-insensitive lookup behavior.
+Both case-sensitive and case-insensitive APFS volumes use `Conservative` filename coordination. An entry edit waits for conflicting operations in the same parent directory; two observations can run together. APFS keeps the volume's native filename spelling and case-sensitive or case-insensitive lookup behavior. Users do not need to normalize names.
 
 ## Enable filesystem snapshots
 

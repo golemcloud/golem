@@ -2412,7 +2412,7 @@ async fn apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
             start_with_filesystem_snapshots_on_apfs(
                 deps,
                 &context,
-                root.path().to_path_buf(),
+                Box::from(root.path()),
                 snapshots,
             )
         },
