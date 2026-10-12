@@ -445,7 +445,11 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   million elements and a brace expansion of a million words fit comfortably.
 - **Time.** A call runs for at most its `timeout` argument (600 s by default, at most 3600 s;
   see [Contract](#contract)). The limit reaches a loop of commands that never wait
-  (`while :; do x=1; done`): the shell lets the call's timers run every 64 commands. It cannot
+  (`while :; do x=1; done`): the shell lets the call's timers run every 64 commands. It does not
+  reach a loop that runs a pipeline in each round, such as `n=0; while :; do n=$((n+1)); echo $n |
+  while read -r x; do :; done; done`: the count of commands starts again with every pipeline
+  stage and never gets to 64, so the timers never run, and neither the limit nor a stop request
+  ends the call. It cannot
   stop one command that computes for long without waiting (a `sort` of a large file, a regular
   expression that backtracks), which ends first. `timeout DURATION COMMAND` limits one command, as
   GNU's does, with its options, signals and statuses (124 on timeout, 137 on KILL). A `sh -c` or
@@ -457,9 +461,10 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   in the middle of the call (see Implementation). At this Golem version the replay that resumes
   it can hang or permanently fail the owner; that is for Golem to fix.
 - **Stop.** A caller that cancels the call's `stdin` stream stops the script (see
-  [Contract](#contract)). The stop reaches what the time limit reaches: a loop of commands that
-  never wait is stopped within 64 commands, and one command that computes for long without
-  waiting ends first. A script that ignores INT (`trap '' INT`) is killed a second later, and one
+  [Contract](#contract)). The stop reaches what the time limit reaches, and no more: a loop of
+  commands that never wait is stopped within 64 commands, a loop with a pipeline in each round
+  is not stopped (see Time), and one command that computes for long without waiting ends
+  first. A script that ignores INT (`trap '' INT`) is killed a second later, and one
   that catches it runs its handler; the call returns 130 in each case. A stream cancelled before
   the script starts ends the call before any of the script runs. Background jobs ignore INT, as
   bash's do without job control, so the end of the run stops and reports them like any leftover

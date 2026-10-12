@@ -6,11 +6,13 @@ then KILL, and exit code 130. Version 0.2.0 changed it to `run(cwd, script, time
 stops its script at a time limit (600 s by default, at most 3600 s) with TERM, then KILL, and exit
 code 124, and the shell gains GNU's `timeout` command. The artifact rows below are for 0.2.0.
 
-Verified on 2026-10-01 on the `builtin-bash-tool` branch with the fork revisions and the artifact
-below. The real-server scenarios were run on 2026-10-02 on Golem `0f4bd0e4e` with that artifact,
-provisioned by the registry from the SHA-256 pinned in `builtin-artifacts.lock.json`. The
-conformance matrix runs the same shell library as the standalone `cooperative` example, built from
-the same source and pins; the other checks were run on that source too.
+The revisions below are the pins of the source. Under Results, the rows for the standalone
+library tests, the unit tests run as WASM and the shell integration tests are the results of those
+suites on the source of version 0.3.0; the other rows were recorded for version 0.2.0 on the same
+pins. The real-server scenarios were run with the 0.2.0 artifact on 2026-10-02 on Golem
+`0f4bd0e4e`, where the registry provisioned it from the SHA-256 pinned in
+`builtin-artifacts.lock.json`. The conformance matrix runs the same shell library as the
+standalone `cooperative` example, built from the same source and pins.
 Optional Rust argument encoding remains a separate requirement for the full 1.6 surface.
 
 ## Revisions and artifact

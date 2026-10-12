@@ -1403,14 +1403,30 @@ mod end_of_run_tests {
         tokio::time::sleep(delay).await;
     }
 
-    const STOP: Duration = Duration::from_millis(50);
+    /// A stop request that comes once `due` holds. It is tied to what the script has done, not
+    /// to the clock, so it comes at the same place however slowly the test runs.
+    fn once(due: impl Fn() -> bool) -> impl Future<Output = ()> {
+        std::future::poll_fn(move |context| {
+            if due() {
+                std::task::Poll::Ready(())
+            } else {
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        })
+    }
+
     const SECOND: Duration = Duration::from_secs(1);
 
     /// A stop request ends a script that waits, with INT: status 130, as a shell reports SIGINT,
     /// what the script wrote so far, and no note on stderr.
     #[test]
     fn a_stop_request_ends_a_waiting_script() {
-        let run = run_stopped("echo start; sleep 300; echo end", stop_after(STOP), None);
+        let run = run_stopped(
+            "echo start; sleep 300; echo end",
+            once_it_waits(ASLEEP),
+            None,
+        );
         assert_eq!(
             (run.code, run.stdout.as_str(), run.stderr.as_str()),
             (130, "start\n", "")
@@ -1425,7 +1441,8 @@ mod end_of_run_tests {
             "echo start; while [[ 1 ]]; do x=$((x+1)); done",
             "echo start; for ((;;)); do :; done",
         ] {
-            let run = run_stopped(script, stop_after(STOP), None);
+            // The script has printed in its first turn and is in its loop by the third.
+            let run = run_stopped(script, at_turn(3), None);
             assert_eq!(run.code, 130, "{script}");
             assert_eq!(run.stdout, "start\n", "{script}");
             assert_eq!(run.stderr, "", "{script}");
@@ -1439,7 +1456,7 @@ mod end_of_run_tests {
     fn a_script_that_ignores_the_stop_is_killed() {
         let run = run_stopped(
             "trap '' INT; echo start; while :; do :; done",
-            stop_after(STOP),
+            at_turn(3),
             None,
         );
         assert_eq!((run.code, run.stdout.as_str()), (130, "start\n"));
@@ -1454,7 +1471,7 @@ mod end_of_run_tests {
     fn a_script_that_catches_the_stop() {
         let run = run_stopped(
             "trap 'echo caught' INT; echo start; sleep 300",
-            stop_after(STOP),
+            once_it_waits(ASLEEP),
             None,
         );
         assert_eq!((run.code, run.stdout.as_str()), (130, "start\ncaught\n"));
@@ -1462,7 +1479,7 @@ mod end_of_run_tests {
 
         let run = run_stopped(
             "trap 'echo caught; exit 3' INT; echo start; sleep 300",
-            stop_after(STOP),
+            once_it_waits(ASLEEP),
             None,
         );
         assert_eq!((run.code, run.stdout.as_str()), (130, "start\ncaught\n"));
@@ -1479,16 +1496,27 @@ mod end_of_run_tests {
         assert!(run.sleeps.is_empty());
     }
 
-    /// The run does not wait for a stop request once its script has ended.
+    /// A stop request that comes after the script has ended changes nothing. The script leaves
+    /// a job that ignores HUP, so the end of the run asks for its second of grace; the request
+    /// comes once that second has been asked for. The run returns the script's own status and
+    /// stops the job as after any other script: no INT, and no second of grace for one.
     #[test]
     fn a_stop_after_the_script_ended_changes_nothing() {
-        let started = std::time::Instant::now();
-        let run = run_stopped("echo done", stop_after(2 * SECOND), None);
-        assert!(started.elapsed() < SECOND, "{:?}", started.elapsed());
-        assert_eq!(
-            (run.code, run.stdout.as_str(), run.stderr.as_str()),
-            (0, "done\n", "")
+        let run = run_stopped(
+            "(trap '' HUP; sleep 300) & echo done",
+            once(|| asked_for(SECOND) >= 1),
+            None,
         );
+        assert_eq!((run.code, run.stdout.as_str()), (0, "done\n"));
+        assert!(
+            run.stderr
+                .starts_with("bash: stopped job [1] (pid 2, killed): "),
+            "{}",
+            run.stderr
+        );
+        assert_eq!(run.stderr.lines().count(), 1, "{}", run.stderr);
+        // The request was due before the run returned.
+        assert_eq!(run.sleeps, [ASLEEP, SECOND]);
     }
 
     /// A stop request that is already there when the script starts ends it before it runs
@@ -1506,7 +1534,7 @@ mod end_of_run_tests {
     /// A stopped run still says where its script was, so the caller can continue there.
     #[test]
     fn a_stopped_script_reports_its_directory() {
-        let run = run_stopped("cd /tmp; sleep 300", stop_after(STOP), None);
+        let run = run_stopped("cd /tmp; sleep 300", once_it_waits(ASLEEP), None);
         assert_eq!((run.code, run.cwd.as_str()), (130, "/tmp"));
     }
 
@@ -1524,7 +1552,12 @@ mod end_of_run_tests {
     /// which stops and reports it as after any other script.
     #[test]
     fn a_stop_leaves_background_jobs_to_the_end_of_run() {
-        let run = run_stopped("sleep 300 & echo start; sleep 300", stop_after(STOP), None);
+        // The stop comes once the job and the script have each asked for their sleep and wait.
+        let run = run_stopped(
+            "sleep 300 & echo start; sleep 300",
+            once(|| waits_in(ASLEEP, 2)),
+            None,
+        );
         assert_eq!((run.code, run.stdout.as_str()), (130, "start\n"));
         assert_eq!(
             run.stderr,
@@ -1944,20 +1977,25 @@ mod end_of_run_tests {
     #[test]
     fn tasks_that_wait_below_their_recorded_turn_fail_the_call() {
         let asked = Rc::new(std::cell::Cell::new(0));
-        let started = std::time::Instant::now();
+        let asked_at = Rc::new(std::cell::Cell::new(None));
         let run = run_session(
             "sleep 200 & echo start; sleep 300",
             counting_sleep,
             |session| {
                 session.set_stop_request(once_it_waits(ASLEEP));
                 let asked = asked.clone();
+                let asked_at = asked_at.clone();
                 session.set_turn_recorder(move |place| {
                     asked.set(place.turn);
+                    asked_at.set(Some(std::time::Instant::now()));
                     waiting_at(place.turn + 1_000)
                 });
             },
         );
-        assert!(started.elapsed() < SECOND, "{:?}", started.elapsed());
+        // From the question for the record to the end of the run, the call took far less time
+        // than the shorter of the script's two sleeps: it did not wait with the script.
+        let took = asked_at.get().unwrap().elapsed();
+        assert!(took < Duration::from_secs(200) / 2, "{took:?}");
         assert_eq!((run.code, run.stdout.as_str()), (1, "start\n"));
         let turn = asked.get();
         // The line of the failure, then the note of the job the end of the run stopped.

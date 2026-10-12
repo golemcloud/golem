@@ -221,6 +221,14 @@ script ended with: the call's time limit returns 124, and the caller's stop requ
 The tool records the place of the script at each step of such a stop. A later run of the call
 repeats the step at that place or fails the call, for the scripts that Replay safety names; for
 the shapes it lists as limits neither is guaranteed.
+Neither stop reaches a loop that runs a pipeline in each round, such as
+`n=0; while :; do n=$((n+1)); echo $n | while read -r x; do :; done; done`. The watchdog acts
+when the call gets the completion of the limit's timer or of the stop request, and the
+component's runtime takes a completion only after a pass over the tasks in which none of them
+ended or started another. A loop of plain commands gets there because the interpreter gives way
+after 64 commands. It starts that count again with every pipeline stage, so this loop never gets
+to 64, and its stages start and end in every pass. Such a call runs until something outside the
+tool ends it.
 A job that finished before the script ended is not reported. This deliberately differs from bash,
 whose non-interactive scripts leave background jobs running after exit, because a job cannot
 survive the transient Store.
@@ -401,6 +409,16 @@ For the shapes below neither is guaranteed. The recorded place has these limits:
   the completion and the moment the watchdog is polled and the tool records the turn. In the
   record that call stands before `bash::stop-turn`; a later run, which records the turn as soon
   as it has the completion, asks for the two in the other order.
+- **A question for the record that is never answered.** `bash::stop-turn` is a synchronous
+  durable call: the call's own task makes it and goes on only with the answer. In a later run
+  Golem answers such a call only when the call has taken every completion that it was given
+  before that call in the first run. A script with more tasks (a pipeline stage, a command
+  substitution, a job) can have a task that took a completion, or a read of a stream, before the
+  watchdog asked in the first run. A later run in which that task is behind asks first, and the
+  question then waits: the call hangs, with no error and no line in a log. The same holds where
+  the call's `stdin` reaches the tool through a middleware. A script that is one task, in a call
+  that a client makes directly, is not exposed. This follows from how Golem replays a
+  synchronous durable call; no run of the tool has shown it.
 - **The same checks fail some later runs that would have given the same result.** The first
   thing above fails every later run that gets a completion between the question and the step,
   also when the completion changes nothing, as the end of a job that the stop ends anyway.
