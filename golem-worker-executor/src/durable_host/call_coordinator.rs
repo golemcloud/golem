@@ -39,6 +39,28 @@ impl<'a> DurableCallAdmission<'a> {
         }
     }
 
+    fn wallet_admission(
+        self,
+        runtime: &OwnerRuntime,
+        snapshotting: bool,
+        durable_call_is_live: bool,
+        automatic_update_unsettled: bool,
+    ) -> WalletAdmission {
+        if self.is_wallet_independent_value_read()
+            && *runtime == OwnerRuntime::Agent
+            && !snapshotting
+            && durable_call_is_live
+        {
+            if automatic_update_unsettled {
+                WalletAdmission::FinalizeUpdate
+            } else {
+                WalletAdmission::Independent
+            }
+        } else {
+            WalletAdmission::Synchronize
+        }
+    }
+
     fn is_wallet_independent_value_read(self) -> bool {
         use golem_common::model::oplog::host_functions::HostFunctionName;
         matches!(
@@ -63,6 +85,13 @@ impl<'a> DurableCallAdmission<'a> {
                 | HostFunctionName::P3RandomInsecureSeedGetInsecureSeed
         )
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WalletAdmission {
+    Independent,
+    FinalizeUpdate,
+    Synchronize,
 }
 
 /// The result of successful admission and durable-scope recovery for a host call.
@@ -105,15 +134,17 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         admission: DurableCallAdmission<'_>,
     ) -> Result<DurableCallBoundary, WorkerExecutorError> {
         self.check_allowed(admission)?;
-        if admission.is_wallet_independent_value_read()
-            && self.ctx.runtime == OwnerRuntime::Agent
-            && !self.ctx.state.snapshotting_mode
-            && self.ctx.state.durable_call_is_live()
-        {
+        match admission.wallet_admission(
+            &self.ctx.runtime,
+            self.ctx.state.snapshotting_mode,
+            self.ctx.state.durable_call_is_live(),
+            self.ctx.state.automatic_update_unsettled,
+        ) {
             // A fresh clock/random value needs no authority. Waiting for an accessor's wallet
             // reconciliation here can deadlock: this call owns the Store that accessor needs.
             // Automatic updates still fence target-only history until success is committed.
-            if self.ctx.state.automatic_update_unsettled {
+            WalletAdmission::Independent => {}
+            WalletAdmission::FinalizeUpdate => {
                 let _boundary = self.ctx.lock_synchronized_card_event_boundary().await?;
                 if self.ctx.state.automatic_update_unsettled {
                     return Err(WorkerExecutorError::runtime(
@@ -121,8 +152,9 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                     ));
                 }
             }
-        } else {
-            self.ctx.synchronize_agent_wallet_at_boundary().await?;
+            WalletAdmission::Synchronize => {
+                self.ctx.synchronize_agent_wallet_at_boundary().await?;
+            }
         }
         let begin_index = self.ctx.begin_function(admission.function_type).await?;
         Ok(DurableCallBoundary::from_begin_index(begin_index))
@@ -463,22 +495,7 @@ where
                 continue;
             }
         }
-        let has_pending_source_transfer = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_scan
-                .as_ref()
-                .is_some_and(|scan| {
-                    scan.pending.iter().any(|pending| {
-                        matches!(&pending.event, QueuedCardEvent::TransferStarted(_))
-                    })
-                })
-        });
-        let retries = if has_pending_source_transfer {
-            prepare_pending_source_card_transfers_access(store, get_ctx).await?
-        } else {
-            Vec::new()
-        };
+        let retries = prepare_pending_source_card_transfers_access(store, get_ctx).await?;
         if retries.is_empty() {
             return Ok(Some(boundary_guard));
         }
@@ -518,7 +535,7 @@ where
 
     loop {
         let pending_events = crate::durable_host::next_drainable_card_events(
-            pending_card_events_at_boundary_access(store, get_ctx).await?,
+            pending_card_events_at_boundary_access(store, get_ctx).await,
         );
         let Some(pending_event) = pending_events.first() else {
             break;
@@ -598,63 +615,23 @@ where
     .await
 }
 
+/// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent
+/// status is the only source of queued card events.
 async fn pending_card_events_at_boundary_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<Vec<golem_common::model::PendingCardEventRef>, WorkerExecutorError>
+) -> Vec<golem_common::model::PendingCardEventRef>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (worker, oplog) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        (ctx.public_state.worker().clone(), ctx.state.oplog.clone())
-    });
-    let status = worker.get_last_known_status().await;
-    let current_idx = oplog.current_oplog_index().await;
-    let unread_range = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        match &mut ctx.state.card_event_boundary_scan {
-            Some(scan) => {
-                scan.synchronize(status.oplog_idx, &status.pending_card_events, current_idx)
-            }
-            None => {
-                ctx.state.card_event_boundary_scan =
-                    Some(crate::durable_host::CardEventBoundaryScan::new(
-                        status.oplog_idx,
-                        status.pending_card_events.clone(),
-                    ));
-            }
-        }
-        ctx.state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .unread_range(current_idx)
-    });
-
-    if let Some((start, count)) = unread_range {
-        let entries = oplog.read_exact(start, count).await;
-        store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_scan
-                .as_mut()
-                .expect("card event boundary scan must be initialized")
-                .fold_through(current_idx, &entries);
-        });
-    }
-
-    Ok(store.with(|mut access| {
-        get_ctx(access.data_mut())
-            .state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .pending
-            .clone()
-    }))
+    let worker = store.with(|mut access| get_ctx(access.data_mut()).public_state.worker().clone());
+    worker
+        .get_last_known_status()
+        .await
+        .pending_card_events
+        .clone()
 }
 
 async fn admit_card_to_wallet_access<T, D, Ctx>(
@@ -1137,7 +1114,7 @@ where
         return Ok(Vec::new());
     }
 
-    let pending_events = pending_card_events_at_boundary_access(store, get_ctx).await?;
+    let pending_events = pending_card_events_at_boundary_access(store, get_ctx).await;
     let mut retries = Vec::new();
     let mut first_error = None;
     for pending in pending_events {
@@ -1545,4 +1522,47 @@ where
         )
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DurableCallAdmission, DurableFunctionType, OwnerRuntime, WalletAdmission};
+    use golem_common::model::entity::{AgentEntity, ToolMiddlewareName};
+    use test_r::test;
+
+    #[test]
+    fn wallet_independent_reads_still_fence_updates_and_replay() {
+        let clock = DurableCallAdmission::new(&DurableFunctionType::ReadLocal, "wall_clock::now");
+        assert_eq!(
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            WalletAdmission::Independent
+        );
+        assert_eq!(
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, true),
+            WalletAdmission::FinalizeUpdate
+        );
+        let entity = OwnerRuntime::Entity(AgentEntity::ToolMiddleware(
+            ToolMiddlewareName::try_from("middleware").unwrap(),
+        ));
+        for (runtime, snapshotting, live) in [
+            (OwnerRuntime::Agent, false, false),
+            (OwnerRuntime::Agent, true, true),
+            (entity, false, true),
+        ] {
+            for unsettled in [false, true] {
+                assert_eq!(
+                    clock.wallet_admission(&runtime, snapshotting, live, unsettled),
+                    WalletAdmission::Synchronize
+                );
+            }
+        }
+        let environment = DurableCallAdmission::new(
+            &DurableFunctionType::ReadLocal,
+            "cli::environment::get_environment",
+        );
+        assert_eq!(
+            environment.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            WalletAdmission::Synchronize
+        );
+    }
 }

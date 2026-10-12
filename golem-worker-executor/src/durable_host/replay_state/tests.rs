@@ -1292,6 +1292,42 @@ async fn held_completed_reconstruction() -> (
 }
 
 #[test]
+async fn primary_publication_requires_completed_reconstruction_validation() {
+    let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
+    let target = replay.switch_cursor_to_live().await.unwrap();
+    let memory = replay_linear_memory();
+
+    let publication = replay
+        .run_owned_cursor_op({
+            let memory = memory.clone();
+            move |state| async move {
+                state
+                    .with_tx(async |tx| Ok(tx.finish_primary_settling(target, &memory).await))
+                    .await
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        publication,
+        LivePublicationOutcome::ReconstructionClaimsActive
+    );
+    assert!(!replay.is_live_published());
+    assert_eq!(memory.reconciliation_grant_bytes(1), 2);
+
+    drop(reconstruction);
+    assert!(matches!(
+        replay
+            .finish_settling_to_live(&memory, ReplayToLiveRole::PrimaryAgent, target)
+            .await
+            .unwrap(),
+        ReplayToLiveOutcome::Live { .. }
+    ));
+    assert!(replay.is_live_published());
+    assert_eq!(memory.reconciliation_grant_bytes(1), 1);
+}
+
+#[test]
 async fn growing_replay_target_revokes_published_live_state() {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await.unwrap();
