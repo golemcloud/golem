@@ -448,7 +448,7 @@ impl ReplayState {
         blocked: BlockedOn,
         progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>,
     ) {
-        #[cfg(feature = "test-utils")]
+        #[cfg(test)]
         if matches!(blocked, BlockedOn::ActiveBody(_)) {
             self.cursor
                 .active_body_waits

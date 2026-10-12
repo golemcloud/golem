@@ -1,8 +1,6 @@
 use super::claims::{RequestClaimIdentity, StartClaim, recorded_request_payload_matches};
 use super::*;
 use crate::durable_host::PositionalRead;
-#[cfg(feature = "test-utils")]
-use std::pin::Pin;
 
 impl ReplayCursor {
     fn begin_settling(&self) {
@@ -2598,7 +2596,7 @@ impl ReplayState {
             log_hashes: std::sync::Mutex::new(HashMap::new()),
             pending_replay_events: std::sync::Mutex::new(Vec::new()),
             progress: Notify::new(),
-            #[cfg(feature = "test-utils")]
+            #[cfg(test)]
             active_body_waits: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
             primary_publication_gate: std::sync::Mutex::new(None),
@@ -2951,7 +2949,7 @@ impl ReplayState {
         .await
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(test)]
     async fn wait_for_reconstruction_fences(&self) -> Result<(), WorkerExecutorError> {
         tokio::select! {
             biased;
@@ -2971,7 +2969,7 @@ impl ReplayState {
 
     /// Waits until `Start` claims of this replay have started to wait for an active entity body
     /// at least `waits` times. A claim that wakes and waits again counts once more.
-    #[cfg(feature = "test-utils")]
+    #[cfg(test)]
     pub(crate) async fn test_wait_for_claims_blocked_on_active_body(&self, waits: u64) {
         let mut counted = self.cursor.active_body_waits.subscribe();
         counted
@@ -3087,123 +3085,6 @@ impl ReplayState {
                 }
                 LivePublicationOutcome::ReplayResumed => Ok(ReplayToLiveOutcome::ReplayResumed),
             }
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn test_drain_reconstruction_terminal(
-        &self,
-        start_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        let (terminal_index, terminal) = self
-            .visible_terminal_record(start_index)
-            .await
-            .ok_or_else(|| {
-                WorkerExecutorError::runtime(format!(
-                    "test replay driver found no visible terminal for reconstruction Start {start_index}"
-                ))
-            })?;
-        let marker = self
-            .cursor
-            .completion_markers
-            .lock()
-            .unwrap()
-            .get(&start_index)
-            .copied();
-        let resolution = match terminal {
-            OplogEntry::End {
-                response,
-                forced_commit,
-                ..
-            } => match marker {
-                Some(CompletionMarker::Discarded(marker_idx)) => {
-                    Resolution::CompletedButDiscarded {
-                        end_idx: terminal_index,
-                        marker_idx,
-                        response,
-                    }
-                }
-                Some(CompletionMarker::Delivered(marker_idx)) => Resolution::Completed {
-                    end_idx: terminal_index,
-                    response,
-                    delivery_marker: Some(marker_idx),
-                    forced_commit,
-                },
-                None => Resolution::Completed {
-                    end_idx: terminal_index,
-                    response,
-                    delivery_marker: None,
-                    forced_commit,
-                },
-            },
-            OplogEntry::Cancelled { partial, .. } => Resolution::Cancelled {
-                cancelled_idx: terminal_index,
-                partial,
-            },
-            _ => unreachable!("visible_terminal_record returns only terminal entries"),
-        };
-        self.run_owned_cursor_op(move |state| async move {
-            state
-                .with_tx(async |tx| {
-                    tx.st.concurrent_resolver.resolve_prefetched_for_test(
-                        start_index,
-                        terminal_index,
-                        resolution,
-                    );
-                    Ok(())
-                })
-                .await
-        })
-        .await
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn test_drain_terminal_clamp_then_reconstruction_barrier(
-        &self,
-        start_index: OplogIndex,
-    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send + 'static>>, WorkerExecutorError> {
-        self.test_drain_reconstruction_terminal(start_index).await?;
-        self.begin_primary_settling().await?;
-        let replay = self.clone();
-        Ok(Box::pin(async move {
-            replay
-                .wait_for_reconstruction_fences()
-                .await
-                .expect("test reconstruction barrier observed owner failure");
-            replay
-                .switch_cursor_to_live()
-                .await
-                .expect("test reconstruction barrier failed to clamp replay");
-        }))
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn test_clamp_after_claim(
-        &self,
-        start_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        loop {
-            let progress = self.cursor.progress.notified();
-            tokio::pin!(progress);
-            progress.as_mut().enable();
-
-            let claimed = self
-                .run_owned_cursor_op(move |state| async move {
-                    let st = state.cursor.state.lock().await;
-                    Ok(st.concurrent_resolver.has_claim(start_index))
-                })
-                .await?;
-            if claimed {
-                self.switch_cursor_to_live().await?;
-                return Ok(());
-            }
-            if self.is_live() {
-                return Err(WorkerExecutorError::runtime(format!(
-                    "test replay driver reached live mode before Start {start_index} was claimed"
-                )));
-            }
-
-            progress.await;
         }
     }
 

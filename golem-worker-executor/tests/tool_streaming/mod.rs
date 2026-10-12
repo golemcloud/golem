@@ -2676,6 +2676,9 @@ async fn wait_for_owner_replay_settling(
             if executor.owner_replay_is_settling(agent_id).await? {
                 return Ok::<_, anyhow::Error>(());
             }
+            if executor.owner_replay_is_live(agent_id).await? {
+                anyhow::bail!("owner published live before reconstruction validation");
+            }
             tokio::task::yield_now().await;
         }
     })
@@ -8845,7 +8848,7 @@ enum CompletedReconstructionExclusiveCase {
     Divergence,
     ExecutorShutdownDuringBodyValidation,
     RestartDuringBodyValidation,
-    CrashReplaySupervisorWindow,
+    CrashReplayClaimWindow,
     EntityCustomRootCrashReplay,
 }
 
@@ -8943,23 +8946,6 @@ fn assert_replayed_reconstruction_invocation_settled(
     );
 }
 
-/// Waits until the replayed clock claim parks on the completed reconstruction whose supervisor the
-/// test holds: the clock `Start` was never recorded, and the body's entries are still at the
-/// cursor head.
-async fn wait_for_clock_claim_blocked_on_held_reconstruction(
-    executor: &TestWorkerExecutor,
-    owned_agent_id: &OwnedAgentId,
-) -> anyhow::Result<()> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        executor.wait_for_replay_claim_blocked_on_active_body(owned_agent_id),
-    )
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!("the replayed clock claim did not wait for the held reconstruction")
-    })?
-}
-
 async fn run_completed_reconstruction_exclusive_p2_case(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -9017,7 +9003,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
             "exclusive-p2-body-validation-restart"
         }
-        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
+        CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             "exclusive-p2-crash-replay-window"
         }
         CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
@@ -9050,11 +9036,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     .map_err(|_| anyhow::anyhow!("timed out waiting for caller initialization"))??;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let mut original_success = executor.gate_next_agent_invocation_success(&worker_id);
-    if case != CompletedReconstructionExclusiveCase::RestartDuringBodyValidation {
-        executor
-            .skip_next_wall_clock_now_durability(&owned_agent_id)
-            .await?;
-    }
     let invocation =
         executor.invoke_and_await_agent(&caller_component, &agent_id, method, data_value!());
     tokio::pin!(invocation);
@@ -9097,20 +9078,18 @@ async fn run_completed_reconstruction_exclusive_p2_case(
 
         if matches!(
             case,
-            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+            CompletedReconstructionExclusiveCase::CrashReplayClaimWindow
                 | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay
         ) {
-            let mut supervisor = executor.gate_next_completed_reconstruction_supervisor(&worker_id);
+            let mut claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
             crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
-            let start =
-                tokio::time::timeout(std::time::Duration::from_secs(30), supervisor.entered())
-                    .await
-                    .map_err(|_| {
-                        anyhow::anyhow!("crash-replay reconstruction supervisor was not reached")
-                    })?;
+            let start = tokio::time::timeout(std::time::Duration::from_secs(30), claim.entered())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("crash-replay reconstruction claim was not reached")
+                })?;
             assert_eq!(start, reconstruction_start);
-            wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id).await?;
-            supervisor.release();
+            claim.release();
             return Ok::<_, anyhow::Error>(reconstruction_start);
         }
         let mut reconstruction_body =
@@ -9125,11 +9104,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .await
                 .map_err(|_| anyhow::anyhow!("replayed reconstruction claim was not reached"))?;
         assert_eq!(claimed_start, reconstruction_start);
-        let mut replayed_clock = executor.gate_next_wall_clock_now(&owned_agent_id).await?;
         replayed_claim.release();
-        tokio::time::timeout(std::time::Duration::from_secs(30), replayed_clock.entered())
-            .await
-            .map_err(|_| anyhow::anyhow!("replayed clock gate was not reached"))?;
         let mut replayed_success = (case == CompletedReconstructionExclusiveCase::Success)
             .then(|| executor.gate_next_agent_invocation_success(&worker_id));
 
@@ -9144,9 +9119,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .map_err(|_| {
                     anyhow::anyhow!("completed reconstruction did not reach body validation gate")
                 })?;
-                replayed_clock.release();
-                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
-                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
                 assert!(
                     tokio::time::timeout(
                         std::time::Duration::from_millis(250),
@@ -9154,7 +9126,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     )
                     .await
                     .is_err(),
-                    "exclusive P2 clock call finished before completed reconstruction validation"
+                    "owner invocation finished before completed reconstruction validation"
                 );
                 reconstruction_body.release();
                 tokio::time::timeout(
@@ -9174,9 +9146,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .map_err(|_| {
                     anyhow::anyhow!("divergent reconstruction did not reach body validation gate")
                 })?;
-                replayed_clock.release();
-                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
-                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
                 let settling_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
                 assert!(
                     settling_oplog
@@ -9190,11 +9159,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     futures::poll!(owner_failure.as_mut()),
                     std::task::Poll::Pending
                 ));
-                // The replay on the source revision that follows the failed update: hold the
-                // supervisor of its completed reconstruction after the claim and before it drains
-                // the recorded terminal, so the exclusive clock call claims in that window.
-                let mut source_claim =
-                    executor.gate_next_completed_reconstruction_supervisor(&worker_id);
+                let mut source_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
                 reconstruction_body.release();
                 let owner_failure =
                     tokio::time::timeout(std::time::Duration::from_secs(30), owner_failure)
@@ -9220,14 +9185,12 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 )
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!("source-revision reconstruction supervisor was not reached")
+                    anyhow::anyhow!("source-revision reconstruction claim was not reached")
                 })?;
                 assert_eq!(source_start, reconstruction_start);
-                wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id)
-                    .await?;
                 source_claim.release();
             }
-            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+            CompletedReconstructionExclusiveCase::CrashReplayClaimWindow
             | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => unreachable!(),
             CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
                 tokio::time::timeout(
@@ -9238,7 +9201,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .map_err(|_| {
                     anyhow::anyhow!("completed reconstruction did not reach body validation gate")
                 })?;
-                replayed_clock.release();
                 executor.shutdown_and_wait_for_invocation_loops().await?;
             }
             CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
@@ -9254,7 +9216,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 eprintln!(
                     "LIFECYCLE_PROBE restart while historical body {reconstruction_start} is held before validation"
                 );
-                replayed_clock.release();
                 // Normal lifecycle cancellation must destroy the blocked body's Store and
                 // settle its reconstruction ownership. Do not release its validation gate.
                 executor.simulated_crash(&worker_id).await?;
@@ -9284,7 +9245,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     match case {
         CompletedReconstructionExclusiveCase::Success
         | CompletedReconstructionExclusiveCase::RestartDuringBodyValidation
-        | CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
+        | CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
@@ -9353,7 +9314,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn completed_reconstruction_settles_while_exclusive_p2_waits(
+async fn completed_reconstruction_validates_during_recorded_clock_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9373,7 +9334,7 @@ async fn completed_reconstruction_settles_while_exclusive_p2_waits(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn crash_replay_clock_claim_waits_for_entity_custom_root_reconstruction(
+async fn recorded_clock_replay_preserves_entity_custom_root_reconstruction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9393,7 +9354,7 @@ async fn crash_replay_clock_claim_waits_for_entity_custom_root_reconstruction(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn crash_replay_clock_claim_waits_for_completed_reconstruction_supervisor(
+async fn recorded_clock_replay_recovers_after_held_reconstruction_claim(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9405,7 +9366,7 @@ async fn crash_replay_clock_claim_waits_for_completed_reconstruction_supervisor(
         deps,
         provider,
         caller,
-        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow,
+        CompletedReconstructionExclusiveCase::CrashReplayClaimWindow,
     )
     .await
 }
@@ -9473,7 +9434,7 @@ async fn executor_shutdown_cancels_completed_reconstruction_during_body_validati
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
+async fn completed_reconstruction_validates_before_delivering_result(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9586,13 +9547,9 @@ async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
         )
         .await
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
-        let barrier = executor
-            .drain_terminal_clamp_then_reconstruction_barrier(&owned_agent_id, reconstruction_start)
-            .await?;
-        tokio::pin!(barrier);
-        assert!(
-            matches!(futures::poll!(barrier.as_mut()), std::task::Poll::Pending),
-            "the primary replay-to-live barrier ignored the atomically registered reconstruction claim"
+        assert_eq!(
+            reconstruction_start,
+            wait_for_completed_entity_terminal(&executor, &worker_id).await?
         );
 
         reconstruction_claim.release();
@@ -9603,13 +9560,10 @@ async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
         .await
         .map_err(|_| anyhow::anyhow!("completed reconstruction body did not settle"))?;
         assert!(
-            matches!(futures::poll!(barrier.as_mut()), std::task::Poll::Pending),
-            "the primary replay-to-live barrier was released before body validation"
+            caller_checkpoints.try_recv().is_err(),
+            "the tool result was delivered before completed reconstruction validation"
         );
         reconstruction_body.release();
-        tokio::time::timeout(std::time::Duration::from_secs(30), barrier)
-            .await
-            .map_err(|_| anyhow::anyhow!("validated reconstruction did not release the barrier"))?;
         let replayed_live = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             caller_checkpoints.recv(),
@@ -9789,9 +9743,6 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         .await
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
         assert_eq!(reconstruction_start, entity_start);
-        executor
-            .drain_reconstruction_terminal(&owned_agent_id, reconstruction_start)
-            .await?;
         reconstruction_claim.release();
         tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -9799,12 +9750,6 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         )
         .await
         .map_err(|_| anyhow::anyhow!("completed reconstruction body did not settle"))?;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            executor.clamp_after_claim(&owned_agent_id, custom_start),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("custom durability did not reach replay-to-live"))??;
         wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
         assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         assert!(
@@ -9816,6 +9761,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             .is_err(),
             "the incomplete custom invocation bypassed the primary reconstruction barrier"
         );
+        assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         reconstruction_body.release();
         let replayed_custom = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -10000,9 +9946,6 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         .await
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
         assert_eq!(reconstruction_start, entity_start);
-        executor
-            .drain_reconstruction_terminal(&owned_agent_id, reconstruction_start)
-            .await?;
         reconstruction_claim.release();
         if tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -10018,12 +9961,6 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
                 "completed reconstruction body did not settle"
             ));
         }
-        tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            executor.clamp_after_claim(&owned_agent_id, custom_start),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("custom durability did not reach replay-to-live"))??;
         wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
         assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         assert!(
@@ -10035,6 +9972,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
             .is_err(),
             "the incomplete custom invocation bypassed the primary reconstruction barrier"
         );
+        assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         reconstruction_body.release();
         let replayed_custom = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -15301,6 +15239,103 @@ async fn clock_races_complete_through_tool_entity_without_suspending_owner(
             .filter(|entry| entry.oplog_index > boundary)
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
         "tool/entity clock-race interval unexpectedly contained a Suspend entry"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn tool_bodies_read_pending_card_events_without_scanning_the_invocation_oplog(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const LOCAL_READS: u32 = 500;
+    const TOOL_CALLS: u32 = 15;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent = agent_id!("ToolStreamingCaller", "card-boundary-tool-owner");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let entries_read_before = executor.oplog_entries_read(&worker);
+    let completed = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "local_clocks_then_tool_clocks",
+            data_value!(LOCAL_READS, TOOL_CALLS),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(completed, TOOL_CALLS);
+    let entries_read = executor.oplog_entries_read(&worker) - entries_read_before;
+
+    let interval = executor.get_oplog(&worker, boundary).await?;
+    let tool_bodies = interval
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    assert_eq!(tool_bodies, TOOL_CALLS as usize);
+    let invocation_entries = interval
+        .iter()
+        .filter(|entry| entry.oplog_index > boundary)
+        .count() as u64;
+    // Each tool body crosses the card event boundary in a new entity Store. Reading the
+    // pending card events must not depend on how many entries the invocation appended before.
+    assert!(
+        entries_read < invocation_entries,
+        "tool bodies read {entries_read} oplog entries during an invocation of \
+         {invocation_entries} entries"
     );
     Ok(())
 }

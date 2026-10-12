@@ -2079,7 +2079,7 @@ pub(super) async fn prepare_pending_source_card_transfers<Ctx: WorkerCtx>(
         return Ok(Vec::new());
     }
 
-    let pending_events = ctx.pending_card_events_at_boundary().await?;
+    let pending_events = ctx.pending_card_events_at_boundary().await;
     let mut retries = Vec::new();
     for pending in pending_events {
         if let QueuedCardEvent::TransferStarted(transfer) = &pending.event {
@@ -2274,8 +2274,17 @@ async fn complete_permission_card_revoke<Ctx: WorkerCtx>(
         Err(PermissionCardRevokeError::NotPermitted(_)) => Vec::new(),
     };
     let entity_parent_start_index = ctx.entity_parent_start_index();
+    // The cascade removes queued revocations of these cards from the pending card events, which
+    // the card event boundary reads from the agent status only. Outside snapshotting the cascade
+    // is committed and folded into the status before this revoke completes; the finish commit
+    // of an ephemeral agent would not fold it. Snapshotting keeps the existing buffered append.
+    let commit_immediately = !ctx.state.snapshotting_mode;
     if let Err(error) = ctx
-        .apply_card_revoked_cascade(entity_parent_start_index, &locally_revoked_card_ids, false)
+        .apply_card_revoked_cascade(
+            entity_parent_start_index,
+            &locally_revoked_card_ids,
+            commit_immediately,
+        )
         .await
     {
         handle.abandon_for_trap();

@@ -109,6 +109,7 @@ use golem_worker_executor::preview2::golem::agent::host::{
     RpcError, ScheduledInvocationReceipt, WasmRpc,
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
+use golem_worker_executor::services::HasWorker;
 use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
 use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoops};
 use golem_worker_executor::services::agent_types::AgentTypesService;
@@ -915,6 +916,15 @@ impl TestWorkerExecutor {
         })
     }
 
+    /// Returns the number of entries the agent's opened oplog returned from `Oplog::read_exact`.
+    pub fn oplog_entries_read(&self, agent_id: &AgentId) -> u64 {
+        self.additional_test_deps
+            .oplog_entries_read(&OwnedAgentId::new(
+                self.context.default_environment_id,
+                agent_id,
+            ))
+    }
+
     pub fn oplog_service_call_count(&self, agent_id: &AgentId, api: &'static str) -> usize {
         self.additional_test_deps.oplog_call_count(
             &OwnedAgentId::new(self.context.default_environment_id, agent_id),
@@ -1325,27 +1335,6 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
-    pub async fn queue_uncommitted_card_revocation(
-        &self,
-        agent_id: &AgentId,
-        card_id: CardId,
-    ) -> anyhow::Result<OplogIndex> {
-        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(&owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
-        Ok(worker
-            .add_to_oplog(OplogEntry::card_event_queued(
-                None,
-                Box::new(golem_common::base_model::oplog::QueuedCardEvent::revoke(
-                    card_id,
-                )),
-            ))
-            .await?)
-    }
-
     pub async fn queue_card_install(
         &self,
         agent_id: &AgentId,
@@ -1706,57 +1695,11 @@ impl TestWorkerExecutor {
     pub async fn gate_next_invocation_started(
         &self,
         owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        Ok(worker.owner_execution().test_gate_next_invocation_started())
-    }
-
-    /// Pauses the next exclusive wall-clock `now` call before it starts durability.
-    pub async fn gate_next_wall_clock_now(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        Ok(worker.owner_execution().test_gate_next_wall_clock_now())
-    }
-
-    /// Holds the wallet boundary with its authority cache invalidated, reproducing a pending
-    /// accessor reconciliation independently of card-service timing.
-    pub async fn hold_invalidated_card_boundary(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<tokio::sync::OwnedMutexGuard<()>> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        Ok(worker.test_hold_invalidated_card_boundary().await)
-    }
-
-    /// Makes the current generation's next wall-clock `now` call return its live value
-    /// without creating a durable record, so crash-tail tests can commit only earlier work.
-    pub async fn skip_next_wall_clock_now_durability(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<()> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        worker
-            .owner_execution()
-            .test_skip_next_wall_clock_now_durability();
-        Ok(())
+    ) -> anyhow::Result<IndexedExecutionGateHandle> {
+        Ok(IndexedExecutionGate::install(
+            &self.additional_test_deps.invocation_started_gates,
+            owned_agent_id.agent_id.clone(),
+        ))
     }
 
     /// Mutates the next completed historical entity body's in-memory response before terminal
@@ -1766,22 +1709,12 @@ impl TestWorkerExecutor {
             .diverge_next_completed_entity_reconstruction(agent_id.clone());
     }
 
-    /// Pauses the spawned supervisor of the next completed historical entity reconstruction
-    /// before it polls its body or its recorded terminal.
-    pub fn gate_next_completed_reconstruction_supervisor(
-        &self,
-        agent_id: &AgentId,
-    ) -> EntityReconstructionClaimGateHandle {
-        self.additional_test_deps
-            .gate_next_completed_reconstruction_supervisor(agent_id.clone())
-    }
-
     /// Pauses the next historical entity reconstruction immediately after its resolver-owned
     /// reconstruction claim becomes visible.
     pub fn gate_next_entity_reconstruction_claim(
         &self,
         agent_id: &AgentId,
-    ) -> EntityReconstructionClaimGateHandle {
+    ) -> IndexedExecutionGateHandle {
         self.additional_test_deps
             .gate_next_entity_reconstruction_claim(agent_id.clone())
     }
@@ -1813,60 +1746,6 @@ impl TestWorkerExecutor {
             .signal_next_direct_replay_wait(agent_id.clone(), name_suffix.to_string())
     }
 
-    /// Drains a claimed reconstruction's recorded terminal, clamps the owner's replay cursor to
-    /// its tail, and returns the reconstruction-barrier future a primary transition awaits next.
-    pub async fn drain_terminal_clamp_then_reconstruction_barrier(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        start_index: OplogIndex,
-    ) -> anyhow::Result<impl Future<Output = ()> + Send + 'static> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        Ok(worker
-            .owner_execution()
-            .test_drain_terminal_clamp_then_reconstruction_barrier(start_index)
-            .await?)
-    }
-
-    /// Resolver-delivers a claimed reconstruction's recorded terminal without settling its body
-    /// validation fence.
-    pub async fn drain_reconstruction_terminal(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        start_index: OplogIndex,
-    ) -> anyhow::Result<()> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        Ok(worker
-            .owner_execution()
-            .test_drain_reconstruction_terminal(start_index)
-            .await?)
-    }
-
-    /// Waits for the exact recorded Start to be claimed by replay, then clamps the shared cursor
-    /// to its tail so the pending call follows its production incomplete-repair path.
-    pub async fn clamp_after_claim(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        start_index: OplogIndex,
-    ) -> anyhow::Result<()> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        Ok(worker
-            .owner_execution()
-            .test_clamp_after_claim(start_index)
-            .await?)
-    }
-
     /// Whether the owner has published live admission after reconstruction settlement.
     pub async fn owner_replay_is_live(
         &self,
@@ -1878,23 +1757,6 @@ impl TestWorkerExecutor {
             .await
             .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
         Ok(worker.owner_execution().test_replay_is_live().await?)
-    }
-
-    /// Waits until a `Start` claim of the owner's current replay waits for an active entity body
-    /// that owns the cursor head.
-    pub async fn wait_for_replay_claim_blocked_on_active_body(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<()> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        Ok(worker
-            .owner_execution()
-            .test_wait_for_replay_claim_blocked_on_active_body()
-            .await?)
     }
 
     /// Whether the owner has clamped replay and is waiting to settle completed reconstructions.
@@ -3050,7 +2912,11 @@ impl InvocationHooks for TestWorkerCtx {
             .additional_test_deps
             .take_agent_invocation_success_gate(&self.agent_id)
         {
-            self.durable_ctx.test_commit_pending_oplog_entries().await;
+            self.get_public_state()
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await
+                .expect("test oplog commit was refused");
             if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
                 let _ = entered_tx.send(());
             }
@@ -5319,6 +5185,14 @@ impl Oplog for TestOplog {
         // A refused write never reaches storage, so the boundaries below stay unarmed and the
         // error propagates to the fence handling instead.
         let index = self.oplog.add(entry.clone()).await?;
+        if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
+            IndexedExecutionGate::enter_and_wait(
+                &self.additional_test_deps.invocation_started_gates,
+                &self.owned_agent_id.agent_id,
+                index,
+            )
+            .await;
+        }
         if let Some(start_index) = ended_start {
             self.observe_rpc_memory_end(start_index);
         }
@@ -5524,6 +5398,8 @@ impl Oplog for TestOplog {
         }
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "read_exact");
+        self.additional_test_deps
+            .record_oplog_entries_read(&self.owned_agent_id, n);
         self.oplog.read_exact(oplog_index, n).await
     }
 
@@ -5961,6 +5837,7 @@ pub struct AdditionalTestDeps {
     native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
+    oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
@@ -5996,8 +5873,8 @@ pub struct AdditionalTestDeps {
     entity_store_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
-    entity_reconstruction_claim_gates: EntityReconstructionClaimGates,
-    completed_supervisor_gates: EntityReconstructionClaimGates,
+    entity_reconstruction_claim_gates: IndexedExecutionGates,
+    invocation_started_gates: IndexedExecutionGates,
     /// One-shot gates pausing an agent's next replayed accessor-call admission
     /// for a matching function at a given stage, and one-shot signals fired when
     /// a direct (Store-holding) durable call starts waiting for its replayed
@@ -6040,6 +5917,7 @@ impl AdditionalTestDeps {
             oplog_failures,
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6065,7 +5943,7 @@ impl AdditionalTestDeps {
             entity_store_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            completed_supervisor_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            invocation_started_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6218,18 +6096,11 @@ impl AdditionalTestDeps {
         })
     }
 
-    fn gate_next_completed_reconstruction_supervisor(
-        &self,
-        agent_id: AgentId,
-    ) -> EntityReconstructionClaimGateHandle {
-        EntityReconstructionClaimGate::install(&self.completed_supervisor_gates, agent_id)
-    }
-
     fn gate_next_entity_reconstruction_claim(
         &self,
         agent_id: AgentId,
-    ) -> EntityReconstructionClaimGateHandle {
-        EntityReconstructionClaimGate::install(&self.entity_reconstruction_claim_gates, agent_id)
+    ) -> IndexedExecutionGateHandle {
+        IndexedExecutionGate::install(&self.entity_reconstruction_claim_gates, agent_id)
     }
 
     fn entity_reconstruction_claim_hook(
@@ -6239,7 +6110,6 @@ impl AdditionalTestDeps {
         Some(Arc::new(TestEntityReconstructionClaimHook {
             agent_id,
             gates: self.entity_reconstruction_claim_gates.clone(),
-            supervisor_gates: self.completed_supervisor_gates.clone(),
         })
             as Arc<
                 dyn golem_worker_executor::workerctx::EntityReconstructionClaimHook,
@@ -6538,6 +6408,24 @@ impl AdditionalTestDeps {
             .or_default() += 1;
     }
 
+    fn record_oplog_entries_read(&self, owned_agent_id: &OwnedAgentId, entries: u64) {
+        *self
+            .oplog_entries_read
+            .lock()
+            .unwrap()
+            .entry(owned_agent_id.clone())
+            .or_default() += entries;
+    }
+
+    fn oplog_entries_read(&self, owned_agent_id: &OwnedAgentId) -> u64 {
+        self.oplog_entries_read
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
     fn oplog_call_count(&self, owned_agent_id: &OwnedAgentId, api: &'static str) -> usize {
         self.oplog_call_counts
             .lock()
@@ -6833,33 +6721,29 @@ struct AgentInvocationSuccessGate {
     abort_as_restart: AtomicBool,
 }
 
-struct EntityReconstructionClaimGate {
+struct IndexedExecutionGate {
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<OplogIndex>>>,
     release: tokio::sync::Semaphore,
 }
 
-/// One-shot entity reconstruction gates, keyed by the agent whose next reconstruction they hold.
-type EntityReconstructionClaimGates =
-    Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>;
+/// One-shot execution gates, keyed by the agent whose next indexed boundary they hold.
+type IndexedExecutionGates = Arc<std::sync::Mutex<HashMap<AgentId, Arc<IndexedExecutionGate>>>>;
 
-impl EntityReconstructionClaimGate {
-    fn install(
-        gates: &EntityReconstructionClaimGates,
-        agent_id: AgentId,
-    ) -> EntityReconstructionClaimGateHandle {
+impl IndexedExecutionGate {
+    fn install(gates: &IndexedExecutionGates, agent_id: AgentId) -> IndexedExecutionGateHandle {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let gate = Arc::new(Self {
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
         gates.lock().unwrap().insert(agent_id, gate.clone());
-        EntityReconstructionClaimGateHandle { entered_rx, gate }
+        IndexedExecutionGateHandle { entered_rx, gate }
     }
 
     /// Takes the agent's gate, if one is installed, reports `start_index` to its handle and waits
     /// until the handle releases it.
     async fn enter_and_wait(
-        gates: &EntityReconstructionClaimGates,
+        gates: &IndexedExecutionGates,
         agent_id: &AgentId,
         start_index: OplogIndex,
     ) {
@@ -6871,7 +6755,7 @@ impl EntityReconstructionClaimGate {
             gate.release
                 .acquire()
                 .await
-                .expect("entity reconstruction gate was closed")
+                .expect("indexed execution gate was closed")
                 .forget();
         }
     }
@@ -6905,16 +6789,16 @@ impl Drop for AgentInvocationSuccessGateHandle {
     }
 }
 
-pub struct EntityReconstructionClaimGateHandle {
+pub struct IndexedExecutionGateHandle {
     entered_rx: tokio::sync::oneshot::Receiver<OplogIndex>,
-    gate: Arc<EntityReconstructionClaimGate>,
+    gate: Arc<IndexedExecutionGate>,
 }
 
-impl EntityReconstructionClaimGateHandle {
+impl IndexedExecutionGateHandle {
     pub async fn entered(&mut self) -> OplogIndex {
         (&mut self.entered_rx)
             .await
-            .expect("the entity reconstruction claim gate was dropped without firing")
+            .expect("the indexed execution gate was dropped without firing")
     }
 
     pub fn release(&self) {
@@ -6922,7 +6806,7 @@ impl EntityReconstructionClaimGateHandle {
     }
 }
 
-impl Drop for EntityReconstructionClaimGateHandle {
+impl Drop for IndexedExecutionGateHandle {
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
     }
@@ -7129,8 +7013,7 @@ mod replay_admission_gate_tests {
 
 struct TestEntityReconstructionClaimHook {
     agent_id: AgentId,
-    gates: EntityReconstructionClaimGates,
-    supervisor_gates: EntityReconstructionClaimGates,
+    gates: IndexedExecutionGates,
 }
 
 #[async_trait]
@@ -7138,17 +7021,7 @@ impl golem_worker_executor::workerctx::EntityReconstructionClaimHook
     for TestEntityReconstructionClaimHook
 {
     async fn after_claim(&self, start_index: OplogIndex) {
-        EntityReconstructionClaimGate::enter_and_wait(&self.gates, &self.agent_id, start_index)
-            .await;
-    }
-
-    async fn before_completed_supervisor(&self, start_index: OplogIndex) {
-        EntityReconstructionClaimGate::enter_and_wait(
-            &self.supervisor_gates,
-            &self.agent_id,
-            start_index,
-        )
-        .await;
+        IndexedExecutionGate::enter_and_wait(&self.gates, &self.agent_id, start_index).await;
     }
 }
 
