@@ -427,48 +427,12 @@ impl BridgeSdkTargetKind {
         }
     }
 
-    pub fn supports(self, bridge_mode: BridgeMode, language: GuestLanguage) -> bool {
-        match (self, bridge_mode, language) {
-            (
-                Self::Agent,
-                BridgeMode::External,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            )
-            | (
-                Self::Agent,
-                BridgeMode::Guest,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            )
-            | (
-                Self::Tool,
-                BridgeMode::Guest,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            ) => true,
-            (
-                Self::Tool,
-                BridgeMode::External,
-                GuestLanguage::TypeScript
-                | GuestLanguage::Effect
-                | GuestLanguage::Rust
-                | GuestLanguage::Scala
-                | GuestLanguage::MoonBit,
-            ) => false,
-            // Go generates agent clients in both modes, and guest tool clients.
-            (Self::Agent, _, GuestLanguage::Go)
-            | (Self::Tool, BridgeMode::Guest, GuestLanguage::Go) => true,
-            (Self::Tool, BridgeMode::External, GuestLanguage::Go) => false,
+    /// Every guest language generates agent clients in both modes and guest tool
+    /// clients; no language generates external tool clients.
+    pub fn supports(self, bridge_mode: BridgeMode, _language: GuestLanguage) -> bool {
+        match (self, bridge_mode) {
+            (Self::Agent, _) | (Self::Tool, BridgeMode::Guest) => true,
+            (Self::Tool, BridgeMode::External) => false,
         }
     }
 

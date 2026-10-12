@@ -53,10 +53,41 @@ pub mod build_tool {
 // Go command, so builds never depend on which Go the developer has installed.
 //
 // Bump TAG to adopt a new release; the CLI replaces an installed toolchain
-// whose recorded tag differs.
+// whose recorded tag differs. A bump also replaces ARCHIVES: the CLI verifies a
+// downloaded archive against these hashes before it unpacks it.
 pub mod go_toolchain {
     pub const REPO: &str = "golemcloud/go";
     pub const TAG: &str = "go1.27.1-golem.4";
+
+    /// The bootstrap archive the release publishes for each platform, as Go's
+    /// os and arch, with its sha256 (the release's `.sha256` assets).
+    pub const ARCHIVES: &[(&str, &str, &str)] = &[
+        (
+            "linux",
+            "amd64",
+            "ce4606c4e2999d0325ec503a4e0d4ebd7c9ce64a5c56c5e486a2f599bc7fdd25",
+        ),
+        (
+            "linux",
+            "arm64",
+            "d858db87053150ed80693445dbdf2c092c8eb53c132c3ea285e393b781a1bdbc",
+        ),
+        (
+            "darwin",
+            "amd64",
+            "6209b04a7a1ce12aa1e0c2f777dfc0632fc48357adfeb57983874da6092544ce",
+        ),
+        (
+            "darwin",
+            "arm64",
+            "a4b59a191a216d584d03d3b32cfb2aaf1f00e26976f0a0230611282e2b3c0d9c",
+        ),
+        (
+            "windows",
+            "amd64",
+            "8aef86fdd0b5073307bedf3752b8551b89f932f84f6721f5baa14c9525eed093",
+        ),
+    ];
 }
 
 // Keep this aligned with the Go component template's `tool` directive.

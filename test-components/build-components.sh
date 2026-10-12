@@ -76,7 +76,12 @@ print_groups_json() {
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
   for ((i=1; i<=GO_CHUNKS; i++)); do
-    printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
+    # agent-sdk-go is the first Go app, so the first chunk always builds it.
+    if [ "$i" -eq 1 ]; then
+      printf ',{"name":"go-%d","needs-node":false,"needs-go":true,"expected-artifact":"golem_it_agent_sdk_go.wasm"}' "$i"
+    else
+      printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
+    fi
   done
   printf ',{"name":"benchmarks","needs-node":true,"needs-effect":true,"needs-moonbit":false}]\n'
 }

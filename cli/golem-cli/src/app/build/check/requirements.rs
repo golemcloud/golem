@@ -214,7 +214,8 @@ const GO_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         ),
         severity: ToolRequirementSeverity::Recommended,
     },
-    // Used by the release preset's `wasm-tools strip` step.
+    // Only the release preset's `wasm-tools strip` step uses it; the default
+    // debug preset builds without it.
     ToolRequirement {
         key: "wasm-tools",
         name: "wasm-tools",
@@ -223,8 +224,8 @@ const GO_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             args: &["--version"],
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::WASM_TOOLS_MIN)),
-        install_hint: "Install wasm-tools: https://github.com/bytecodealliance/wasm-tools",
-        severity: ToolRequirementSeverity::Required,
+        install_hint: "Needed by the release preset to strip debug names. Install wasm-tools: https://github.com/bytecodealliance/wasm-tools",
+        severity: ToolRequirementSeverity::Recommended,
     },
 ];
 

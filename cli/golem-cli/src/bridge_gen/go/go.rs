@@ -284,8 +284,6 @@ pub fn lower_first(s: &str) -> String {
     }
 }
 
-/// A Go string literal. Schema names are identifiers, but a quote or a
-/// backslash would still produce source that does not parse.
 /// A struct type of one untagged field, as gofmt writes it: on one line while
 /// the field's type is short (go/printer's `isOneLineFieldList` allows 30
 /// columns for the name and type, counting the name as one), expanded
@@ -298,6 +296,10 @@ pub fn one_field_struct(field: &str, typ: &str) -> String {
     }
 }
 
+/// A Go string literal. Schema names are identifiers, but a quote, a backslash
+/// or a control character would still produce source that does not parse:
+/// gofmt rejects NUL and the byte order mark anywhere in a file, and a raw
+/// newline ends an interpreted string.
 pub fn go_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -308,6 +310,8 @@ pub fn go_string(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
+            '\u{0}'..='\u{1f}' | '\u{7f}' => out.push_str(&format!("\\x{:02x}", ch as u32)),
+            '\u{feff}' => out.push_str("\\ufeff"),
             _ => out.push(ch),
         }
     }
@@ -427,5 +431,17 @@ mod tests {
             unique_idents_with_reserved(vec!["ctx".into()], &["ctx"]),
             vec!["ctx2".to_string()]
         );
+    }
+
+    #[test]
+    fn string_literals_escape_what_go_source_cannot_hold() {
+        assert_eq!(go_string("a\"b\\c"), r#""a\"b\\c""#);
+        assert_eq!(go_string("x\n\t\r"), r#""x\n\t\r""#);
+        assert_eq!(
+            go_string("nul\u{0}bell\u{7}del\u{7f}"),
+            r#""nul\x00bell\x07del\x7f""#
+        );
+        assert_eq!(go_string("\u{feff}bom"), r#""\ufeffbom""#);
+        assert_eq!(go_string("héllo"), "\"héllo\"");
     }
 }

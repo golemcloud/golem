@@ -567,7 +567,9 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
+      # bridge_gen_rust generates and compiles only Rust bridges.
       - name: Setup Go
+        if: matrix.group.shard != 'bridge_gen_rust'
         uses: actions/setup-go@v5
         with:
           # Host Go for `go test`/tooling. Components are built with the Go
@@ -578,6 +580,7 @@ jobs:
             test-components/**/go.sum
 
       - name: Cache componentize-go toolchain
+        if: matrix.group.shard != 'bridge_gen_rust'
         uses: actions/cache@v5
         with:
           # On first `golem build` of a Go component the CLI installs Golem's Go

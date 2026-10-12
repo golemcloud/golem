@@ -89,6 +89,7 @@ serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 semver = { workspace = true }
+sha2 = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
 strum = { workspace = true }
@@ -149,7 +150,6 @@ poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
-sha2 = { workspace = true }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }

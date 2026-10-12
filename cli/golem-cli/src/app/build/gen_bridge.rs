@@ -1908,7 +1908,7 @@ tools:
                 .tool_bridge_sdk_dir("echo", GuestLanguage::Rust),
             rust_config: Default::default(),
         }];
-        for language in tool_guest_languages() {
+        for language in GuestLanguage::iter() {
             collect_tool_manifest_targets_for_entry(
                 &ctx,
                 &[],
@@ -1925,12 +1925,12 @@ tools:
             .unwrap();
         }
         // The local tool once, then an ambient and an imported tool per language.
-        assert_eq!(targets.len(), 1 + 2 * tool_guest_languages().count());
+        assert_eq!(targets.len(), 1 + 2 * GuestLanguage::iter().count());
         assert!(matches!(
             targets[0].source,
             BridgeSdkTargetSource::Local { .. }
         ));
-        for language in tool_guest_languages() {
+        for language in GuestLanguage::iter() {
             let names = targets
                 .iter()
                 .filter(|target| target.target_language == language)
@@ -1951,7 +1951,7 @@ tools:
                     BridgeSdkTargetSource::AmbientNative { .. }
                 ))
                 .count(),
-            tool_guest_languages().count()
+            GuestLanguage::iter().count()
         );
         assert!(
             targets
@@ -2214,7 +2214,7 @@ environments:
 
     #[test]
     async fn mcp_dependencies_require_resolved_metadata_before_consumer_build() {
-        for language in tool_guest_languages() {
+        for language in GuestLanguage::iter() {
             let (application, _dir) = application_from_manifest(&format!(
                 r#"
 app: imported-tools
@@ -2507,14 +2507,6 @@ components:
     #[test]
     fn validate_supported_bridge_targets_accepts_supported_guest_targets() {
         for language in GuestLanguage::iter() {
-            // Only languages whose guest agent and tool bridges are both supported
-            // should validate.
-            if !(BridgeSdkTargetKind::Agent.supports(BridgeMode::Guest, language)
-                && BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, language))
-            {
-                continue;
-            }
-
             let agent_target = bridge_sdk_target_with_mode(
                 "AlphaAgent",
                 language,
@@ -2540,13 +2532,6 @@ components:
         }
     }
 
-    /// The languages that generate guest tool clients, which is what MCP
-    /// imports are consumed through.
-    fn tool_guest_languages() -> impl Iterator<Item = GuestLanguage> {
-        GuestLanguage::iter()
-            .filter(|language| BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, *language))
-    }
-
     #[test]
     fn rust_generator_configuration_is_rejected_for_non_rust_targets() {
         let mut target = bridge_sdk_target(
@@ -2568,10 +2553,9 @@ components:
     fn bridge_sdk_support_matrix_matches_current_capabilities() {
         use GuestLanguage::*;
         let full = [TypeScript, Effect, Rust, Scala, MoonBit, Go];
-        let agents = full;
         let capabilities: [(BridgeSdkTargetKind, BridgeMode, &[GuestLanguage]); 4] = [
-            (BridgeSdkTargetKind::Agent, BridgeMode::External, &agents),
-            (BridgeSdkTargetKind::Agent, BridgeMode::Guest, &agents),
+            (BridgeSdkTargetKind::Agent, BridgeMode::External, &full),
+            (BridgeSdkTargetKind::Agent, BridgeMode::Guest, &full),
             // No language generates external tool clients.
             (BridgeSdkTargetKind::Tool, BridgeMode::External, &[]),
             (BridgeSdkTargetKind::Tool, BridgeMode::Guest, &full),

@@ -1029,7 +1029,8 @@ fn go_options_are_bare_or_nil_and_nested_options_use_some() {
 }
 
 /// The inner option reached through a named definition is recognised on both
-/// sides, so the value round-trips (the TypeScript dialect does not: GOL-774).
+/// sides, so the value round-trips. The TypeScript dialect does not recognise it
+/// there, so the same value does not round-trip in TypeScript syntax.
 #[test]
 fn go_nested_option_behind_a_named_type_round_trips() {
     let inner_id = TypeId::new("maybe-count");

@@ -6,8 +6,7 @@ componentTemplates:
     presets:
       # debug keeps the name/DWARF custom sections for better diagnostics.
       # Dependency resolution (go mod tidy) is NOT a build step: the CLI runs it
-      # automatically before the build, like `npm install` (see
-      # ensure_common_deps_for_tool).
+      # automatically before the build, like `npm install`.
       debug:
         default: true
         build:

@@ -27,6 +27,8 @@ use crate::fs;
 use crate::log::{LogColorize, log_action};
 use crate::model::app::ApplicationConfig;
 use anyhow::{Context, anyhow, bail};
+use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -61,7 +63,7 @@ impl GoToolchain {
 /// Makes the pinned Go toolchain available, downloading it if needed, and
 /// returns where it lives.
 pub async fn ensure_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<GoToolchain> {
-    if let Some(root) = go_toolchain_override()? {
+    if let Some(root) = go_toolchain_override(std::env::var_os(GO_TOOLCHAIN_ENV_VAR))? {
         return Ok(GoToolchain::at(root));
     }
 
@@ -70,22 +72,22 @@ pub async fn ensure_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<G
         return Ok(toolchain);
     }
 
-    if !SUPPORTED_PLATFORMS.contains(&(go_os(), go_arch())) {
+    let Some(expected_sha256) = archive_sha256() else {
         bail!(
             "The Golem Go toolchain ({tag}) has no build for {os}/{arch}; it is published for {supported}.\n\
              Set {env} to a toolchain built from https://github.com/{repo} for this platform.",
             tag = crate::versions::go_toolchain::TAG,
             os = go_os(),
             arch = go_arch(),
-            supported = SUPPORTED_PLATFORMS
+            supported = crate::versions::go_toolchain::ARCHIVES
                 .iter()
-                .map(|(os, arch)| format!("{os}/{arch}"))
+                .map(|(os, arch, _)| format!("{os}/{arch}"))
                 .collect::<Vec<_>>()
                 .join(", "),
             env = GO_TOOLCHAIN_ENV_VAR,
             repo = crate::versions::go_toolchain::REPO,
         );
-    }
+    };
 
     if config.offline {
         bail!(
@@ -114,14 +116,19 @@ pub async fn ensure_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<G
         .to_path_buf();
     fs::create_dir_all(&parent_dir)?;
     let lock = File::create(parent_dir.join("lock"))?;
-    lock.lock()?;
+    // Another process may hold the lock for a whole download; wait for it off
+    // the async workers.
+    let lock = tokio::task::spawn_blocking(move || lock.lock().map(|()| lock))
+        .await
+        .context("Failed to wait for the Go toolchain lock")??;
 
     // Another process may have installed it while we waited for the lock.
     if is_installed(&toolchain) {
         return Ok(toolchain);
     }
 
-    install(&toolchain, &parent_dir).await?;
+    install(&toolchain, &parent_dir, expected_sha256).await?;
+    drop(lock);
 
     Ok(toolchain)
 }
@@ -136,7 +143,11 @@ fn is_installed(toolchain: &GoToolchain) -> bool {
     }
 }
 
-async fn install(toolchain: &GoToolchain, parent_dir: &Path) -> anyhow::Result<()> {
+async fn install(
+    toolchain: &GoToolchain,
+    parent_dir: &Path,
+    expected_sha256: &str,
+) -> anyhow::Result<()> {
     let url = download_url();
 
     log_action(
@@ -162,6 +173,7 @@ async fn install(toolchain: &GoToolchain, parent_dir: &Path) -> anyhow::Result<(
         .bytes()
         .await
         .with_context(|| anyhow!("Failed to download the Golem Go toolchain from {url}"))?;
+    verify_archive(&archive, expected_sha256, &url)?;
 
     let staging_dir = parent_dir.join(format!("{}.incoming", archive_stem()));
     if staging_dir.exists() {
@@ -193,8 +205,26 @@ async fn install(toolchain: &GoToolchain, parent_dir: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-fn go_toolchain_override() -> anyhow::Result<Option<PathBuf>> {
-    let Some(root) = std::env::var_os(GO_TOOLCHAIN_ENV_VAR) else {
+/// Fails unless `archive` hashes to the sha256 pinned for this platform, so a
+/// corrupted download or a replaced release asset is never unpacked and run.
+fn verify_archive(archive: &[u8], expected_sha256: &str, url: &str) -> anyhow::Result<()> {
+    let actual = format!("{:x}", Sha256::digest(archive));
+    if actual != expected_sha256 {
+        bail!(
+            "The Golem Go toolchain downloaded from {url} does not match the checksum this CLI pins \
+             for {tag}: expected sha256 {expected_sha256}, got {actual}. Retry the build; if it \
+             keeps failing, set {env} to a toolchain built from https://github.com/{repo}.",
+            tag = crate::versions::go_toolchain::TAG,
+            env = GO_TOOLCHAIN_ENV_VAR,
+            repo = crate::versions::go_toolchain::REPO,
+        );
+    }
+    Ok(())
+}
+
+/// The toolchain `GOLEM_GO_TOOLCHAIN` points at, given that variable's value.
+fn go_toolchain_override(value: Option<OsString>) -> anyhow::Result<Option<PathBuf>> {
+    let Some(root) = value else {
         return Ok(None);
     };
     let root = PathBuf::from(root);
@@ -221,15 +251,14 @@ fn install_dir() -> anyhow::Result<PathBuf> {
         .join(archive_stem()))
 }
 
-/// The platforms the toolchain fork publishes a bootstrap archive for, in Go's
-/// os/arch naming.
-const SUPPORTED_PLATFORMS: &[(&str, &str)] = &[
-    ("linux", "amd64"),
-    ("linux", "arm64"),
-    ("darwin", "amd64"),
-    ("darwin", "arm64"),
-    ("windows", "amd64"),
-];
+/// The pinned sha256 of this platform's bootstrap archive, or `None` when the
+/// release publishes no archive for this platform.
+fn archive_sha256() -> Option<&'static str> {
+    crate::versions::go_toolchain::ARCHIVES
+        .iter()
+        .find(|(os, arch, _)| *os == go_os() && *arch == go_arch())
+        .map(|(_, _, sha256)| *sha256)
+}
 
 fn download_url() -> String {
     format!(
@@ -339,9 +368,34 @@ mod tests {
     #[test]
     fn override_must_point_at_a_toolchain() {
         let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var(GO_TOOLCHAIN_ENV_VAR, dir.path()) };
-        let error = go_toolchain_override().unwrap_err().to_string();
-        unsafe { std::env::remove_var(GO_TOOLCHAIN_ENV_VAR) };
+        assert!(go_toolchain_override(None).unwrap().is_none());
+        let error = go_toolchain_override(Some(dir.path().as_os_str().to_owned()))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains(GO_TOOLCHAIN_ENV_VAR), "{error}");
+    }
+
+    #[test]
+    fn an_archive_must_match_its_pinned_checksum() {
+        let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        verify_archive(b"", empty, "https://example.test/go.tbz").unwrap();
+        let error = verify_archive(b"tampered", empty, "https://example.test/go.tbz")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not match the checksum"), "{error}");
+        assert!(error.contains(empty), "{error}");
+    }
+
+    #[test]
+    fn every_pinned_archive_has_a_sha256() {
+        for (os, arch, sha256) in crate::versions::go_toolchain::ARCHIVES {
+            assert_eq!(sha256.len(), 64, "{os}/{arch}");
+            assert!(
+                sha256
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                "{os}/{arch}"
+            );
+        }
     }
 }

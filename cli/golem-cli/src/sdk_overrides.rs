@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::edit::go_mod::replace_path_token;
 use crate::fs;
 use crate::versions;
 use anyhow::{Context, anyhow, bail};
@@ -188,10 +189,10 @@ impl SdkOverrides {
     pub fn go_sdk_dep(&self) -> String {
         match &self.go_sdk_path {
             Some(_) => "v0.0.0".to_string(),
-            None => format!(
-                "v{}",
-                self.go_sdk_version.as_deref().unwrap_or(versions::sdk::GO)
-            ),
+            None => {
+                let version = self.go_sdk_version.as_deref().unwrap_or(versions::sdk::GO);
+                format!("v{}", version.strip_prefix('v').unwrap_or(version))
+            }
         }
     }
 
@@ -209,7 +210,8 @@ impl SdkOverrides {
                 // A `replace` in a dependency's go.mod is ignored, so a
                 // component that resolves the SDK from a checkout has to point
                 // at the core module itself as well.
-                let core = Self::go_core_path(path);
+                let core = replace_path_token(&Self::go_core_path(path));
+                let path = replace_path_token(path);
                 format!("\nreplace {GO_SDK_MODULE} => {path}\n\nreplace {GO_CORE_MODULE} => {core}")
             }
             None => String::new(),
@@ -221,8 +223,8 @@ impl SdkOverrides {
     pub fn go_bridge_replace(&self) -> String {
         match &self.go_sdk_path {
             Some(path) => {
-                let bridge = Self::go_sibling_path(path, "bridge");
-                let core = Self::go_core_path(path);
+                let bridge = replace_path_token(&Self::go_sibling_path(path, "bridge"));
+                let core = replace_path_token(&Self::go_core_path(path));
                 format!(
                     "\nreplace {GO_BRIDGE_MODULE} => {bridge}\n\nreplace {GO_CORE_MODULE} => {core}"
                 )
@@ -244,11 +246,15 @@ impl SdkOverrides {
         Self::go_sibling_path(go_sdk_path, "core")
     }
 
+    /// The module directory `module` beside the guest SDK's directory. Both
+    /// separators count, so a Windows path stays a path.
     fn go_sibling_path(go_sdk_path: &str, module: &str) -> String {
-        match go_sdk_path.rsplit_once('/') {
-            Some((parent, _)) => format!("{parent}/{module}"),
-            None => module.to_string(),
-        }
+        let sdk = Path::new(go_sdk_path);
+        let sibling = match sdk.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(module),
+            _ => PathBuf::from(module),
+        };
+        sibling.to_string_lossy().into_owned()
     }
 
     pub fn moonbit_sdk_tools_bin_deps(&self) -> String {
@@ -1042,5 +1048,45 @@ mod tests {
         let file_values =
             SdkOverrides::load_file_values(&child).expect("failed to load file values");
         assert!(!file_values.contains_key(GOLEM_PATH));
+    }
+
+    #[test]
+    fn go_sdk_version_takes_an_optional_v_prefix() {
+        for version in ["0.2.0", "v0.2.0"] {
+            let overrides = SdkOverrides {
+                go_sdk_version: Some(version.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(overrides.go_sdk_dep(), "v0.2.0");
+        }
+    }
+
+    #[test]
+    fn go_replace_directives_quote_paths_with_spaces() {
+        let overrides = SdkOverrides {
+            go_sdk_path: Some("/home/me/my work/sdks/go/golem".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            overrides.go_sdk_replace(),
+            format!(
+                "\nreplace {GO_SDK_MODULE} => \"/home/me/my work/sdks/go/golem\"\n\nreplace {GO_CORE_MODULE} => \"/home/me/my work/sdks/go/core\""
+            )
+        );
+        assert_eq!(
+            overrides.go_bridge_replace(),
+            format!(
+                "\nreplace {GO_BRIDGE_MODULE} => \"/home/me/my work/sdks/go/bridge\"\n\nreplace {GO_CORE_MODULE} => \"/home/me/my work/sdks/go/core\""
+            )
+        );
+    }
+
+    #[test]
+    fn go_sibling_of_a_bare_directory_name_is_the_module_name() {
+        assert_eq!(SdkOverrides::go_sibling_path("golem", "core"), "core");
+        assert_eq!(
+            SdkOverrides::go_sibling_path("/src/sdks/go/golem", "core"),
+            Path::new("/src/sdks/go").join("core").to_string_lossy()
+        );
     }
 }

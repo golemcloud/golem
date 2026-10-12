@@ -28,6 +28,7 @@ use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
+use crate::model::language::GuestLanguage;
 use crate::process::{CommandExt, normalized_program_name, resolve_command_for_execution, which};
 use anyhow::{Context as AnyhowContext, anyhow};
 use camino::Utf8Path;
@@ -41,14 +42,12 @@ pub async fn execute_build_command(
     component_name: &ComponentName,
     command: &app_raw::BuildCommand,
 ) -> anyhow::Result<()> {
-    let base_build_dir = ctx
-        .application()
-        .component(component_name)
-        .component_dir()
-        .to_path_buf();
+    let component = ctx.application().component(component_name);
+    let base_build_dir = component.component_dir().to_path_buf();
+    let go_component = component.guest_language() == Some(GuestLanguage::Go);
     match command {
         app_raw::BuildCommand::External(external_command) => {
-            execute_external_command(ctx, &base_build_dir, external_command).await
+            execute_external_command(ctx, &base_build_dir, external_command, go_component).await
         }
         app_raw::BuildCommand::QuickJSCrate(command) => {
             execute_quickjs_create(ctx, &base_build_dir, command)
@@ -188,7 +187,7 @@ pub async fn execute_custom_command(
         let _indent = LogIndent::new();
 
         for step in &command.value {
-            if let Err(error) = execute_external_command(ctx, &command.source, step).await {
+            if let Err(error) = execute_external_command(ctx, &command.source, step, false).await {
                 return Err(CustomCommandError::CommandError { error });
             }
         }
@@ -208,8 +207,10 @@ pub async fn execute_custom_command(
             let _indent = LogIndent::new();
 
             for step in custom_command {
+                let go_component = component.guest_language() == Some(GuestLanguage::Go);
                 if let Err(error) =
-                    execute_external_command(ctx, component.component_dir(), step).await
+                    execute_external_command(ctx, component.component_dir(), step, go_component)
+                        .await
                 {
                     return Err(CustomCommandError::CommandError { error });
                 }
@@ -321,10 +322,14 @@ fn execute_quickjs_d_ts(
         )
 }
 
+/// Runs one external command. `go_component` says whether it belongs to a Go
+/// component: only then is `go` the managed toolchain and the component's
+/// `go.mod` tidied first; anywhere else `go` is whatever is on `PATH`.
 pub async fn execute_external_command(
     ctx: &BuildContext<'_>,
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
+    go_component: bool,
 ) -> anyhow::Result<()> {
     let app_root_dir = ctx.application().app_root_dir();
 
@@ -405,10 +410,18 @@ pub async fn execute_external_command(
                     return Err(anyhow!("Empty command!"));
                 }
 
-                ensure_common_deps_for_tool(ctx, command_tokens[0].as_str(), &build_dir).await?;
+                ensure_common_deps_for_tool(
+                    ctx,
+                    command_tokens[0].as_str(),
+                    &build_dir,
+                    go_component,
+                )
+                .await?;
 
-                // `go` is the managed toolchain, not whatever is on PATH.
-                let go_toolchain = if normalized_program_name(command_tokens[0].as_str()) == "go" {
+                // In a Go component `go` is the managed toolchain, not whatever is on PATH.
+                let go_toolchain = if go_component
+                    && normalized_program_name(command_tokens[0].as_str()) == "go"
+                {
                     Some(ensure_go_toolchain(ctx.application_config()).await?)
                 } else {
                     None
@@ -467,6 +480,7 @@ pub async fn ensure_common_deps_for_tool(
     ctx: &BuildContext<'_>,
     tool: &str,
     build_dir: &Path,
+    go_component: bool,
 ) -> anyhow::Result<()> {
     let normalized = normalized_program_name(tool);
     match normalized.as_str() {
@@ -511,7 +525,7 @@ pub async fn ensure_common_deps_for_tool(
             // Each Go component is its own module, rooted exactly at build_dir
             // (the componentDir), so there is no ancestor walk like moon needs.
             let go_mod_path = build_dir.join("go.mod");
-            if !go_mod_path.exists() {
+            if !go_component || !go_mod_path.exists() {
                 return Ok(());
             }
 

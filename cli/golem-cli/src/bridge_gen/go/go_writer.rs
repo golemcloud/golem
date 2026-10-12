@@ -22,9 +22,9 @@
 
 use std::collections::BTreeMap;
 
-/// One import: the package path, and the alias it is bound to when the path's
-/// last segment is not the package name, or when two paths would otherwise
-/// bind the same name.
+/// One import: the package path, and the alias an emitter chose for it with
+/// [`GoWriter::import_as`]. The writer does not detect two paths binding the same
+/// name; emitters pick distinct aliases where that can happen.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Import {
     path: String,

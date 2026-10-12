@@ -39,13 +39,34 @@ pub fn reconcile_sdk_dependency(
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
     set_require_version(&mut lines, module, version);
-    set_replace_directive(&mut lines, module, replace_path);
+    let replace_target = replace_path.map(replace_path_token);
+    set_replace_directive(&mut lines, module, replace_target.as_deref());
 
     let mut out = lines.join("\n");
     if !out.ends_with('\n') {
         out.push('\n');
     }
     out
+}
+
+/// A filesystem path as the target of a `replace` directive. Go reads a bare
+/// token up to whitespace or a comment marker, so a path holding a space, a
+/// quote, a comment marker or a control character is written as a Go string
+/// literal, as `modfile.AutoQuote` does.
+pub fn replace_path_token(path: &str) -> String {
+    let must_quote = path.is_empty()
+        || path.contains("//")
+        || path.contains("/*")
+        || path.chars().any(|ch| match ch {
+            ' ' | '"' | '\'' | '`' => true,
+            '(' | ')' | '[' | ']' | '{' | '}' | ',' => path.chars().count() > 1,
+            _ => ch.is_control() || ch.is_whitespace(),
+        });
+    if must_quote {
+        crate::bridge_gen::go::go::go_string(path)
+    } else {
+        path.to_string()
+    }
 }
 
 /// Ensure `replace <module> => <target>` when `target` is `Some`, and remove any
@@ -262,6 +283,24 @@ mod tests {
         let out = reconcile_sdk_dependency(&src, MOD, "v0.0.0", Some("/new/path"));
         assert!(out.contains(&format!("replace {MOD} => /new/path")));
         assert!(!out.contains("/old/path"));
+    }
+
+    #[test]
+    fn quotes_a_replace_path_that_go_would_split() {
+        let src = format!("module app\n\nrequire {MOD} v0.0.0\n");
+        let out = reconcile_sdk_dependency(&src, MOD, "v0.0.0", Some("/home/me/my work/golem"));
+        assert!(out.contains(&format!(r#"replace {MOD} => "/home/me/my work/golem""#)));
+        assert_eq!(
+            reconcile_sdk_dependency(&out, MOD, "v0.0.0", Some("/home/me/my work/golem")),
+            out
+        );
+        assert_eq!(replace_path_token("/plain/path"), "/plain/path");
+        assert_eq!(replace_path_token(r"C:\src\golem"), r"C:\src\golem");
+        assert_eq!(
+            replace_path_token(r"C:\My Files\golem"),
+            r#""C:\\My Files\\golem""#
+        );
+        assert_eq!(replace_path_token("/a//b"), r#""/a//b""#);
     }
 
     #[test]
