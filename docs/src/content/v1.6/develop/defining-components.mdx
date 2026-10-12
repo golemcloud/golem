@@ -1,0 +1,717 @@
+import { Tabs } from "nextra/components"
+
+# Defining Golem Components
+
+## Creating a project
+
+Golem's **command line interface** provides a set of predefined, Golem-specific **templates** to choose from as a starting point.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the TypeScript template:
+
+```shell copy
+golem new --template ts --yes my-app
+cd my-app
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the Effect TypeScript template:
+
+```shell copy
+golem new --template effect --yes my-app
+cd my-app
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the Rust template:
+
+```shell copy
+golem new --template rust --yes my-app
+cd my-app
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the Scala template:
+
+```shell copy
+golem new --template scala --yes my-app
+cd my-app
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the MoonBit template:
+
+```shell copy
+golem new --template moonbit --yes my-app
+cd my-app
+```
+    </Tabs.Tab>
+
+</Tabs>
+
+An application can consist of multiple components. Add a new component by choosing from one of the available templates. To see the list of available templates, run:
+
+```shell copy
+golem templates
+```
+
+Then create a new component using the chosen template:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+```shell copy
+golem new . --template ts --component-name my:component --yes
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```shell copy
+golem new . --template effect --component-name my:component --yes
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```shell copy
+golem new . --template rust --component-name my:component --yes
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```shell copy
+golem new . --template scala --component-name my:component --yes
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```shell copy
+golem new . --template moonbit --component-name my:component --yes
+```
+    </Tabs.Tab>
+</Tabs>
+
+## TypeScript agents, tools, and middleware
+
+TypeScript components use one default guest world for agents, tools, snapshots, and tool middleware. Select the `ts` component template regardless of which of these categories the component exports:
+
+```yaml filename="golem.yaml"
+components:
+    my:middleware:
+        dir: middleware
+        templates: ts
+```
+
+Standalone middleware components remain supported. Import their authoring APIs from the middleware entry point; unused agent and tool discovery returns empty lists:
+
+```typescript
+import {
+    toolDefinition,
+    universalToolMiddleware,
+} from '@golemcloud/golem-ts-sdk/middleware';
+```
+
+The default guest imports `golem:tool/host`; ambient calls remain subject to runtime permission
+checks. Invocation-scoped underlying access still advances the pinned middleware chain.
+
+## Defining agents
+
+Defining Golem agents is done using the Golem SDK, which is included in all the templates provided by `golem`.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+An agent is declared with `defineAgent(...)` and given its behaviour with `.implement(...)`:
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+export const MyAgent = defineAgent({
+    name: 'MyAgent',
+    id: { /* constructor parameters — see below */ },
+    methods: {
+        // ...
+    },
+});
+
+export const MyAgentImpl = MyAgent.implement({
+    init: () => ({ /* initial state */ }),
+    methods: {
+        // ...
+    },
+});
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+An Effect agent is declared with `defineAgent(...)` and registered with `.implement(...)`. Methods return Effects:
+
+```typescript
+import { Effect, Schema } from "effect"
+import { defineAgent, method } from "@golemcloud/effect-golem"
+
+export const MyAgent = defineAgent({
+  name: "MyAgent",
+  id: {},
+  methods: {
+    ping: method({ input: {}, success: Schema.String }),
+  },
+})
+
+MyAgent.implement({
+  init: () => Effect.void,
+  methods: () => ({ ping: () => Effect.succeed("pong") }),
+})
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+An agent is defined by a **trait** annotated as `#[agent_definition]` and a `struct` implementing it, annotated as `#[agent_implementation]`:
+
+```rust
+use golem_rust::{agent_definition, agent_implementation};
+
+#[agent_definition]
+pub trait MyAgent {
+    fn new() -> Self;
+    // ...
+}
+
+struct MyAgentImpl;
+
+#[agent_implementation]
+impl MyAgent for MyAgentImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    // ...
+}
+
+```
+
+    </Tabs.Tab>
+    <Tabs.Tab>
+An agent is defined by a **trait** extending `BaseAgent`, annotated as `@agentDefinition()`, and an implementation class annotated as `@agentImplementation()`:
+
+```scala
+import golem.runtime.annotations.{agentDefinition, agentImplementation}
+import golem.BaseAgent
+
+@agentDefinition()
+trait MyAgent extends BaseAgent {
+  class Id()
+  // ...
+}
+
+@agentImplementation()
+final class MyAgentImpl() extends MyAgent {
+  // ...
+}
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+An agent is defined by a `struct` annotated as `#derive.agent` and a `::new` constructor:
+
+```moonbit
+#derive.agent
+struct MyAgent {
+  name : String
+}
+
+fn MyAgent::new(name : String) -> MyAgent {
+  { name }
+}
+```
+    </Tabs.Tab>
+
+</Tabs>
+
+An agent component must define at least one agent, but can also define multiple ones.
+
+### Agent constructors
+Every agent must define a **constructor** with an arbitrary number of parameters. These parameters form the **agent identifier**. Every possible parameter value combination identifies a particular agent instance.
+
+For example, an agent working on a particular user's particular request could be defined as:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+```typescript
+import { z } from 'zod';
+import { defineAgent } from '@golemcloud/golem-ts-sdk';
+
+export const RequestHandler = defineAgent({
+    name: 'RequestHandler',
+    id: { userId: z.string(), requestId: z.string() },
+    methods: {
+        // ...
+    },
+});
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```typescript
+import { Schema } from "effect"
+import { defineAgent } from "@golemcloud/effect-golem"
+
+export const RequestHandler = defineAgent({
+  name: "RequestHandler",
+  id: { userId: Schema.String, requestId: Schema.String },
+  methods: {
+    // ...
+  },
+})
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```rust
+#[agent_definition]
+pub trait RequestHandler {
+    fn new(user_id: String, request_id: String) -> Self;
+}
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```scala
+@agentDefinition()
+trait RequestHandler extends BaseAgent {
+  class Id(val userId: String, val requestId: String)
+}
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```moonbit
+#derive.agent
+struct RequestHandler {
+  user_id : String
+  request_id : String
+}
+
+fn RequestHandler::new(user_id : String, request_id : String) -> RequestHandler {
+  { user_id, request_id }
+}
+```
+    </Tabs.Tab>
+</Tabs>
+
+The Effect agent shown here is identified by `RequestHandler("user-123", "request-456")`; agent identifiers preserve the declared agent name.
+
+### Agent methods
+
+Every method an agent declares is an **agent method**, which can be called by other remote agents, externally through Golem's invocation API, and can [also be mapped to HTTP APIs](/v1.6/invoke/making-custom-apis).
+
+Agent methods can (and should) be also annotated with the metadata such as `prompt` and `description`
+- `prompt` should provide information for an external AI to understand what needs to be passed to the method as parameters
+- `description` should be a human-readable description of what the method does
+
+This metadata is stored in the Golem component and can be used when exposing the agents through MCP, for example.
+
+The following example shows the use of how to attach these metadata to simple agent methods in different languages
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+```typescript
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+const TaskDetails = z.object({ description: z.string(), priority: z.number() });
+const RequestHandlerStatus = z.object({
+    status: z.enum(['success', 'failure']),
+    summary: z.string(),
+});
+
+export const RequestHandler = defineAgent({
+    name: 'RequestHandler',
+    id: { userId: z.string(), requestId: z.string() },
+    methods: {
+        addDetails: method({
+            input: { details: TaskDetails },
+            returns: RequestHandlerStatus,
+            description:
+                "Adds some more details to the request handler about the task being performed. The result is an update of the current status.",
+            promptHint: "Enter new details about the task",
+        }),
+    },
+});
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```typescript
+import { Schema } from "effect"
+import { defineAgent, method } from "@golemcloud/effect-golem"
+
+const TaskDetails = Schema.Struct({
+  description: Schema.String,
+  priority: Schema.Number,
+})
+const RequestHandlerStatus = Schema.Struct({
+  status: Schema.Literals(["success", "failure"]),
+  summary: Schema.String,
+})
+
+export const RequestHandler = defineAgent({
+  name: "RequestHandler",
+  id: { userId: Schema.String, requestId: Schema.String },
+  methods: {
+    addDetails: method({
+      input: { details: TaskDetails },
+      success: RequestHandlerStatus,
+      description: "Adds details and returns the current status.",
+      promptHint: "Enter new details about the task",
+    }),
+  },
+})
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```rust
+use golem_rust::{Schema, agent_definition, prompt, description};
+
+#[derive(Schema)]
+pub struct TaskDetails {
+    description: String,
+    priority: u8,
+}
+
+#[derive(Schema)]
+pub enum RequestHandlerStatus {
+    Success(String),
+    Failure(String),
+}
+
+#[agent_definition]
+pub trait RequestHandler {
+    async fn new(name: String) -> Self;
+
+    #[prompt("Enter new details about the task")]
+    #[description("Adds some more details to the request handler about the task being performed. The result is an update of the current status.")]
+    async fn add_details(&self, task_details: TaskDetails) -> RequestHandlerStatus;
+}
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```scala
+import golem.runtime.annotations.{agentDefinition, description, prompt}
+import golem.BaseAgent
+import zio.blocks.schema.Schema
+
+import scala.concurrent.Future
+
+final case class TaskDetails(description: String, priority: Int) derives Schema
+final case class RequestHandlerStatus(summary: String, successful: Boolean) derives Schema
+
+@agentDefinition()
+trait RequestHandler extends BaseAgent {
+  class Id(val name: String)
+
+  @prompt("Enter new details about the task")
+  @description("Adds some more details to the request handler about the task being performed. The result is an update of the current status.")
+  def addDetails(details: TaskDetails): Future[RequestHandlerStatus]
+}
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```moonbit
+///|
+#derive.golem_schema
+pub(all) struct TaskDetails {
+  description : String
+  priority : Int
+}
+
+///|
+#derive.golem_schema
+pub(all) struct RequestHandlerStatus {
+  summary : String
+  successful : Bool
+}
+
+///|
+#derive.agent
+struct RequestHandler {
+  name : String
+}
+
+///|
+fn RequestHandler::new(name : String) -> RequestHandler {
+  { name, }
+}
+
+///|
+/// Adds some more details to the request handler about the task being performed. The result is an update of the current status.
+#derive.prompt_hint("Enter new details about the task")
+pub fn RequestHandler::add_details(
+  self : Self,
+  details : TaskDetails,
+) -> RequestHandlerStatus {
+  {
+    summary: "Updated task for " + self.name + ": " + details.description,
+    successful: true,
+  }
+}
+```
+    </Tabs.Tab>
+
+</Tabs>
+
+Agent methods can be both sync or async. Effect TypeScript handlers always return an `Effect`, whether the work represented by that Effect is synchronous or asynchronous.
+
+### Supported data types
+The SDK supports a large variety of data types in agent constructors and agent methods, both in parameter and return type position. Validation timing is SDK-specific; Effect TypeScript validates whether its schemas have an unambiguous Golem representation during registration and discovery.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    In TypeScript, declare constructor parameters, method inputs, and return values using supported runtime schemas, such as Zod schemas. Use `z.object(...)` for records and `z.enum(...)` for string alternatives; TypeScript types are inferred from these schemas.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Effect TypeScript uses Effect `Schema` values for IDs, method inputs, successes, and typed errors. User-defined records use `Schema.Struct`, and variants use schemas such as `Schema.Union`. Ambiguous unions and schemas without a Golem representation are rejected during registration or discovery.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    In Rust, any data type that implements the `golem_rust::agentic::Schema` trait can be used as a constructor parameter or as a parameter or return type of an agent method. For user-defined types, `#[derive(Schema)]` is usually enough to derive the implementation automatically. See the [page about data type mapping](/v1.6/type-mapping) for more details about the supported built-in types.
+
+    Note that parameters must be passed by value to agent methods, not as references (`Schema` is not implemented for `&T`).
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    In Scala, custom types used in constructors, method parameters, and return types need a `zio.blocks.schema.Schema`. This is usually provided with `derives Schema` or `given Schema[T] = Schema.derived`. See the [page about data type mapping](/v1.6/type-mapping) for more details.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    In MoonBit, built-in serializable types such as `String`, `Bool`, numeric types, arrays, options, tuples, and `Bytes` work as expected. For user-defined types used in constructors, method parameters, and return types, add `#derive.golem_schema`. See the [page about data type mapping](/v1.6/type-mapping) for more details.
+    </Tabs.Tab>
+</Tabs>
+
+### Library support
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    See the [JS APIs](/v1.6/js-apis) page for a detailed overview of all the supported Web Platform and Node.js APIs. Most 3rd party libraries can be installed using `npm` and used in the agent code, as long as they only rely on the supported APIs and do not require native addons.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Packages compatible with the template's pinned Effect version can be installed with `npm`. They must rely on Web Platform or supported Node.js APIs and must not require native addons.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Any Rust crate can be added as a dependency if it supports compiling to the `wasm32-wasip2` target.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Any Scala.js-compatible library can be added as a dependency. Use the `%%%` operator in `build.sbt` so sbt resolves the Scala.js variant of the library; JVM-only libraries will not work.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Any MoonBit package can be added as a dependency in `moon.mod.json` and imported from `moon.pkg`, as long as it supports compiling to WASI.
+    </Tabs.Tab>
+</Tabs>
+
+### Agent mode - durable or ephemeral
+By default every agent is **durable**. To define an **ephemeral agent**, override the agent mode in the agent definition:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    ```typescript
+    export const EphemeralAgent = defineAgent({
+      name: 'EphemeralAgent',
+      mode: 'ephemeral',
+      id: { name: z.string() },
+      methods: {
+        // ...
+      },
+    });
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```typescript
+    export const EphemeralAgent = defineAgent({
+      name: "EphemeralAgent",
+      mode: "ephemeral",
+      id: { name: Schema.String },
+      methods: {
+        // ...
+      },
+    })
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```rust
+    #[agent_definition(ephemeral)]
+    trait EphemeralAgent {
+      fn new() -> Self;
+      // ...
+    }  
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```scala
+    @agentDefinition(mode = DurabilityMode.Ephemeral)
+    trait EphemeralAgent extends BaseAgent {
+      class Id()
+      // ...
+    }
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```moonbit
+    ///|
+    #derive.agent("ephemeral")
+    struct EphemeralAgent {
+      value : Int
+    }
+
+    ///|
+    fn EphemeralAgent::new() -> EphemeralAgent {
+      { value: 0 }
+    }
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+## Agent configuration
+
+It is often required to pass _configuration values_ to agents when they are started.
+
+Golem supports two ways of doing this:
+
+1. Defining key-value pairs available as **environment variables**.
+2. Defining dedicated typed configuration values.
+
+### Environment variables
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+Environment variables are accessible through the `node:process` module:
+
+```typescript
+import { env } from "node:process";
+```
+</Tabs.Tab>
+
+<Tabs.Tab>
+Environment variables are available through `node:process`:
+
+```typescript
+import { env } from "node:process"
+```
+</Tabs.Tab>
+
+
+<Tabs.Tab>
+Environment variables are accessible through the `std::env` module:
+```rust
+use std::env;
+let agent_id = env::var("GOLEM_AGENT_ID").unwrap();
+```
+</Tabs.Tab>
+
+
+<Tabs.Tab>
+Environment variables are accessible through `golem.wasi.Environment` in Scala:
+```scala
+import golem.wasi.Environment
+
+val env = Environment.getEnvironment()
+val agentId = env("GOLEM_AGENT_ID")
+```
+</Tabs.Tab>
+
+
+<Tabs.Tab>
+Environment variables are accessible through the `@environment` module:
+```moonbit
+let env = @environment.get_environment()
+```
+</Tabs.Tab>
+
+</Tabs>
+
+Environment variables can be specified when an agent is **explicitly created**, but there are some environment variables that are always set by Golem:
+
+- `GOLEM_AGENT_ID` - the ID of the agent
+- `GOLEM_AGENT_TYPE` - the agent type (first part of the agent ID)
+- `GOLEM_COMPONENT_ID` - the ID of the agent's component
+- `GOLEM_COMPONENT_REVISION` - the revision of the component used for this agent
+
+In addition to these, when using [Agent to Agent communication](/v1.6/develop/rpc), agents created by remote calls **inherit the environment variables of the caller**.
+
+This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of agents.
+
+#### Default environment variables
+It is possible to define default environment values and config key-value pairs for a component using the **app manifest**. These values are automatically set for each agent created from the component, but can be overridden when creating the agent.
+
+To set component level environment variables, use the `env` section of the `golem.yaml`:
+
+```yaml
+components:
+    my:component:
+        env:
+            MY_ENV_VAR: "some value"
+            ANOTHER_ENV_VAR: "another value"
+```
+
+### Per-agent configuration
+
+Configuration resolves from the component template and component first. Agent templates are then applied, followed by agent properties, environment presets, and finally custom presets. Each level can define `env` (environment variables) and `files` (initial filesystem), with later, more specific levels overriding earlier ones according to their merge modes.
+
+#### Agent-level configuration in golem.yaml
+
+```yaml
+agents:
+  InboxAgent:
+    env:
+      OPENAI_API_KEY: "{{ OPENAI_API_KEY }}"
+      MODEL: gpt-4.1-mini
+    files:
+      - sourcePath: ./prompts/inbox-system.md
+        targetPath: /prompts/system.md
+        permissions: read-only
+    config:
+      defaultQueue: general
+      summarizeReplies: true
+
+  EscalationAgent:
+    env:
+      JIRA_BASE_URL: https://acme.atlassian.net
+    files:
+      - sourcePath: ./prompts/escalation-system.md
+        targetPath: /prompts/system.md
+        permissions: read-only
+```
+
+#### Merge modes
+
+By default, child-level environment variables are upserted (added or updated) into parent values. This can be changed with `envMergeMode`:
+
+| Mode | Behavior |
+|------|----------|
+| `upsert` | (default) Add new keys, overwrite existing ones |
+| `replace` | Discard all parent env vars, use only this level's values |
+| `remove` | Remove the listed keys from the parent map |
+
+Similarly, `filesMergeMode` controls how initial files are merged: `append` (default), `prepend`, or `replace`.
+
+#### Presets
+
+Both components and agents support presets that can override configuration per deployment target:
+
+```yaml
+environments:
+  local:
+    default: true
+    server: local
+    componentPresets: local
+  prod:
+    server: cloud
+    componentPresets: cloud
+```

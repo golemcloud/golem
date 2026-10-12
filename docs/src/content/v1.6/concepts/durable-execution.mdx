@@ -1,0 +1,222 @@
+import { Callout, Tabs } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
+
+# Durable execution
+
+Durable execution means that a running program survives failures: if the process or server running it dies, the program continues where it stopped, with the same state, and does not repeat work it already finished. In Golem, every agent is durable by default. You write ordinary code; Golem provides the durability.
+
+Consider an agent loop that makes twelve model calls and runs a tool after each. If the server crashes during step 7, an ordinary process loses everything and starts over, paying for six model calls again and re-running six tools. A Golem agent resumes at step 7.
+
+## The oplog
+
+Golem keeps an append-only log for each agent, called the **oplog**. It records every interaction between the agent's code and the outside world, together with its result: HTTP requests (including model calls), calls to other agents, tool calls, clock reads, random numbers, and the order in which concurrent operations completed. It also records each method invocation the agent receives.
+
+Golem records these at the boundary between the agent's WebAssembly code and the Golem host, so your code needs no annotations, step functions, or activity wrappers. This agent loop calls a model, runs the [tool](/v1.6/concepts/tools) the model asks for, and repeats until the model answers:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+// Excerpt: an agent loop in a method of ReportAgent
+async ask({ question }) {
+  this.messages.push({ role: "user", content: question });
+  for (let step = 0; step < 12; step++) {
+    // Your own function: an HTTP request to a model API
+    const reply = await callModel(this.messages, [echoToolSchema]);
+    this.messages.push(reply.message);
+    if (!reply.toolCall) return reply.message.content;
+
+    // A Golem tool call, through the tool's typed client
+    const output = await echoClient.echo({ value: reply.toolCall.arguments.value });
+    this.messages.push({ role: "tool", content: output });
+  }
+  return "Step limit reached";
+},
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+// Excerpt: an agent loop in a method of ReportAgent (state is a Ref)
+// echoClient = Tool.client(echo); callModel, echoToolSchema and Message are your own application code
+ask: ({ question }) =>
+  Effect.gen(function* () {
+    const push = (message: Message) =>
+      Ref.update(state, (s) => ({ ...s, messages: [...s.messages, message] }));
+    yield* push({ role: "user", content: question });
+    for (let step = 0; step < 12; step++) {
+      // Your own Effect: an HTTP request to a model API
+      const { messages } = yield* Ref.get(state);
+      const reply = yield* callModel(messages, [echoToolSchema]);
+      yield* push(reply.message);
+      if (!reply.toolCall) return reply.message.content;
+
+      // A Golem tool call, through the tool's typed client
+      const output = yield* echoClient({ value: reply.toolCall.arguments.value });
+      yield* push({ role: "tool", content: output });
+    }
+    return "Step limit reached";
+  }).pipe(Effect.orDie),
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+// Excerpt: an agent loop in a method of ReportAgent
+// call_model, echo_tool_schema, Message and Reply are your own application code
+async fn ask(&mut self, question: String) -> String {
+    self.messages.push(Message { role: "user".to_string(), content: question });
+    for _ in 0..12 {
+        // Your own function: an HTTP request to a model API
+        let reply = call_model(&self.messages, &[echo_tool_schema()]).await;
+        self.messages.push(reply.message.clone());
+        let Some(tool_call) = reply.tool_call else { return reply.message.content };
+
+        // A Golem tool call, through the tool's typed client
+        let output = EchoClient::default().echo(tool_call.arguments.value).await.unwrap();
+        self.messages.push(Message { role: "tool".to_string(), content: output });
+    }
+    "Step limit reached".to_string()
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+// Excerpt: an agent loop in a method of ReportAgentImpl (private var messages: List[Message])
+// callModel, echoToolSchema, Message and Reply are your own application code
+override def ask(question: String): Future[String] = {
+  messages :+= Message("user", question)
+  def loop(step: Int): Future[String] =
+    if (step == 12) Future.successful("Step limit reached")
+    else
+      // Your own function: an HTTP request to a model API
+      callModel(messages, List(echoToolSchema)).flatMap { reply =>
+        messages :+= reply.message
+        reply.toolCall match {
+          case None => Future.successful(reply.message.content)
+          case Some(call) =>
+            // A Golem tool call, through the tool's typed client
+            EchoClient().echo(call.arguments.value).flatMap {
+              case Right(output) =>
+                messages :+= Message("tool", output)
+                loop(step + 1)
+              case Left(error) => Future.failed(new IllegalStateException(error.toString))
+            }
+        }
+      }
+  loop(0)
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+// Excerpt: an agent loop in a method of ReportAgent (field messages : Array[Message])
+// call_model, echo_tool_schema, Message and Reply are your own application code
+pub async fn ReportAgent::ask(self : Self, question : String) -> String {
+  self.messages.push({ role: "user", content: question })
+  let echo = EchoClient::new()
+  defer echo.drop()
+  for _ in 0..<12 {
+    // Your own function: an HTTP request to a model API
+    let reply = call_model(self.messages, [echo_tool_schema])
+    self.messages.push(reply.message)
+    guard reply.tool_call is Some(call) else { return reply.message.content }
+
+    // A Golem tool call, through the tool's typed client
+    let output = echo.echo(call.value).unwrap()
+    self.messages.push({ role: "tool", content: output })
+  }
+  "Step limit reached"
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+// Excerpt: an agent loop in the ask handler of ReportAgent (state has messages []Message)
+// callModel, echoToolSchema, Message and ToolSchema are your own application code
+agent.Handle(report.Ask, func(ctx *golem.Context[state], in report.AskIn) string {
+	ctx.State.messages = append(ctx.State.messages, Message{Role: "user", Content: in.Question})
+	for step := 0; step < 12; step++ {
+		// Your own function: an HTTP request to a model API
+		reply := callModel(ctx.State.messages, []ToolSchema{echoToolSchema})
+		ctx.State.messages = append(ctx.State.messages, reply.Message)
+		if reply.ToolCall == nil {
+			return reply.Message.Content
+		}
+
+		// A Golem tool call, through the tool's typed client
+		output := golem.Must(EchoBody.Call(func(a *EchoArgs) { a.Value = reply.ToolCall.Arguments.Value }))
+		ctx.State.messages = append(ctx.State.messages, Message{Role: "tool", Content: output})
+	}
+	return "Step limit reached"
+})
+```
+  </Tabs.Tab>
+</Tabs>
+
+Every model response and every tool result goes into the oplog. If the server fails during the third model call, recovery re-runs the loop: the first two model calls and the tool calls between them return their recorded results, `this.messages` is rebuilt along the way, the third request is sent again, and the loop continues.
+
+<ThemedImage
+  lightSrc="/images/getting-started/agent-loop-recovery-light.webp"
+  darkSrc="/images/getting-started/agent-loop-recovery-dark.webp"
+  alt={`Oplog of ReportAgent("acme", "q3"): entry 31 starts ask("summarize Q3"); entries 32 to 35 record two model calls, each answering with a call to the echo tool, and the two tool results; entry 36 is a third model call in flight. The server crashes. Recovery on any server: a fresh instance re-runs ask(); entries 32 to 35 return their recorded responses and results and nothing is sent again; model call 3 is sent again; the loop continues with its messages rebuilt, and the caller gets one answer.`}
+  caption="An agent loop recovers mid-run: completed model calls and tool calls come from the oplog, and only the in-flight call is sent again."
+  width={1536}
+  height={1024}
+/>
+
+## Recovery
+
+When an agent's process is lost, Golem starts a fresh instance of the agent's code, on the same server or another one, and re-runs it against the oplog:
+
+- Each interaction already recorded in the oplog returns its recorded result instead of being performed again. The model is not called a second time, and the reviewer agent is not asked again.
+- Ordinary computation and local file operations run again, which rebuilds the agent's variables, call stack, and files exactly as they were.
+- When the replay reaches the end of the log, the agent continues live from where it stopped.
+
+The same mechanism handles a crash, a server restart, an agent moving to another server, and an idle agent being unloaded from memory and loaded again later.
+
+The following example shows recovery in the middle of a method. `OrderAgent("order-42")` charges a payment over HTTP and then asks `InventoryAgent` to reserve stock. The server crashes while the reservation call is in progress.
+
+<ThemedImage
+  lightSrc="/images/getting-started/crash-recovery-light.webp"
+  darkSrc="/images/getting-started/crash-recovery-dark.webp"
+  alt={`Oplog of OrderAgent("order-42"): entries 20 to 24 record acceptance with idempotency key K, invocation start, an HTTP POST to /charge with an idempotency-key header, its 200 response, and a call to InventoryAgent.reserve. The node crashes. Recovery starts a new instance, answers the HTTP call at entry 22 from the oplog without sending a request, and re-sends the call at entry 24 with the same key, so InventoryAgent returns its recorded result. Entries 25 and 26 record the reservation result and the finished invocation; the caller gets one answer.`}
+  caption="Recovery reuses completed results from the oplog and finishes the in-flight call under the same key."
+  width={1536}
+  height={1024}
+/>
+
+During recovery, the payment response comes from the oplog, so the customer is not charged again. The reservation call is sent again with the same idempotency key, and `InventoryAgent`, which had already processed it, returns its recorded result instead of reserving twice.
+
+## Execution guarantees
+
+| Operation | Guarantee |
+|---|---|
+| Method invocation | Executes exactly once per idempotency key. Repeating a call with the same key returns the recorded result. |
+| Call to another agent | Agent-to-agent calls execute exactly once. Retries and recovery reuse the same key, and the target runs the call once. |
+| [Golem tool](/v1.6/concepts/tools) call | Every tool call executes exactly once. A call interrupted by a failure is completed as the same call, not started again. |
+| Model call | Completed model calls are recovered from the oplog rather than requested again. A model call still in flight during a failure is sent again, like any HTTP request. |
+| Outgoing HTTP request, from an agent or a tool | A request that completed is answered from the oplog. A request in flight during a failure is sent again with the same `idempotency-key` header, which Golem adds automatically. |
+| Your own code | Re-runs during recovery to rebuild memory and files, using recorded results for clocks, random numbers, and all external interactions. |
+
+These guarantees have two scopes. A call between agents, or from an agent to a Golem tool, executes exactly once, including everything it does inside Golem: its computation, its files, and its own calls to agents and tools. An HTTP request that an agent or a tool sends to a service outside Golem is a separate operation with its own row in the table above.
+
+Golem's control ends at the network boundary. When a request was in flight during a failure, Golem cannot know whether the remote service received it, so it sends the request again with the same idempotency key. Services that honor the `idempotency-key` header process it once.
+
+## Retries
+
+Golem retries transient failures automatically, such as network errors and interrupted executions. Retry policies can be configured per environment in `golem.yaml`, changed at runtime with the CLI, or applied to a block of code. Permanent errors and permission failures are not retried. Recovery does not fix bugs: code that fails the same way every time fails again.
+
+## Snapshots, updates, and transactions
+
+- **Snapshots** are optional. Without them, recovery replays the agent's history from the beginning: recorded results are reused rather than performed again, but the agent's own code runs again. For agents with long histories, an agent type can save snapshots of its state, and recovery then loads the latest snapshot and replays only the entries after it. The oplog remains the source of truth.
+- **Updates** move existing agents to new code. Golem replays the agent's history against the new code and keeps the agent on the old version if they disagree. This is the one place where code must agree with recorded history; within one version, Golem records every nondeterministic input, so you follow no determinism rules. See [Agent lifecycle](/v1.6/concepts/agent-lifecycle).
+- **Transactions** group several operations. An atomic block re-runs as a whole if interrupted. For business-level rollback, sagas run compensating actions in reverse order.
+
+## Next
+
+[Tools](/v1.6/concepts/tools): how agents run shell commands, compilers, and other tools inside Golem.
+
+Related guides:
+
+- [Durability controls](/v1.6/develop/durability)
+- [Retries](/v1.6/develop/retries)
+- [Snapshotting](/v1.6/develop/snapshotting)
+- [Transactions](/v1.6/develop/transactions)

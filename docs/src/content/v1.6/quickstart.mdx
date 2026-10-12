@@ -1,0 +1,519 @@
+import { Callout, Cards, Tabs } from "nextra/components"
+import { ArtifactLink } from "@/components/releaselink"
+import { NEXT_RELEASE_VERSION } from "@/lib/releases"
+import { ThemedImage } from "@/components/themed-image"
+
+# Quickstart
+
+In this quickstart you run Golem on your machine, deploy a small counter agent, and call it four times. Between calls you crash the agent and restart the whole server. The counter still returns 1, 2, 3, 4, because Golem keeps the agent's state without any database or save call in your code.
+
+It takes about ten minutes once the prerequisites are installed.
+
+<ThemedImage
+  lightSrc="/images/getting-started/quickstart-flow-light.webp"
+  darkSrc="/images/getting-started/quickstart-flow-dark.webp"
+  alt={`Four increment calls to CounterAgent("my-counter") on a timeline return 1, 2, 3, and 4. A simulated crash happens between the second and third calls, and a server restart between the third and fourth. One oplog keeps the same history across the crash and the restart.`}
+  caption="The counter keeps counting across a crash and a server restart."
+  width={1536}
+  height={1024}
+/>
+
+## Before you start
+
+### Install the `golem` binary
+
+The `golem` binary contains the command-line interface and a complete Golem server that runs locally. Download the binary for your platform:
+
+| Platform | Binary |
+| -------- | ------ |
+| macOS ARM64 | <ArtifactLink artifact="golem" platform="mac-arm64" version={NEXT_RELEASE_VERSION} /> |
+| macOS x86_64 | <ArtifactLink artifact="golem" platform="mac-x64" version={NEXT_RELEASE_VERSION} /> |
+| Linux ARM64 | <ArtifactLink artifact="golem" platform="linux-arm64" version={NEXT_RELEASE_VERSION} /> |
+| Linux x86_64 | <ArtifactLink artifact="golem" platform="linux-x64" version={NEXT_RELEASE_VERSION} /> |
+| Windows x86_64 | <ArtifactLink artifact="golem" platform="windows-x64" version={NEXT_RELEASE_VERSION} /> |
+
+Rename the downloaded file to `golem`, make it executable (`chmod +x golem` on macOS and Linux), and move it to a directory on your `PATH`. Some systems block downloaded binaries until you allow them in the system settings. Check the installation:
+
+```shell copy
+golem --version
+```
+
+On Windows, use WSL (Windows Subsystem for Linux) and follow the Linux instructions. Native Windows binaries are available to try, but Windows is not fully supported and operation is not guaranteed.
+
+A lighter `golem-cli` binary without the local server exists for working against a remote Golem deployment; see the [CLI reference](/v1.6/cli).
+
+### Install the toolchain for your language
+
+`golem build` compiles agents with the language's own toolchain. TypeScript and Effect need **Node.js 24.11 or newer** and **npm 11.6.2 or newer**. For Rust, Scala, MoonBit, and Go, install the toolchain listed on the [Setup](/v1.6/develop/setup) page.
+
+## Start Golem locally
+
+This walkthrough uses two terminals. **Terminal 1** runs the server; **Terminal 2** runs every other command.
+
+In **Terminal 1**, from any directory:
+
+```shell copy
+golem server run
+```
+
+The first start downloads and provisions Golem's built-in plugins and tools, so it takes longer than later starts. Leave the server running.
+
+## Create and deploy a counter
+
+In **Terminal 2**, generate an application named `agent-examples` from your language's default template. The default template defines a counter agent type with an `increment` method, so there is no code to write.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```shell copy
+golem new --template ts --yes agent-examples
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```shell copy
+golem new --template effect --yes agent-examples
+```
+
+The Effect template names its agent type `Counter`, not `CounterAgent`.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```shell copy
+golem new --template rust --yes agent-examples
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```shell copy
+golem new --template scala --yes agent-examples
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```shell copy
+golem new --template moonbit --yes agent-examples
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```shell copy
+golem new --template go --yes agent-examples
+```
+
+`golem build` installs the Golem Go toolchain on first use. Go builds also require `wasm-tools`.
+  </Tabs.Tab>
+</Tabs>
+
+The generated agent is ordinary code. Its state is a field, and `increment` changes it:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+// src/counter-agent.ts (excerpt)
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  id: { name: z.string() },
+  methods: {
+    increment: method({ input: {}, returns: z.number() }),
+  },
+});
+
+export const CounterAgentImpl = CounterAgent.implement({
+  init: () => ({ count: 0 }),
+  methods: {
+    increment() {
+      this.count += 1;
+      return this.count;
+    },
+  },
+});
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+// src/counter-agent.ts (excerpt)
+export const Counter = defineAgent({
+  name: "Counter",
+  mode: "durable",
+  id: { name: Schema.String },
+  methods: {
+    increment: method({
+      input: {},
+      success: Schema.Number,
+      description: "Increments the counter and returns the new value",
+    }),
+  },
+}).implement<Ref.Ref<{ count: number }>>({
+  init: () => Ref.make({ count: 0 }),
+  methods: (state) => ({
+    increment: () =>
+      Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
+        Effect.map(({ count }) => count),
+      ),
+  }),
+});
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+// src/counter_agent.rs (excerpt)
+#[agent_definition]
+pub trait CounterAgent {
+    fn new(name: String) -> Self;
+
+    fn increment(&mut self) -> u32;
+}
+
+struct CounterImpl {
+    _name: String,
+    count: u32,
+}
+
+#[agent_implementation]
+impl CounterAgent for CounterImpl {
+    fn new(name: String) -> Self {
+        Self {
+            _name: name,
+            count: 0,
+        }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+// src/main/scala/component_name/CounterAgent.scala (excerpt)
+@agentDefinition()
+trait CounterAgent extends BaseAgent {
+
+  class Id(val name: String)
+
+  @prompt("Increase the count by one")
+  @description("Increases the count by one and returns the new value")
+  def increment(): Future[Int]
+}
+
+// src/main/scala/component_name/CounterAgentImpl.scala (excerpt)
+@agentImplementation()
+final class CounterAgentImpl(@unused private val name: String) extends CounterAgent {
+  private var count: Int = 0
+
+  override def increment(): Future[Int] =
+    Future.successful {
+      count += 1
+      count
+    }
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+// <component>/counter.mbt (excerpt)
+#derive.agent
+struct CounterAgent {
+  name : String
+  mut value : UInt64
+}
+
+fn CounterAgent::new(name : String) -> CounterAgent {
+  { name, value: 0 }
+}
+
+pub fn CounterAgent::increment(self : Self) -> UInt64 {
+  self.value += 1
+  self.value
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+// agents/counter/counter.go (excerpt)
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name:        "CounterAgent",
+	Description: "A simple durable counter",
+})
+
+var (
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
+)
+
+// agents/counter/impl/impl.go (excerpt)
+type state struct{ value int64 }
+
+var agent = counter.Agent.Implement(func(counter.ID) *state { return &state{} })
+
+func init() {
+	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		ctx.State.value++
+		return ctx.State.value
+	})
+}
+```
+  </Tabs.Tab>
+</Tabs>
+
+The project also contains an `AGENTS.md` file and skill files with Golem-specific instructions for AI coding tools. `golem templates` lists every available template. Build the application and deploy it to the local server:
+
+```shell copy
+cd agent-examples
+golem build
+golem deploy --yes
+```
+
+`--yes` confirms the deployment plan that `golem deploy` prints. Deploying makes the agent type available; it does not start any agent.
+
+Keep Terminal 2 in the `agent-examples` directory for the remaining commands.
+
+## Call the same agent twice
+
+An agent is addressed by its agent type and its constructor parameters. `CounterAgent("my-counter")` names one agent; Golem creates it on the first call. In **Terminal 2**, from the `agent-examples` directory:
+
+```shell copy
+golem agent invoke 'CounterAgent("my-counter")' increment
+golem agent invoke 'CounterAgent("my-counter")' increment
+```
+
+<Callout type="info">
+  **Effect:** write `'Counter("my-counter")'` wherever this page writes `'CounterAgent("my-counter")'`.
+</Callout>
+
+Each command ends with the method's result. The first call prints `1` and the second prints `2`. Excerpt of the second call's output (the label names the component's language):
+
+```text
+Invocation result in TypeScript syntax:
+2
+```
+
+A different name, such as `CounterAgent("other")`, addresses a different agent with its own count starting at zero.
+
+## Crash the agent
+
+Simulate a crash, then call the agent again without redeploying:
+
+```shell copy
+golem agent simulate-crash 'CounterAgent("my-counter")'
+golem agent invoke 'CounterAgent("my-counter")' increment
+```
+
+The invocation prints `3`. The crash discarded the agent's running instance and its memory. Golem started a fresh instance and rebuilt the agent's state from its oplog, the durable record of what the agent has done.
+
+## Restart the server
+
+In **Terminal 1**, stop the server with `Ctrl+C`, then start it again without `--clean`:
+
+```shell copy
+golem server run
+```
+
+`golem server run --clean` deletes all local server data, including every agent and oplog, and would reset the counter.
+
+When the server is running again, call the agent from **Terminal 2**:
+
+```shell copy
+golem agent invoke 'CounterAgent("my-counter")' increment
+```
+
+The invocation prints `4`.
+
+Optionally, in **Terminal 2**, inspect the agent's recorded invocations:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")'
+```
+
+## What the counter showed
+
+| Property | What it shows |
+| -------- | ------------- |
+| Identity | `CounterAgent("my-counter")` reached the same agent on every call. Its type and constructor parameters are its address. |
+| Ordinary state | The count is an ordinary field. The code has no save call or database write. |
+| Recovery | After the crash, Golem rebuilt the state from the oplog, with no redeploy or manual restore. |
+| Persistent local server data | The local server keeps components, agents, and oplogs in a `golem` directory under the platform's local data directory, so state survives a restart without `--clean`. |
+
+## Recover a method in the middle of its work
+
+The counter's state survived between calls. This second example shows Golem recovering a method that is still running. A `WorkflowAgent` starts a workflow, asks a `HumanAgent` for approval, and then waits inside its `start` method until the human decides. You restart the server while it waits, approve the workflow afterwards, and the method continues from the line where it stopped.
+
+The example uses the `human-in-the-loop` template. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+// src/workflow-agent.ts (excerpt)
+async start({ approver }) {
+  const approvalPromiseId = createPromise();
+
+  await HumanAgent.client.get({ username: approver }).requestApproval({
+    workflowId: this.workflowId,
+    promiseId: encodePromiseId(approvalPromiseId),
+  });
+
+  // The agent is suspended here until the promise is completed.
+  const decision = new TextDecoder().decode(await awaitPromise(approvalPromiseId));
+
+  return decision === "approved"
+    ? `Workflow ${this.workflowId} was approved`
+    : `Workflow ${this.workflowId} was rejected`;
+},
+```
+
+```shell copy
+cd ..
+golem new --template ts/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' listPendingApprovals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+```text
+Invocation result in TypeScript syntax:
+["<workflow-id>"]
+...
+  Status:                   Suspended
+```
+
+In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+```text
+Invocation result in TypeScript syntax:
+"Workflow <workflow-id> was approved"
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+The Effect SDK has no `human-in-the-loop` template yet. The TypeScript tab runs the same example, with the same commands.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+// src/workflow_agent.rs (excerpt)
+async fn start(&mut self) -> String {
+    let approval_promise_id = create_promise();
+
+    let mut approver = HumanAgentClient::get("bob".to_string());
+    approver
+        .request_approval(self.id.clone(), approval_promise_id.clone())
+        .await;
+
+    // The agent is suspended here until the promise is completed.
+    let result: Decision = await_promise_json(&approval_promise_id)
+        .await
+        .expect("Invalid promise payload");
+
+    if result == Decision::Approved {
+        format!("Workflow {} was approved ✅", self.id)
+    } else {
+        format!("Workflow {} was rejected ❌", self.id)
+    }
+}
+```
+
+In the Rust template, `WorkflowAgent` is a phantom agent without constructor parameters, and `start` always asks the human agent `"bob"`. Give the workflow an ID of your own choice in square brackets, as below, so every command reaches the same agent.
+
+```shell copy
+cd ..
+golem new --template rust/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
+golem agent invoke 'HumanAgent("bob")' list_pending_approvals
+golem agent get 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]'
+```
+
+```text
+Invocation result in Rust syntax:
+["<workflow-id>"]
+...
+  Status:                   Suspended
+```
+
+In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
+
+```shell copy
+golem agent invoke 'HumanAgent("bob")' decide_approval '"<workflow-id>"' 'Approved'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
+```
+
+```text
+Invocation result in Rust syntax:
+"Workflow <workflow-id> was approved ✅"
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+The Scala `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+  </Tabs.Tab>
+  <Tabs.Tab>
+The MoonBit `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+// agents/workflow/impl/impl.go (excerpt)
+agent.Handle(workflow.Start, func(ctx *golem.Context[state], in workflow.StartIn) string {
+	approval := golem.NewPromise[string]()
+
+	approver := human.Agent.Get(human.ID{Username: in.Approver})
+	human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
+		WorkflowId: ctx.State.workflowID,
+		PromiseId:  approval.ID(),
+	})
+
+	// The agent is suspended here until the promise is completed.
+	decision := approval.MustAwait()
+
+	if decision == "approved" {
+		return fmt.Sprintf("Workflow %s was approved", ctx.State.workflowID)
+	}
+	return fmt.Sprintf("Workflow %s was rejected", ctx.State.workflowID)
+})
+```
+
+```shell copy
+cd ..
+golem new --template go/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' listPendingApprovals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+```text
+Invocation result in Go syntax:
+["<workflow-id>"]
+...
+  Status:                   Suspended
+```
+
+In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+```text
+Invocation result in Go syntax:
+"Workflow <workflow-id> was approved"
+```
+  </Tabs.Tab>
+</Tabs>
+
+The approval completed the promise that `start` was waiting on, and the method continued on a server that did not exist when it started. Repeating the invocation with the same idempotency key returned the recorded result instead of starting a second workflow, because a method invocation executes exactly once per idempotency key. [Durable execution](/v1.6/concepts/durable-execution) explains how recovery works, and [Agent communication](/v1.6/concepts/communication) covers promises and waiting.
+
+## Next
+
+<Cards num={3}>
+  <Cards.Card title="How recovery works: Durable execution" href="/v1.6/concepts/durable-execution" />
+  <Cards.Card title="Concepts: Agents" href="/v1.6/concepts/agents" />
+  <Cards.Card title="Build your own agents: Develop" href="/v1.6/develop" />
+</Cards>
