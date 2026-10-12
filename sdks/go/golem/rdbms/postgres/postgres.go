@@ -93,8 +93,10 @@ func pgError(e pg.Error) error {
 		return &Error{Kind: QueryExecutionFailure, Message: e.QueryExecutionFailure()}
 	case pg.ErrorQueryResponseFailure:
 		return &Error{Kind: QueryResponseFailure, Message: e.QueryResponseFailure()}
-	default:
+	case pg.ErrorOther:
 		return &Error{Kind: Other, Message: e.Other()}
+	default:
+		panic(fmt.Sprintf("golem/rdbms/postgres: unhandled error case %d", e.Tag()))
 	}
 }
 
@@ -114,6 +116,15 @@ type DbValue struct {
 }
 
 func flat(v pg.DbValue) DbValue { return DbValue{raw: v} }
+
+// checked builds a parameter from a value that Validate accepts, or one that
+// fails with its error when the query runs.
+func checked(err error, build func() pg.DbValue) DbValue {
+	if err != nil {
+		return DbValue{encode: func() (pg.DbValue, error) { return pg.DbValue{}, err }}
+	}
+	return flat(build())
+}
 
 // tagName gives a db-value family its display name (used in error text — never by
 // encode/decode). It switches on the generated constants, not on the raw tag
@@ -283,34 +294,44 @@ func Macaddr(m rdbms.MacAddr) DbValue { return flat(pg.MakeDbValueMacaddr(macToW
 
 // Interval builds an interval parameter.
 func Interval(iv rdbms.Interval) DbValue {
-	return flat(pg.MakeDbValueInterval(pg.Interval{
-		Months: int32(iv.Months), Days: int32(iv.Days), Microseconds: iv.Microseconds,
-	}))
+	return checked(iv.Validate(), func() pg.DbValue {
+		return pg.MakeDbValueInterval(pg.Interval{
+			Months: int32(iv.Months), Days: int32(iv.Days), Microseconds: iv.Microseconds,
+		})
+	})
 }
 
 // Date builds a date parameter.
 func Date(d rdbms.Date) DbValue {
-	return flat(pg.MakeDbValueDate(pg.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)}))
+	return checked(d.Validate(), func() pg.DbValue {
+		return pg.MakeDbValueDate(pg.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)})
+	})
 }
 
 // Time builds a time-of-day parameter.
-func Time(t rdbms.Time) DbValue { return flat(pg.MakeDbValueTime(typesTimeToWit(t))) }
+func Time(t rdbms.Time) DbValue {
+	return checked(t.Validate(), func() pg.DbValue { return pg.MakeDbValueTime(typesTimeToWit(t)) })
+}
 
 // Timetz builds a time-of-day-with-offset parameter.
 func Timetz(t rdbms.Timetz) DbValue {
-	return flat(pg.MakeDbValueTimetz(pg.Timetz{Time: typesTimeToWit(t.Time), Offset: int32(t.OffsetSeconds)}))
+	return checked(t.Validate(), func() pg.DbValue {
+		return pg.MakeDbValueTimetz(pg.Timetz{Time: typesTimeToWit(t.Time), Offset: int32(t.OffsetSeconds)})
+	})
 }
 
 // Timestamp builds a timestamp (no time zone) parameter.
 func Timestamp(ts rdbms.Timestamp) DbValue {
-	return flat(pg.MakeDbValueTimestamp(typesTimestampToWit(ts)))
+	return checked(ts.Validate(), func() pg.DbValue { return pg.MakeDbValueTimestamp(typesTimestampToWit(ts)) })
 }
 
 // Timestamptz builds a timestamp-with-time-zone parameter.
 func Timestamptz(ts rdbms.Timestamptz) DbValue {
-	return flat(pg.MakeDbValueTimestamptz(pg.Timestamptz{
-		Timestamp: typesTimestampToWit(ts.Timestamp), Offset: int32(ts.OffsetSeconds),
-	}))
+	return checked(ts.Validate(), func() pg.DbValue {
+		return pg.MakeDbValueTimestamptz(pg.Timestamptz{
+			Timestamp: typesTimestampToWit(ts.Timestamp), Offset: int32(ts.OffsetSeconds),
+		})
+	})
 }
 
 // Vector builds a pgvector vector parameter.
@@ -588,8 +609,7 @@ func decodeLazy(v pg.DbValue) any {
 		rg := v.Range()
 		return RangeValue{Name: rg.Name, Start: valueBoundFromWit(rg.Value.Start), End: valueBoundFromWit(rg.Value.End)}
 	default:
-		// A newly appended WIT family we do not decode yet.
-		return fmt.Sprintf("unsupported(%s)", tagName(v.Tag()))
+		panic(fmt.Sprintf("golem/rdbms/postgres: unhandled value case %s", tagName(v.Tag())))
 	}
 }
 
@@ -1004,7 +1024,38 @@ func convColumns(cols []pg.DbColumn) []Column {
 }
 
 // Row is a single result row, read positionally.
-type Row struct{ values []pg.DbValue }
+type Row struct {
+	values []pg.DbValue
+	// lazy holds the decoded recursive columns. Decoding one reads and drops
+	// its host-backed children, so a second read must reuse the first result.
+	lazy *lazyColumns
+}
+
+type lazyColumns struct{ decoded map[int]any }
+
+func newRow(values []pg.DbValue) Row {
+	return Row{values: values, lazy: &lazyColumns{decoded: map[int]any{}}}
+}
+
+// decodeLazyValue decodes a recursive value. The component build binds it to
+// decodeLazy, which reaches host-backed children; a native build has none.
+var decodeLazyValue = func(pg.DbValue) any {
+	panic("golem/rdbms/postgres: recursive values are only available inside a component")
+}
+
+// lazyColumn decodes the recursive column i once and returns the same value on
+// every later read.
+func (r Row) lazyColumn(i int, v pg.DbValue) any {
+	if r.lazy == nil {
+		return decodeLazyValue(v)
+	}
+	if x, ok := r.lazy.decoded[i]; ok {
+		return x
+	}
+	x := decodeLazyValue(v)
+	r.lazy.decoded[i] = x
+	return x
+}
 
 // Len returns the number of columns in the row.
 func (r Row) Len() int { return len(r.values) }
@@ -1035,7 +1086,10 @@ func (r Row) Get(i int) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decode(v), nil
+	if x, ok := decodeFlat(v); ok {
+		return x, nil
+	}
+	return r.lazyColumn(i, v), nil
 }
 
 // Int64 reads an integer column (any integer width, money or oid) as int64.
@@ -1274,7 +1328,7 @@ func (r Row) Array(i int) ([]any, error) {
 	if v.Tag() != pg.DbValueArray {
 		return nil, typeErr(i, v, "array")
 	}
-	return decodeLazy(v).([]any), nil
+	return r.lazyColumn(i, v).([]any), nil
 }
 
 // Composite reads a composite column.
@@ -1286,7 +1340,7 @@ func (r Row) Composite(i int) (CompositeValue, error) {
 	if v.Tag() != pg.DbValueComposite {
 		return CompositeValue{}, typeErr(i, v, "composite")
 	}
-	return decodeLazy(v).(CompositeValue), nil
+	return r.lazyColumn(i, v).(CompositeValue), nil
 }
 
 // Domain reads a domain column.
@@ -1298,7 +1352,7 @@ func (r Row) Domain(i int) (DomainValue, error) {
 	if v.Tag() != pg.DbValueDomain {
 		return DomainValue{}, typeErr(i, v, "domain")
 	}
-	return decodeLazy(v).(DomainValue), nil
+	return r.lazyColumn(i, v).(DomainValue), nil
 }
 
 // Range reads a user-defined range column (use the typed range getters for the
@@ -1311,7 +1365,7 @@ func (r Row) Range(i int) (RangeValue, error) {
 	if v.Tag() != pg.DbValueRange {
 		return RangeValue{}, typeErr(i, v, "range")
 	}
-	return decodeLazy(v).(RangeValue), nil
+	return r.lazyColumn(i, v).(RangeValue), nil
 }
 
 // Scan decodes the row into the given pointers, one per column. Supported
@@ -1401,7 +1455,7 @@ type ResultSet struct {
 func newResultSet(res pg.DbResult) *ResultSet {
 	rows := make([]Row, len(res.Rows))
 	for i, r := range res.Rows {
-		rows[i] = Row{values: r.Values}
+		rows[i] = newRow(r.Values)
 	}
 	return &ResultSet{columns: convColumns(res.Columns), rows: rows}
 }
@@ -1447,7 +1501,7 @@ func (s *Stream) Next() (row Row, ok bool, err error) {
 		batch := opt.Some()
 		s.buf = make([]Row, len(batch))
 		for i, r := range batch {
-			s.buf[i] = Row{values: r.Values}
+			s.buf[i] = newRow(r.Values)
 		}
 		s.idx = 0
 	}

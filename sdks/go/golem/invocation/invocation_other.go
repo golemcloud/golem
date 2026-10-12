@@ -19,12 +19,8 @@ package invocation
 // Off the wasm target there is no host; binding the generated calls here would
 // drag their //go:wasmimport declarations into a native link.
 
-// CurrentContext is the invocation context at this point of the invocation.
-func CurrentContext() *Context { return &Context{} }
+func hostCurrentContext() *Context { return &Context{} }
 
-// StartSpan starts a span named name as a child of the current context.
-func StartSpan(string) *Span { return &Span{} }
+func hostStartSpan(string) *Span { return &Span{} }
 
-// AllowForwardingTraceContextHeaders turns forwarding of trace context headers
-// on outgoing HTTP requests on or off, returning the previous setting.
-func AllowForwardingTraceContextHeaders(bool) bool { return true }
+func hostAllowForwardingTraceContextHeaders(bool) bool { return true }

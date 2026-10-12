@@ -48,33 +48,43 @@ type Checkpoint struct {
 // Start is the checkpoint before the first item.
 var Start = Checkpoint{Offset: "-1", Cursor: golem.None[string]()}
 
-// Transport is how a reader waits for new items once it has caught up.
-type Transport uint8
+// LiveTransport is how a reader waits for new items once it has caught up.
+// Reading always starts with catch-up requests.
+type LiveTransport uint8
 
 const (
-	CatchUp Transport = iota
-	LongPoll
+	// LongPoll holds each request open until new items arrive (the default).
+	LongPoll LiveTransport = iota
+	// SSE receives new items as server-sent events.
 	SSE
 )
 
-// ErrorKind classifies a failed read or append.
+func (t LiveTransport) toWire() wire.DurableStreamTransport {
+	if t == SSE {
+		return wire.DurableStreamTransportSse
+	}
+	return wire.DurableStreamTransportLongPoll
+}
+
+// ErrorKind classifies a failed read or append. The kinds are the host's
+// durable-stream-error-kind cases, in the same order.
 type ErrorKind uint8
 
 const (
-	KindInvalidRequest ErrorKind = iota
-	KindPermissionDenied
-	KindNotFound
-	KindGone
-	KindClosed
-	KindSequenceConflict
-	KindFenced
-	KindProducerDiverged
-	KindProtocolError
-	KindPayloadTooLarge
-	KindTimeout
-	KindTransport
-	KindRateLimited
-	KindUnavailable
+	InvalidRequest ErrorKind = iota
+	PermissionDenied
+	NotFound
+	Gone
+	Closed
+	SequenceConflict
+	Fenced
+	ProducerDiverged
+	ProtocolError
+	PayloadTooLarge
+	Timeout
+	Transport
+	RateLimited
+	Unavailable
 )
 
 // Error is a failed read or append. An error never means the end of a stream.
@@ -117,36 +127,61 @@ type RetryOptions struct {
 	MaxDelay     time.Duration
 }
 
-// DefaultRetry is three retries from 100ms, up to 10s apart.
+// DefaultRetry is three retries from 100ms, up to 10s apart. Options that leave
+// Retry unset use it; golem.Some(RetryOptions{}) retries nothing.
 var DefaultRetry = RetryOptions{MaxRetries: 3, InitialDelay: 100 * time.Millisecond, MaxDelay: 10 * time.Second}
 
 func (r RetryOptions) delay(err *Error, failures uint32) (time.Duration, bool) {
 	switch err.Kind {
-	case KindTimeout, KindTransport, KindRateLimited, KindUnavailable:
+	case Timeout, Transport, RateLimited, Unavailable:
 	default:
 		return 0, false
 	}
 	if failures >= r.MaxRetries {
 		return 0, false
 	}
-	backoff := min(r.InitialDelay<<min(failures, 62), r.MaxDelay)
+	backoff := backoffAfter(r.InitialDelay, r.MaxDelay, failures)
 	if wait, ok := err.RetryAfter.Get(); ok && wait > backoff {
 		backoff = wait
 	}
 	return backoff, true
 }
 
+// backoffAfter is initial doubled once per failure, saturating at limit instead
+// of overflowing.
+func backoffAfter(initial, limit time.Duration, failures uint32) time.Duration {
+	backoff := initial
+	if backoff <= 0 {
+		return 0
+	}
+	for range failures {
+		if backoff >= limit/2 {
+			return limit
+		}
+		backoff *= 2
+	}
+	return min(backoff, limit)
+}
+
+// retryOrDefault is the retry policy an options struct asks for.
+func retryOrDefault(retry golem.Option[RetryOptions]) RetryOptions {
+	if r, ok := retry.Get(); ok {
+		return r
+	}
+	return DefaultRetry
+}
+
 // ReadOptions configures a Reader; the zero value reads from [Start] with long
 // polling, a 30s attempt deadline and [DefaultRetry].
 type ReadOptions struct {
 	Checkpoint Checkpoint
-	// Transport is used once the reader has caught up; reading always starts
-	// with a catch-up request.
-	Transport Transport
-	Timeout   time.Duration
+	// Live is how the reader waits once it has caught up.
+	Live    LiveTransport
+	Timeout time.Duration
 	// IdleDelay is the pause after an empty batch at the tail.
 	IdleDelay time.Duration
-	Retry     RetryOptions
+	// Retry bounds the retries; unset means [DefaultRetry].
+	Retry golem.Option[RetryOptions]
 	// Auth authenticates the requests; its plaintext never reaches the agent.
 	Auth golem.Option[golem.Secret[string]]
 }
@@ -155,18 +190,13 @@ func (o ReadOptions) withDefaults() ReadOptions {
 	if o.Checkpoint.Offset == "" {
 		o.Checkpoint = Start
 	}
-	if o.Transport == CatchUp {
-		o.Transport = LongPoll
-	}
 	if o.Timeout == 0 {
 		o.Timeout = 30 * time.Second
 	}
 	if o.IdleDelay == 0 {
 		o.IdleDelay = 100 * time.Millisecond
 	}
-	if o.Retry == (RetryOptions{}) {
-		o.Retry = DefaultRetry
-	}
+	o.Retry = golem.Some(retryOrDefault(o.Retry))
 	return o
 }
 
@@ -178,6 +208,7 @@ type readCall func(wire.DurableStreamReadRequest) (wire.DurableStreamBatch, *Err
 // before its checkpoint is promoted.
 type Reader[T any] struct {
 	read    readCall
+	release func()
 	mode    wire.DurableStreamMode
 	decode  func(payload []byte) ([]T, error)
 	request wire.DurableStreamReadRequest
@@ -197,7 +228,7 @@ func ReadJSON[T any](url string, options ReadOptions) *Reader[T] {
 			return nil, nil
 		}
 		if err := json.Unmarshal(payload, &items); err != nil {
-			return nil, newError(KindProtocolError, "JSON batch decode failed: %v", err)
+			return nil, newError(ProtocolError, "JSON batch decode failed: %v", err)
 		}
 		return items, nil
 	})
@@ -213,10 +244,12 @@ func ReadBytes(url string, options ReadOptions) *Reader[byte] {
 
 func newReader[T any](url string, options ReadOptions, mode wire.DurableStreamMode, decode func([]byte) ([]T, error)) *Reader[T] {
 	options = options.withDefaults()
+	read, release := hostReader(url, mode, options)
 	return &Reader[T]{
-		read:   hostReader(url, mode, options),
-		mode:   mode,
-		decode: decode,
+		read:    read,
+		release: release,
+		mode:    mode,
+		decode:  decode,
 		request: wire.DurableStreamReadRequest{
 			Checkpoint:  checkpointToWire(options.Checkpoint),
 			Transport:   wire.DurableStreamTransportCatchUp,
@@ -230,10 +263,16 @@ func newReader[T any](url string, options ReadOptions, mode wire.DurableStreamMo
 // batch keeps its original one.
 func (r *Reader[T]) Checkpoint() Checkpoint { return checkpointFromWire(r.request.Checkpoint) }
 
-// Close stops reading and discards buffered items.
+// Close stops reading, discards buffered items and releases the reader's host
+// resource. A reader that is not closed is released when it is garbage
+// collected.
 func (r *Reader[T]) Close() {
 	r.closed = true
 	r.pending, r.batch = nil, nil
+	if r.release != nil {
+		r.release()
+		r.release = nil
+	}
 }
 
 // Next returns the next item. It reports ok=false with a nil error at the end
@@ -256,7 +295,7 @@ func (r *Reader[T]) Next() (T, bool, error) {
 			r.closed = batch.Closed
 			r.request.Transport = wire.DurableStreamTransportCatchUp
 			if batch.UpToDate {
-				r.request.Transport = wire.DurableStreamTransport(r.options.Transport)
+				r.request.Transport = r.options.Live.toWire()
 				if len(batch.Payload) == 0 && !batch.Closed {
 					r.delay = r.options.IdleDelay
 				}
@@ -269,7 +308,7 @@ func (r *Reader[T]) Next() (T, bool, error) {
 		}
 		batch, err := r.read(r.request)
 		if err != nil {
-			wait, retry := r.options.Retry.delay(err, r.failure)
+			wait, retry := retryOrDefault(r.options.Retry).delay(err, r.failure)
 			if !retry {
 				return zero, false, err
 			}
@@ -285,7 +324,7 @@ func (r *Reader[T]) Next() (T, bool, error) {
 
 func (r *Reader[T]) install(batch wire.DurableStreamBatch) error {
 	if batch.Next.Offset == "now" {
-		return newError(KindProtocolError, "server did not resolve now")
+		return newError(ProtocolError, "server did not resolve now")
 	}
 	items, err := r.decode(batch.Payload)
 	if err != nil {
@@ -293,7 +332,7 @@ func (r *Reader[T]) install(batch wire.DurableStreamBatch) error {
 		if errors.As(err, &se) {
 			return se
 		}
-		return newError(KindProtocolError, "%v", err)
+		return newError(ProtocolError, "%v", err)
 	}
 	if r.request.ContentType.IsNone() {
 		r.request.ContentType = witTypes.Some(batch.ContentType)

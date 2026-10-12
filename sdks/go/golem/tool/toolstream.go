@@ -26,14 +26,14 @@ import (
 // Tool byte streams.
 //
 // A command reads standard input from the io.Reader field it binds with
-// [ToolCommandSpec.Stdin], and an output command writes through
-// [ToolOutputContext.Stdout] and [ToolOutputContext.Stderr], ordinary
+// [CommandSpec.Stdin], and an output command writes through
+// [OutputContext.Stdout] and [OutputContext.Stderr], ordinary
 // io.Writers — p3 makes the underlying host calls blocking, so there is no
 // callback or future to thread through.
 //
 // The wire protocol has explicit terminals the author does not have to
 // remember: a handler that succeeds finishes its output streams, and one that
-// fails or panics fails them. Call [ToolOutput.Fail] to end one with a
+// fails or panics fails them. Call [Output.Fail] to end one with a
 // specific cause instead.
 
 // absentStdin explains a standard input the host did not supply.
@@ -101,6 +101,9 @@ type byteStreamSink interface {
 	Write(bytes []uint8) witTypes.Result[witTypes.Unit, streams.StreamWriteError]
 	Finish() witTypes.Result[witTypes.Unit, streams.StreamWriteError]
 	Fail(reason streams.ByteStreamFailure) witTypes.Result[witTypes.Unit, streams.StreamWriteError]
+	// release drops the writer once its terminal is selected; dropping it
+	// earlier would select abandoned.
+	release()
 }
 
 // byteReader is a byte stream read as an ordinary io.Reader: a command's
@@ -165,6 +168,19 @@ func (r *byteReader) present() bool { return r != nil && r.absent == "" }
 
 // Read fills p from the stream. It returns io.EOF at clean end of input, and a
 // [OutputError] when the producer reports a failure.
+// handedOnStdin is why a standard input that went whole to an earlier call has
+// nothing left to read.
+const handedOnStdin = "standard input was already passed to an earlier call"
+
+// handOn marks the stream as handed on whole to another call: it is no longer
+// this reader's to drop, and a later read fails with an error instead of
+// reaching the moved stream.
+func (r *byteReader) handOn() {
+	r.consumed = true
+	r.release = nil
+	r.absent = handedOnStdin
+}
+
 func (r *byteReader) Read(p []byte) (int, error) {
 	r.consumed = true
 	if r.absent != "" {
@@ -284,6 +300,7 @@ func (w *Output) Fail(cause OutputFailure) error {
 	if w.sink == nil {
 		return nil
 	}
+	defer w.sink.release()
 	if res := w.sink.Fail(cause.wit); res.Tag() == witTypes.ResultErr {
 		return writeError(w.name, res.Err())
 	}
@@ -300,6 +317,7 @@ func (w *Output) finish() error {
 	if w.sink == nil {
 		return nil
 	}
+	defer w.sink.release()
 	if res := w.sink.Finish(); res.Tag() == witTypes.ResultErr {
 		return writeError(w.name, res.Err())
 	}
@@ -315,6 +333,7 @@ func (w *Output) fail(cause OutputFailure) {
 	w.terminal = true
 	if w.sink != nil {
 		w.sink.Fail(cause.wit)
+		w.sink.release()
 	}
 }
 

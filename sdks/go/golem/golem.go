@@ -67,6 +67,7 @@
 package golem
 
 import (
+	"fmt"
 	"time"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -106,6 +107,9 @@ func (m Mode) toWit() common.AgentMode {
 type SnapshotPolicy struct {
 	kind   snapshotKind
 	amount uint64 // periodic: nanoseconds; every-n: count
+	// invalid explains why the policy cannot be used; the agent definition
+	// reports it.
+	invalid string
 }
 
 type snapshotKind uint8
@@ -123,8 +127,12 @@ var SnapshotDisabled = SnapshotPolicy{kind: snapDisabled}
 // SnapshotDefault enables snapshotting at the platform's default cadence.
 var SnapshotDefault = SnapshotPolicy{kind: snapDefault}
 
-// SnapshotPeriodic snapshots on a fixed time interval.
+// SnapshotPeriodic snapshots on a fixed time interval. d must be positive; a
+// zero or negative interval is a definition error.
 func SnapshotPeriodic(d time.Duration) SnapshotPolicy {
+	if d <= 0 {
+		return SnapshotPolicy{kind: snapPeriodic, invalid: fmt.Sprintf("SnapshotPeriodic(%v): the interval must be positive", d)}
+	}
 	return SnapshotPolicy{kind: snapPeriodic, amount: uint64(d.Nanoseconds())}
 }
 
@@ -227,7 +235,8 @@ func (c *InitContext[Id, S, Cfg]) AgentID() string { return selfAgentID() }
 // the agent's type-level identity; Cfg is the agent's config struct ([NoConfig]
 // for a config-less agent). It carries no state type: callers obtain a client
 // with [AgentDefinition.Get] and never depend on how the target stores state.
-// The behaviour (and the private state) is attached separately with [Implement].
+// The behaviour (and the private state) is attached separately with
+// [AgentDefinition.Implement].
 type AgentDefinition[Id any, Cfg any] struct{ name string }
 
 // Name returns the agent's wire-level type name.
@@ -235,9 +244,10 @@ func (a *AgentDefinition[Id, Cfg]) Name() string { return a.name }
 
 func (a *AgentDefinition[Id, Cfg]) dependencyName() string { return a.name }
 
-// AgentImpl is the state-bound implementation handle returned by [Implement] /
-// [ImplementConfigured]. Register the agent's methods on it with [Handle]. Its S
-// type parameter is the agent's private state type, introduced at [Implement]; it
+// AgentImpl is the state-bound implementation handle returned by
+// [AgentDefinition.Implement] / [AgentDefinition.ImplementConfigured]. Register
+// the agent's methods on it with [AgentImpl.Handle]. Its S type parameter is the
+// agent's private state type, introduced at Implement; it
 // is used only inside the agent's implementation package (callers use the
 // [AgentDefinition] instead).
 type AgentImpl[Id any, S any, Cfg any] struct {
@@ -252,7 +262,7 @@ type AgentImpl[Id any, S any, Cfg any] struct {
 type MethodDef[Id any, In any, Out any] struct {
 	name          string
 	desc          string
-	descCount     int // how many times Desc was set; validated at Implement time
+	descCount     int // how many times Description was set; validated at Implement time
 	hint          string
 	hintCount     int // how many times PromptHint was set
 	endpoints     []Endpoint
@@ -278,15 +288,15 @@ type methodOpts struct {
 	cacheCount    int
 }
 
-// Desc sets a method's description, surfaced in the agent type metadata. Setting
+// Description sets a method's description, surfaced in the agent type metadata. Setting
 // it more than once for the same method is a definition error, not a silent
 // overwrite.
-func Desc(s string) MethodOpt {
+func Description(s string) MethodOpt {
 	return func(o *methodOpts) { o.desc = s; o.descCount++ }
 }
 
 // PromptHint sets a method's hint for AI callers deciding when to use it,
-// surfaced in the agent type metadata. Like [Desc], it is set at most once.
+// surfaced in the agent type metadata. Like [Description], it is set at most once.
 func PromptHint(s string) MethodOpt {
 	return func(o *methodOpts) { o.hint = s; o.hintCount++ }
 }

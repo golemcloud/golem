@@ -23,22 +23,16 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// NewQuotaToken acquires a token for resourceName, declaring how much of it the
-// agent expects to use; the runtime shares the resource among tokens in
-// proportion to their expected use.
-func NewQuotaToken(resourceName string, expectedUse uint64) QuotaToken {
+func hostNewQuotaToken(resourceName string, expectedUse uint64) QuotaToken {
 	return QuotaToken{st: &quotaTokenState{h: quota.NewToken(resourceName, expectedUse)}}
 }
 
-// Reserve reserves amount before using it. When the resource throttles, it
-// waits until the amount is available; when the resource rejects instead, the
-// error is a [*FailedReservation].
-func (t QuotaToken) Reserve(amount uint64) (*Reservation, error) {
+func (t QuotaToken) hostReserve(amount uint64) (*Reservation, error) {
 	res := quota.Reserve(t.handle(), amount)
 	if res.Tag() == witTypes.ResultErr {
 		failed := &FailedReservation{EstimatedWait: None[time.Duration]()}
 		if wait := res.Err().EstimatedWaitNanos; wait.IsSome() {
-			failed.EstimatedWait = Some(time.Duration(wait.Some()))
+			failed.EstimatedWait = Some(durationFromNanos(wait.Some()))
 		}
 		return nil, failed
 	}
@@ -46,15 +40,11 @@ func (t QuotaToken) Reserve(amount uint64) (*Reservation, error) {
 	return &Reservation{commit: func(used uint64) { quota.ReservationCommit(r, used) }}, nil
 }
 
-// Split carves a child token off this one, with part of its expected use, for
-// handing to another agent.
-func (t QuotaToken) Split(childExpectedUse uint64) QuotaToken {
+func (t QuotaToken) hostSplit(childExpectedUse uint64) QuotaToken {
 	return QuotaToken{st: &quotaTokenState{h: quota.Split(t.handle(), childExpectedUse)}}
 }
 
-// Merge folds other, a token for the same resource, back into this one; other
-// is unusable afterwards.
-func (t QuotaToken) Merge(other QuotaToken) {
+func (t QuotaToken) hostMerge(other QuotaToken) {
 	h := other.handle()
 	other.st.h = nil
 	quota.Merge(t.handle(), h)

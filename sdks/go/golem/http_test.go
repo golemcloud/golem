@@ -1,7 +1,10 @@
 package golem
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,5 +113,32 @@ func TestHeaderErr(t *testing.T) {
 		if got := headerErr(e); got != want {
 			t.Errorf("headerErr(tag %d) = %q, want %q", e.Tag(), got, want)
 		}
+	}
+}
+
+// A request is refused before any work when its context already ended, its
+// deadline is already past (so it would go out with no timeout), or its Host
+// differs from the URL host (the authority is also the destination).
+func TestCheckRequestRefusesWhatCannotBeSentAsAsked(t *testing.T) {
+	now := time.Now()
+	ok, _ := http.NewRequest(http.MethodGet, "https://example.com/a", nil)
+	if err := checkRequest(ok, now); err != nil {
+		t.Fatalf("a plain request was refused: %v", err)
+	}
+	past, cancel := context.WithDeadline(context.Background(), now.Add(time.Hour))
+	defer cancel()
+	late := ok.WithContext(past)
+	if err := checkRequest(late, now.Add(2*time.Hour)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a past deadline gave %v", err)
+	}
+	vhost := ok.Clone(context.Background())
+	vhost.Host = "internal.example"
+	if err := checkRequest(vhost, now); err == nil || !strings.Contains(err.Error(), "differs from the URL host") {
+		t.Fatalf("a differing Host gave %v", err)
+	}
+	same := ok.Clone(context.Background())
+	same.Host = "EXAMPLE.com"
+	if err := checkRequest(same, now); err != nil {
+		t.Fatalf("a Host equal to the URL host was refused: %v", err)
 	}
 }

@@ -17,12 +17,13 @@ package golem
 import (
 	"errors"
 	"fmt"
-	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"reflect"
 	"slices"
 	"strings"
+
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
@@ -71,6 +72,7 @@ func init() {
 	link.TypedValue = func(w types.TypedSchemaValue) any { return TypedValue{wit: w} }
 	link.TypedValueWit = func(v any) types.TypedSchemaValue { return v.(TypedValue).wit }
 	link.AgentError = agentErrorToGo
+	link.TrapPanic = trapRegionPanic
 	link.Principal = func(p common.Principal) any { return principalFromWit(p) }
 	link.LocalAgentTypes = func() ([]common.AgentType, error) {
 		found, errs := defs.discover()

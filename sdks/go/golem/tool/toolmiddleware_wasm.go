@@ -37,7 +37,7 @@ func newUnderlyingLayer(tool *underlying.UnderlyingTool) underlyingLayer {
 	}
 	return underlyingLayer{start: func(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
 		res, out, errOut := tool.Invoke(slices.Clone(path), input, underlyingStdin(stdin))
-		return toolCall{
+		return guardCancel(toolCall{
 			stdout: optionalReader("stdout", out),
 			stderr: optionalReader("stderr", errOut),
 			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
@@ -50,7 +50,7 @@ func newUnderlyingLayer(tool *underlying.UnderlyingTool) underlyingLayer {
 				return r.Ok(), nil
 			},
 			cancel: res.Cancel,
-		}, nil
+		}), nil
 	}}
 }
 
@@ -70,8 +70,7 @@ func underlyingStdin(stdin io.Reader) witTypes.Option[*byteStream] {
 	}
 	if br, ok := stdin.(*byteReader); ok && !br.consumed {
 		if raw, ok := br.src.(*byteStream); ok {
-			br.consumed = true
-			br.release = nil
+			br.handOn()
 			return witTypes.Some(raw)
 		}
 	}

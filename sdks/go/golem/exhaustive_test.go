@@ -57,7 +57,7 @@ func tagCount(t *testing.T, pkg, prefix string) int {
 	return n
 }
 
-func TestToolTagSwitchesCoverEveryCase(t *testing.T) {
+func TestWitTagSwitchesCoverEveryCase(t *testing.T) {
 	for _, c := range []struct {
 		pkg, prefix, where string
 		handled            int
@@ -70,6 +70,28 @@ func TestToolTagSwitchesCoverEveryCase(t *testing.T) {
 		{"golem_core_types", "ToolRpcError", "toolcall.go toolCallErrorFromWit", 7},
 		// toolcall.go toolCallErrorFromWit, remote tool error.
 		{"golem_core_types", "ToolError", "toolcall.go toolCallErrorFromWit", 6},
+		// client.go agentErrorToGo.
+		{"golem_agent_common", "AgentError", "client.go agentErrorToGo", 5},
+		// rpc.go rpcErrorToGo.
+		{"golem_agent_host", "RpcError", "rpc.go rpcErrorToGo", 5},
+		// principal.go principalFromWit: an unknown principal must never pass as anonymous.
+		{"golem_agent_common", "Principal", "principal.go principalFromWit", 4},
+		// agentops.go agentOperationErrorFromWit.
+		{"golem_api_host", "AgentOperationError", "agentops.go agentOperationErrorFromWit", 2},
+		// promise.go webhookErrorToGo.
+		{"golem_agent_host", "WebhookError", "promise.go webhookErrorToGo", 2},
+		// oplog/oplog_wasm.go readErrorFromWit.
+		{"golem_api_oplog", "OplogReadError", "oplog readErrorFromWit", 2},
+		// websocket/websocket.go wsError.
+		{"golem_websocket_client", "Error", "websocket wsError", 6},
+		// durablestreams/reader.go errorFromWire converts the kind by position.
+		{"golem_agent_durable_streams", "DurableStreamErrorKind", "durablestreams ErrorKind", 14},
+		// rdbms/postgres: pgError; tagName, and decodeFlat with decodeLazy.
+		{"golem_rdbms_postgres", "Error", "postgres pgError", 5},
+		{"golem_rdbms_postgres", "DbValue", "postgres tagName, decodeFlat and decodeLazy", 45},
+		// rdbms/mysql: its error mapping; tagName and decodeValue.
+		{"golem_rdbms_mysql", "Error", "mysql error mapping", 5},
+		{"golem_rdbms_mysql", "DbValue", "mysql tagName and decodeValue", 36},
 	} {
 		if got := tagCount(t, c.pkg, c.prefix); got != c.handled {
 			t.Errorf("%s declares %d %s cases, %s handles %d: handle the new case and move the count",

@@ -29,32 +29,32 @@ import (
 
 var errOutsideComponent = fmt.Errorf("golem: agent discovery and binding are only available inside a component")
 
-func DiscoverAgentTypes() []AgentType { return nil }
+func hostDiscoverAgentTypes() []AgentType { return nil }
 
-func DiscoverAgentType(string) (AgentType, bool) { return AgentType{}, false }
+func hostDiscoverAgentType(string) (AgentType, bool) { return AgentType{}, false }
 
-func DiscoverAgentTypeByID(string) (AgentType, bool) { return AgentType{}, false }
+func hostDiscoverAgentTypeByID(string) (AgentType, bool) { return AgentType{}, false }
 
-func (r AgentType) Get(map[string]any, ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostGet(map[string]any, ...ClientOpt) (*AgentClient, error) {
 	return nil, errOutsideComponent
 }
 
-func (r AgentType) NewPhantom(map[string]any, ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostNewPhantom(map[string]any, ...ClientOpt) (*AgentClient, error) {
 	return nil, errOutsideComponent
 }
 
-func (r AgentType) Bind(string, ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostBind(string, ...ClientOpt) (*AgentClient, error) {
 	return nil, errOutsideComponent
 }
 
-func (r AgentType) AgentID(map[string]any, golem.Option[golem.UUID]) (string, error) {
+func (r AgentType) hostAgentID(map[string]any, golem.Option[golem.UUID]) (string, error) {
 	return "", errOutsideComponent
 }
 
-func ParseRawAgentID(string) (RawAgentID, error) { return RawAgentID{}, errOutsideComponent }
+func hostParseRawAgentID(string) (RawAgentID, error) { return RawAgentID{}, errOutsideComponent }
 
-func BindAgentID(string) (*DynamicAgentClient, error) { return nil, errOutsideComponent }
+func hostBindAgentID(string) (*DynamicAgentClient, error) { return nil, errOutsideComponent }
 
-func MakeAgentID(string, golem.TypedValue, golem.Option[golem.UUID]) (string, error) {
+func hostMakeAgentID(string, golem.TypedValue, golem.Option[golem.UUID]) (string, error) {
 	return "", errOutsideComponent
 }

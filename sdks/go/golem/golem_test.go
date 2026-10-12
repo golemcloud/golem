@@ -2,10 +2,12 @@ package golem
 
 import (
 	"errors"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/golemcloud/golem/sdks/go/core/values"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	guestExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_agent_guest"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -24,7 +26,7 @@ var tCounter = DefineAgent[tCounterId](
 )
 
 var (
-	tValue = tCounter.Method[Unit, int64]("value", Desc("current value"))
+	tValue = tCounter.Method[Unit, int64]("value", Description("current value"))
 	tInc   = tCounter.Method[Unit, int64]("increment")
 	tAdd   = tCounter.Method[tAddIn, int64]("add")
 	tReset = tCounter.Method[Unit, Unit]("reset")
@@ -176,9 +178,9 @@ func TestDiscoverAgentTypes(t *testing.T) {
 func TestPanicTrapsWithAttribution(t *testing.T) {
 	initAgent(t)
 	defer func() {
-		var pe *PanicError
+		var pe *panicError
 		if r := recover(); !errors.As(asError(r), &pe) || pe.Method != "boom" || pe.Stage != stageHandler || pe.Value != "kaboom from agent code" {
-			t.Fatalf("a panicking method must trap with an attributed PanicError, got %#v", r)
+			t.Fatalf("a panicking method must trap with an attributed panicError, got %#v", r)
 		}
 	}()
 	guestExports.Invoke("boom", params(), common.MakePrincipalAnonymous())
@@ -199,21 +201,21 @@ func TestUnknownMethodAndBadInputAreDistinguished(t *testing.T) {
 }
 
 func TestPanicErrorAttribution(t *testing.T) {
-	agentSide := &PanicError{Method: "m", Stage: stageHandler, Value: "boom"}
+	agentSide := &panicError{Method: "m", Stage: stageHandler, Value: "boom"}
 	if agentSide.Internal() {
 		t.Fatal("a handler panic is not an SDK bug")
 	}
 	if !strings.Contains(agentSide.Error(), `agent method "m" panicked`) {
 		t.Fatalf("unexpected message: %s", agentSide)
 	}
-	sdkSide := &PanicError{Method: "m", Stage: stageEncode, Value: "boom"}
+	sdkSide := &panicError{Method: "m", Stage: stageEncode, Value: "boom"}
 	if !sdkSide.Internal() || !strings.Contains(sdkSide.Error(), "INTERNAL SDK ERROR") {
 		t.Fatalf("unexpected message: %s", sdkSide)
 	}
 
 	// An encode-stage panic caused by the agent returning an unencodable value is
 	// the agent's mistake, not an SDK bug — even though it occurs in encode.
-	userSide := &PanicError{Method: "m", Stage: stageEncode, Value: &engine.EncodeError{Msg: "not a registered case"}}
+	userSide := &panicError{Method: "m", Stage: stageEncode, Value: &engine.EncodeError{Msg: "not a registered case"}}
 	if userSide.Internal() {
 		t.Fatal("an unencodable agent value is not an SDK bug")
 	}
@@ -327,5 +329,32 @@ func TestVariantTypedMethodOutputRoundTripsThroughTheExports(t *testing.T) {
 	}
 	if body := def.Schema.TypeNodes[pay.OutputSchema.Single()].Body; body.Tag() != types.SchemaTypeBodyVariantType {
 		t.Fatalf("pay output type tag = %d, want variant", body.Tag())
+	}
+}
+
+// A string that is not valid UTF-8, or a char that is not a Unicode scalar
+// value, is refused while encoding, naming the field, instead of reaching the
+// host and trapping there with no word on which value it was.
+func TestInvalidTextIsRefusedNamingTheField(t *testing.T) {
+	type Note struct {
+		Title string
+		Mark  values.Char
+	}
+	for _, c := range []struct {
+		value Note
+		want  string
+	}{
+		{Note{Title: "ok\xffno"}, "Note.Title: string value is not valid UTF-8 (invalid byte at offset 2)"},
+		{Note{Title: "ok", Mark: values.Char(0xD800)}, "Note.Mark: char value U+D800 is not a Unicode scalar value"},
+	} {
+		func() {
+			defer func() {
+				ee, ok := recover().(*engine.EncodeError)
+				if !ok || !strings.Contains(ee.Msg, c.want) {
+					t.Errorf("encoding %+v panicked with %v, want %q", c.value, ee, c.want)
+				}
+			}()
+			engine.EncodeWith(defs.Compile(reflect.TypeFor[Note]()), reflect.ValueOf(c.value))
+		}()
 	}
 }

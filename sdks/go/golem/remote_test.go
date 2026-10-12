@@ -139,7 +139,7 @@ func TestFullAgentClientErrors(t *testing.T) {
 // Call invokes through, so it must carry the same fields either way.
 func TestRemoteMethodDescriptorMatchesTheLocalOne(t *testing.T) {
 	remote := &FullAgentClient[RemoteCounterID, NoConfig]{name: "CounterAgent"}
-	m := remote.Method[RemoteAddIn, int64]("add", Desc("Add to the counter"))
+	m := remote.Method[RemoteAddIn, int64]("add", Description("Add to the counter"))
 	if m.Name() != "add" {
 		t.Errorf("name %q", m.Name())
 	}
@@ -209,7 +209,7 @@ type Pingable struct{}
 // nothing: its methods are descriptors on its shape type.
 func TestMethodOnlyClientDeclaresDescriptorsOnly(t *testing.T) {
 	pinger := DefineAgentClient[Pingable]()
-	ping := pinger.Method[Unit, string]("ping", Desc("Ping"))
+	ping := pinger.Method[Unit, string]("ping", Description("Ping"))
 	if ping.Name() != "ping" || ping.desc != "Ping" {
 		t.Errorf("descriptor %+v", ping)
 	}

@@ -16,6 +16,7 @@ package postgres
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,5 +327,45 @@ func TestErrorMapping(t *testing.T) {
 		if err.Kind != c.kind || err.Message != c.msg {
 			t.Fatalf("mapping = kind %d msg %q, want kind %d msg %q", err.Kind, err.Message, c.kind, c.msg)
 		}
+	}
+}
+
+// Decoding a recursive column reads and drops its host-backed children, so a
+// row read twice (Get then Array, or iterating Rows again) reuses the first
+// decode instead of reaching dropped handles.
+func TestRecursiveColumnDecodesOnce(t *testing.T) {
+	decodes := 0
+	prev := decodeLazyValue
+	t.Cleanup(func() { decodeLazyValue = prev })
+	decodeLazyValue = func(pg.DbValue) any {
+		decodes++
+		return []any{int32(1), int32(2)}
+	}
+	r := newRow([]pg.DbValue{pg.MakeDbValueArray(nil)})
+	first, err := r.Get(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := r.Array(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := r
+	if _, err := copied.Get(0); err != nil {
+		t.Fatal(err)
+	}
+	if decodes != 1 {
+		t.Fatalf("the column was decoded %d times, want 1", decodes)
+	}
+	if len(first.([]any)) != 2 || len(again) != 2 {
+		t.Fatalf("got %v and %v", first, again)
+	}
+}
+
+// An out-of-range date fails as a parameter error when the query runs.
+func TestAnOutOfRangeDateIsAParameterError(t *testing.T) {
+	_, err := encodeParams([]any{Date(rdbms.Date{Year: 2026, Month: 13, Day: 1})})
+	if err == nil || !strings.Contains(err.Error(), "parameter 1: date 2026-13-01: month 13 is not 1..12") {
+		t.Fatalf("got %v", err)
 	}
 }

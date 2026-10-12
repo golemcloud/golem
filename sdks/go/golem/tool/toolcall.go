@@ -40,7 +40,7 @@ import (
 //	})
 //	if nf, ok := ErrNothingToCommit.Match(err); ok { … }
 //
-// A command declared with OutputCommand returns a [ToolInvocation] instead,
+// A command declared with OutputCommand returns an [Invocation] instead,
 // whose standard output and standard error are read while the command runs.
 
 // CallErrorKind classifies a failed tool call.
@@ -111,7 +111,7 @@ type CallError struct {
 	Kind        CallErrorKind
 	// Message is the accompanying detail, empty when there is none.
 	Message string
-	// ErrorName is the declared error case, for [ToolCallDeclaredError].
+	// ErrorName is the declared error case, for [CallDeclaredError].
 	ErrorName string
 	payload   golem.TypedValue
 	// wire is the tool's own error, kept so a middleware passing the failure
@@ -199,6 +199,24 @@ type toolCall struct {
 	stderr *byteReader
 	wait   func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError)
 	cancel func()
+}
+
+// guardCancel makes cancel a no-op once wait has returned: wait releases the
+// host future that cancel addresses, so a late cancel (a deferred Cancel, or a
+// relay that fails after the result arrived) must not reach it.
+func guardCancel(c toolCall) toolCall {
+	settled := false
+	wait, cancel := c.wait, c.cancel
+	c.wait = func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		defer func() { settled = true }()
+		return wait()
+	}
+	c.cancel = func() {
+		if !settled {
+			cancel()
+		}
+	}
+	return c
 }
 
 // startToolCall starts a call through the host. It is a variable so native

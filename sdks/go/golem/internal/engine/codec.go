@@ -161,7 +161,7 @@ func (d *Engine) buildCodec(c *Codec) {
 	case reflect.String:
 		scalar(c, types.MakeSchemaTypeBodyStringType(), types.SchemaValueNodeStringValue,
 			func(b *ValBuilder, v reflect.Value) int32 {
-				return b.Push(types.MakeSchemaValueNodeStringValue(v.String()))
+				return b.Push(types.MakeSchemaValueNodeStringValue(validUTF8("string", v.String())))
 			},
 			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetString(n.StringValue()) })
 

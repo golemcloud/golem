@@ -23,20 +23,16 @@ import (
 	witctx "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_context"
 )
 
-// CurrentContext is the invocation context at this point of the invocation.
-func CurrentContext() *Context { return &Context{h: wrapContext(witctx.CurrentContext())} }
+func hostCurrentContext() *Context { return &Context{h: wrapContext(witctx.CurrentContext())} }
 
-// StartSpan starts a span named name as a child of the current context.
-func StartSpan(name string) *Span {
+func hostStartSpan(name string) *Span {
 	raw := witctx.StartSpan(name)
 	h := &hostSpan{raw: raw}
 	h.cleanup = runtime.AddCleanup(h, func(r *witctx.Span) { r.Drop() }, raw)
 	return &Span{h: h}
 }
 
-// AllowForwardingTraceContextHeaders turns forwarding of trace context headers
-// on outgoing HTTP requests on or off, returning the previous setting.
-func AllowForwardingTraceContextHeaders(allow bool) bool {
+func hostAllowForwardingTraceContextHeaders(allow bool) bool {
 	return witctx.AllowForwardingTraceContextHeaders(allow)
 }
 

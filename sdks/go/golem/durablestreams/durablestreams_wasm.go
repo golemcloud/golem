@@ -39,7 +39,7 @@ func withAuth[R any](auth golem.Option[golem.Secret[string]], create func(witTyp
 	return create(witTypes.Some(h))
 }
 
-func hostReader(url string, mode wire.DurableStreamMode, options ReadOptions) readCall {
+func hostReader(url string, mode wire.DurableStreamMode, options ReadOptions) (readCall, func()) {
 	reader := withAuth(options.Auth, func(auth witTypes.Option[*types.Secret]) *wire.DurableStreamReader {
 		return wire.MakeDurableStreamReader(wire.DurableStreamReaderOptions{
 			Url: url, Mode: mode, TimeoutMs: uint64(options.Timeout.Milliseconds()),
@@ -51,10 +51,10 @@ func hostReader(url string, mode wire.DurableStreamMode, options ReadOptions) re
 			return wire.DurableStreamBatch{}, errorFromWire(res.Err())
 		}
 		return res.Ok(), nil
-	}
+	}, reader.Drop
 }
 
-func hostWriter(url, contentType, producerID string, options WriteOptions) appendCall {
+func hostWriter(url, contentType, producerID string, options WriteOptions) (appendCall, func()) {
 	writer := withAuth(options.Auth, func(auth witTypes.Option[*types.Secret]) *wire.DurableStreamWriter {
 		return wire.MakeDurableStreamWriter(wire.DurableStreamWriterOptions{
 			Url: url, ContentType: contentType, ProducerId: producerID, ProducerEpoch: options.Epoch,
@@ -67,5 +67,5 @@ func hostWriter(url, contentType, producerID string, options WriteOptions) appen
 			return wire.DurableStreamAppendReceipt{}, errorFromWire(res.Err())
 		}
 		return res.Ok(), nil
-	}
+	}, writer.Drop
 }

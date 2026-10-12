@@ -18,9 +18,9 @@ package golem
 
 import (
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/secretref"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -106,6 +106,8 @@ func readSecretValue[T any](d *definitions, path []string) (T, error) {
 	if err != nil {
 		return zero, err
 	}
+	// The handle is minted for this read; reveal only borrows it.
+	defer handle.Drop()
 	return revealSecret[T](d, path, handle)
 }
 

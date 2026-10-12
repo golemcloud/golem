@@ -49,7 +49,7 @@ func startToolCallHost(
 	stderrArg, stderr := requestOutput("stderr", streams.Stderr)
 
 	future := rpc.AsyncInvokeAndAwait(slices.Clone(path), input, stdinArg, stdoutArg, stderrArg)
-	return toolCall{
+	return guardCancel(toolCall{
 		stdout: stdout,
 		stderr: stderr,
 		wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
@@ -63,7 +63,7 @@ func startToolCallHost(
 			return res.Ok().Result, nil
 		},
 		cancel: future.Cancel,
-	}, nil
+	}), nil
 }
 
 // requestOutput creates the target and reader of an output the call requests.

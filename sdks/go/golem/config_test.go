@@ -226,7 +226,7 @@ func TestWithConfigEncodesLocalsSkipsSecrets(t *testing.T) {
 		noDefErrs(t, d)
 
 		var o clientOpts
-		WithConfig(demoAppConfig{
+		withConfig(demoAppConfig{
 			Greeting: "hi",
 			Db:       demoDBConfig{Url: "db://prod"},
 		})(&o)
@@ -403,4 +403,17 @@ func TestConfigFieldsTakeRestrictionTags(t *testing.T) {
 		}
 		t.Fatal("no retries declaration")
 	})
+}
+
+// Reading the config through another agent's definition is refused, instead of
+// caching a value of the wrong type for the running agent.
+func TestConfigThroughAnotherAgentsDefinitionIsRefused(t *testing.T) {
+	running := &instance{def: &agentEntry{name: "Shop"}}
+	if err := checkConfigDefinition(running, "Shop"); err != nil {
+		t.Fatalf("own definition refused: %v", err)
+	}
+	err := checkConfigDefinition(running, "Billing")
+	if err == nil || !strings.Contains(err.Error(), "ctx.Config(Billing) inside agent Shop") {
+		t.Fatalf("another agent's definition gave %v", err)
+	}
 }

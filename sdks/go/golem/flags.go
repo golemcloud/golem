@@ -27,8 +27,8 @@ import (
 //
 //	var _ = golem.DefineFlags[Perms]()
 //
-// Flag names are the field names with the first letter lower-cased, in
-// declaration order — the same rule record fields follow. Order is the wire
+// Flag names are the field names in lowerCamelCase with each initialism as one
+// word, in declaration order — the same rule record fields follow. Order is the wire
 // order, so reordering the fields is a breaking change.
 //
 // Without the registration the struct would lower to a record of bools, which
@@ -36,8 +36,9 @@ import (
 
 // DefineFlags registers a struct of bool fields as a WIT flags set. Call it from
 // a package-level var so registration happens before the component is invoked.
-func DefineFlags[T any]() *engine.FlagsDef {
-	return defineFlagsInto[T](defs)
+func DefineFlags[T any]() struct{} {
+	defineFlagsInto[T](defs)
+	return struct{}{}
 }
 
 // defineFlagsInto is the instance-scoped implementation behind DefineFlags.

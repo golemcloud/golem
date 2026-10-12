@@ -16,10 +16,10 @@ package golem
 
 import (
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
@@ -105,7 +105,7 @@ func paramsTypeProblem(t reflect.Type) string {
 // DefineAgent declares a config-less agent and returns its state-free
 // [AgentDefinition]. Put it in a package-level var in the agent's DEFINITION
 // package; other agents import that package to call the agent. The behaviour and
-// the private state are attached separately with [Implement] — typically from a
+// the private state are attached separately with [AgentDefinition.Implement] — typically from a
 // different (implementation) package, so agents can call one another without a Go
 // import cycle.
 //
@@ -116,10 +116,11 @@ func DefineAgent[Id any](spec Spec) *AgentDefinition[Id, NoConfig] {
 
 // DefineConfiguredAgent declares an agent with config type Cfg and returns its
 // state-free [AgentDefinition]. Cfg rides on the definition, so a method reads
-// config with [Config] and the constructor reads it with [InitContext.Config].
-// Attach the behaviour with [ImplementConfigured] (whose init receives an
+// config with [Context.Config] and the constructor reads it with
+// [InitContext.Config]. Attach the behaviour with
+// [AgentDefinition.ImplementConfigured] (whose init receives an
 // *[InitContext]); an agent whose constructor does not itself need config can
-// still use the plain [Implement].
+// still use the plain [AgentDefinition.Implement].
 //
 //	type ShopConfig struct{ Greeting string }
 //	var Shop = golem.DefineConfiguredAgent[ShopID, ShopConfig](golem.Spec{Name: "Shop"})
@@ -129,9 +130,9 @@ func DefineConfiguredAgent[Id any, Cfg any](spec Spec) *AgentDefinition[Id, Cfg]
 
 // defineAgentInto registers the agent's DEFINITION shell (name, mode, mount,
 // snapshot policy, id fields, and config surface) on d and returns the handle.
-// The constructor and the methods are attached later by [Implement]/[Bound].
-// Tests call it with their own definitions for full isolation. (It must stay a
-// generic function — Go forbids generic methods.)
+// The constructor and the methods are attached later by
+// [AgentDefinition.Implement] and [AgentImpl.Handle]. Tests call it with their
+// own definitions for full isolation.
 func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinition[Id, Cfg] {
 	idType := reflect.TypeFor[Id]()
 	if spec.Name == "" {
@@ -152,6 +153,9 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 		// Record but still register (with no id fields) so a later Implement attaches
 		// rather than cascading into "unknown agent" errors.
 		d.RecordErr(spec.Name, "", "Id must be a struct, got %s", idType)
+	}
+	if spec.Snapshot.invalid != "" {
+		d.RecordErr(spec.Name, "", "%s", spec.Snapshot.invalid)
 	}
 	e := &agentEntry{
 		name:     spec.Name,
@@ -289,7 +293,7 @@ func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cf
 }
 
 // implementInto registers the agent's constructor on its already-declared entry
-// and returns the state-bound handle that [Handle] adds methods to. Tests call it
+// and returns the state-bound handle that [AgentImpl.Handle] adds methods to. Tests call it
 // with their own definitions for isolation.
 func implementInto[Id any, S any, Cfg any](
 	d *definitions,
@@ -368,7 +372,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		d.RecordErr(e.name, m.name, "method %q: PromptHint set %d times (a method has one prompt hint)", m.name, m.hintCount)
 	}
 	if m.descCount > 1 {
-		d.RecordErr(e.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
+		d.RecordErr(e.name, m.name, "method %q: Description set %d times (a method has one description)", m.name, m.descCount)
 	}
 	if m.readOnlyCount > 1 {
 		d.RecordErr(e.name, m.name, "method %q: ReadOnly set %d times (a method is read-only once)", m.name, m.readOnlyCount)
@@ -409,7 +413,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		stage := stageDecode
 		defer func() {
 			if r := recover(); r != nil {
-				trap(&PanicError{Method: me.name, Stage: stage, Value: r})
+				trap(&panicError{Method: me.name, Stage: stage, Value: r})
 			}
 		}()
 

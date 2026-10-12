@@ -89,7 +89,7 @@ func DefineFullAgentClient[Id any](name string, spec AgentClientSpec) *FullAgent
 
 // DefineConfiguredFullAgentClient declares a full agent client whose target
 // takes configuration Cfg, so a caller can pass typed creation-time overrides
-// with [WithConfig].
+// with [FullAgentClient.WithConfig].
 func DefineConfiguredFullAgentClient[Id any, Cfg any](name string, spec AgentClientSpec) *FullAgentClient[Id, Cfg] {
 	return defineFullAgentClientInto[Id, Cfg](defs, name, spec)
 }

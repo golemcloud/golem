@@ -15,9 +15,8 @@
 // Package websocket is a Go wrapper over Golem's durable WebSocket client
 // (golem:websocket). Connect to a URL, then Send/Receive text or binary frames.
 //
-// Like the other WASI wrappers, operations return an error (a receive timeout is
-// reported as ok=false, not an error), distinct from the fail-loud control-flow
-// surface. The connection is durable — sends/receives are journaled and replayed
+// Operations return an error (a receive timeout is reported as ok=false, not an
+// error), because a caller can act on a dropped or refused connection. The connection is durable — sends/receives are journaled and replayed
 // — and because they are remote side effects, using it inside a read-only method
 // traps.
 //
@@ -128,8 +127,10 @@ func wsError(e client.Error) error {
 			er.Message = fmt.Sprintf("connection closed: code %d %q", info.Code, info.Reason)
 		}
 		return er
-	default:
+	case client.ErrorOther:
 		return &Error{Kind: Other, Message: e.Other()}
+	default:
+		panic(fmt.Sprintf("golem/websocket: unhandled error case %d", e.Tag()))
 	}
 }
 
@@ -215,9 +216,9 @@ func (c *Conn) Receive() (Message, error) {
 }
 
 // ReceiveWithTimeout waits up to d for a frame. ok is false (nil error) if the
-// wait times out.
+// wait times out. A d of zero or less does not wait.
 func (c *Conn) ReceiveWithTimeout(d time.Duration) (msg Message, ok bool, err error) {
-	r := c.raw.ReceiveWithTimeout(uint64(d.Milliseconds()))
+	r := c.raw.ReceiveWithTimeout(timeoutMillis(d))
 	if r.IsErr() {
 		return Message{}, false, wsError(r.Err())
 	}
@@ -228,10 +229,43 @@ func (c *Conn) ReceiveWithTimeout(d time.Duration) (msg Message, ok bool, err er
 	return messageFromWit(opt.Some()), true, nil
 }
 
-// Close closes the connection with the given code and reason.
-func (c *Conn) Close(code uint16, reason string) error {
-	if r := c.raw.Close(witTypes.Some(code), witTypes.Some(reason)); r.IsErr() {
+// Close sends a close frame without a code or reason, and releases the
+// connection's host resource; do not use the connection after it.
+//
+//	defer conn.Close()
+func (c *Conn) Close() error {
+	return c.close(witTypes.None[uint16](), witTypes.None[string]())
+}
+
+// CloseWith sends a close frame with the given code and reason (an empty reason
+// is sent as none), and releases the connection's host resource.
+func (c *Conn) CloseWith(code uint16, reason string) error {
+	r := witTypes.None[string]()
+	if reason != "" {
+		r = witTypes.Some(reason)
+	}
+	return c.close(witTypes.Some(code), r)
+}
+
+func (c *Conn) close(code witTypes.Option[uint16], reason witTypes.Option[string]) error {
+	if c.raw == nil {
+		return nil
+	}
+	defer func() {
+		c.raw.Drop()
+		c.raw = nil
+	}()
+	if r := c.raw.Close(code, reason); r.IsErr() {
 		return wsError(r.Err())
 	}
 	return nil
+}
+
+// timeoutMillis is d in whole milliseconds, with zero or less meaning no wait
+// rather than a negative count wrapping to an endless one.
+func timeoutMillis(d time.Duration) uint64 {
+	if d <= 0 {
+		return 0
+	}
+	return uint64(d.Milliseconds())
 }

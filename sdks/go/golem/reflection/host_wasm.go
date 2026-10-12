@@ -18,11 +18,12 @@ package reflection
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	clock "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_clocks_0_3_0_system_clock"
-	"time"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
@@ -31,9 +32,7 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// DiscoverAgentTypes returns a snapshot of every agent type deployed in the
-// caller's environment.
-func DiscoverAgentTypes() []AgentType {
+func hostDiscoverAgentTypes() []AgentType {
 	registered := host.GetAllAgentTypes()
 	out := make([]AgentType, 0, len(registered))
 	for _, r := range registered {
@@ -42,9 +41,7 @@ func DiscoverAgentTypes() []AgentType {
 	return out
 }
 
-// DiscoverAgentType looks one agent type up by name. A missing deployment, or
-// one the caller cannot see, reports false rather than failing.
-func DiscoverAgentType(name string) (AgentType, bool) {
+func hostDiscoverAgentType(name string) (AgentType, bool) {
 	found := host.GetAgentType(name)
 	if found.IsNone() {
 		return AgentType{}, false
@@ -52,9 +49,7 @@ func DiscoverAgentType(name string) (AgentType, bool) {
 	return newAgentType(found.Some().AgentType), true
 }
 
-// DiscoverAgentTypeByID looks up the agent type behind an existing agent id.
-// Discovery never creates the agent.
-func DiscoverAgentTypeByID(agentID string) (AgentType, bool) {
+func hostDiscoverAgentTypeByID(agentID string) (AgentType, bool) {
 	found := host.GetAgentTypeByAgentId(agentID)
 	if found.IsNone() {
 		return AgentType{}, false
@@ -106,10 +101,7 @@ func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTre
 	return link.ScheduledInvocation(receipt.Metadata.AgentId, receipt.Metadata.IdempotencyKey, receipt.CancellationToken).(*golem.ScheduledInvocation), nil
 }
 
-// Get returns a client for the instance the constructor arguments identify,
-// creating it if it does not exist yet, exactly as a typed client would. Pass
-// [WithPhantomID] to address a phantom instance.
-func (r AgentType) Get(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostGet(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
 	o := applyOpts(opts)
 	if r.Mode() == golem.Ephemeral && o.phantomID.IsNone() {
 		return nil, fmt.Errorf("golem: %s is ephemeral and has no durable identity; use NewPhantom", r.Name())
@@ -140,16 +132,11 @@ func (r AgentType) Get(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient
 	}, nil
 }
 
-// NewPhantom allocates a fresh phantom instance and returns a client for it.
-func (r AgentType) NewPhantom(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostNewPhantom(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
 	return r.Get(ctorArgs, append(opts, WithPhantomID(engine.UUIDFromWit(apiHost.GenerateIdempotencyKey())))...)
 }
 
-// Bind addresses an agent by its id, which must name this agent type. Binding
-// does not create it; the first call to a durable id does, with the
-// configuration overrides given here. An agent that already exists keeps the
-// configuration it was created with.
-func (r AgentType) Bind(agentID string, opts ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostBind(agentID string, opts ...ClientOpt) (*AgentClient, error) {
 	if r.Mode() == golem.Ephemeral {
 		return nil, fmt.Errorf("golem: %s is ephemeral; an ephemeral agent id cannot be bound", r.Name())
 	}
@@ -175,9 +162,7 @@ func (r AgentType) Bind(agentID string, opts ...ClientOpt) (*AgentClient, error)
 	return &AgentClient{agentType: r, agentID: agentID, rpc: rpc}, nil
 }
 
-// AgentID renders the identity the constructor arguments (and phantom, if
-// any) name, without creating the agent.
-func (r AgentType) AgentID(ctorArgs map[string]any, phantom golem.Option[golem.UUID]) (string, error) {
+func (r AgentType) hostAgentID(ctorArgs map[string]any, phantom golem.Option[golem.UUID]) (string, error) {
 	ctor, err := r.packConstructor(ctorArgs)
 	if err != nil {
 		return "", fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
@@ -191,10 +176,7 @@ func reflectedAgentConfig(r AgentType, o clientOpts) ([]common.TypedAgentConfigV
 	return r.configValues(o.overrides)
 }
 
-// ParseRawAgentID takes an agent identity apart without decoding its
-// constructor into a Go type. Parsing is strict: a malformed identity is
-// reported rather than guessed at.
-func ParseRawAgentID(agentID string) (RawAgentID, error) {
+func hostParseRawAgentID(agentID string) (RawAgentID, error) {
 	res := host.ParseAgentId(agentID)
 	if res.IsErr() {
 		return RawAgentID{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, link.AgentError(res.Err()))
@@ -207,10 +189,7 @@ func ParseRawAgentID(agentID string) (RawAgentID, error) {
 	return RawAgentID{TypeName: t.F0, Constructor: link.TypedValue(t.F1).(golem.TypedValue), PhantomID: phantom}, nil
 }
 
-// BindAgentID binds an existing agent identity. It makes no claim about the
-// agent's type beyond what the identity says. Binding does not create the
-// agent, but the first call to a durable identity does.
-func BindAgentID(agentID string) (*DynamicAgentClient, error) {
+func hostBindAgentID(agentID string) (*DynamicAgentClient, error) {
 	parsed, err := ParseRawAgentID(agentID)
 	if err != nil {
 		return nil, err
@@ -222,9 +201,7 @@ func BindAgentID(agentID string) (*DynamicAgentClient, error) {
 	return &DynamicAgentClient{agentID: agentID, parsed: parsed, rpc: rpc}, nil
 }
 
-// MakeAgentID renders the identity of an agent of the given type, constructor
-// record and phantom, without creating it.
-func MakeAgentID(typeName string, constructor golem.TypedValue, phantom golem.Option[golem.UUID]) (string, error) {
+func hostMakeAgentID(typeName string, constructor golem.TypedValue, phantom golem.Option[golem.UUID]) (string, error) {
 	return makeAgentID(typeName, link.TypedValueWit(constructor).Value, phantom)
 }
 

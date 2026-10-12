@@ -87,8 +87,11 @@ func principalFromWit(p common.Principal) Principal {
 		return AgentPrincipal{AgentID: agentIDFromWit(p.Agent().AgentId)}
 	case common.PrincipalGolemUser:
 		return GolemUserPrincipal{AccountID: uuidFromWit(p.GolemUser().AccountId.Uuid)}
-	default:
+	case common.PrincipalAnonymous:
 		return AnonymousPrincipal{}
+	default:
+		// An unknown principal must never pass as anonymous.
+		panic(fmt.Sprintf("golem: unhandled principal case %d", p.Tag()))
 	}
 }
 

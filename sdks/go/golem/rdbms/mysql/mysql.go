@@ -85,8 +85,10 @@ func myError(e my.Error) error {
 		return &Error{Kind: QueryExecutionFailure, Message: e.QueryExecutionFailure()}
 	case my.ErrorQueryResponseFailure:
 		return &Error{Kind: QueryResponseFailure, Message: e.QueryResponseFailure()}
-	default:
+	case my.ErrorOther:
 		return &Error{Kind: Other, Message: e.Other()}
+	default:
+		panic(fmt.Sprintf("golem/rdbms/mysql: unhandled error case %d", e.Tag()))
 	}
 }
 
@@ -97,7 +99,12 @@ func myError(e my.Error) error {
 // ([Decimal], [Int], [JSON], …) and pass it as a query argument. A value read
 // back from a column family this wrapper does not recognize is also returned as
 // a DbValue; inspect its family with [DbValue.Kind].
-type DbValue struct{ raw my.DbValue }
+type DbValue struct {
+	raw my.DbValue
+	// err is why the value cannot be sent; the query reports it as a
+	// parameter error.
+	err error
+}
 
 // tagName gives a db-value family its display name (used by [DbValue.Kind] and
 // error text — never by encode/decode). It switches on the generated constants,
@@ -194,119 +201,133 @@ func (v DbValue) IsNull() bool { return v.raw.Tag() == my.DbValueNull }
 func (v DbValue) String() string { return "mysql:" + v.Kind() }
 
 // Null builds a SQL NULL parameter.
-func Null() DbValue { return DbValue{my.MakeDbValueNull()} }
+func Null() DbValue { return DbValue{raw: my.MakeDbValueNull()} }
 
 // Boolean builds a boolean parameter.
-func Boolean(v bool) DbValue { return DbValue{my.MakeDbValueBoolean(v)} }
+func Boolean(v bool) DbValue { return DbValue{raw: my.MakeDbValueBoolean(v)} }
 
 // Tinyint builds a signed tinyint parameter.
-func Tinyint(v int8) DbValue { return DbValue{my.MakeDbValueTinyint(v)} }
+func Tinyint(v int8) DbValue { return DbValue{raw: my.MakeDbValueTinyint(v)} }
 
 // Smallint builds a signed smallint parameter.
-func Smallint(v int16) DbValue { return DbValue{my.MakeDbValueSmallint(v)} }
+func Smallint(v int16) DbValue { return DbValue{raw: my.MakeDbValueSmallint(v)} }
 
 // Mediumint builds a signed mediumint parameter.
-func Mediumint(v int32) DbValue { return DbValue{my.MakeDbValueMediumint(v)} }
+func Mediumint(v int32) DbValue { return DbValue{raw: my.MakeDbValueMediumint(v)} }
 
 // Int builds a signed int parameter.
-func Int(v int32) DbValue { return DbValue{my.MakeDbValueInt(v)} }
+func Int(v int32) DbValue { return DbValue{raw: my.MakeDbValueInt(v)} }
 
 // Bigint builds a signed bigint parameter.
-func Bigint(v int64) DbValue { return DbValue{my.MakeDbValueBigint(v)} }
+func Bigint(v int64) DbValue { return DbValue{raw: my.MakeDbValueBigint(v)} }
 
 // TinyintUnsigned builds an unsigned tinyint parameter.
-func TinyintUnsigned(v uint8) DbValue { return DbValue{my.MakeDbValueTinyintUnsigned(v)} }
+func TinyintUnsigned(v uint8) DbValue { return DbValue{raw: my.MakeDbValueTinyintUnsigned(v)} }
 
 // SmallintUnsigned builds an unsigned smallint parameter.
-func SmallintUnsigned(v uint16) DbValue { return DbValue{my.MakeDbValueSmallintUnsigned(v)} }
+func SmallintUnsigned(v uint16) DbValue { return DbValue{raw: my.MakeDbValueSmallintUnsigned(v)} }
 
 // MediumintUnsigned builds an unsigned mediumint parameter.
-func MediumintUnsigned(v uint32) DbValue { return DbValue{my.MakeDbValueMediumintUnsigned(v)} }
+func MediumintUnsigned(v uint32) DbValue { return DbValue{raw: my.MakeDbValueMediumintUnsigned(v)} }
 
 // IntUnsigned builds an unsigned int parameter.
-func IntUnsigned(v uint32) DbValue { return DbValue{my.MakeDbValueIntUnsigned(v)} }
+func IntUnsigned(v uint32) DbValue { return DbValue{raw: my.MakeDbValueIntUnsigned(v)} }
 
 // BigintUnsigned builds an unsigned bigint parameter.
-func BigintUnsigned(v uint64) DbValue { return DbValue{my.MakeDbValueBigintUnsigned(v)} }
+func BigintUnsigned(v uint64) DbValue { return DbValue{raw: my.MakeDbValueBigintUnsigned(v)} }
 
 // Float builds a single-precision float parameter.
-func Float(v float32) DbValue { return DbValue{my.MakeDbValueFloat(v)} }
+func Float(v float32) DbValue { return DbValue{raw: my.MakeDbValueFloat(v)} }
 
 // Double builds a double-precision float parameter.
-func Double(v float64) DbValue { return DbValue{my.MakeDbValueDouble(v)} }
+func Double(v float64) DbValue { return DbValue{raw: my.MakeDbValueDouble(v)} }
 
 // Decimal builds an exact decimal parameter from its string form (so no
 // precision is lost).
-func Decimal(v string) DbValue { return DbValue{my.MakeDbValueDecimal(v)} }
+func Decimal(v string) DbValue { return DbValue{raw: my.MakeDbValueDecimal(v)} }
 
 // Year builds a year parameter.
-func Year(v uint16) DbValue { return DbValue{my.MakeDbValueYear(v)} }
+func Year(v uint16) DbValue { return DbValue{raw: my.MakeDbValueYear(v)} }
 
 // Fixchar builds a fixed-length char parameter.
-func Fixchar(v string) DbValue { return DbValue{my.MakeDbValueFixchar(v)} }
+func Fixchar(v string) DbValue { return DbValue{raw: my.MakeDbValueFixchar(v)} }
 
 // Varchar builds a varchar parameter.
-func Varchar(v string) DbValue { return DbValue{my.MakeDbValueVarchar(v)} }
+func Varchar(v string) DbValue { return DbValue{raw: my.MakeDbValueVarchar(v)} }
 
 // Tinytext builds a tinytext parameter.
-func Tinytext(v string) DbValue { return DbValue{my.MakeDbValueTinytext(v)} }
+func Tinytext(v string) DbValue { return DbValue{raw: my.MakeDbValueTinytext(v)} }
 
 // Text builds a text parameter.
-func Text(v string) DbValue { return DbValue{my.MakeDbValueText(v)} }
+func Text(v string) DbValue { return DbValue{raw: my.MakeDbValueText(v)} }
 
 // Mediumtext builds a mediumtext parameter.
-func Mediumtext(v string) DbValue { return DbValue{my.MakeDbValueMediumtext(v)} }
+func Mediumtext(v string) DbValue { return DbValue{raw: my.MakeDbValueMediumtext(v)} }
 
 // Longtext builds a longtext parameter.
-func Longtext(v string) DbValue { return DbValue{my.MakeDbValueLongtext(v)} }
+func Longtext(v string) DbValue { return DbValue{raw: my.MakeDbValueLongtext(v)} }
 
 // Binary builds a fixed-length binary parameter.
-func Binary(v []byte) DbValue { return DbValue{my.MakeDbValueBinary(v)} }
+func Binary(v []byte) DbValue { return DbValue{raw: my.MakeDbValueBinary(v)} }
 
 // Varbinary builds a varbinary parameter.
-func Varbinary(v []byte) DbValue { return DbValue{my.MakeDbValueVarbinary(v)} }
+func Varbinary(v []byte) DbValue { return DbValue{raw: my.MakeDbValueVarbinary(v)} }
 
 // Tinyblob builds a tinyblob parameter.
-func Tinyblob(v []byte) DbValue { return DbValue{my.MakeDbValueTinyblob(v)} }
+func Tinyblob(v []byte) DbValue { return DbValue{raw: my.MakeDbValueTinyblob(v)} }
 
 // Blob builds a blob parameter.
-func Blob(v []byte) DbValue { return DbValue{my.MakeDbValueBlob(v)} }
+func Blob(v []byte) DbValue { return DbValue{raw: my.MakeDbValueBlob(v)} }
 
 // Mediumblob builds a mediumblob parameter.
-func Mediumblob(v []byte) DbValue { return DbValue{my.MakeDbValueMediumblob(v)} }
+func Mediumblob(v []byte) DbValue { return DbValue{raw: my.MakeDbValueMediumblob(v)} }
 
 // Longblob builds a longblob parameter.
-func Longblob(v []byte) DbValue { return DbValue{my.MakeDbValueLongblob(v)} }
+func Longblob(v []byte) DbValue { return DbValue{raw: my.MakeDbValueLongblob(v)} }
 
 // Enumeration builds an enum parameter (the selected label).
-func Enumeration(v string) DbValue { return DbValue{my.MakeDbValueEnumeration(v)} }
+func Enumeration(v string) DbValue { return DbValue{raw: my.MakeDbValueEnumeration(v)} }
 
 // Set builds a set parameter (the comma-separated labels).
-func Set(v string) DbValue { return DbValue{my.MakeDbValueSet(v)} }
+func Set(v string) DbValue { return DbValue{raw: my.MakeDbValueSet(v)} }
 
 // Bit builds a bit-string parameter.
-func Bit(v []bool) DbValue { return DbValue{my.MakeDbValueBit(v)} }
+func Bit(v []bool) DbValue { return DbValue{raw: my.MakeDbValueBit(v)} }
 
 // JSON builds a json parameter from its serialized text.
-func JSON(v string) DbValue { return DbValue{my.MakeDbValueJson(v)} }
+func JSON(v string) DbValue { return DbValue{raw: my.MakeDbValueJson(v)} }
 
 // Date builds a date parameter.
 func Date(d rdbms.Date) DbValue {
-	return DbValue{my.MakeDbValueDate(my.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)})}
+	if err := d.Validate(); err != nil {
+		return DbValue{err: err}
+	}
+	return DbValue{raw: my.MakeDbValueDate(my.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)})}
 }
 
 // Datetime builds a datetime parameter.
 func Datetime(ts rdbms.Timestamp) DbValue {
-	return DbValue{my.MakeDbValueDatetime(typesTimestampToWit(ts))}
+	if err := ts.Validate(); err != nil {
+		return DbValue{err: err}
+	}
+	return DbValue{raw: my.MakeDbValueDatetime(typesTimestampToWit(ts))}
 }
 
 // Timestamp builds a timestamp parameter.
 func Timestamp(ts rdbms.Timestamp) DbValue {
-	return DbValue{my.MakeDbValueTimestamp(typesTimestampToWit(ts))}
+	if err := ts.Validate(); err != nil {
+		return DbValue{err: err}
+	}
+	return DbValue{raw: my.MakeDbValueTimestamp(typesTimestampToWit(ts))}
 }
 
 // Time builds a time-of-day parameter.
-func Time(t rdbms.Time) DbValue { return DbValue{my.MakeDbValueTime(typesTimeToWit(t))} }
+func Time(t rdbms.Time) DbValue {
+	if err := t.Validate(); err != nil {
+		return DbValue{err: err}
+	}
+	return DbValue{raw: my.MakeDbValueTime(typesTimeToWit(t))}
+}
 
 // ── Parameter encoding ───────────────────────────────────────────────────────
 
@@ -315,7 +336,7 @@ func encodeParam(v any) (my.DbValue, error) {
 	case nil:
 		return my.MakeDbValueNull(), nil
 	case DbValue:
-		return x.raw, nil
+		return x.raw, x.err
 	case bool:
 		return my.MakeDbValueBoolean(x), nil
 	case int:
@@ -445,7 +466,7 @@ func decodeValue(v my.DbValue) any {
 	case my.DbValueJson:
 		return v.Json()
 	default:
-		return DbValue{raw: v}
+		panic(fmt.Sprintf("golem/rdbms/mysql: unhandled value case %s", tagName(v.Tag())))
 	}
 }
 

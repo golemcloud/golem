@@ -70,7 +70,7 @@ func TestAReaderDeliversBatchesAndPromotesCheckpoints(t *testing.T) {
 		batch(`[]`, "o2", true, false),
 		batch(`[{"N":3}]`, "o3", true, true),
 	)
-	r := newReader[item]("", ReadOptions{IdleDelay: time.Millisecond, Retry: RetryOptions{MaxRetries: 2, InitialDelay: time.Millisecond, MaxDelay: time.Millisecond}}, wire.DurableStreamModeJson, ReadJSON[item]("", ReadOptions{}).decode)
+	r := newReader[item]("", ReadOptions{IdleDelay: time.Millisecond, Retry: golem.Some(RetryOptions{MaxRetries: 2, InitialDelay: time.Millisecond, MaxDelay: time.Millisecond})}, wire.DurableStreamModeJson, ReadJSON[item]("", ReadOptions{}).decode)
 	r.read = read
 
 	first, ok, err := r.Next()
@@ -97,14 +97,14 @@ func TestAReaderStopsOnPermanentErrorsAndBadCheckpoints(t *testing.T) {
 	read, _ := scripted(t, transient(wire.DurableStreamErrorKindNotFound))
 	r := ReadBytes("", ReadOptions{})
 	r.read = read
-	if _, _, err := r.Next(); err == nil || err.(*Error).Kind != KindNotFound {
+	if _, _, err := r.Next(); err == nil || err.(*Error).Kind != NotFound {
 		t.Errorf("a missing stream gave %v", err)
 	}
 
 	read, _ = scripted(t, batch("", "now", true, false))
 	r = ReadBytes("", ReadOptions{})
 	r.read = read
-	if _, _, err := r.Next(); err == nil || err.(*Error).Kind != KindProtocolError {
+	if _, _, err := r.Next(); err == nil || err.(*Error).Kind != ProtocolError {
 		t.Errorf("an unresolved checkpoint gave %v", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestAWriterSequencesAndRetriesItsAppends(t *testing.T) {
 	if receipt, err := w.Close(); err != nil || !receipt.Closed || w.Producer().Sequence != 2 {
 		t.Fatalf("close %+v, %v", receipt, err)
 	}
-	if _, err := w.AppendBytes([]byte("late"), false); err == nil || err.(*Error).Kind != KindClosed {
+	if _, err := w.AppendBytes([]byte("late"), false); err == nil || err.(*Error).Kind != Closed {
 		t.Errorf("appending after close gave %v", err)
 	}
 
@@ -142,10 +142,10 @@ func TestAWriterSequencesAndRetriesItsAppends(t *testing.T) {
 	w.append = func(r wire.DurableStreamAppendRequest) (wire.DurableStreamAppendReceipt, *Error) {
 		return wire.DurableStreamAppendReceipt{Sequence: r.Sequence + 1}, nil
 	}
-	if _, err := w.AppendBytes([]byte("x"), false); err == nil || err.(*Error).Kind != KindProducerDiverged || !w.HasPending() {
+	if _, err := w.AppendBytes([]byte("x"), false); err == nil || err.(*Error).Kind != ProducerDiverged || !w.HasPending() {
 		t.Errorf("a diverged acknowledgement gave %v", err)
 	}
-	if _, err := w.AppendBytes([]byte("y"), false); err == nil || err.(*Error).Kind != KindSequenceConflict {
+	if _, err := w.AppendBytes([]byte("y"), false); err == nil || err.(*Error).Kind != SequenceConflict {
 		t.Errorf("overtaking a pending append gave %v", err)
 	}
 	if _, err := w.AppendBytes(nil, true); !errors.As(err, new(*Error)) {
@@ -167,5 +167,53 @@ func TestRetryDelaysBackOffAndHonourRetryAfter(t *testing.T) {
 	e.RetryAfter = golem.Some(time.Second)
 	if got, _ := r.delay(e, 0); got != time.Second {
 		t.Errorf("retry-after ignored: %v", got)
+	}
+}
+
+// Retry left unset uses the default; golem.Some(RetryOptions{}) retries nothing.
+func TestRetryUnsetIsDefaultAndZeroRetriesNothing(t *testing.T) {
+	if got := retryOrDefault(golem.None[RetryOptions]()); got != DefaultRetry {
+		t.Fatalf("unset retry = %+v, want the default", got)
+	}
+	if _, retry := retryOrDefault(golem.Some(RetryOptions{})).delay(newError(Timeout, "x"), 0); retry {
+		t.Fatal("a zero RetryOptions retried")
+	}
+}
+
+// The backoff doubles per failure and saturates at the limit instead of
+// overflowing into a negative delay.
+func TestBackoffSaturatesAtTheLimit(t *testing.T) {
+	for _, c := range []struct {
+		failures uint32
+		want     time.Duration
+	}{{0, time.Millisecond}, {3, 8 * time.Millisecond}, {62, time.Second}, {1 << 31, time.Second}} {
+		if got := backoffAfter(time.Millisecond, time.Second, c.failures); got != c.want {
+			t.Errorf("backoff after %d failures = %v, want %v", c.failures, got, c.want)
+		}
+	}
+}
+
+// The live transport maps onto the host's long-poll and SSE.
+func TestLiveTransportMapsOntoTheHost(t *testing.T) {
+	if LongPoll.toWire() != wire.DurableStreamTransportLongPoll || SSE.toWire() != wire.DurableStreamTransportSse {
+		t.Fatal("live transport maps wrongly")
+	}
+}
+
+// Closing a reader, or releasing a writer, frees its host resource once; a
+// released writer refuses further appends instead of reaching the freed one.
+func TestReaderCloseAndWriterReleaseFreeTheHostResource(t *testing.T) {
+	releases := 0
+	r := &Reader[byte]{release: func() { releases++ }}
+	r.Close()
+	r.Close()
+	w := &Writer{release: func() { releases++ }, retry: DefaultRetry, producer: Producer{ID: "p"}}
+	w.Release()
+	w.Release()
+	if releases != 2 {
+		t.Fatalf("released %d times, want 2", releases)
+	}
+	if _, err := w.AppendBytes([]byte("x"), false); err == nil {
+		t.Fatal("a released writer appended")
 	}
 }

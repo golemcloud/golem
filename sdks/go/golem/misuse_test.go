@@ -17,6 +17,7 @@ package golem
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // withDefs runs fn against a fresh, fully isolated definition set. Because
@@ -50,15 +51,15 @@ func noDefErrs(t *testing.T, d *definitions) {
 
 // --- repeated / overwriting settings ---------------------------------------
 
-func TestMisuseRepeatedDesc(t *testing.T) {
+func TestMisuseRepeatedDescription(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
-		m := def.Method[Unit, Unit]("m", Desc("a"), Desc("b"))
+		m := def.Method[Unit, Unit]("m", Description("a"), Description("b"))
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
 		impl.Handle(m, func(*Context[St], Unit) Unit { return Unit{} })
-		mustDefErr(t, d, "Desc set 2 times")
+		mustDefErr(t, d, "Description set 2 times")
 	})
 }
 
@@ -217,5 +218,33 @@ func TestMisuseRepeatedPromptHint(t *testing.T) {
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
 		impl.Handle(m, func(*Context[St], Unit) Unit { return Unit{} })
 		mustDefErr(t, d, "PromptHint set 2 times")
+	})
+}
+
+// Two fields that map to one schema name (UserID and UserId both become userId)
+// would publish a record with a duplicate field.
+func TestMisuseFieldsWithOneSchemaName(t *testing.T) {
+	type Id struct{ Name string }
+	type In struct {
+		UserID string
+		UserId string //nolint:revive // the clash under test
+	}
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
+		m := def.Method[In, Unit]("m")
+		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		impl.Handle(m, func(*Context[St], In) Unit { return Unit{} })
+		mustDefErr(t, d, `fields UserID and UserId have the same schema name "userId"`)
+	})
+}
+
+// A snapshot interval of zero or less would wrap to an interval of about 584
+// years on the wire.
+func TestMisuseNonPositiveSnapshotInterval(t *testing.T) {
+	type Id struct{ Name string }
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Snapshot: SnapshotPeriodic(-time.Second)})
+		mustDefErr(t, d, "SnapshotPeriodic(-1s): the interval must be positive")
 	})
 }

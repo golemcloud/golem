@@ -16,11 +16,12 @@ package reflection
 
 import (
 	"fmt"
+	"io"
+	"strings"
+
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	"github.com/golemcloud/golem/sdks/go/golem/tool"
-	"io"
-	"strings"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -505,3 +506,10 @@ func ToolOf(m tool.Metadata) Tool {
 	name, wit := link.ToolMetadata(m)
 	return newTool(name, wit)
 }
+
+// DiscoverTools returns a snapshot of every tool the calling agent may reach in
+// its environment.
+func DiscoverTools() []Tool { return hostDiscoverTools() }
+
+// DiscoverTool looks one tool up by its lookup name.
+func DiscoverTool(name string) (Tool, bool) { return hostDiscoverTool(name) }

@@ -50,9 +50,12 @@ import (
 
 // Atomically runs f as an atomic region: on normal return the region commits, so
 // on a later replay it is treated as a single completed step. If f panics, the
-// region is left open (MarkEndOperation is never reached) and the runtime
-// re-executes the whole region on retry — all-or-nothing. Panicking is therefore
-// the way to abort a region, consistent with the fail-loud RPC/promise model.
+// component traps at once, with the region left open, and the runtime
+// re-executes the whole region on retry — all-or-nothing. The trap happens even
+// when something above Atomically would recover the panic (a tool handler or
+// the HTTP router turns a panic into a response), because the invocation must
+// not go on inside the open region. Panicking is therefore the way to abort a
+// region, consistent with the fail-loud RPC/promise model.
 //
 // Return a value by capturing it in an outer variable:
 //
@@ -60,7 +63,7 @@ import (
 //	durability.Atomically(func() { total = recompute() })
 func Atomically(f func()) {
 	begin := apiHost.MarkBeginOperation()
-	f() // if this panics, the region stays open and is replayed on retry
+	link.TrapOnPanic("atomic region", f)
 	apiHost.MarkEndOperation(begin)
 }
 

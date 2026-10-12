@@ -16,6 +16,7 @@ package websocket
 
 import (
 	"testing"
+	"time"
 
 	client "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_websocket_client"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -68,5 +69,17 @@ func TestErrorMapping(t *testing.T) {
 	closed := wsError(client.MakeErrorClosed(witTypes.Some(client.CloseInfo{Code: 1001, Reason: "bye"}))).(*Error)
 	if !closed.IsClosed() || closed.CloseCode != 1001 || closed.CloseReason != "bye" {
 		t.Fatalf("closed = %+v", closed)
+	}
+}
+
+// A timeout of zero or less does not wait, instead of wrapping to an endless one.
+func TestNonPositiveTimeoutDoesNotWait(t *testing.T) {
+	for _, d := range []time.Duration{-time.Second, 0, time.Microsecond} {
+		if got := timeoutMillis(d); got != 0 {
+			t.Errorf("timeout %v gave %d ms", d, got)
+		}
+	}
+	if got := timeoutMillis(1500 * time.Millisecond); got != 1500 {
+		t.Errorf("1.5s gave %d ms", got)
 	}
 }

@@ -301,23 +301,38 @@ func optionOf[T any](p *T) witTypes.Option[T] {
 func numericBound(tag uint8, text string) (types.NumericBound, error) {
 	switch tag {
 	case types.SchemaTypeBodyS8Type, types.SchemaTypeBodyS16Type, types.SchemaTypeBodyS32Type, types.SchemaTypeBodyS64Type:
-		n, err := strconv.ParseInt(text, 10, 64)
+		n, err := strconv.ParseInt(text, 10, boundBits(tag))
 		if err != nil {
-			return types.NumericBound{}, fmt.Errorf("bound %q is not an integer", text)
+			return types.NumericBound{}, fmt.Errorf("bound %q is not an integer the type holds", text)
 		}
 		return types.MakeNumericBoundSigned(n), nil
 	case types.SchemaTypeBodyF32Type, types.SchemaTypeBodyF64Type:
-		f, err := strconv.ParseFloat(text, 64)
+		f, err := strconv.ParseFloat(text, boundBits(tag))
 		if err != nil || math.IsNaN(f) {
-			return types.NumericBound{}, fmt.Errorf("bound %q is not a number", text)
+			return types.NumericBound{}, fmt.Errorf("bound %q is not a number the type holds", text)
 		}
 		return types.MakeNumericBoundFloatBits(math.Float64bits(f)), nil
 	}
-	n, err := strconv.ParseUint(text, 10, 64)
+	n, err := strconv.ParseUint(text, 10, boundBits(tag))
 	if err != nil {
-		return types.NumericBound{}, fmt.Errorf("bound %q is not a non-negative integer", text)
+		return types.NumericBound{}, fmt.Errorf("bound %q is not a non-negative integer the type holds", text)
 	}
 	return types.MakeNumericBoundUnsigned(n), nil
+}
+
+// boundBits is the width of a numeric type, so a bound that no value of the
+// type can reach (min=300 on an int8) is refused.
+func boundBits(tag uint8) int {
+	switch tag {
+	case types.SchemaTypeBodyS8Type, types.SchemaTypeBodyU8Type:
+		return 8
+	case types.SchemaTypeBodyS16Type, types.SchemaTypeBodyU16Type:
+		return 16
+	case types.SchemaTypeBodyS32Type, types.SchemaTypeBodyU32Type, types.SchemaTypeBodyF32Type:
+		return 32
+	default:
+		return 64
+	}
 }
 
 func numericBody(tag uint8, rs witTypes.Option[types.NumericRestrictions]) types.SchemaTypeBody {

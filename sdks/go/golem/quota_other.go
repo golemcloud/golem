@@ -22,10 +22,10 @@ import "errors"
 
 var errQuotaOutsideComponent = errors.New("golem: quota tokens are only available inside a component")
 
-func NewQuotaToken(string, uint64) QuotaToken { panic(errQuotaOutsideComponent) }
+func hostNewQuotaToken(string, uint64) QuotaToken { panic(errQuotaOutsideComponent) }
 
-func (t QuotaToken) Reserve(uint64) (*Reservation, error) { return nil, errQuotaOutsideComponent }
+func (t QuotaToken) hostReserve(uint64) (*Reservation, error) { return nil, errQuotaOutsideComponent }
 
-func (t QuotaToken) Split(uint64) QuotaToken { panic(errQuotaOutsideComponent) }
+func (t QuotaToken) hostSplit(uint64) QuotaToken { panic(errQuotaOutsideComponent) }
 
-func (t QuotaToken) Merge(QuotaToken) { panic(errQuotaOutsideComponent) }
+func (t QuotaToken) hostMerge(QuotaToken) { panic(errQuotaOutsideComponent) }

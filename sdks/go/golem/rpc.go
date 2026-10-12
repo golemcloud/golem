@@ -16,10 +16,10 @@ package golem
 
 import (
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"time"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	clock "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_clocks_0_3_0_system_clock"
@@ -196,7 +196,7 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	}
 	if out.IsNone() {
 		return zero, &RemoteCallError{
-			Target: target, Method: method, Kind: RemoteProtocol,
+			Target: target, Method: method, Kind: RemoteProtocolError,
 			Message: "remote returned no value for a non-unit output",
 		}
 	}
@@ -205,7 +205,7 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	dec := engine.Decoder{Nodes: tree.ValueNodes}
 	if err := defs.Compile(outType).Decode(&dec, dst, tree.Root); err != nil {
 		return zero, &RemoteCallError{
-			Target: target, Method: method, Kind: RemoteProtocol,
+			Target: target, Method: method, Kind: RemoteProtocolError,
 			Message: "remote returned an undecodable value: " + err.Error(),
 		}
 	}
@@ -236,9 +236,14 @@ type ScheduledInvocation struct {
 func (s *ScheduledInvocation) Cancel() {
 	if s.token != nil {
 		s.token.Cancel()
+		dropCancellationToken(s.token)
 		s.token = nil
 	}
 }
+
+// dropCancellationToken releases a used token. The component build binds it
+// to the resource's Drop; a native build has no host resource to release.
+var dropCancellationToken = func(*host.CancellationToken) {}
 
 func instantFrom(t time.Time) clock.Instant {
 	return clock.Instant{
@@ -251,20 +256,21 @@ func instantFrom(t time.Time) clock.Instant {
 // errors
 // ---------------------------------------------------------------------------
 
-// RemoteCallErrorKind classifies an RPC failure, mirroring the WIT rpc-error cases.
+// RemoteCallErrorKind classifies an RPC failure. The kinds are the host's
+// rpc-error cases.
 type RemoteCallErrorKind uint8
 
 const (
-	// RemoteProtocol is a transport or encoding level failure.
-	RemoteProtocol RemoteCallErrorKind = iota
+	// RemoteProtocolError is a transport or encoding level failure.
+	RemoteProtocolError RemoteCallErrorKind = iota
 	// RemoteDenied means the caller is not permitted to make this call.
 	RemoteDenied
 	// RemoteNotFound means the target agent or method does not exist.
 	RemoteNotFound
-	// RemoteInternal is an unexpected failure on the remote side.
-	RemoteInternal
-	// RemoteAgent means the remote returned a domain error; see Cause.
-	RemoteAgent
+	// RemoteInternalError is an unexpected failure on the remote side.
+	RemoteInternalError
+	// RemoteAgentError means the remote returned a domain error; see Cause.
+	RemoteAgentError
 )
 
 func (k RemoteCallErrorKind) String() string {
@@ -273,9 +279,9 @@ func (k RemoteCallErrorKind) String() string {
 		return "denied"
 	case RemoteNotFound:
 		return "not found"
-	case RemoteInternal:
+	case RemoteInternalError:
 		return "remote internal error"
-	case RemoteAgent:
+	case RemoteAgentError:
 		return "remote agent error"
 	default:
 		return "protocol error"
@@ -308,20 +314,20 @@ func rpcErrorToGo(target, method string, e host.RpcError) error {
 	err := &RemoteCallError{Target: target, Method: method}
 	switch e.Tag() {
 	case host.RpcErrorProtocolError:
-		err.Kind, err.Message = RemoteProtocol, e.ProtocolError()
+		err.Kind, err.Message = RemoteProtocolError, e.ProtocolError()
 	case host.RpcErrorDenied:
 		err.Kind, err.Message = RemoteDenied, e.Denied()
 	case host.RpcErrorNotFound:
 		err.Kind, err.Message = RemoteNotFound, e.NotFound()
 	case host.RpcErrorRemoteInternalError:
-		err.Kind, err.Message = RemoteInternal, e.RemoteInternalError()
+		err.Kind, err.Message = RemoteInternalError, e.RemoteInternalError()
 	case host.RpcErrorRemoteAgentError:
 		remote := e.RemoteAgentError()
-		err.Kind = RemoteAgent
+		err.Kind = RemoteAgentError
 		err.Cause = agentErrorToGo(remote)
 		err.Message = err.Cause.Error()
 	default:
-		err.Kind, err.Message = RemoteProtocol, fmt.Sprintf("unknown rpc-error (tag %d)", e.Tag())
+		panic(fmt.Sprintf("golem: unhandled rpc-error case %d", e.Tag()))
 	}
 	return err
 }

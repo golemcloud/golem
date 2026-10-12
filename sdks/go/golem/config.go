@@ -16,10 +16,10 @@ package golem
 
 import (
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -34,7 +34,7 @@ import (
 // read-from-anywhere descriptors.
 //
 // Declare the config struct and attach it to the agent with
-// [DefineConfiguredAgent]; the config type Cfg rides on the returned [Agent], so
+// [DefineConfiguredAgent]; the config type Cfg rides on the returned [AgentDefinition], so
 // there is no separate config handle:
 //
 //	type ShopConfig struct {
@@ -43,7 +43,7 @@ import (
 //	}
 //	var Shop = golem.DefineConfiguredAgent[ShopID, ShopConfig](spec)
 //
-// and read it from inside a method via [Config] (or, in the constructor,
+// and read it from inside a method via [Context.Config] (or, in the constructor,
 // [InitContext.Config]):
 //
 //	cfg := golem.Config(Shop, ctx)  // ctx is the running agent's *Context[S]
@@ -58,8 +58,8 @@ import (
 // whether to store) it.
 //
 // Each exported field of the config struct becomes a config key; nested structs
-// flatten into multi-segment paths (field names lower-cased to match
-// record-field naming), and any [Secret]-typed field becomes a secret. The
+// flatten into multi-segment paths (field names in lowerCamelCase, as record
+// fields are named), and any [Secret]-typed field becomes a secret. The
 // platform provisions the values (golem.yaml config/env/envDefaults/
 // secretDefaults + the CLI); the guest reads them at runtime through
 // golem:agent/host.get-config-value, keyed by the multi-segment path. Access is
@@ -216,16 +216,30 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // so a rotated secret is observed and the user decides when to read (and whether
 // to store) it. A read failure has no in-band recovery, so it panics rather than
 // returning an error; the panic traps the component, as in Rust.
+//
+// def must be the running agent's own definition: another agent's config is not
+// this worker's, and reading it is a programming error, so it panics.
 func (c *Context[S]) Config[Id any, Cfg any](def *AgentDefinition[Id, Cfg]) Cfg {
 	// def fixes Cfg; the receiver is the compile-time "inside a running method"
-	// gate. Neither carries the config itself: it is materialized from the
-	// process-global active instance.
-	_ = def
+	// gate. The config itself is materialized from the process-global active
+	// instance.
+	if err := checkConfigDefinition(active, def.name); err != nil {
+		panic(err)
+	}
 	return materializeAgentConfig[Cfg]()
 }
 
+// checkConfigDefinition rejects reading the config through another agent's
+// definition. Pure.
+func checkConfigDefinition(running *instance, name string) error {
+	if running == nil || running.def == nil || running.def.name == name {
+		return nil
+	}
+	return fmt.Errorf("golem: ctx.Config(%s) inside agent %s: pass the running agent's own definition", name, running.def.name)
+}
+
 // Config reads the agent's config from within its constructor. It behaves like
-// [Config] and populates the same per-worker cache the methods reuse.
+// [Context.Config] and populates the same per-worker cache the methods reuse.
 func (c *InitContext[Id, S, Cfg]) Config() Cfg {
 	return materializeAgentConfig[Cfg]()
 }
@@ -262,7 +276,7 @@ func materializeAgentConfig[Cfg any]() Cfg {
 }
 
 // materializeConfig assembles a Cfg value by reading each declared leaf through
-// readLeaf; [Config] / [InitContext.Config] supply the host-backed reader.
+// readLeaf; [Context.Config] / [InitContext.Config] supply the host-backed reader.
 func materializeConfig[Cfg any](readLeaf func(lf configLeaf) (reflect.Value, error)) (Cfg, error) {
 	var zero Cfg
 	cfgType := reflect.TypeFor[Cfg]()
@@ -392,13 +406,24 @@ func secretErrorToGo(path []string, e secrets.SecretError) error {
 // client-creation time.
 type configOverrideFn func(d *definitions) ([]common.TypedAgentConfigValue, error)
 
-// WithConfig supplies the callee's local config values at client creation
-// (make-wasm-rpc's agent-config), overriding what the platform would otherwise
-// provision. Cfg is inferred from value; each local field is encoded as an
-// override and validated against the target agent's declarations by [AgentDefinition.Get]
-// (which already names the target). Secret fields are provisioned by the
-// platform, not by a caller, so they are skipped.
-func WithConfig[Cfg any](value Cfg) ClientOpt {
+// WithConfig supplies the target agent's local config values at client
+// creation (make-wasm-rpc's agent-config), overriding what the platform would
+// otherwise provision:
+//
+//	client := shop.Agent.Get(shop.ID{Name: "eu"}, shop.Agent.WithConfig(shop.Config{Greeting: "Hi"}))
+//
+// value replaces every local value: each local field of Cfg, its zero value
+// included, is sent as an override and validated against the target's
+// declarations. To override some values and keep the rest, use
+// [WithConfigEntries]. Secret fields are provisioned by the platform, not by a
+// caller, so they are skipped.
+func (a *AgentDefinition[Id, Cfg]) WithConfig(value Cfg) ClientOpt { return withConfig(value) }
+
+// WithConfig supplies the target agent's local config values at client
+// creation, as [AgentDefinition.WithConfig] does for a local agent.
+func (a *FullAgentClient[Id, Cfg]) WithConfig(value Cfg) ClientOpt { return withConfig(value) }
+
+func withConfig[Cfg any](value Cfg) ClientOpt {
 	return func(o *clientOpts) {
 		o.configs = append(o.configs, func(d *definitions) ([]common.TypedAgentConfigValue, error) {
 			return encodeConfigOverrides(d, value)
@@ -423,7 +448,7 @@ func ConfigEntryOf[T any](path []string, value T) ConfigEntry {
 // WithConfigEntries supplies some of the callee's local config values at
 // client creation, each at its own path; the rest keep their provisioned
 // values. Generated clients build these from their typed configuration
-// structs, whose fields need not follow [WithConfig]'s field-name paths.
+// structs, whose fields need not follow [AgentDefinition.WithConfig]'s field-name paths.
 func WithConfigEntries(entries ...ConfigEntry) ClientOpt {
 	return func(o *clientOpts) {
 		o.configs = append(o.configs, func(d *definitions) ([]common.TypedAgentConfigValue, error) {

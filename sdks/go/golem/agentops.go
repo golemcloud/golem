@@ -71,10 +71,14 @@ func (e *AgentOperationError) Error() string {
 }
 
 func agentOperationErrorFromWit(w apiHost.AgentOperationError) error {
-	if w.Tag() == apiHost.AgentOperationErrorPermissionDenied {
+	switch w.Tag() {
+	case apiHost.AgentOperationErrorPermissionDenied:
 		return &AgentOperationError{Kind: AgentOperationPermissionDenied}
+	case apiHost.AgentOperationErrorBackendError:
+		return &AgentOperationError{Kind: AgentOperationBackendError, Message: w.BackendError()}
+	default:
+		panic(fmt.Sprintf("golem: unhandled agent-operation-error case %d", w.Tag()))
 	}
-	return &AgentOperationError{Kind: AgentOperationBackendError, Message: w.BackendError()}
 }
 
 // AgentStatus is an agent's execution status.

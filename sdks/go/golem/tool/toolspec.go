@@ -482,15 +482,22 @@ func newToolPositionalArg[T any](b *argBinding) *PositionalArg[T] {
 	return a
 }
 
+// Name sets its name on the command line.
 func (a *PositionalArg[T]) Name(name string) *PositionalArg[T] { a.b.name = name; return a }
+
+// Doc sets its one-line summary in help.
 func (a *PositionalArg[T]) Doc(summary string) *PositionalArg[T] {
 	a.b.doc.summary = summary
 	return a
 }
+
+// Description sets its longer explanation in help.
 func (a *PositionalArg[T]) Description(text string) *PositionalArg[T] {
 	a.b.doc.description = text
 	return a
 }
+
+// ValueName sets the placeholder for its value in help.
 func (a *PositionalArg[T]) ValueName(n string) *PositionalArg[T] { a.b.valueName = n; return a }
 
 // AcceptsStdio lets the value be "-", read from standard input.
@@ -522,16 +529,32 @@ func newToolTailArg[T any](b *argBinding) *TailArg[T] {
 	return a
 }
 
-func (a *TailArg[T]) Name(name string) *TailArg[T]   { a.b.name = name; return a }
+// Name sets its name on the command line.
+func (a *TailArg[T]) Name(name string) *TailArg[T] { a.b.name = name; return a }
+
+// Doc sets its one-line summary in help.
 func (a *TailArg[T]) Doc(summary string) *TailArg[T] { a.b.doc.summary = summary; return a }
+
+// Description sets its longer explanation in help.
 func (a *TailArg[T]) Description(text string) *TailArg[T] {
 	a.b.doc.description = text
 	return a
 }
-func (a *TailArg[T]) ValueName(n string) *TailArg[T]   { a.b.valueName = n; return a }
-func (a *TailArg[T]) Min(n uint32) *TailArg[T]         { a.b.min = n; return a }
-func (a *TailArg[T]) Max(n uint32) *TailArg[T]         { a.b.max = &n; return a }
-func (a *TailArg[T]) AcceptsStdio() *TailArg[T]        { a.b.acceptsStdio = true; return a }
+
+// ValueName sets the placeholder for its value in help.
+func (a *TailArg[T]) ValueName(n string) *TailArg[T] { a.b.valueName = n; return a }
+
+// Min sets the fewest items it takes.
+func (a *TailArg[T]) Min(n uint32) *TailArg[T] { a.b.min = n; return a }
+
+// Max sets the most items it takes.
+func (a *TailArg[T]) Max(n uint32) *TailArg[T] { a.b.max = &n; return a }
+
+// AcceptsStdio lets the items be read from standard input.
+func (a *TailArg[T]) AcceptsStdio() *TailArg[T] { a.b.acceptsStdio = true; return a }
+
+// Separator sets the token required before the items, as "--" in
+// `git log -- <paths>`.
 func (a *TailArg[T]) Separator(sep string) *TailArg[T] { a.b.separator = sep; return a }
 
 // Verbatim takes everything after the separator as values, flags included.
@@ -554,18 +577,32 @@ func newToolOptionArg[T any](b *argBinding) *OptionArg[T] {
 	return a
 }
 
-func (a *OptionArg[T]) Name(name string) *OptionArg[T]   { a.b.name = name; return a }
-func (a *OptionArg[T]) Short(r rune) *OptionArg[T]       { a.b.short = r; return a }
-func (a *OptionArg[T]) Env(name string) *OptionArg[T]    { a.b.env = name; return a }
+// Name sets its name on the command line.
+func (a *OptionArg[T]) Name(name string) *OptionArg[T] { a.b.name = name; return a }
+
+// Short sets its one-letter form.
+func (a *OptionArg[T]) Short(r rune) *OptionArg[T] { a.b.short = r; return a }
+
+// Env names an environment variable that supplies the value when the command
+// line does not.
+func (a *OptionArg[T]) Env(name string) *OptionArg[T] { a.b.env = name; return a }
+
+// ValueName sets the placeholder for its value in help.
 func (a *OptionArg[T]) ValueName(n string) *OptionArg[T] { a.b.valueName = n; return a }
+
+// Doc sets its one-line summary in help.
 func (a *OptionArg[T]) Doc(summary string) *OptionArg[T] {
 	a.b.doc.summary = summary
 	return a
 }
+
+// Description sets its longer explanation in help.
 func (a *OptionArg[T]) Description(text string) *OptionArg[T] {
 	a.b.doc.description = text
 	return a
 }
+
+// Aliases adds other names it is accepted under.
 func (a *OptionArg[T]) Aliases(names ...string) *OptionArg[T] {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -601,15 +638,29 @@ func newToolListArg[T any](b *argBinding) *ListArg[T] {
 	return a
 }
 
-func (a *ListArg[T]) Name(name string) *ListArg[T]   { a.b.name = name; return a }
-func (a *ListArg[T]) Short(r rune) *ListArg[T]       { a.b.short = r; return a }
-func (a *ListArg[T]) Env(name string) *ListArg[T]    { a.b.env = name; return a }
+// Name sets its name on the command line.
+func (a *ListArg[T]) Name(name string) *ListArg[T] { a.b.name = name; return a }
+
+// Short sets its one-letter form.
+func (a *ListArg[T]) Short(r rune) *ListArg[T] { a.b.short = r; return a }
+
+// Env names an environment variable that supplies the value when the command
+// line does not.
+func (a *ListArg[T]) Env(name string) *ListArg[T] { a.b.env = name; return a }
+
+// ValueName sets the placeholder for its value in help.
 func (a *ListArg[T]) ValueName(n string) *ListArg[T] { a.b.valueName = n; return a }
+
+// Doc sets its one-line summary in help.
 func (a *ListArg[T]) Doc(summary string) *ListArg[T] { a.b.doc.summary = summary; return a }
+
+// Description sets its longer explanation in help.
 func (a *ListArg[T]) Description(text string) *ListArg[T] {
 	a.b.doc.description = text
 	return a
 }
+
+// Aliases adds other names it is accepted under.
 func (a *ListArg[T]) Aliases(names ...string) *ListArg[T] {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -647,18 +698,32 @@ func (a *ListArg[T]) toolRefs() refsDecl { return single(a) }
 // MapArg is a map field bound to a key-value option.
 type MapArg[K comparable, V any] struct{ b *argBinding }
 
-func (a *MapArg[K, V]) Name(name string) *MapArg[K, V]   { a.b.name = name; return a }
-func (a *MapArg[K, V]) Short(r rune) *MapArg[K, V]       { a.b.short = r; return a }
-func (a *MapArg[K, V]) Env(name string) *MapArg[K, V]    { a.b.env = name; return a }
+// Name sets its name on the command line.
+func (a *MapArg[K, V]) Name(name string) *MapArg[K, V] { a.b.name = name; return a }
+
+// Short sets its one-letter form.
+func (a *MapArg[K, V]) Short(r rune) *MapArg[K, V] { a.b.short = r; return a }
+
+// Env names an environment variable that supplies the value when the command
+// line does not.
+func (a *MapArg[K, V]) Env(name string) *MapArg[K, V] { a.b.env = name; return a }
+
+// ValueName sets the placeholder for its value in help.
 func (a *MapArg[K, V]) ValueName(n string) *MapArg[K, V] { a.b.valueName = n; return a }
+
+// Doc sets its one-line summary in help.
 func (a *MapArg[K, V]) Doc(summary string) *MapArg[K, V] {
 	a.b.doc.summary = summary
 	return a
 }
+
+// Description sets its longer explanation in help.
 func (a *MapArg[K, V]) Description(text string) *MapArg[K, V] {
 	a.b.doc.description = text
 	return a
 }
+
+// Aliases adds other names it is accepted under.
 func (a *MapArg[K, V]) Aliases(names ...string) *MapArg[K, V] {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -700,14 +765,26 @@ func (a *MapArg[K, V]) toolRefs() refsDecl { return single(a) }
 // FlagArg is a bool field bound to a switch.
 type FlagArg struct{ b *argBinding }
 
-func (a *FlagArg) Name(name string) *FlagArg   { a.b.name = name; return a }
-func (a *FlagArg) Short(r rune) *FlagArg       { a.b.short = r; return a }
-func (a *FlagArg) Env(name string) *FlagArg    { a.b.env = name; return a }
+// Name sets its name on the command line.
+func (a *FlagArg) Name(name string) *FlagArg { a.b.name = name; return a }
+
+// Short sets its one-letter form.
+func (a *FlagArg) Short(r rune) *FlagArg { a.b.short = r; return a }
+
+// Env names an environment variable that supplies the value when the command
+// line does not.
+func (a *FlagArg) Env(name string) *FlagArg { a.b.env = name; return a }
+
+// Doc sets its one-line summary in help.
 func (a *FlagArg) Doc(summary string) *FlagArg { a.b.doc.summary = summary; return a }
+
+// Description sets its longer explanation in help.
 func (a *FlagArg) Description(text string) *FlagArg {
 	a.b.doc.description = text
 	return a
 }
+
+// Aliases adds other names it is accepted under.
 func (a *FlagArg) Aliases(names ...string) *FlagArg {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -725,14 +802,26 @@ func (a *FlagArg) toolRefs() refsDecl { return single(a) }
 // CountFlagArg is a uint32 field bound to a counted switch.
 type CountFlagArg struct{ b *argBinding }
 
-func (a *CountFlagArg) Name(name string) *CountFlagArg   { a.b.name = name; return a }
-func (a *CountFlagArg) Short(r rune) *CountFlagArg       { a.b.short = r; return a }
-func (a *CountFlagArg) Env(name string) *CountFlagArg    { a.b.env = name; return a }
+// Name sets its name on the command line.
+func (a *CountFlagArg) Name(name string) *CountFlagArg { a.b.name = name; return a }
+
+// Short sets its one-letter form.
+func (a *CountFlagArg) Short(r rune) *CountFlagArg { a.b.short = r; return a }
+
+// Env names an environment variable that supplies the value when the command
+// line does not.
+func (a *CountFlagArg) Env(name string) *CountFlagArg { a.b.env = name; return a }
+
+// Doc sets its one-line summary in help.
 func (a *CountFlagArg) Doc(summary string) *CountFlagArg { a.b.doc.summary = summary; return a }
+
+// Description sets its longer explanation in help.
 func (a *CountFlagArg) Description(text string) *CountFlagArg {
 	a.b.doc.description = text
 	return a
 }
+
+// Aliases adds other names it is accepted under.
 func (a *CountFlagArg) Aliases(names ...string) *CountFlagArg {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -747,7 +836,10 @@ func (a *CountFlagArg) toolRefs() refsDecl { return single(a) }
 // StdinArg is the io.Reader field a command reads standard input from.
 type StdinArg struct{ b *stdinBinding }
 
+// Doc sets its one-line summary in help.
 func (a *StdinArg) Doc(summary string) *StdinArg { a.b.doc.summary = summary; return a }
+
+// Description sets its longer explanation in help.
 func (a *StdinArg) Description(text string) *StdinArg {
 	a.b.doc.description = text
 	return a

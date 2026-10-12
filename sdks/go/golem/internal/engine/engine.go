@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/golemcloud/golem/sdks/go/core/values"
 )
@@ -68,6 +69,10 @@ type Engine struct {
 	Pins     map[reflect.Type]string // NameType type-id overrides
 	Codecs   map[reflect.Type]*Codec // Compile memoization
 	Errs     []DefError              // registration-phase errors (derivation adds more)
+
+	// nameClashes holds the struct types already reported for two fields with
+	// one schema name, so each is reported once.
+	nameClashes map[reflect.Type]bool
 
 	// PrincipalType is the type the host fills from the invocation: a struct
 	// field of it carries no value, and it is invalid anywhere else.
@@ -121,3 +126,44 @@ func AllErrors(errs []DefError) string {
 type EncodeError struct{ Msg string }
 
 func (e *EncodeError) Error() string { return e.Msg }
+
+// validUTF8 returns s, or panics with an [EncodeError] when s is not valid
+// UTF-8: the host reads every string as UTF-8 and would otherwise trap with no
+// word on which value it was.
+func validUTF8(kind, s string) string {
+	if !utf8.ValidString(s) {
+		at := 0
+		for at < len(s) {
+			r, size := utf8.DecodeRuneInString(s[at:])
+			if r == utf8.RuneError && size == 1 {
+				break
+			}
+			at += size
+		}
+		panic(&EncodeError{fmt.Sprintf("%s value is not valid UTF-8 (invalid byte at offset %d)", kind, at)})
+	}
+	return s
+}
+
+// validRune returns r, or panics with an [EncodeError] when r is not a Unicode
+// scalar value (a surrogate half, or beyond U+10FFFF).
+func validRune(r rune) rune {
+	if !utf8.ValidRune(r) {
+		panic(&EncodeError{fmt.Sprintf("char value %U is not a Unicode scalar value", r)})
+	}
+	return r
+}
+
+// encodeField encodes field f of the struct value v, naming the field in an
+// [EncodeError] raised inside it, so the report says where the bad value is.
+func encodeField(b *ValBuilder, t reflect.Type, f Field, v reflect.Value) int32 {
+	defer func() {
+		if r := recover(); r != nil {
+			if ee, ok := r.(*EncodeError); ok {
+				panic(&EncodeError{fmt.Sprintf("%s.%s: %s", t, t.Field(f.Index).Name, ee.Msg)})
+			}
+			panic(r)
+		}
+	}()
+	return f.Codec.Encode(b, v.Field(f.Index))
+}

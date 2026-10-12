@@ -165,7 +165,7 @@ func init() {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
 		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
-			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stdout(stderr))},
+			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stderr(stderr))},
 			principalFromWit(principal))
 	}
 
@@ -210,7 +210,7 @@ func init() {
 			input:       input,
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
 			stdout:      newToolOutput("stdout", hostOutput(toolExports.Stdout(stdout))),
-			stderr:      newToolOutput("stderr", hostOutput(toolExports.Stdout(stderr))),
+			stderr:      newToolOutput("stderr", hostOutput(toolExports.Stderr(stderr))),
 			principal:   principalFromWit(principal),
 			under:       newUnderlyingLayer(wrapped),
 		})

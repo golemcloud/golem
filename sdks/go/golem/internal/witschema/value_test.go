@@ -77,8 +77,8 @@ func TestValueRoundTripsThroughCore(t *testing.T) {
 	}
 }
 
-// TestWideIntegersSurviveConversion — the values GOL-653 is about must cross
-// the boundary exactly, with no float in the middle.
+// TestWideIntegersSurviveConversion — 64-bit integers beyond a float64's exact
+// range must cross the boundary exactly, with no float in the middle.
 func TestWideIntegersSurviveConversion(t *testing.T) {
 	for _, want := range []int64{-9223372036854775808, 9223372036854775807, 9007199254740993} {
 		var b valueBuilder

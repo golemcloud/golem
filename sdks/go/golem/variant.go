@@ -76,8 +76,9 @@ func WrappedCase[T any](name string) CaseDef {
 // Iface. Case order is declaration order, and it is the wire order — reordering
 // the arguments is a breaking change. Call it from a package-level var so
 // registration happens before the component is invoked.
-func DefineVariant[Iface any](cases ...CaseDef) *engine.VariantDef {
-	return defineVariantInto[Iface](defs, cases...)
+func DefineVariant[Iface any](cases ...CaseDef) struct{} {
+	defineVariantInto[Iface](defs, cases...)
+	return struct{}{}
 }
 
 // defineVariantInto is the instance-scoped implementation behind DefineVariant.
@@ -106,8 +107,9 @@ func defineVariantInto[Iface any](d *definitions, cases ...CaseDef) *engine.Vari
 // Values are positional: Status(0) is "active", so the constants are expected to
 // run 0..n-1 in declaration order. A value outside 0..len(names)-1 is rejected
 // at encode time rather than silently truncated.
-func DefineEnum[T any](names ...string) *engine.EnumDef {
-	return defineEnumInto[T](defs, names...)
+func DefineEnum[T any](names ...string) struct{} {
+	defineEnumInto[T](defs, names...)
+	return struct{}{}
 }
 
 // defineEnumInto is the instance-scoped implementation behind DefineEnum.

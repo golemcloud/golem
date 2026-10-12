@@ -62,6 +62,7 @@ type fakeSink struct {
 	failed    *OutputFailure
 	writeErr  *streams.StreamWriteError
 	finishErr *streams.StreamWriteError
+	dropped   bool
 }
 
 func (f *fakeSink) Write(b []uint8) witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
@@ -84,6 +85,8 @@ func (f *fakeSink) Fail(reason streams.ByteStreamFailure) witTypes.Result[witTyp
 	f.failed = &OutputFailure{reason}
 	return witTypes.Ok[witTypes.Unit, streams.StreamWriteError](witTypes.Unit{})
 }
+
+func (f *fakeSink) release() { f.dropped = true }
 
 func TestStdinReadsChunksAndEndsWithEOF(t *testing.T) {
 	r := &byteReader{src: &fakeSource{items: []streamItem{chunk("hello, "), chunk("world")}}}
@@ -477,5 +480,34 @@ func TestStdinIsReleasedExactlyOnce(t *testing.T) {
 	d.invokeCommand(e, nil, encodeArgs(t, e.root.body, func(a *GateArgs) { a.Mode = "pass" }), in, hostOutputs{}, nil)
 	if *released != 1 {
 		t.Errorf("a stdin the command does not declare was released %d times", *released)
+	}
+}
+
+// Standard input handed on whole to the layer beneath belongs to that call: a
+// second call with the same reader (a retrying middleware) gets an error, not
+// the moved stream.
+func TestAHandedOnStdinFailsOnReuse(t *testing.T) {
+	r := &byteReader{src: &fakeSource{}, name: "stdin"}
+	r.handOn()
+	if _, err := r.Read(make([]byte, 8)); err == nil || !strings.Contains(err.Error(), handedOnStdin) {
+		t.Fatalf("reading a handed-on stdin gave %v", err)
+	}
+	if r.release != nil {
+		t.Fatal("a handed-on stdin would still be dropped here")
+	}
+}
+
+// An output's writer is released once its terminal is selected, finished or
+// failed, rather than left for the garbage collector.
+func TestAnOutputReleasesItsWriterAfterTheTerminal(t *testing.T) {
+	finished, failed := &fakeSink{}, &fakeSink{}
+	if err := newToolOutput("stdout", finished).finish(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newToolOutput("stderr", failed).Fail(OutputFailed("boom")); err != nil {
+		t.Fatal(err)
+	}
+	if !finished.finished || !finished.dropped || failed.failed == nil || !failed.dropped {
+		t.Fatalf("finished %+v, failed %+v", finished, failed)
 	}
 }

@@ -17,10 +17,11 @@ package golem
 import (
 	"errors"
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"math"
 	"reflect"
 	"time"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -135,3 +136,32 @@ func compileQuotaToken(c *engine.Codec) {
 		return nil
 	}
 }
+
+// durationFromNanos converts the host's nanosecond count, saturating at the
+// largest Duration instead of wrapping to a negative one.
+func durationFromNanos(n uint64) time.Duration {
+	if n > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return time.Duration(n)
+}
+
+// NewQuotaToken acquires a token for resourceName, declaring how much of it the
+// agent expects to use; the runtime shares the resource among tokens in
+// proportion to their expected use.
+func NewQuotaToken(resourceName string, expectedUse uint64) QuotaToken {
+	return hostNewQuotaToken(resourceName, expectedUse)
+}
+
+// Reserve reserves amount before using it. When the resource throttles, it
+// waits until the amount is available; when the resource rejects instead, the
+// error is a [*FailedReservation].
+func (t QuotaToken) Reserve(amount uint64) (*Reservation, error) { return t.hostReserve(amount) }
+
+// Split carves a child token off this one, with part of its expected use, for
+// handing to another agent.
+func (t QuotaToken) Split(childExpectedUse uint64) QuotaToken { return t.hostSplit(childExpectedUse) }
+
+// Merge folds other, a token for the same resource, back into this one; other
+// is unusable afterwards.
+func (t QuotaToken) Merge(other QuotaToken) { t.hostMerge(other) }

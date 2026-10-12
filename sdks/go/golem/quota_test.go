@@ -17,6 +17,7 @@ package golem
 import (
 	"errors"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -70,4 +71,14 @@ func TestFailedReservationSaysWhenToRetry(t *testing.T) {
 func asError(r any) error {
 	err, _ := r.(error)
 	return err
+}
+
+// A wait beyond the largest Duration saturates instead of turning negative.
+func TestEstimatedWaitSaturates(t *testing.T) {
+	if got := durationFromNanos(1 << 63); got != math.MaxInt64 {
+		t.Fatalf("got %v", got)
+	}
+	if got := durationFromNanos(5); got != 5 {
+		t.Fatalf("got %v", got)
+	}
 }

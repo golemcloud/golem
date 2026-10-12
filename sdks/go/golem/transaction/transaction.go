@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 )
 
@@ -117,11 +118,13 @@ func (f Failure[E]) RolledBackFully() bool {
 // Fallible runs f as a transaction. If f returns golem.Ok, the transaction
 // commits and its value is returned. If f returns an error, the recorded
 // compensations run in reverse (best-effort) and a [Failure] is
-// returned — there is no retry. A panic in f (an infra failure) leaves the atomic
-// region open so the runtime replays it.
+// returned — there is no retry. A panic in f (an infra failure) traps the
+// component at once, with the atomic region left open, so the runtime replays
+// it; nothing above Fallible can recover the panic and go on inside the region.
 func Fallible[Out, E any](f func(*Tx[E]) golem.Result[Out, E]) golem.Result[Out, Failure[E]] {
 	begin := apiHost.MarkBeginOperation()
-	out := runFallible(&Tx[E]{}, f)
+	var out golem.Result[Out, Failure[E]]
+	link.TrapOnPanic("transaction", func() { out = runFallible(&Tx[E]{}, f) })
 	apiHost.MarkEndOperation(begin)
 	return out
 }
@@ -144,24 +147,28 @@ func runFallible[Out, E any](tx *Tx[E], f func(*Tx[E]) golem.Result[Out, E]) gol
 // compensations run in reverse, the oplog is rewound to the transaction start, and
 // the runtime replays the whole transaction. Use it only when the steps are
 // expected to eventually succeed — a deterministic failure would retry forever.
+// A panic in f traps the component at once, as in [Fallible].
 func Infallible[Out, E any](f func(*Tx[E]) golem.Result[Out, E]) Out {
 	begin := apiHost.MarkBeginOperation()
 	txBegin := apiHost.GetOplogIndex()
 
 	tx := &Tx[E]{}
-	r := f(tx)
-	if r.IsErr() {
-		if compFail := tx.compensate(); compFail.IsSome() {
-			// A compensation failed while rolling back for a retry — the
-			// transaction cannot be made consistent, so fail loudly, surfacing
-			// which compensation failed.
-			panic(fmt.Errorf("golem: compensation failed during an infallible transaction rollback: %v", compFail.Unwrap()))
+	var r golem.Result[Out, E]
+	link.TrapOnPanic("transaction", func() {
+		r = f(tx)
+		if r.IsErr() {
+			if compFail := tx.compensate(); compFail.IsSome() {
+				// A compensation failed while rolling back for a retry — the
+				// transaction cannot be made consistent, so fail loudly,
+				// surfacing which compensation failed.
+				panic(fmt.Errorf("golem: compensation failed during an infallible transaction rollback: %v", compFail.Unwrap()))
+			}
+			// Rewind to the start; this interrupts the invocation and the
+			// runtime replays the transaction, so it does not return.
+			apiHost.SetOplogIndex(txBegin)
+			panic(fmt.Errorf("golem: unreachable after oplog rewind"))
 		}
-		// Rewind to the start; this interrupts the invocation and the runtime
-		// replays the transaction, so it does not return.
-		apiHost.SetOplogIndex(txBegin)
-		panic(fmt.Errorf("golem: unreachable after oplog rewind"))
-	}
+	})
 
 	apiHost.MarkEndOperation(begin)
 	return r.Ok()

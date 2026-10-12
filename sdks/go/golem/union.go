@@ -112,8 +112,9 @@ func WrappedBranch[T any](tag string, discriminator Discriminator) BranchDef {
 // decoder tries them, so reordering the arguments can change which branch an
 // ambiguous value resolves to. Call it from a package-level var so registration
 // happens before the component is invoked.
-func DefineUnion[Iface any](branches ...BranchDef) *engine.UnionDef {
-	return defineUnionInto[Iface](defs, branches...)
+func DefineUnion[Iface any](branches ...BranchDef) struct{} {
+	defineUnionInto[Iface](defs, branches...)
+	return struct{}{}
 }
 
 // defineUnionInto is the instance-scoped implementation behind DefineUnion.

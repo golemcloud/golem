@@ -73,7 +73,7 @@ func TestImplementRegistersMethods(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "Counter"})
 		type AddIn struct{ N int64 }
-		add := def.Method[AddIn, int64]("add", Desc("adds to the counter"))
+		add := def.Method[AddIn, int64]("add", Description("adds to the counter"))
 		get := def.Method[Unit, int64]("get")
 
 		// Implement binds the constructor + returns the handle; Handle registers each

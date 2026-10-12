@@ -47,7 +47,7 @@ var (
 	greeterAgent = golem.DefineAgent[GreeterID](golem.Spec{
 		Name: "Greeter", Description: "Greets people", Mode: golem.Durable,
 	})
-	greetMethod = greeterAgent.Method[GreetIn, string]("greet", golem.Desc("Greet someone"))
+	greetMethod = greeterAgent.Method[GreetIn, string]("greet", golem.Description("Greet someone"))
 	_           = greeterAgent.Implement(func(GreeterID) *greeter { return &greeter{} }).
 			Handle(greetMethod, func(_ *golem.Context[greeter], in GreetIn) string {
 			return strings.TrimSpace(strings.Repeat(in.Greeting+" ", int(in.Times)))
@@ -353,6 +353,11 @@ func TestReflectedClientChecksOutputCardinality(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "declares a result") {
 		t.Errorf("error is %v", err)
 	}
+	// It is reported as a typed call reports it, so callers classify it alike.
+	var rce *golem.RemoteCallError
+	if !errors.As(err, &rce) || rce.Kind != golem.RemoteProtocolError || rce.Method != "greet" {
+		t.Errorf("error is %#v, want a *golem.RemoteCallError of kind RemoteProtocolError", err)
+	}
 }
 
 func TestReflectedClientValidatesBeforeSending(t *testing.T) {
@@ -492,7 +497,7 @@ func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
 	if err != nil || p.ID != fakeID {
 		t.Fatalf("CallAsync gave %+v, %v", p, err)
 	}
-	if got, err := p.Wait(); got != "hi" || err != nil {
+	if got, err := p.Get(); got != "hi" || err != nil {
 		t.Fatalf("Wait gave %v, %v", got, err)
 	}
 	p.Cancel()
@@ -502,7 +507,7 @@ func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
 
 	p, _ = client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
 	p.Cancel()
-	if _, err := p.Wait(); !errors.Is(err, ErrCallCancelled) || !rpc.cancelled {
+	if _, err := p.Get(); !errors.Is(err, golem.ErrCallCancelled) || !rpc.cancelled {
 		t.Errorf("a cancelled call gave %v (cancelled=%v)", err, rpc.cancelled)
 	}
 }

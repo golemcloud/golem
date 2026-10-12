@@ -47,11 +47,24 @@ func EncodeWith(c *Codec, v reflect.Value) types.SchemaValueTree {
 // decode
 // ---------------------------------------------------------------------------
 
-type Decoder struct{ Nodes []types.SchemaValueNode }
+type Decoder struct {
+	Nodes []types.SchemaValueNode
+	// reads counts node reads. Each node of a tree has one parent, so a decode
+	// reads it only a few times; a tree whose indices form a cycle would be
+	// read forever, so too many reads end the decode instead.
+	reads int
+}
+
+// maxReadsPerNode bounds how often a decode may read each node on average.
+const maxReadsPerNode = 8
 
 func (d *Decoder) Node(idx int32) (types.SchemaValueNode, error) {
 	if idx < 0 || int(idx) >= len(d.Nodes) {
 		return types.SchemaValueNode{}, fmt.Errorf("value node index %d out of range (%d nodes)", idx, len(d.Nodes))
+	}
+	d.reads++
+	if d.reads > maxReadsPerNode*len(d.Nodes)+maxReadsPerNode {
+		return types.SchemaValueNode{}, fmt.Errorf("value tree of %d nodes refers back to itself", len(d.Nodes))
 	}
 	return d.Nodes[idx], nil
 }

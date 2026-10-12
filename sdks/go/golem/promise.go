@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
@@ -68,7 +69,8 @@ func (id PromiseID) toWit() types.PromiseId {
 // one with [NewPromise] inside an agent, or rebuild it from a stored id with
 // [PromiseByID]. Only the agent that created the promise may [Promise.Await] it.
 type Promise[T any] struct {
-	id PromiseID
+	id   PromiseID
+	wait promiseWait
 }
 
 // NewPromise creates a fresh promise owned by the current agent and returns a
@@ -103,7 +105,8 @@ func (p *Promise[T]) ID() PromiseID { return p.id }
 // Only the agent that created the promise may Await it; awaiting from another
 // agent traps in the host.
 func (p *Promise[T]) Await() (T, error) {
-	return decodePromisePayload[T](p.id, p.awaitData())
+	data, _ := p.wait.result(context.Background(), p.awaitData)
+	return decodePromisePayload[T](p.id, data)
 }
 
 // MustAwait is [Promise.Await] that panics if the payload does not decode.
@@ -126,8 +129,12 @@ func (p *Promise[T]) awaitData() []byte {
 // ctx.Err(). Giving up only stops this wait: the promise may still be completed,
 // and a later Await returns its value. A payload that does not decode is
 // returned as an error, as for Await.
+//
+// A promise has at most one wait on the host in flight: every Await and
+// AwaitContext on it shares that one, so a loop that gives up and waits again
+// (a reminder every hour until a human approves) does not pile up waits.
 func (p *Promise[T]) AwaitContext(ctx context.Context) (T, error) {
-	data, err := awaitWithContext(ctx, p.awaitData)
+	data, err := p.wait.result(ctx, p.awaitData)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -135,17 +142,31 @@ func (p *Promise[T]) AwaitContext(ctx context.Context) (T, error) {
 	return decodePromisePayload[T](p.id, data)
 }
 
-// awaitWithContext runs wait on its own goroutine and returns its outcome, or
-// ctx.Err() if ctx ends first. Pure, so it is natively testable.
-func awaitWithContext(ctx context.Context, wait func() []byte) ([]byte, error) {
+// promiseWait is a promise's one wait on the host. The first result call starts
+// it on its own goroutine; every call, before or after it completes, reads the
+// same outcome. Pure, so it is natively testable.
+type promiseWait struct {
+	once sync.Once
+	done chan struct{}
+	data []byte
+}
+
+// result returns the wait's outcome, starting it with wait if no call has yet,
+// or ctx.Err() if ctx ends first.
+func (w *promiseWait) result(ctx context.Context, wait func() []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	done := make(chan []byte, 1)
-	go func() { done <- wait() }()
+	w.once.Do(func() {
+		w.done = make(chan struct{})
+		go func() {
+			w.data = wait()
+			close(w.done)
+		}()
+	})
 	select {
-	case data := <-done:
-		return data, nil
+	case <-w.done:
+		return w.data, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -154,8 +175,8 @@ func awaitWithContext(ctx context.Context, wait func() []byte) ([]byte, error) {
 // Webhook is a promise completed by an HTTP POST to its URL: the request body is
 // the payload. Create it with [NewWebhook]; await it like any promise.
 type Webhook[T any] struct {
-	*Promise[T]
-	url string
+	promise *Promise[T]
+	url     string
 }
 
 // NewWebhook creates a promise and the URL that completes it, in one step. It
@@ -163,11 +184,26 @@ type Webhook[T any] struct {
 // [Promise.WebhookURL] does.
 func NewWebhook[T any]() *Webhook[T] {
 	p := NewPromise[T]()
-	return &Webhook[T]{Promise: p, url: p.WebhookURL()}
+	return &Webhook[T]{promise: p, url: p.WebhookURL()}
 }
 
 // URL returns the address an off-platform system POSTs to.
 func (w *Webhook[T]) URL() string { return w.url }
+
+// ID returns the durable identity of the webhook's promise.
+func (w *Webhook[T]) ID() PromiseID { return w.promise.ID() }
+
+// Await waits for the POST to the URL and returns its body, as [Promise.Await].
+func (w *Webhook[T]) Await() (T, error) { return w.promise.Await() }
+
+// MustAwait is [Webhook.Await] that panics if the payload does not decode.
+func (w *Webhook[T]) MustAwait() T { return w.promise.MustAwait() }
+
+// AwaitContext is [Webhook.Await] that gives up when ctx ends first, as
+// [Promise.AwaitContext].
+func (w *Webhook[T]) AwaitContext(ctx context.Context) (T, error) {
+	return w.promise.AwaitContext(ctx)
+}
 
 // WebhookURL mints an external URL that completes this promise: a POST to the URL
 // completes the promise with the request body, so a later [Promise.Await] returns
@@ -194,7 +230,7 @@ func webhookErrorToGo(e host.WebhookError) error {
 	case host.WebhookErrorInternalError:
 		return fmt.Errorf("golem: webhook: internal error: %s", e.InternalError())
 	default:
-		return fmt.Errorf("golem: webhook: error (tag %d)", e.Tag())
+		panic(fmt.Sprintf("golem: unhandled webhook-error case %d", e.Tag()))
 	}
 }
 

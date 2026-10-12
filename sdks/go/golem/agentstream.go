@@ -17,10 +17,10 @@ package golem
 import (
 	"errors"
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"iter"
 	"reflect"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
@@ -166,14 +166,16 @@ func StreamOf[T any](items ...T) AgentStream[T] {
 }
 
 // ProduceStream runs produce on its own goroutine and returns the stream it
-// writes to. Returning nil closes the stream cleanly. Returning an error, or
-// panicking, fails the invocation the stream belongs to — the component traps —
-// because a stream has no failure end and a consumer must not read a failed
-// production as a complete one.
+// writes to. Returning nil closes the stream cleanly, and so does returning
+// [ErrReaderGone] (or an error wrapping it), which only says the consumer
+// stopped reading. Returning any other error, or panicking, fails the
+// invocation the stream belongs to — the component traps — because a stream
+// has no failure end and a consumer must not read a failed production as a
+// complete one.
 func ProduceStream[T any](produce func(*AgentStreamWriter[T]) error) AgentStream[T] {
 	w, s := NewAgentStream[T]()
 	go func() {
-		if err := produce(w); err != nil {
+		if err := produce(w); err != nil && !errors.Is(err, ErrReaderGone) {
 			failProduction(err)
 			return
 		}

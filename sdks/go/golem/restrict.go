@@ -14,8 +14,6 @@
 
 package golem
 
-import ()
-
 // PathDirection is which way a path argument's file flows.
 type PathDirection uint8
 

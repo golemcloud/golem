@@ -124,6 +124,9 @@ func TestARestrictionThatCannotApplyIsADefinitionError(t *testing.T) {
 	type noValue struct {
 		N uint8 `golem:"min"`
 	}
+	type outOfWidth struct {
+		N int8 `golem:"min=300"`
+	}
 	check := func(want string, declare func(*AgentDefinition[Id, NoConfig], *AgentImpl[Id, struct{}, NoConfig])) {
 		withDefs(t, func(d *definitions) {
 			def := defineAgentInto[Id, NoConfig](d, Spec{Name: "R"})
@@ -140,5 +143,8 @@ func TestARestrictionThatCannotApplyIsADefinitionError(t *testing.T) {
 	})
 	check("key=value", func(def *AgentDefinition[Id, NoConfig], impl *AgentImpl[Id, struct{}, NoConfig]) {
 		impl.Handle(def.Method[noValue, Unit]("m"), func(*Context[struct{}], noValue) Unit { return Unit{} })
+	})
+	check(`bound "300" is not an integer the type holds`, func(def *AgentDefinition[Id, NoConfig], impl *AgentImpl[Id, struct{}, NoConfig]) {
+		impl.Handle(def.Method[outOfWidth, Unit]("m"), func(*Context[struct{}], outOfWidth) Unit { return Unit{} })
 	})
 }

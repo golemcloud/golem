@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,9 +56,7 @@ type HTTPTransport struct{}
 // single-threaded target, and it never stamps req.Context().Deadline() for the
 // transport to read. Use a context deadline instead.
 func (HTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// A context deadline (or an already-cancelled context) lands on req; honor a
-	// cancellation before doing any work.
-	if err := req.Context().Err(); err != nil {
+	if err := checkRequest(req, time.Now()); err != nil {
 		return nil, err
 	}
 
@@ -197,6 +196,9 @@ func (b *responseBody) awaitTrailers() {
 }
 
 func (b *responseBody) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	if len(b.buf) == 0 {
 		chunk := make([]byte, len(p))
 		n := b.stream.Read(chunk)
@@ -256,6 +258,25 @@ func schemeOf(s string) httptypes.Scheme {
 	default:
 		return httptypes.MakeSchemeOther(s)
 	}
+}
+
+// checkRequest refuses a request the transport cannot send as asked, before
+// any work. A cancelled context, or a deadline already past (the cooperative
+// runtime may not have fired the context's timer yet), ends the request: sending
+// it would leave it with no timeout at all. A Host that differs from the URL's
+// host is refused because the wasi:http authority is both the destination and
+// the Host header, so a virtual-host override cannot be sent faithfully. Pure.
+func checkRequest(req *http.Request, now time.Time) error {
+	if err := req.Context().Err(); err != nil {
+		return err
+	}
+	if dl, ok := req.Context().Deadline(); ok && !dl.After(now) {
+		return context.DeadlineExceeded
+	}
+	if req.URL != nil && req.Host != "" && !strings.EqualFold(req.Host, req.URL.Host) {
+		return fmt.Errorf("golem/http: Host %q differs from the URL host %q; a component's request goes to its Host, so set the URL instead", req.Host, req.URL.Host)
+	}
+	return nil
 }
 
 // timeoutFromDeadline returns the remaining time until deadline in nanoseconds,

@@ -148,6 +148,15 @@ type Container struct {
 // Name returns the container's name.
 func (c *Container) Name() string { return c.name }
 
+// Close releases the container's host resource; do not use the container after
+// it. A container that is not closed is released when it is garbage collected.
+func (c *Container) Close() {
+	if c.raw != nil {
+		c.raw.Drop()
+		c.raw = nil
+	}
+}
+
 // Info returns the container's metadata.
 func (c *Container) Info() (ContainerMetadata, error) {
 	r := c.raw.Info()
@@ -158,8 +167,8 @@ func (c *Container) Info() (ContainerMetadata, error) {
 	return ContainerMetadata{Name: m.Name, CreatedAt: millis(m.CreatedAt)}, nil
 }
 
-// Has reports whether the named object exists.
-func (c *Container) Has(name string) (bool, error) {
+// HasObject reports whether the named object exists.
+func (c *Container) HasObject(name string) (bool, error) {
 	r := c.raw.HasObject(name)
 	if r.IsErr() {
 		return false, bsError(r.Err())
@@ -177,16 +186,16 @@ func (c *Container) ObjectInfo(name string) (ObjectMetadata, error) {
 	return ObjectMetadata{Name: m.Name, Container: m.Container, CreatedAt: millis(m.CreatedAt), Size: m.Size}, nil
 }
 
-// Delete removes the named object (a no-op if it is absent).
-func (c *Container) Delete(name string) error {
+// DeleteObject removes the named object (a no-op if it is absent).
+func (c *Container) DeleteObject(name string) error {
 	if r := c.raw.DeleteObject(name); r.IsErr() {
 		return bsError(r.Err())
 	}
 	return nil
 }
 
-// DeleteMany removes several objects at once.
-func (c *Container) DeleteMany(names []string) error {
+// DeleteObjects removes several objects at once.
+func (c *Container) DeleteObjects(names []string) error {
 	if r := c.raw.DeleteObjects(names); r.IsErr() {
 		return bsError(r.Err())
 	}
@@ -213,7 +222,7 @@ func (c *Container) ListObjects() ([]string, error) {
 // GetData reads the whole object's bytes. found is false (nil error) when the
 // object is absent.
 func (c *Container) GetData(name string) (data []byte, found bool, err error) {
-	has, err := c.Has(name)
+	has, err := c.HasObject(name)
 	if err != nil || !has {
 		return nil, false, err
 	}
@@ -317,10 +326,6 @@ type Store[T any] struct{ c *Container }
 //	report, found, err := container.Typed[Report]().Get("2026-09.json")
 func (c *Container) Typed[T any]() *Store[T] { return &Store[T]{c: c} }
 
-// Typed is [Container.Typed] as a free function, for call sites that read better
-// with the type first.
-func Typed[T any](c *Container) *Store[T] { return c.Typed[T]() }
-
 // Get decodes the named object as T. found is false (nil error) when absent.
 func (s *Store[T]) Get(name string) (value T, found bool, err error) {
 	raw, found, err := s.c.GetData(name)
@@ -363,13 +368,13 @@ func (s *Store[T]) MustSet(name string, value T) {
 }
 
 // Delete removes the named object.
-func (s *Store[T]) Delete(name string) error { return s.c.Delete(name) }
+func (s *Store[T]) Delete(name string) error { return s.c.DeleteObject(name) }
 
 // Exists reports whether the named object is present.
-func (s *Store[T]) Exists(name string) (bool, error) { return s.c.Has(name) }
+func (s *Store[T]) Exists(name string) (bool, error) { return s.c.HasObject(name) }
 
-// List returns the object names.
-func (s *Store[T]) List() ([]string, error) { return s.c.ListObjects() }
+// Keys returns the object names. Order is not guaranteed.
+func (s *Store[T]) Keys() ([]string, error) { return s.c.ListObjects() }
 
 // marshalValue/unmarshalValue are the JSON codec behind Store.
 func marshalValue[T any](v T) ([]byte, error) { return json.Marshal(v) }

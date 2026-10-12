@@ -103,7 +103,7 @@ func TestCallArgumentsAgreeWithThePublishedSchema(t *testing.T) {
 	}
 }
 
-// checkAgreement2 adapts the Phase 3 helper, which returns an error.
+// checkAgreement2 fails the test when checkAgreement, which returns an error, finds a disagreement.
 func checkAgreement2(t *testing.T, g types.SchemaGraph, s int32, tree types.SchemaValueTree, v int32, path string) {
 	t.Helper()
 	if err := checkAgreement(g, s, tree, v, path); err != nil {
@@ -141,7 +141,7 @@ func TestDecodeOutputRejectsAMismatchedRemote(t *testing.T) {
 	if !errors.As(err, &rce) {
 		t.Fatalf("expected a *RemoteCallError, got %T", err)
 	}
-	if rce.Kind != RemoteProtocol || rce.Method != "charge" || rce.Target != "agent-1" {
+	if rce.Kind != RemoteProtocolError || rce.Method != "charge" || rce.Target != "agent-1" {
 		t.Fatalf("unexpected error detail: %+v", rce)
 	}
 
@@ -162,10 +162,10 @@ func TestRpcErrorsMapToDistinguishableKinds(t *testing.T) {
 		in   host.RpcError
 		want RemoteCallErrorKind
 	}{
-		{"protocol", host.MakeRpcErrorProtocolError("bad frame"), RemoteProtocol},
+		{"protocol", host.MakeRpcErrorProtocolError("bad frame"), RemoteProtocolError},
 		{"denied", host.MakeRpcErrorDenied("nope"), RemoteDenied},
 		{"not found", host.MakeRpcErrorNotFound("no such agent"), RemoteNotFound},
-		{"internal", host.MakeRpcErrorRemoteInternalError("boom"), RemoteInternal},
+		{"internal", host.MakeRpcErrorRemoteInternalError("boom"), RemoteInternalError},
 	} {
 		err := rpcErrorToGo("agent-1", "charge", tc.in)
 		var rce *RemoteCallError
@@ -190,8 +190,8 @@ func TestRemoteAgentErrorKeepsItsCause(t *testing.T) {
 	if !errors.As(err, &rce) {
 		t.Fatalf("expected *RemoteCallError, got %T", err)
 	}
-	if rce.Kind != RemoteAgent {
-		t.Fatalf("kind = %v, want RemoteAgent", rce.Kind)
+	if rce.Kind != RemoteAgentError {
+		t.Fatalf("kind = %v, want RemoteAgentError", rce.Kind)
 	}
 	cause := errors.Unwrap(rce)
 	if cause == nil {

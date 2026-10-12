@@ -19,6 +19,7 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
+	"time"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
@@ -337,3 +338,30 @@ type streamTree struct {
 }
 
 type streamLeaf struct{ Lines AgentStream[string] }
+
+// A producer that returns the Write error after the consumer stopped reading
+// ends cleanly: the reader going away is not a failed production.
+func TestAProducerStoppedByTheReaderEndsCleanly(t *testing.T) {
+	failed := observeFailedProduction(t)
+	stopped := make(chan error, 1)
+	s := ProduceStream(func(w *AgentStreamWriter[int32]) error {
+		for i := int32(0); ; i++ {
+			if err := w.Write(i); err != nil {
+				stopped <- err
+				return err
+			}
+		}
+	})
+	if _, ok := s.Next(); !ok {
+		t.Fatal("no first item")
+	}
+	s.Close()
+	if err := <-stopped; !errors.Is(err, ErrReaderGone) {
+		t.Fatalf("the producer stopped with %v, want ErrReaderGone", err)
+	}
+	select {
+	case err := <-failed:
+		t.Fatalf("a producer stopped by its reader failed the invocation: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

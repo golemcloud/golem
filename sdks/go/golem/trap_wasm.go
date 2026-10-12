@@ -17,6 +17,7 @@
 package golem
 
 import (
+	"fmt"
 	"os"
 	"runtime/debug"
 )
@@ -31,8 +32,16 @@ func init() { debug.SetTraceback("crash") }
 // trap reports an agent method's panic and traps the component. The report is
 // one write, so it is one log entry; the runtime's own panic report writes each
 // token separately and dumps every goroutine.
-func trap(pe *PanicError) {
+func trap(pe *panicError) {
 	_, _ = os.Stderr.WriteString("panic: " + pe.Error() + "\n\n" + string(debug.Stack()))
+	abort()
+}
+
+// trapRegionPanic reports a panic recovered in a region that must not resume
+// (an atomic region, a transaction) and traps the component, so nothing above
+// can recover it and run on inside the region.
+func trapRegionPanic(region string, value any) {
+	_, _ = os.Stderr.WriteString("panic: " + region + ": " + fmt.Sprint(value) + "\n\n" + string(debug.Stack()))
 	abort()
 }
 

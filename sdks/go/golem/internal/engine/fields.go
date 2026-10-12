@@ -42,17 +42,23 @@ func (d *Engine) StructFields(t reflect.Type) []Field {
 	if t == nil || t.Kind() != reflect.Struct {
 		return out
 	}
+	byName := map[string]string{}
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if f.PkgPath != "" { // unexported
 			continue
 		}
+		name := SchemaName(f.Name)
+		if other, ok := byName[name]; ok {
+			d.reportNameClash(t, other, f.Name, name)
+		}
+		byName[name] = f.Name
 		if f.Type == d.PrincipalType {
-			out = append(out, Field{Name: SchemaName(f.Name), Index: i, Typ: f.Type, AutoInjected: true})
+			out = append(out, Field{Name: name, Index: i, Typ: f.Type, AutoInjected: true})
 			continue
 		}
 		fi := Field{
-			Name:  SchemaName(f.Name),
+			Name:  name,
 			Index: i,
 			Typ:   f.Type,
 			Codec: d.Compile(f.Type),
@@ -71,6 +77,19 @@ func (d *Engine) StructFields(t reflect.Type) []Field {
 		out = append(out, fi)
 	}
 	return out
+}
+
+// reportNameClash records two fields of t that map to one schema name, such as
+// UserID and UserId: the record would publish the name twice.
+func (d *Engine) reportNameClash(t reflect.Type, first, second, name string) {
+	if d.nameClashes == nil {
+		d.nameClashes = map[reflect.Type]bool{}
+	}
+	if d.nameClashes[t] {
+		return
+	}
+	d.nameClashes[t] = true
+	d.RecordErr("", "", "%s: fields %s and %s have the same schema name %q; rename one", t, first, second, name)
 }
 
 // SchemaName is the schema name of an exported Go identifier, in the lowerCamelCase

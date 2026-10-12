@@ -18,6 +18,7 @@ package oplog
 
 import (
 	"encoding/binary"
+	"fmt"
 	"iter"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
@@ -25,10 +26,7 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
-// Get reads an agent's oplog from the entry at index start. Pages are fetched
-// as the loop advances; a failing page is yielded as an error and ends the
-// iteration.
-func Get(id golem.AgentID, start uint64) iter.Seq2[Entry, error] {
+func hostGet(id golem.AgentID, start uint64) iter.Seq2[Entry, error] {
 	return func(yield func(Entry, error) bool) {
 		r := oplogwit.MakeGetOplog(agentIDToWit(id), start)
 		defer r.Drop()
@@ -51,9 +49,7 @@ func Get(id golem.AgentID, start uint64) iter.Seq2[Entry, error] {
 	}
 }
 
-// Search finds the entries of an agent's oplog that match text, in pages like
-// [Get].
-func Search(id golem.AgentID, text string) iter.Seq2[SearchHit, error] {
+func hostSearch(id golem.AgentID, text string) iter.Seq2[SearchHit, error] {
 	return func(yield func(SearchHit, error) bool) {
 		r := oplogwit.MakeSearchOplog(agentIDToWit(id), text)
 		defer r.Drop()
@@ -88,8 +84,12 @@ func agentIDToWit(id golem.AgentID) types.AgentId {
 }
 
 func readErrorFromWit(e oplogwit.OplogReadError) error {
-	if e.Tag() == oplogwit.OplogReadErrorPermissionDenied {
+	switch e.Tag() {
+	case oplogwit.OplogReadErrorPermissionDenied:
 		return &golem.AgentOperationError{Kind: golem.AgentOperationPermissionDenied}
+	case oplogwit.OplogReadErrorInternalError:
+		return &golem.AgentOperationError{Kind: golem.AgentOperationBackendError, Message: e.InternalError()}
+	default:
+		panic(fmt.Sprintf("golem/oplog: unhandled oplog-read-error case %d", e.Tag()))
 	}
-	return &golem.AgentOperationError{Kind: golem.AgentOperationBackendError, Message: e.InternalError()}
 }

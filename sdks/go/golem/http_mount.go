@@ -140,15 +140,31 @@ func newEndpoint(method, path string, opts []EndpointOpt) Endpoint {
 // HTTP method plus a path suffix. GET and HEAD are bodyless (they must bind
 // every input field, since there is no request body to carry the rest); the
 // other verbs carry unbound fields in the body.
-func GET(path string, opts ...EndpointOpt) Endpoint     { return newEndpoint("GET", path, opts) }
-func HEAD(path string, opts ...EndpointOpt) Endpoint    { return newEndpoint("HEAD", path, opts) }
-func POST(path string, opts ...EndpointOpt) Endpoint    { return newEndpoint("POST", path, opts) }
-func PUT(path string, opts ...EndpointOpt) Endpoint     { return newEndpoint("PUT", path, opts) }
-func DELETE(path string, opts ...EndpointOpt) Endpoint  { return newEndpoint("DELETE", path, opts) }
+func GET(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("GET", path, opts) }
+
+// HEAD builds a HEAD endpoint, bodyless like GET.
+func HEAD(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("HEAD", path, opts) }
+
+// POST builds a POST endpoint.
+func POST(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("POST", path, opts) }
+
+// PUT builds a PUT endpoint.
+func PUT(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("PUT", path, opts) }
+
+// DELETE builds a DELETE endpoint.
+func DELETE(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("DELETE", path, opts) }
+
+// CONNECT builds a CONNECT endpoint.
 func CONNECT(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("CONNECT", path, opts) }
+
+// OPTIONS builds an OPTIONS endpoint.
 func OPTIONS(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("OPTIONS", path, opts) }
-func TRACE(path string, opts ...EndpointOpt) Endpoint   { return newEndpoint("TRACE", path, opts) }
-func PATCH(path string, opts ...EndpointOpt) Endpoint   { return newEndpoint("PATCH", path, opts) }
+
+// TRACE builds a TRACE endpoint.
+func TRACE(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("TRACE", path, opts) }
+
+// PATCH builds a PATCH endpoint.
+func PATCH(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("PATCH", path, opts) }
 
 // Custom builds an endpoint with a non-standard HTTP verb.
 func Custom(verb, path string, opts ...EndpointOpt) Endpoint { return newEndpoint(verb, path, opts) }

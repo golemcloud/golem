@@ -20,9 +20,7 @@ import (
 	toolHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_host"
 )
 
-// DiscoverTools returns a snapshot of every tool the calling agent may reach in
-// its environment.
-func DiscoverTools() []Tool {
+func hostDiscoverTools() []Tool {
 	registered := toolHost.GetAllTools()
 	out := make([]Tool, 0, len(registered))
 	for _, r := range registered {
@@ -31,8 +29,7 @@ func DiscoverTools() []Tool {
 	return out
 }
 
-// DiscoverTool looks one tool up by its lookup name.
-func DiscoverTool(name string) (Tool, bool) {
+func hostDiscoverTool(name string) (Tool, bool) {
 	found := toolHost.GetTool(name)
 	if found.IsNone() {
 		return Tool{}, false

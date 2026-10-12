@@ -84,3 +84,12 @@ func MustSearch(id golem.AgentID, text string) iter.Seq[SearchHit] {
 		}
 	}
 }
+
+// Get reads an agent's oplog from the entry at index start. Pages are fetched
+// as the loop advances; a failing page is yielded as an error and ends the
+// iteration.
+func Get(id golem.AgentID, start uint64) iter.Seq2[Entry, error] { return hostGet(id, start) }
+
+// Search finds the entries of an agent's oplog that match text, in pages like
+// [Get].
+func Search(id golem.AgentID, text string) iter.Seq2[SearchHit, error] { return hostSearch(id, text) }

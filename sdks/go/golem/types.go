@@ -97,7 +97,7 @@ type (
 	Multimodal                      = values.Multimodal
 )
 
-// Secret is a handle to a secret, obtained from the agent's config ([Config] /
+// Secret is a handle to a secret, obtained from the agent's config ([Context.Config] /
 // [InitContext.Config]) or received as a field of a method's input or output.
 // It lowers to the WIT secret type. [Secret.Get] reads the plaintext from the
 // host — for a config secret, the CURRENT value on each call, so a rotated value

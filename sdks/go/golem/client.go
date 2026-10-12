@@ -233,7 +233,8 @@ func (a *AgentDefinition[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) Client[I
 	return Must(newPhantomClient[Id](defs, a.name, id, opts))
 }
 
-// AgentErrorKind classifies an [AgentError].
+// AgentErrorKind classifies an [AgentError]. The kinds are the host's
+// agent-error cases.
 type AgentErrorKind uint8
 
 const (
@@ -243,10 +244,11 @@ const (
 	AgentInvalidMethod
 	// AgentInvalidType means no such agent type exists.
 	AgentInvalidType
-	// AgentCustom means the agent reported a custom error.
-	AgentCustom
-	// AgentUnknown is an error kind the SDK does not recognize.
-	AgentUnknown
+	// AgentInvalidAgentID means the agent id does not parse, or does not match
+	// the agent type's constructor.
+	AgentInvalidAgentID
+	// AgentCustomError means the agent reported a custom error.
+	AgentCustomError
 )
 
 // AgentError is a typed error from invoking an agent. Its Kind lets callers
@@ -264,7 +266,9 @@ func (e *AgentError) Error() string {
 		return "invalid method: " + e.Message
 	case AgentInvalidType:
 		return "invalid type: " + e.Message
-	case AgentCustom:
+	case AgentInvalidAgentID:
+		return "invalid agent id: " + e.Message
+	case AgentCustomError:
 		return "custom error: " + e.Message
 	default:
 		return e.Message
@@ -281,10 +285,12 @@ func agentErrorToGo(e common.AgentError) error {
 		return &AgentError{Kind: AgentInvalidMethod, Message: e.InvalidMethod()}
 	case common.AgentErrorInvalidType:
 		return &AgentError{Kind: AgentInvalidType, Message: e.InvalidType()}
+	case common.AgentErrorInvalidAgentId:
+		return &AgentError{Kind: AgentInvalidAgentID, Message: e.InvalidAgentId()}
 	case common.AgentErrorCustomError:
-		return &AgentError{Kind: AgentCustom, Message: customErrorMessage(e.CustomError())}
+		return &AgentError{Kind: AgentCustomError, Message: customErrorMessage(e.CustomError())}
 	default:
-		return &AgentError{Kind: AgentUnknown, Message: fmt.Sprintf("agent error (tag %d)", e.Tag())}
+		panic(fmt.Sprintf("golem: unhandled agent-error case %d", e.Tag()))
 	}
 }
 

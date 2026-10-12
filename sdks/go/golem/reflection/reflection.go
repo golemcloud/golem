@@ -296,11 +296,6 @@ type pendingRPC struct {
 	cancel func()
 }
 
-// ErrCallCancelled is what waiting on a call cancelled with
-// [PendingCall.Cancel] reports. Cancelling only stops waiting: the call may
-// already have run.
-var ErrCallCancelled = errors.New("golem: the call was cancelled before its result was awaited")
-
 // PendingCall is a reflected or dynamic invocation in flight.
 type PendingCall[T any] struct {
 	// ID identifies the invocation, available before the result is.
@@ -312,8 +307,10 @@ type PendingCall[T any] struct {
 	err    error
 }
 
-// Wait waits for the invocation to finish and returns its result.
-func (p *PendingCall[T]) Wait() (T, error) {
+// Get waits for the invocation to finish and returns its result, as
+// [golem.Future.Get] does: the result is kept, so a later Get returns it again,
+// and after [PendingCall.Cancel] Get returns [golem.ErrCallCancelled].
+func (p *PendingCall[T]) Get() (T, error) {
 	if !p.done {
 		p.done = true
 		p.out, p.err = p.wait()
@@ -321,15 +318,24 @@ func (p *PendingCall[T]) Wait() (T, error) {
 	return p.out, p.err
 }
 
-// Cancel makes a best-effort attempt to cancel the invocation; a later Wait
-// reports [ErrCallCancelled]. It does nothing once the result was awaited.
+// MustGet is [PendingCall.Get] that panics on a failure.
+func (p *PendingCall[T]) MustGet() T {
+	out, err := p.Get()
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
+// Cancel makes a best-effort attempt to cancel the invocation; a later Get
+// reports [golem.ErrCallCancelled]. It does nothing once the result was taken.
 func (p *PendingCall[T]) Cancel() {
 	if p.done {
 		return
 	}
 	p.done = true
 	p.cancel()
-	p.err = ErrCallCancelled
+	p.err = golem.ErrCallCancelled
 }
 
 // AgentType returns the snapshot this client was built from.
@@ -358,7 +364,7 @@ func (c *AgentClient) Call(method string, args map[string]any) (any, golem.Invoc
 	if err != nil {
 		return nil, golem.InvocationID{}, err
 	}
-	out, err := p.Wait()
+	out, err := p.Get()
 	return out, p.ID, err
 }
 
@@ -390,9 +396,9 @@ func (c *AgentClient) decodeResult(m Method, method string, res witTypes.Option[
 	case has && !declared:
 		// Cardinality is part of the contract, so an unexpected value is a
 		// remote output error rather than something to quietly drop.
-		return nil, fmt.Errorf("golem: %s.%s returned a value but declares none", c.agentType.Name(), method)
+		return nil, c.protocolError(method, "remote returned a value but the method declares none")
 	case !has && declared:
-		return nil, fmt.Errorf("golem: %s.%s returned nothing but declares a result", c.agentType.Name(), method)
+		return nil, c.protocolError(method, "remote returned no value but the method declares a result")
 	case !has:
 		return nil, nil
 	}
@@ -404,7 +410,13 @@ func (c *AgentClient) decodeResult(m Method, method string, res witTypes.Option[
 			return unpacked, nil
 		}
 	}
-	return nil, fmt.Errorf("golem: %s.%s returned an unreadable result: %w", c.agentType.Name(), method, err)
+	return nil, c.protocolError(method, "remote returned an undecodable value: "+err.Error())
+}
+
+// protocolError is a result the call cannot read, reported as typed calls
+// report it.
+func (c *AgentClient) protocolError(method, message string) error {
+	return &golem.RemoteCallError{Target: c.agentID, Method: method, Kind: golem.RemoteProtocolError, Message: message}
 }
 
 // Trigger invokes a method without waiting for its result.
@@ -430,4 +442,60 @@ func optionFromWit[T any](o witTypes.Option[T]) golem.Option[T] {
 		return golem.Some(o.Some())
 	}
 	return golem.None[T]()
+}
+
+// DiscoverAgentTypes returns a snapshot of every agent type deployed in the
+// caller's environment.
+func DiscoverAgentTypes() []AgentType { return hostDiscoverAgentTypes() }
+
+// DiscoverAgentType looks one agent type up by name. A missing deployment, or
+// one the caller cannot see, reports false rather than failing.
+func DiscoverAgentType(name string) (AgentType, bool) { return hostDiscoverAgentType(name) }
+
+// DiscoverAgentTypeByID looks up the agent type behind an existing agent id.
+// Discovery never creates the agent.
+func DiscoverAgentTypeByID(agentID string) (AgentType, bool) {
+	return hostDiscoverAgentTypeByID(agentID)
+}
+
+// Get returns a client for the instance the constructor arguments identify,
+// creating it if it does not exist yet, exactly as a typed client would. Pass
+// [WithPhantomID] to address a phantom instance.
+func (r AgentType) Get(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
+	return r.hostGet(ctorArgs, opts...)
+}
+
+// NewPhantom allocates a fresh phantom instance and returns a client for it.
+func (r AgentType) NewPhantom(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
+	return r.hostNewPhantom(ctorArgs, opts...)
+}
+
+// Bind addresses an agent by its id, which must name this agent type. Binding
+// does not create it; the first call to a durable id does, with the
+// configuration overrides given here. An agent that already exists keeps the
+// configuration it was created with.
+func (r AgentType) Bind(agentID string, opts ...ClientOpt) (*AgentClient, error) {
+	return r.hostBind(agentID, opts...)
+}
+
+// AgentID renders the identity the constructor arguments (and phantom, if
+// any) name, without creating the agent.
+func (r AgentType) AgentID(ctorArgs map[string]any, phantom golem.Option[golem.UUID]) (string, error) {
+	return r.hostAgentID(ctorArgs, phantom)
+}
+
+// ParseRawAgentID takes an agent identity apart without decoding its
+// constructor into a Go type. Parsing is strict: a malformed identity is
+// reported rather than guessed at.
+func ParseRawAgentID(agentID string) (RawAgentID, error) { return hostParseRawAgentID(agentID) }
+
+// BindAgentID binds an existing agent identity. It makes no claim about the
+// agent's type beyond what the identity says. Binding does not create the
+// agent, but the first call to a durable identity does.
+func BindAgentID(agentID string) (*DynamicAgentClient, error) { return hostBindAgentID(agentID) }
+
+// MakeAgentID renders the identity of an agent of the given type, constructor
+// record and phantom, without creating it.
+func MakeAgentID(typeName string, constructor golem.TypedValue, phantom golem.Option[golem.UUID]) (string, error) {
+	return hostMakeAgentID(typeName, constructor, phantom)
 }

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
@@ -173,7 +174,8 @@ func TestPromiseTypeCheckIsSilentWithoutARecord(t *testing.T) {
 // TestAwaitWithContextGivesUp — waiting stops when the context ends, and a
 // completion that arrives first is returned.
 func TestAwaitWithContextGivesUp(t *testing.T) {
-	data, err := awaitWithContext(context.Background(), func() []byte { return []byte("done") })
+	var done promiseWait
+	data, err := done.result(context.Background(), func() []byte { return []byte("done") })
 	if err != nil || string(data) != "done" {
 		t.Fatalf("a completed wait gave %q, %v", data, err)
 	}
@@ -182,11 +184,40 @@ func TestAwaitWithContextGivesUp(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	go cancel()
-	if _, err := awaitWithContext(ctx, func() []byte { <-release; return nil }); !errors.Is(err, context.Canceled) {
+	var pending promiseWait
+	if _, err := pending.result(ctx, func() []byte { <-release; return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("a cancelled wait gave %v", err)
 	}
 
-	if _, err := awaitWithContext(ctx, func() []byte { t.Error("an ended context still waited"); return nil }); !errors.Is(err, context.Canceled) {
+	var ended promiseWait
+	if _, err := ended.result(ctx, func() []byte { t.Error("an ended context still waited"); return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("an already-ended context gave %v", err)
+	}
+}
+
+// A promise waits on the host once: a wait that gave up and a later one share
+// the first wait, instead of starting another each time.
+func TestAPromiseWaitsOnTheHostOnce(t *testing.T) {
+	var w promiseWait
+	starts := 0
+	release := make(chan []byte)
+	wait := func() []byte { starts++; return <-release }
+	for range 3 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, _ = w.result(ctx, wait)
+		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
+		if _, err := w.result(ctx, wait); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a timed-out wait gave %v", err)
+		}
+		cancel()
+	}
+	release <- []byte("approved")
+	data, err := w.result(context.Background(), wait)
+	if err != nil || string(data) != "approved" {
+		t.Fatalf("the shared wait gave %q, %v", data, err)
+	}
+	if starts != 1 {
+		t.Fatalf("the host was waited on %d times, want 1", starts)
 	}
 }

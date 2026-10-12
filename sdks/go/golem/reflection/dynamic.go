@@ -76,7 +76,7 @@ func (c *DynamicAgentClient) Call(method string, input core.SchemaValue) (golem.
 	if err != nil {
 		return golem.None[core.SchemaValue](), golem.InvocationID{}, err
 	}
-	out, err := p.Wait()
+	out, err := p.Get()
 	return out, p.ID, err
 }
 

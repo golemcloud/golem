@@ -18,6 +18,6 @@ package reflection
 
 // Off the wasm target there is no deployment to discover.
 
-func DiscoverTools() []Tool { return nil }
+func hostDiscoverTools() []Tool { return nil }
 
-func DiscoverTool(string) (Tool, bool) { return Tool{}, false }
+func hostDiscoverTool(string) (Tool, bool) { return Tool{}, false }

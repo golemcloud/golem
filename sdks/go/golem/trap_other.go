@@ -18,4 +18,8 @@ package golem
 
 // trap re-raises an agent method's panic. Off the wasm target there is no
 // component to trap, and a native test can recover the attributed value.
-func trap(pe *PanicError) { panic(pe) }
+func trap(pe *panicError) { panic(pe) }
+
+// trapRegionPanic re-raises a panic recovered in a region that must not resume.
+// Off the wasm target there is no component to trap.
+func trapRegionPanic(region string, value any) { panic(value) }

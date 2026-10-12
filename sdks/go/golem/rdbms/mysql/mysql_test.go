@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -229,5 +230,13 @@ func TestErrorMapping(t *testing.T) {
 		if err.Kind != c.kind || err.Message != c.msg {
 			t.Fatalf("mapping = kind %d msg %q, want kind %d msg %q", err.Kind, err.Message, c.kind, c.msg)
 		}
+	}
+}
+
+// An out-of-range time fails as a parameter error when the query runs.
+func TestAnOutOfRangeTimeIsAParameterError(t *testing.T) {
+	_, err := encodeParams([]any{Time(rdbms.Time{Hour: 25})})
+	if err == nil || !strings.Contains(err.Error(), "hour 25 is not 0..23") {
+		t.Fatalf("got %v", err)
 	}
 }

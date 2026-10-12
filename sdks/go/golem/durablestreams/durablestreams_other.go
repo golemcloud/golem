@@ -22,17 +22,17 @@ import wire "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_
 // durablestreams_wasm.go. Tests replace the calls on the Reader or Writer.
 
 func outsideComponent() *Error {
-	return newError(KindUnavailable, "durable streams are only available inside a component")
+	return newError(Unavailable, "durable streams are only available inside a component")
 }
 
-func hostReader(string, wire.DurableStreamMode, ReadOptions) readCall {
+func hostReader(string, wire.DurableStreamMode, ReadOptions) (readCall, func()) {
 	return func(wire.DurableStreamReadRequest) (wire.DurableStreamBatch, *Error) {
 		return wire.DurableStreamBatch{}, outsideComponent()
-	}
+	}, func() {}
 }
 
-func hostWriter(string, string, string, WriteOptions) appendCall {
+func hostWriter(string, string, string, WriteOptions) (appendCall, func()) {
 	return func(wire.DurableStreamAppendRequest) (wire.DurableStreamAppendReceipt, *Error) {
 		return wire.DurableStreamAppendReceipt{}, outsideComponent()
-	}
+	}, func() {}
 }

@@ -27,7 +27,6 @@ import (
 type streamish interface {
 	streamElem() reflect.Type
 	streamTake() (treeSource, error)
-	streamAdopt(src treeSource)
 }
 
 func (s AgentStream[T]) streamElem() reflect.Type { return reflect.TypeFor[T]() }
@@ -52,8 +51,6 @@ func (s AgentStream[T]) streamTake() (treeSource, error) {
 	s.st.taken = true
 	return s.st.src, nil
 }
-
-func (s AgentStream[T]) streamAdopt(src treeSource) { s.st.src = src }
 
 // compileStream lowers AgentStream[T] to the WIT stream type.
 func compileStream(c *engine.Codec, inner *engine.Codec) {

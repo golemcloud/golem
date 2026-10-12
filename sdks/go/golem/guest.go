@@ -37,9 +37,9 @@ const (
 	stageEncode  = "encoding output"
 )
 
-// PanicError is an agent method's panic, attributed to the stage it occurred
+// panicError is an agent method's panic, attributed to the stage it occurred
 // in.
-type PanicError struct {
+type panicError struct {
 	Method string
 	Stage  string
 	Value  any
@@ -49,14 +49,14 @@ type PanicError struct {
 // rather than from the agent's handler — i.e. whether it is our bug. An
 // [engine.EncodeError] is the agent supplying an unencodable value, so it is not
 // internal even though it surfaces in the encode stage.
-func (e *PanicError) Internal() bool {
+func (e *panicError) Internal() bool {
 	if _, ok := e.Value.(*engine.EncodeError); ok {
 		return false
 	}
 	return e.Stage != stageHandler
 }
 
-func (e *PanicError) Error() string {
+func (e *panicError) Error() string {
 	if ee, ok := e.Value.(*engine.EncodeError); ok {
 		return fmt.Sprintf("agent method %q returned a value that cannot be encoded: %s", e.Method, ee.Error())
 	}
@@ -69,7 +69,7 @@ func (e *PanicError) Error() string {
 // Unwrap exposes the recovered value when it is itself an error, so a wrapped
 // cause (e.g. a RemoteCallError from a nested call, or an engine.EncodeError) stays
 // reachable via errors.As/Is.
-func (e *PanicError) Unwrap() error {
+func (e *panicError) Unwrap() error {
 	if err, ok := e.Value.(error); ok {
 		return err
 	}

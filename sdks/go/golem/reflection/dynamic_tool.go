@@ -15,12 +15,13 @@
 package reflection
 
 import (
+	"io"
+
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"github.com/golemcloud/golem/sdks/go/golem/tool"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
-	"io"
 )
 
 // DynamicToolClient invokes a tool by name and command path, with values the

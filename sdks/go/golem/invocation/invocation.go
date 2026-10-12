@@ -175,3 +175,15 @@ func (s *Span) Finish() {
 	s.h.finish()
 	s.h = nil
 }
+
+// CurrentContext is the invocation context at this point of the invocation.
+func CurrentContext() *Context { return hostCurrentContext() }
+
+// StartSpan starts a span named name as a child of the current context.
+func StartSpan(name string) *Span { return hostStartSpan(name) }
+
+// AllowForwardingTraceContextHeaders turns forwarding of trace context headers
+// on outgoing HTTP requests on or off, returning the previous setting.
+func AllowForwardingTraceContextHeaders(allow bool) bool {
+	return hostAllowForwardingTraceContextHeaders(allow)
+}

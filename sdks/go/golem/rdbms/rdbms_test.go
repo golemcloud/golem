@@ -15,6 +15,7 @@
 package rdbms
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,5 +60,29 @@ func TestMacAddrString(t *testing.T) {
 	m := MacAddr{0xde, 0xad, 0xbe, 0xef, 0x00, 0x01}
 	if m.String() != "de:ad:be:ef:00:01" {
 		t.Fatalf("MacAddr.String = %q", m.String())
+	}
+}
+
+// A field outside its database range is reported instead of being cut to the
+// wire's width (month 300 would otherwise become 44).
+func TestDateAndTimeFieldsOutOfRangeAreReported(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"month", Date{Year: 2026, Month: 300, Day: 1}.Validate(), "month 300 is not 1..12"},
+		{"day", Date{Year: 2026, Month: 1, Day: 0}.Validate(), "day 0 is not 1..31"},
+		{"hour", Time{Hour: 24}.Validate(), "hour 24 is not 0..23"},
+		{"nanosecond", Time{Nanosecond: 1_000_000_000}.Validate(), "nanosecond 1000000000"},
+		{"offset", Timetz{OffsetSeconds: 90000}.Validate(), "not within a day"},
+		{"interval", Interval{Months: 1 << 40}.Validate(), "months 1099511627776 is out of range"},
+	} {
+		if c.err == nil || !strings.Contains(c.err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", c.name, c.err, c.want)
+		}
+	}
+	if err := (Timestamptz{Timestamp: Timestamp{Date: Date{Year: 2026, Month: 2, Day: 3}, Time: Time{Second: 60}}}).Validate(); err != nil {
+		t.Errorf("a valid timestamp with a leap second was refused: %v", err)
 	}
 }

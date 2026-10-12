@@ -63,7 +63,7 @@ func TestPublicAccessors(t *testing.T) {
 	if got := (&AgentDefinition[struct{}, NoConfig]{name: "N"}).Name(); got != "N" {
 		t.Errorf("AgentDefinition.Name = %q", got)
 	}
-	md := (&AgentDefinition[struct{}, NoConfig]{name: "N"}).Method[struct{}, struct{}]("m", Desc("d"), HTTP(GET("/x")))
+	md := (&AgentDefinition[struct{}, NoConfig]{name: "N"}).Method[struct{}, struct{}]("m", Description("d"), HTTP(GET("/x")))
 	if md.Name() != "m" {
 		t.Errorf("MethodDef.Name = %q", md.Name())
 	}

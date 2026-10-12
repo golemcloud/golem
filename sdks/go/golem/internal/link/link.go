@@ -35,6 +35,23 @@ var Engine *engine.Engine
 // NewEngine returns a fresh type system with the SDK's own types registered.
 var NewEngine func() *engine.Engine
 
+// TrapPanic reports a panic recovered in a region that must not resume, such
+// as an atomic region, and traps the component. Off the wasm target it panics
+// again with the value.
+var TrapPanic func(region string, value any)
+
+// TrapOnPanic runs f and traps the component if f panics, so that no caller
+// can recover the panic and go on inside a region that must not resume.
+// region names it in the report.
+func TrapOnPanic(region string, f func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			TrapPanic(region, r)
+		}
+	}()
+	f()
+}
+
 // The root package's own types, built and read from subpackages. Each returns
 // or takes the root type as any: a subpackage asserts it back.
 var (

@@ -54,7 +54,7 @@ func TestAgentErrorIsRecoverable(t *testing.T) {
 	if !errors.As(err, &ae) {
 		t.Fatalf("agentErrorToGo did not return an *AgentError: %T", err)
 	}
-	if ae.Kind != AgentCustom || ae.Message != "boom" {
+	if ae.Kind != AgentCustomError || ae.Message != "boom" {
 		t.Fatalf("AgentError = {Kind:%d Message:%q}, want {Custom, boom}", ae.Kind, ae.Message)
 	}
 	if got := agentErrorToGo(common.MakeAgentErrorInvalidMethod("nope")); got.(*AgentError).Kind != AgentInvalidMethod {

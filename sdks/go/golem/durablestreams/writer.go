@@ -45,7 +45,8 @@ type WriteOptions struct {
 	ProducerID golem.Option[string]
 	Epoch      uint64
 	Timeout    time.Duration
-	Retry      RetryOptions
+	// Retry bounds the retries; unset means [DefaultRetry].
+	Retry golem.Option[RetryOptions]
 	// Auth authenticates the requests; its plaintext never reaches the agent.
 	Auth golem.Option[golem.Secret[string]]
 }
@@ -62,6 +63,7 @@ const maxProducerNumber = 1<<53 - 1
 // before appending new data. Dropping a writer does not undo a write.
 type Writer struct {
 	append   appendCall
+	release  func()
 	producer Producer
 	retry    RetryOptions
 	pending  *pendingAppend
@@ -78,22 +80,21 @@ type pendingAppend struct {
 // given content type.
 func NewWriter(url, contentType string, options WriteOptions) (*Writer, error) {
 	if options.Epoch > maxProducerNumber {
-		return nil, newError(KindInvalidRequest, "producer epoch exceeds 2^53-1")
+		return nil, newError(InvalidRequest, "producer epoch exceeds 2^53-1")
 	}
 	if options.Timeout == 0 {
 		options.Timeout = 30 * time.Second
-	}
-	if options.Retry == (RetryOptions{}) {
-		options.Retry = DefaultRetry
 	}
 	id, ok := options.ProducerID.Get()
 	if !ok {
 		id = durability.GenerateIdempotencyKey().String()
 	}
+	appendTo, release := hostWriter(url, contentType, id, options)
 	return &Writer{
-		append:   hostWriter(url, contentType, id, options),
+		append:   appendTo,
+		release:  release,
 		producer: Producer{ID: id, Epoch: options.Epoch},
-		retry:    options.Retry,
+		retry:    retryOrDefault(options.Retry),
 	}, nil
 }
 
@@ -110,7 +111,7 @@ func AppendJSON[T any](w *Writer, values []T, close bool) (AppendReceipt, error)
 	for _, v := range values {
 		data, err := json.Marshal(v)
 		if err != nil {
-			return AppendReceipt{}, newError(KindInvalidRequest, "JSON encode failed: %v", err)
+			return AppendReceipt{}, newError(InvalidRequest, "JSON encode failed: %v", err)
 		}
 		encoded = append(encoded, string(data))
 	}
@@ -133,22 +134,39 @@ func (w *Writer) Close() (AppendReceipt, error) {
 	if err := w.prepare(wire.MakeDurableStreamAppendPayloadBytes(nil), true); err != nil {
 		return AppendReceipt{}, err
 	}
-	return w.RetryPending()
+	receipt, err := w.RetryPending()
+	if err == nil {
+		w.Release()
+	}
+	return receipt, err
+}
+
+// Release frees the writer's host resource without closing the stream, for a
+// writer that will not append again. A writer is also released when [Close]
+// closes the stream, or when it is garbage collected.
+func (w *Writer) Release() {
+	if w.release != nil {
+		w.release()
+		w.release = nil
+		w.append = func(wire.DurableStreamAppendRequest) (wire.DurableStreamAppendReceipt, *Error) {
+			return wire.DurableStreamAppendReceipt{}, newError(Closed, "writer was released")
+		}
+	}
 }
 
 func (w *Writer) prepare(payload wire.DurableStreamAppendPayload, close bool) error {
 	switch {
 	case w.pending != nil:
-		return newError(KindSequenceConflict, "resolve the pending append before supplying new data")
+		return newError(SequenceConflict, "resolve the pending append before supplying new data")
 	case w.closed:
-		return newError(KindClosed, "writer is closed")
+		return newError(Closed, "writer is closed")
 	case w.producer.Sequence > maxProducerNumber:
-		return newError(KindInvalidRequest, "producer sequence exhausted")
+		return newError(InvalidRequest, "producer sequence exhausted")
 	}
 	empty := payload.Tag() == wire.DurableStreamAppendPayloadJson && len(payload.Json()) == 0 ||
 		payload.Tag() == wire.DurableStreamAppendPayloadBytes && len(payload.Bytes()) == 0
 	if empty && !close {
-		return newError(KindInvalidRequest, "an empty append must close the stream")
+		return newError(InvalidRequest, "an empty append must close the stream")
 	}
 	w.pending = &pendingAppend{request: wire.DurableStreamAppendRequest{
 		Payload: payload, Sequence: w.producer.Sequence, Close: close,
@@ -162,7 +180,7 @@ func (w *Writer) RetryPending() (AppendReceipt, error) {
 	for {
 		p := w.pending
 		if p == nil {
-			return AppendReceipt{}, newError(KindInvalidRequest, "no pending append")
+			return AppendReceipt{}, newError(InvalidRequest, "no pending append")
 		}
 		if p.delay > 0 {
 			time.Sleep(p.delay)
@@ -192,11 +210,11 @@ func (w *Writer) acknowledge(receipt wire.DurableStreamAppendReceipt) error {
 	request := w.pending.request
 	switch {
 	case receipt.Epoch != w.producer.Epoch || receipt.Sequence < request.Sequence:
-		return newError(KindProtocolError, "invalid producer acknowledgement")
+		return newError(ProtocolError, "invalid producer acknowledgement")
 	case receipt.Sequence > request.Sequence:
-		return newError(KindProducerDiverged, "peer acknowledged a later producer sequence")
+		return newError(ProducerDiverged, "peer acknowledged a later producer sequence")
 	case request.Close && !receipt.Closed:
-		return newError(KindProtocolError, "peer did not acknowledge closure")
+		return newError(ProtocolError, "peer did not acknowledge closure")
 	}
 	w.producer.Sequence = request.Sequence + 1
 	w.closed = receipt.Closed

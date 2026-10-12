@@ -18,6 +18,7 @@ package tool
 
 import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
+	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
 )
 
 // newToolStdin adapts the host-supplied reader, or produces one that explains
@@ -36,5 +37,10 @@ func hostOutput(out toolExports.Stdout) byteStreamSink {
 	if out.IsNone() {
 		return nil
 	}
-	return out.Some()
+	return hostSink{out.Some()}
 }
+
+// hostSink is a host output writer as a byteStreamSink.
+type hostSink struct{ *streams.ToolOutputWriter }
+
+func (s hostSink) release() { s.Drop() }

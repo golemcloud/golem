@@ -48,7 +48,7 @@ func (d *Engine) compileRecord(c *Codec) {
 		// Children are appended first; the record node then refers to them.
 		idxs := make([]int32, 0, len(fields))
 		for _, f := range fields {
-			idxs = append(idxs, f.Codec.Encode(b, v.Field(f.Index)))
+			idxs = append(idxs, encodeField(b, c.Typ, f, v))
 		}
 		return b.Push(types.MakeSchemaValueNodeRecordValue(idxs))
 	}
@@ -62,7 +62,9 @@ func (d *Engine) compileRecord(c *Codec) {
 			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
 		idxs := n.RecordValue()
-		if len(idxs) < len(fields) {
+		// Records are positional, so a record of another width has another
+		// shape: reading it would take values by the wrong index.
+		if len(idxs) != len(fields) {
 			return fmt.Errorf("record for %s has %d field(s), want %d", c.Typ, len(idxs), len(fields))
 		}
 		for i, f := range fields {
@@ -408,7 +410,7 @@ var namedTypeCodecs = map[reflect.Type]func(*Codec){
 	reflect.TypeFor[values.Char](): func(c *Codec) {
 		scalar(c, types.MakeSchemaTypeBodyCharType(), types.SchemaValueNodeCharValue,
 			func(b *ValBuilder, v reflect.Value) int32 {
-				return b.Push(types.MakeSchemaValueNodeCharValue(rune(v.Int())))
+				return b.Push(types.MakeSchemaValueNodeCharValue(validRune(rune(v.Int()))))
 			},
 			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetInt(int64(n.CharValue())) })
 	},
@@ -418,7 +420,7 @@ var namedTypeCodecs = map[reflect.Type]func(*Codec){
 			AllowedHosts:   witTypes.None[[]string](),
 		}), types.SchemaValueNodeUrlValue,
 			func(b *ValBuilder, v reflect.Value) int32 {
-				return b.Push(types.MakeSchemaValueNodeUrlValue(v.String()))
+				return b.Push(types.MakeSchemaValueNodeUrlValue(validUTF8("url", v.String())))
 			},
 			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetString(n.UrlValue()) })
 	},
@@ -446,7 +448,7 @@ var namedTypeCodecs = map[reflect.Type]func(*Codec){
 		}), types.SchemaValueNodeTextValue,
 			func(b *ValBuilder, v reflect.Value) int32 {
 				return b.Push(types.MakeSchemaValueNodeTextValue(types.TextValuePayload{
-					Text:     v.String(),
+					Text:     validUTF8("text", v.String()),
 					Language: witTypes.None[string](),
 				}))
 			},
@@ -476,7 +478,7 @@ var namedTypeCodecs = map[reflect.Type]func(*Codec){
 			AllowedExtensions: witTypes.None[[]string](),
 		}), types.SchemaValueNodePathValue,
 			func(b *ValBuilder, v reflect.Value) int32 {
-				return b.Push(types.MakeSchemaValueNodePathValue(v.String()))
+				return b.Push(types.MakeSchemaValueNodePathValue(validUTF8("path", v.String())))
 			},
 			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetString(n.PathValue()) })
 	},

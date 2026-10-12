@@ -928,3 +928,35 @@ func TestNameTypeRejectsConflicts(t *testing.T) {
 		mustDefErr(t, d, "non-empty")
 	})
 }
+
+// Records are positional, so a record wider than the Go struct has another
+// shape and is refused rather than read by the wrong index.
+func TestARecordOfAnotherWidthIsRefused(t *testing.T) {
+	type Pair struct{ A, B string }
+	c := defs.Compile(reflect.TypeFor[Pair]())
+	wider := []types.SchemaValueNode{
+		types.MakeSchemaValueNodeStringValue("a"),
+		types.MakeSchemaValueNodeStringValue("b"),
+		types.MakeSchemaValueNodeStringValue("c"),
+		types.MakeSchemaValueNodeRecordValue([]int32{0, 1, 2}),
+	}
+	d := engine.Decoder{Nodes: wider}
+	if err := c.Decode(&d, reflect.New(reflect.TypeFor[Pair]()).Elem(), 3); err == nil || !strings.Contains(err.Error(), "has 3 field(s), want 2") {
+		t.Fatalf("a wider record gave %v", err)
+	}
+}
+
+// A value tree whose indices form a cycle ends the decode with an error
+// instead of recursing until the stack runs out.
+func TestACyclicValueTreeIsRefused(t *testing.T) {
+	type Node struct{ Children []Node }
+	c := defs.Compile(reflect.TypeFor[Node]())
+	cyclic := []types.SchemaValueNode{
+		types.MakeSchemaValueNodeListValue([]int32{1}),
+		types.MakeSchemaValueNodeRecordValue([]int32{0}),
+	}
+	d := engine.Decoder{Nodes: cyclic}
+	if err := c.Decode(&d, reflect.New(reflect.TypeFor[Node]()).Elem(), 1); err == nil || !strings.Contains(err.Error(), "refers back to itself") {
+		t.Fatalf("a cyclic tree gave %v", err)
+	}
+}

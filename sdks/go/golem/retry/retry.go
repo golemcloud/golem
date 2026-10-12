@@ -44,7 +44,7 @@
 // Base rules are usually declared in the application manifest (golem.yaml
 // retryPolicyDefaults) or via the CLI/REST API; those are managed by the operator
 // and stay live (the host refreshes them, like secrets), and this package reads
-// them back with [GetPolicies], [GetByName], [Resolve] and [PolicyNames]. From
+// them back with [Policies], [ByName], [Resolve] and [PolicyNames]. From
 // agent code you overlay them: [Set] registers a rule that persists (and takes
 // precedence over a live rule of the same name — use it when the code owns that
 // rule), while [With] applies a rule only for the current call and restores the
@@ -415,9 +415,9 @@ func PolicyNames() []string {
 	return names
 }
 
-// GetPolicies returns the rules active for this agent, decoded into [NamedPolicy]
+// Policies returns the rules active for this agent, decoded into [NamedPolicy]
 // values. It panics if the host returned a malformed policy graph.
-func GetPolicies() []NamedPolicy {
+func Policies() []NamedPolicy {
 	raw := apiRetry.GetRetryPolicies()
 	out := make([]NamedPolicy, 0, len(raw))
 	for _, r := range raw {
@@ -426,9 +426,9 @@ func GetPolicies() []NamedPolicy {
 	return out
 }
 
-// GetByName returns the rule with the given name, reporting false if no such
+// ByName returns the rule with the given name, reporting false if no such
 // rule exists. It panics if the host returned a malformed policy graph.
-func GetByName(name string) (NamedPolicy, bool) {
+func ByName(name string) (NamedPolicy, bool) {
 	opt := apiRetry.GetRetryPolicyByName(name)
 	if opt.IsNone() {
 		return NamedPolicy{}, false

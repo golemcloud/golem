@@ -22,6 +22,7 @@ package rdbms
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -101,6 +102,79 @@ type Interval struct {
 	Months       int
 	Days         int
 	Microseconds int64
+}
+
+// Validate reports a field outside the range a database date holds.
+func (d Date) Validate() error {
+	switch {
+	case d.Year < math.MinInt32 || d.Year > math.MaxInt32:
+		return fmt.Errorf("date %s: year %d is out of range", d, d.Year)
+	case d.Month < 1 || d.Month > 12:
+		return fmt.Errorf("date %s: month %d is not 1..12", d, d.Month)
+	case d.Day < 1 || d.Day > 31:
+		return fmt.Errorf("date %s: day %d is not 1..31", d, d.Day)
+	}
+	return nil
+}
+
+// Validate reports a field outside the range a database time of day holds. A
+// second of 60 is a leap second.
+func (t Time) Validate() error {
+	switch {
+	case t.Hour < 0 || t.Hour > 23:
+		return fmt.Errorf("time %s: hour %d is not 0..23", t, t.Hour)
+	case t.Minute < 0 || t.Minute > 59:
+		return fmt.Errorf("time %s: minute %d is not 0..59", t, t.Minute)
+	case t.Second < 0 || t.Second > 60:
+		return fmt.Errorf("time %s: second %d is not 0..60", t, t.Second)
+	case t.Nanosecond < 0 || t.Nanosecond > 999_999_999:
+		return fmt.Errorf("time %s: nanosecond %d is not 0..999999999", t, t.Nanosecond)
+	}
+	return nil
+}
+
+// Validate reports a field outside the range a database time with offset holds.
+func (t Timetz) Validate() error {
+	if err := t.Time.Validate(); err != nil {
+		return err
+	}
+	return validOffset(t.OffsetSeconds)
+}
+
+// Validate reports a field outside the range a database timestamp holds.
+func (ts Timestamp) Validate() error {
+	if err := ts.Date.Validate(); err != nil {
+		return err
+	}
+	return ts.Time.Validate()
+}
+
+// Validate reports a field outside the range a database timestamp with offset
+// holds.
+func (ts Timestamptz) Validate() error {
+	if err := ts.Timestamp.Validate(); err != nil {
+		return err
+	}
+	return validOffset(ts.OffsetSeconds)
+}
+
+// Validate reports a field outside the range a database interval holds.
+func (iv Interval) Validate() error {
+	switch {
+	case iv.Months < math.MinInt32 || iv.Months > math.MaxInt32:
+		return fmt.Errorf("interval: months %d is out of range", iv.Months)
+	case iv.Days < math.MinInt32 || iv.Days > math.MaxInt32:
+		return fmt.Errorf("interval: days %d is out of range", iv.Days)
+	}
+	return nil
+}
+
+// validOffset accepts a UTC offset of less than a day either way.
+func validOffset(seconds int) error {
+	if seconds <= -86400 || seconds >= 86400 {
+		return fmt.Errorf("UTC offset of %d seconds is not within a day", seconds)
+	}
+	return nil
 }
 
 // MacAddr is a six-octet hardware address.

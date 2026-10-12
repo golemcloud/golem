@@ -46,6 +46,15 @@ func hostFailure(op string, e *kverr.Error) error {
 // Bucket is a handle to a key-value bucket.
 type Bucket struct{ raw *kvtypes.Bucket }
 
+// Close releases the bucket's host resource; do not use the bucket after it.
+// A bucket that is not closed is released when it is garbage collected.
+func (b *Bucket) Close() {
+	if b.raw != nil {
+		b.raw.Drop()
+		b.raw = nil
+	}
+}
+
 // OpenBucket opens (or creates) the named bucket.
 func OpenBucket(name string) *Bucket {
 	r := kvtypes.BucketOpenBucket(name)
@@ -70,7 +79,9 @@ func (b *Bucket) Get(key string) (value []byte, found bool) {
 
 // Set stores value at key.
 func (b *Bucket) Set(key string, value []byte) {
-	if r := eventual.Set(b.raw, key, outgoing(value)); r.IsErr() {
+	ov := outgoing(value)
+	defer ov.Drop()
+	if r := eventual.Set(b.raw, key, ov); r.IsErr() {
 		panic(hostFailure("set", r.Err()))
 	}
 }
@@ -122,7 +133,9 @@ func (b *Bucket) GetMany(keys []string) map[string][]byte {
 func (b *Bucket) SetMany(entries map[string][]byte) {
 	kvs := make([]witTypes.Tuple2[string, *kvtypes.OutgoingValue], 0, len(entries))
 	for k, v := range entries {
-		kvs = append(kvs, witTypes.Tuple2[string, *kvtypes.OutgoingValue]{F0: k, F1: outgoing(v)})
+		ov := outgoing(v)
+		defer ov.Drop()
+		kvs = append(kvs, witTypes.Tuple2[string, *kvtypes.OutgoingValue]{F0: k, F1: ov})
 	}
 	if r := batch.SetMany(b.raw, kvs); r.IsErr() {
 		panic(hostFailure("set many", r.Err()))
@@ -163,10 +176,6 @@ type Store[T any] struct{ b *Bucket }
 //
 //	cart, found := bucket.Typed[Cart]().MustGet("cart-1")
 func (b *Bucket) Typed[T any]() *Store[T] { return &Store[T]{b: b} }
-
-// Typed is [Bucket.Typed] as a free function, for call sites that read better
-// with the type first.
-func Typed[T any](b *Bucket) *Store[T] { return b.Typed[T]() }
 
 // Get decodes the value at key as T. found is false (nil error) when absent; the
 // error reports stored data that does not decode as T.
@@ -211,6 +220,45 @@ func (s *Store[T]) Exists(key string) bool { return s.b.Exists(key) }
 
 // Keys lists all keys.
 func (s *Store[T]) Keys() []string { return s.b.Keys() }
+
+// GetMany decodes several keys at once, returning only the present ones. The
+// batch is not atomic; the error reports stored data that does not decode as T.
+func (s *Store[T]) GetMany(keys []string) (map[string]T, error) {
+	raw := s.b.GetMany(keys)
+	out := make(map[string]T, len(raw))
+	for key, data := range raw {
+		v, err := unmarshalValue[T](data)
+		if err != nil {
+			return nil, fmt.Errorf("golem/keyvalue: decoding %q: %w", key, err)
+		}
+		out[key] = v
+	}
+	return out, nil
+}
+
+// MustGetMany is [Store.GetMany] that panics when stored data does not decode
+// as T.
+func (s *Store[T]) MustGetMany(keys []string) map[string]T {
+	out, err := s.GetMany(keys)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
+// SetMany JSON-encodes several values and stores them at once. The batch is
+// not atomic. It panics when a value does not encode as JSON.
+func (s *Store[T]) SetMany(entries map[string]T) {
+	raw := make(map[string][]byte, len(entries))
+	for key, value := range entries {
+		data, err := marshalValue(value)
+		if err != nil {
+			panic(fmt.Errorf("golem/keyvalue: encoding %q: %w", key, err))
+		}
+		raw[key] = data
+	}
+	s.b.SetMany(raw)
+}
 
 // marshalValue/unmarshalValue are the JSON codec behind Store.
 func marshalValue[T any](v T) ([]byte, error) { return json.Marshal(v) }
