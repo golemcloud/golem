@@ -14,7 +14,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { compileSchema } from '../src/schema/adapter';
-import type { SchemaValue } from '../src/internal/schema-model';
+import { schemaValueToWit, type SchemaValue } from '../src/internal/schema-model';
+import {
+  SchemaValueWriter,
+  invocationSchemaValueReader,
+  directSchemaValueToWit,
+  directSchemaValueFromWit,
+} from '../src/schema/codec';
 import { s } from '../src/schema/markers';
 
 // Each typed-array marker → WIT `list<primN>`, decoded to the concrete subclass.
@@ -111,6 +117,55 @@ describe('typed-array markers → WIT list<primN>', () => {
       expect(Array.from(decoded as Iterable<number | bigint>)).toEqual(
         Array.from(k.sample as readonly (number | bigint)[]),
       );
+
+      expect(directSchemaValueFromWit(codec, directSchemaValueToWit(codec, input))).toEqual(input);
+      const writer = new SchemaValueWriter();
+      const root = codec.invocationDirect!.write(input, writer)!;
+      expect(
+        codec.invocationDirect!.read(
+          invocationSchemaValueReader({ valueNodes: writer.valueNodes, root }),
+          root,
+        ),
+      ).toEqual(input);
     });
   }
+
+  it.each([0, 1, 255, 256, 10000])(
+    'preserves bytes and full-width indices at length %i',
+    (length) => {
+      const codec = compileSchema(s.uint8Array());
+      const input = Uint8Array.from({ length }, (_, i) => (i * 37 + 19) % 256);
+      const writer = new SchemaValueWriter();
+      // A preceding argument must not truncate the following list's arena indices.
+      for (let i = 0; i < 300; i++) writer.add({ tag: 'u8-value', val: i % 256 });
+      const root = codec.invocationDirect!.write(input, writer)!;
+      expect(writer.valueNodes.slice(300)).toEqual(
+        schemaValueToWit(codec.toValue(input)).valueNodes.map((node) =>
+          node.tag === 'list-value' ? { ...node, val: node.val.map((i) => i + 300) } : node,
+        ),
+      );
+      const decoded = codec.invocationDirect!.read(
+        invocationSchemaValueReader({ valueNodes: writer.valueNodes, root }),
+        root,
+      );
+      expect(decoded).toBeInstanceOf(Uint8Array);
+      expect(decoded).toEqual(input);
+    },
+  );
+
+  it('rejects the wrong array kind and malformed scalar carriers', () => {
+    const codec = compileSchema(s.uint8Array());
+    for (const input of [[1, 2], new Int8Array([1, 2]), 'abc']) {
+      expect(() => codec.invocationDirect!.write(input, new SchemaValueWriter())).toThrow();
+    }
+    expect(() =>
+      invocationSchemaValueReader({
+        valueNodes: [
+          { tag: 'u8-value', val: 256 },
+          { tag: 'list-value', val: [0] },
+        ],
+        root: 1,
+      }),
+    ).toThrow();
+  });
 });

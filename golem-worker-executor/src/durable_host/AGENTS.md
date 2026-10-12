@@ -113,10 +113,15 @@ not add a feature-specific recovery path or immediate restart.
   observer, not at host take time. Its oplog position is the guest boundary; there is no extra
   durable call or delivery marker. Packed bytes record only the consumed portion. A crash before
   consumption leaves no record and recovery re-reads the source by offset. Host projections keep
-  take-time journaling. Native read cancellation does not yet reconstruct the inline-versus-blocked
-  return disposition. If cancellation cannot retain a recorded guest delivery, replay fails with
-  `UnexpectedOplogEntry` and poisons the shared cursor instead of discarding the value or waiting
-  forever. The canonical cancellation policy is unchanged; do not force always-blocked returns.
+  take-time journaling. A zero-progress native read cancellation retains the producer's receive
+  and prepared observation for the next read; only dropping the readable end cancels the durable
+  source. A retained receive keeps its original runtime activity binding; a later transfer stays
+  unclassified until it completes. Finishing the original activity is not owner suspension and
+  must not prevent the receive from returning. Native read cancellation does not yet reconstruct
+  the inline-versus-blocked return disposition. If cancellation cannot retain a recorded guest
+  delivery, replay fails with `UnexpectedOplogEntry` and poisons the shared cursor instead of
+  discarding the value or waiting forever. The canonical cancellation policy is unchanged; do not
+  force always-blocked returns.
 - Atomic rollback retains logical consumer input, including its ordinal, source offset and nested
   reader identities. Re-executing a read whose physical boundary a `Jump` deleted appends one
   consumer record with `reobserves` referencing the original record. Append and replay validate
@@ -157,8 +162,9 @@ rather than replaced by a recorded result.
   not put a host task or a buffer between that durable input and the guest: what a host takes ahead
   of the body has no place among the body's recorded calls, and a replay then hands it over too
   early. In completed replay a read past the recorded journal stays pending. A guest that cancels a
-  pending read cancels the input as its consumer; a reader that is dropped without a pending read
-  cancels nothing, and the end of the session cancels the unread input. The records keep the
+  pending read cancels nothing and keeps its receive for the next read, as every guest reader of a
+  durable input does. Unlike those, a reader of this stdin that is dropped cancels nothing either:
+  the end of the session cancels the unread input. The records keep the
   session's attribution, so an incomplete body with a recorded read of this stdin has started
   (`has_recorded_guest_read`): do not send it through the empty-scope shortcut.
 

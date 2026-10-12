@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{TestContext, cmd, flag, replace_string_in_file};
+use crate::app::{TestContext, cmd, flag};
 use crate::workspace_path;
 use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_cli::{fs, versions};
@@ -266,16 +266,22 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
     assert!(!readme.contains("ORIGIN=http://app-name.localhost:9006"));
     assert!(ctx.cli([flag::YES, cmd::BUILD]).await.success_or_dump());
     ctx.start_server().await;
-    replace_string_in_file(
-        ctx.cwd_path_join("golem.yaml"),
-        &format!("subdomain: {app_name}"),
-        &format!("domain: localhost:{}", ctx.custom_request_port()),
-    )
-    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["localServer"]["customRequestPort"] = ctx.custom_request_port().into();
+    fs::write_str(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
     assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let origin = format!("http://localhost:{}", ctx.custom_request_port());
+    let hostname = format!("{app_name}.localhost");
+    // Only the test-process setup client needs an address override. Guest calls
+    // below use the executor's production transport with the original authority.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .resolve(&hostname, "127.0.0.1:0".parse().unwrap())
+        .build()
+        .unwrap();
+    let origin = format!("http://{hostname}:{}", ctx.custom_request_port());
     let base = format!("{origin}/durable-stream-agents/protocol/echo/invocations/template-session");
     let source = format!("{base}/streams/input");
     assert_eq!(
@@ -329,6 +335,34 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
         [json!("echo:shared"), json!("echo:fork-only")]
     );
 
+    let guest_base =
+        format!("{origin}/durable-stream-agents/protocol/echo/invocations/guest-local-session");
+    let guest_source = format!("{guest_base}/streams/input");
+    assert_eq!(
+        client.put(&guest_source).send().await.unwrap().status(),
+        reqwest::StatusCode::CREATED
+    );
+    // Closing the small batch before reading avoids the separate open-stream
+    // flag interoperability issue and keeps the entire payload in one batch.
+    let offset: Option<String> = invoke_template(
+        &ctx,
+        append,
+        vec![
+            json!(guest_source),
+            json!("guest-local-producer"),
+            json!(["local-first", "local-tail"]),
+            json!(true),
+        ],
+    )
+    .await;
+    assert!(offset.is_some());
+    let values: Vec<String> = invoke_template(&ctx, read, vec![json!(guest_source)]).await;
+    assert_eq!(values, ["local-first", "local-tail"]);
+    assert_eq!(
+        wait_for_closed_json(&client, &format!("{guest_base}/streams/$result")).await,
+        [json!("echo:local-first"), json!("echo:local-tail")]
+    );
+
     let server = ReferenceServer::start().await;
     let external = server.create("/template", "application/json").await;
     let append_args = vec![
@@ -370,16 +404,32 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
 
 #[test]
 #[timeout("40 minutes")]
-async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
-    for (language, append, read) in [
-        ("rust", "append_external", "read_external"),
-        ("ts", "appendExternal", "readExternal"),
-        ("effect", "appendExternal", "readExternal"),
-        ("scala", "appendExternal", "readExternal"),
-        ("moonbit", "append_external", "read_external"),
-    ] {
-        streaming_template_walkthrough(language, append, read).await;
-    }
+async fn rust_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("rust", "append_external", "read_external").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn typescript_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("ts", "appendExternal", "readExternal").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn effect_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("effect", "appendExternal", "readExternal").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn scala_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("scala", "appendExternal", "readExternal").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn moonbit_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("moonbit", "append_external", "read_external").await;
 }
 
 #[test]

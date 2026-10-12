@@ -7,6 +7,9 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   const session = yield* TestSession
   const ref = `EffectP3Caller("p3-${session.stamp}")`
 
+  const bytes = yield* liftCliError(cli.invoke(ref, "typedArrayRoundtrip"))
+  yield* expectMatch(bytes.stdout, /\btrue\b/, "large typed-array RPC preserves every byte")
+
   const streamed = yield* liftCliError(cli.invoke(ref, "streamRoundtrip"))
   yield* expectMatch(streamed.stdout, /2[^0-9]+4[^0-9]+6/, "Effect Stream RPC round-trip")
 

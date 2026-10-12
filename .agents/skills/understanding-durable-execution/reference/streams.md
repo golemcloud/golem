@@ -230,13 +230,14 @@ The size is fixed and never configured: a replay that asked for less would cut a
 another place. In the replay of a completed body a read past the recorded journal stays pending,
 because a read with no record delivered nothing before the body's `End`. A cancel by the client
 reads as one `cancelled` item and then the end; a clean end gives no item. A body that cancels a
-pending read cancels the input as its consumer, and a later read gets the end. A reader that is
-dropped without a pending read cancels nothing, also when a failed attempt drops it, so a later
-attempt of the call finds the stdin as the client left it; the end of the session cancels what
-nobody read. The cost: a dropped reader gives no backpressure, because its bus subscription is gone,
-so every byte that the client still sends is journaled in the oplog until the call ends. A reader
-that is kept and not read holds the client back as usual. A native body reads an in-memory
-attachment that a host task fills, and its reads are host records.
+pending read cancels nothing, as for every guest reader of a durable input: the reader keeps its
+receive, and the next read goes on with it. A reader that is dropped cancels nothing either, also
+when a failed attempt drops it, so a later attempt of the call finds the stdin as the client left
+it; the end of the session cancels what nobody read. The cost: a dropped reader gives no
+backpressure, because its bus subscription is gone, so every byte that the client still sends is
+journaled in the oplog until the call ends. A reader that is kept and not read holds the client
+back as usual. A native body reads an in-memory attachment that a host task fills, and its reads
+are host records.
 
 The ownership layers are deliberately local. `DurableStreamStore` is the existing per-worker
 journal/index store; it still owns queue admission, serialized local mutations, durable commit and
@@ -493,9 +494,12 @@ Constructors retain the borrowed secret's pinned identity/metadata independently
 handle's lifetime. The live path requires
 network permission, secret Reveal permission and any entity `secret_keys_revealable` restriction;
 it fetches one pinned string secret and sends it as Bearer without exposing it to the SDK. HTTP
-is restricted to loopback/localhost; otherwise HTTPS is required. Redirects and automatic HTTP
-retries are disabled. Remote errors are typed durable results. SDK retry budgets/backoff use
-durable clocks and waits, outside custom durability wrappers.
+is restricted to literal loopback IPs and case-insensitive `localhost` names or dot-delimited
+subdomains, with at most one terminal DNS dot. A reusable local HTTP client bypasses proxies and
+resolves localhost names to IPv4/IPv6 loopback candidates without rewriting the URL authority.
+Literal loopback destinations remain unchanged. HTTPS uses the normal client's DNS and proxy
+behavior. Redirects and automatic HTTP retries are disabled. Remote errors are typed durable
+results. SDK retry budgets/backoff use durable clocks and waits, outside custom durability wrappers.
 
 `durable_stream.external_batch_max_size` bounds payloads and accepts human-readable SI/IEC sizes
 (default `8 MiB`). Codec buffer reservation uses existing memory admission and is held through

@@ -1330,6 +1330,7 @@ const walk = (
             if (tak !== undefined) {
               const elem = typedArrayElement[tak]
               const Ctor = typedArrayCtor[tak]
+              const item = primPair(elem.toV, elem.make().body.tag as WitNumericKind, elem.coerce)
               return {
                 type: t.list(elem.make()),
                 pair: {
@@ -1342,6 +1343,21 @@ const walk = (
                     const lv = sv as { elements: ReadonlyArray<SchemaValue> }
                     const raw = lv.elements.map((c) => (c as { value: unknown }).value)
                     return new Ctor(raw as Iterable<any>)
+                  },
+                  wire: {
+                    write: (arr, writer) =>
+                      writer.add({
+                        tag: "list-value",
+                        val: Array.from(arr as Iterable<unknown>, (value) =>
+                          item.wire!.write(value, writer),
+                        ),
+                      }),
+                    read: (nodes, index) =>
+                      new Ctor(
+                        wireNode(nodes, index, "list-value").val.map((i) =>
+                          item.wire!.read(nodes, i),
+                        ),
+                      ),
                   },
                 },
               }

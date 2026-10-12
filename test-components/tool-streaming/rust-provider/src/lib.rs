@@ -1786,7 +1786,8 @@ impl Streaming for StreamingImpl {
                     !write_chunk(&mut stdout, format!("{first}, then {again}").into_bytes()).await;
             }
             // Gives up a pending read of stdin when a short wait ends first, and then reads
-            // once more. It writes which of the two ended first and what the second read gave.
+            // once more. It writes a line that says which of the two ended first, before the
+            // second read, and then what the second read gave.
             "stdin-read-after-own-cancel" => {
                 let read = async { stdin_read_name(stdin.next().await) };
                 let tick = async {
@@ -1794,9 +1795,13 @@ impl Streaming for StreamingImpl {
                     "tick".to_string()
                 };
                 let first = (read, tick).race().await;
-                let again = stdin_read_name(stdin.next().await);
-                summary.output_closed =
-                    !write_chunk(&mut stdout, format!("{first}, then {again}").into_bytes()).await;
+                if write_chunk(&mut stdout, format!("{first}\n").into_bytes()).await {
+                    let again = stdin_read_name(stdin.next().await);
+                    summary.output_closed =
+                        !write_chunk(&mut stdout, format!("then {again}").into_bytes()).await;
+                } else {
+                    summary.output_closed = true;
+                }
             }
             // Reads stdin once, drops its reader with no read pending, and goes on for a second.
             "stdin-dropped-after-a-chunk" => {

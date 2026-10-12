@@ -8847,6 +8847,7 @@ enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
     ExecutorShutdownDuringBodyValidation,
+    RestartDuringBodyValidation,
     CrashReplayClaimWindow,
     EntityCustomRootCrashReplay,
 }
@@ -8999,6 +9000,9 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
             "exclusive-p2-body-validation-shutdown"
         }
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+            "exclusive-p2-body-validation-restart"
+        }
         CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             "exclusive-p2-crash-replay-window"
         }
@@ -9046,6 +9050,17 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         let reconstruction_start =
             wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        if case == CompletedReconstructionExclusiveCase::RestartDuringBodyValidation {
+            let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let clock = golem_common::model::oplog::host_functions::HostFunctionName::WallClockNow
+                .to_string();
+            assert!(
+                recorded.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Start(start) if start.function_name == clock
+                )),
+                "the lifecycle test must keep normal wall-clock recording"
+            );
+        }
         if case == CompletedReconstructionExclusiveCase::Divergence {
             let updated_component = executor
                 .update_component(&caller_component.id, caller.wasm_name.as_str())
@@ -9188,6 +9203,34 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 })?;
                 executor.shutdown_and_wait_for_invocation_loops().await?;
             }
+            CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("completed reconstruction did not reach body validation gate")
+                })?;
+                let mut next_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+                eprintln!(
+                    "LIFECYCLE_PROBE restart while historical body {reconstruction_start} is held before validation"
+                );
+                // Normal lifecycle cancellation must destroy the blocked body's Store and
+                // settle its reconstruction ownership. Do not release its validation gate.
+                executor.simulated_crash(&worker_id).await?;
+                let next_start =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), next_claim.entered())
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "restart did not install a generation and reclaim the entity"
+                            )
+                        })?;
+                assert_eq!(next_start, reconstruction_start);
+                eprintln!("LIFECYCLE_PROBE next Store reclaimed historical body {next_start}");
+                next_claim.release();
+            }
         }
         Ok::<_, anyhow::Error>(reconstruction_start)
     };
@@ -9201,6 +9244,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
     match case {
         CompletedReconstructionExclusiveCase::Success
+        | CompletedReconstructionExclusiveCase::RestartDuringBodyValidation
         | CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -9343,6 +9387,26 @@ async fn completed_reconstruction_divergence_fails_automatic_update_and_runs_on_
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Divergence,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn restart_cancels_completed_reconstruction_during_body_validation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation,
     )
     .await
 }
@@ -19000,10 +19064,6 @@ async fn the_stdin_of_a_client_call_reaches_the_tool_through_a_middleware(
 const UNREAD_AT_THE_END_OF_THE_CALL: &str =
     "invocation finished before consuming the complete input";
 
-/// The details of the cancel that a reader of an input records when its guest drops it or gives
-/// up a read of it.
-const THE_READER_WENT_AWAY: &str = "guest dropped its durable readable stream end";
-
 /// The role and the details of each stream cancel in the oplog of an agent, in the order of the
 /// oplog.
 async fn stream_cancels(
@@ -19240,13 +19300,14 @@ async fn a_read_after_cancelled_gets_the_end_of_stdin(
     ended.the_next_call_runs_after_a_restart(deps).await
 }
 
-/// The body gives up a pending read of its stdin and reads again. The stdin has ended for the
-/// body: the second read gets the end of the stream, in the first run and in a replay. The
-/// client holds the stdin open all the time.
+/// The body gives up a pending read of its stdin and reads again. Giving up a read cancels
+/// nothing: the stdin is still the body's, and the second read gets what the client sends
+/// after it, in the first run and in a replay. The client never closes the stdin, so the one
+/// cancel is that of the end of the call.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn a_read_after_the_body_gave_up_a_read_gets_the_end_of_stdin(
+async fn a_read_after_the_body_gave_up_a_read_gets_what_the_client_sends_next(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -19254,7 +19315,7 @@ async fn a_read_after_the_body_gave_up_a_read_gets_the_end_of_stdin(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::durable_stream::StreamCancelRole;
-    let call = start_an_external_run(
+    let mut call = start_an_external_run(
         last_unique_id,
         deps,
         provider,
@@ -19262,15 +19323,19 @@ async fn a_read_after_the_body_gave_up_a_read_gets_the_end_of_stdin(
         "stdin-read-after-own-cancel",
     )
     .await?;
-    let ended = call.send_stdin_and_wait_for_the_end(&[], None).await?;
-    assert_eq!(ended.stdout_after_marker, "tick, then eof");
+    // The body says that it gave up its first read. The client has sent nothing so far.
+    call.read_stdout_until_a_line_starts_with("tick").await?;
+    let ended = call
+        .send_stdin_and_wait_for_the_end(&[b"abc"], None)
+        .await?;
+    assert_eq!(ended.stdout_after_marker, "tick\nthen chunk 3");
     assert_eq!(
         stream_cancels(&ended.executor, &ended.worker_id).await?,
         [(
             StreamCancelRole::InputConsumer,
-            THE_READER_WENT_AWAY.to_string()
+            UNREAD_AT_THE_END_OF_THE_CALL.to_string()
         )],
-        "the read that the body gave up cancels the stdin as its consumer, once"
+        "the read that the body gave up cancels nothing"
     );
     ended.the_next_call_runs_after_a_restart(deps).await
 }
