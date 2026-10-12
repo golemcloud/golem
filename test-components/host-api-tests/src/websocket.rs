@@ -288,8 +288,7 @@ impl WebsocketTest for WebsocketTestImpl {
         })
         .await;
         drop(receive);
-        // The exclusive clock call acknowledges that guest cancellation has run.
-        let _ = wasi::clocks::wall_clock::now();
+        println!("report-loss receive discarded");
         matches!(
             ws.blocking_receive_with_timeout(0),
             Err(WebSocketError::SessionLost)

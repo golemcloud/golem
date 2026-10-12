@@ -404,6 +404,34 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 .download_payload(&consumer, AgentMode::Durable, record)
                 .await
                 .map_err(StreamStoreError::Oplog)?;
+            if let Some(original_index) = record.reobserves() {
+                let original = self
+                    .oplog_service
+                    .read_exact(&consumer, AgentMode::Durable, original_index, 1)
+                    .await;
+                let Some(OplogEntry::StreamSession {
+                    record: original, ..
+                }) = original.get(&original_index)
+                else {
+                    return Err(StreamStoreError::CorruptHistory(
+                        "consumer re-observation has no original record".into(),
+                    ));
+                };
+                let original = self
+                    .oplog_service
+                    .download_payload(&consumer, AgentMode::Durable, original.clone())
+                    .await
+                    .map_err(StreamStoreError::Oplog)?;
+                if original_index >= index
+                    || !record.has_supported_format()
+                    || !record.matches_reobserved(&original)
+                {
+                    return Err(StreamStoreError::CorruptHistory(
+                        "consumer re-observation differs from original input".into(),
+                    ));
+                }
+                continue;
+            }
             let reader_id = match &record {
                 StreamSessionRecord::ConsumerItemValue(record)
                     if record.session_key.qualify(

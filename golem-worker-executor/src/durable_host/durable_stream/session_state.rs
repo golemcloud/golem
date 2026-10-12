@@ -424,7 +424,7 @@ impl SessionControlMetadata {
     pub fn root_outputs(&self) -> &[u64] {
         &self.root_outputs
     }
-    /// Returns the number of indexed consumer records for a stream.
+    /// Returns physical journal positions, including re-observations, for pagination.
     pub fn consumer_record_count(&self, reader: LocalStreamReaderId) -> u64 {
         self.consumer_record_counts
             .get(&reader)
@@ -973,7 +973,9 @@ impl SessionControlMetadata {
             StreamSessionRecord::TopologyActivated(record) if record_matches => {
                 vec![StreamBindingRecord::foreign(&record.mapping)]
             }
-            StreamSessionRecord::ConsumerItemValue(record) if record_matches => {
+            StreamSessionRecord::ConsumerItemValue(record)
+                if record_matches && record.reobserves.is_none() =>
+            {
                 record.recursive_mappings.clone()
             }
             StreamSessionRecord::InvocationResult(record) if record_matches => {
@@ -1457,7 +1459,9 @@ mod tests {
             let offset = StreamOffset::new(OplogIndex::from_u64(8), 0);
             let observations = [
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    reobserves: None,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                     session_key: reference.clone(),
                     reader_id: observed,
                     source_offset: offset,
@@ -1467,7 +1471,9 @@ mod tests {
                     recursive_mappings: vec![],
                 }),
                 StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    reobserves: None,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                     session_key: reference.clone(),
                     reader_id: observed,
                     source_offset: offset,

@@ -1,0 +1,2011 @@
+import {
+  EnumValue,
+  EnumValues,
+  Example,
+  Field,
+  Fields,
+  FieldLink,
+  FieldReleases,
+  Release,
+} from "@/components/app-manifest-schema"
+import {MultiPlatformCommand} from "@/components/multi-platform-command"
+
+# Golem Application Manifest Reference
+
+## JSON schema
+
+For the application manifest format we also publish _JSON schemas_. The current version (1.6.0-dev.9) is available [here](https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json).
+
+The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
+
+Use the following _YAML comments_ at the start of your `golem.yaml` documents to enable _schema support_:
+
+<MultiPlatformCommand
+  commands={[
+    {
+      label: "IntelliJ IDEA based products",
+      command: "# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
+    },
+    {
+      label: "VSCode with YAML Language Support plugin",
+      command:
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
+    },
+  ]}
+  language={"yaml"}
+/>
+
+Note that on top of the above schema there are other checks performed by `golem`, see the field reference below for details.
+
+## Loading of Application Manifest documents
+
+The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. The outermost `golem.yaml` found this way is used as the root manifest document, then more manifests are searched based on its <FieldLink path="includes"/> field.
+
+After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by passing component names as positional arguments to the commands that accept them (e.g. `golem build <COMPONENT_NAME>...`), or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
+
+An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
+
+## Template variables and functions
+
+The _Application Manifest_ has some fields which are used as templates, these fields are marked as **Templated** in the field reference below. The templates are using [minijinja](https://github.com/mitsuhiko/minijinja), which is a minimal templating engine based on _Jinja2_ syntax.
+
+Available template variables:
+
+- `component_name`: contains the current component name in which the template is used
+
+Available naming related string transforming functions:
+
+- `to_snake_case`
+- `to_kebab_case`
+- `to_lower_camel_case`
+- `to_pascal_case`
+- `to_shouty_kebab_case`
+- `to_shouty_snake_case`
+- `to_snake_case`
+- `to_title_case`
+- `to_train_case`
+- `to_upper_camel_case`
+
+<Example>
+  { /* @formatter:off */ }
+  ```yaml
+  build: tool-name build {{ component_name | to_snake_case }}.wasm
+  ```
+  { /* @formatter:on */}
+</Example>
+
+## Component-implemented tools
+
+Components that export `golem:tool/guest` declare each discovered tool by its root name in the top-level `tools` map. The declaration configures how the tool implementation is provisioned. Deployment fails if a discovered tool has no matching declaration, a declaration has no implementation, or more than one component implements the same tool.
+
+### Tools-only component
+
+A component can implement tools without exporting an agent:
+
+```yaml
+components:
+  support:search-tools:
+    componentWasm: build/search-tools.wasm
+
+tools:
+  search:
+    config:
+      index: documentation
+    env:
+      LOG_LEVEL: info
+```
+
+### Component containing tools and agents
+
+Declarations are matched to metadata discovered from the built components, so one component can provide both kinds of export:
+
+```yaml
+components:
+  support:assistant:
+    componentWasm: build/assistant.wasm
+
+agents:
+  SupportAgent: {}
+
+tools:
+  search: {}
+```
+
+In this example, `build/assistant.wasm` must export both `SupportAgent` and the `search` tool.
+
+### Component and agent bindings
+
+Tool bindings select which deployed tools an owner can invoke and provide invocation parameters. A component binding authorizes fresh owners such as tools-only MCP calls and is also inherited as a default by real agents exported by that component. Agent bindings alone do not authorize a fresh component owner. Use the automatically selected `app-env:<environment>` agent preset to vary real-agent bindings by environment. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
+
+```yaml
+environments:
+  production:
+    server: cloud
+
+components:
+  support:assistant:
+    tools:
+      search:
+        version: "1.0.0"
+        parameters:
+          index: documentation
+          limit: 20
+
+agents:
+  SupportAgent:
+    presets:
+      app-env:production:
+        tools:
+          search:
+            parametersMergeMode: upsert
+            parameters:
+              limit: 5
+
+  RestrictedAgent:
+    toolsMergeMode: remove
+    tools:
+      search: {}
+```
+
+`RestrictedAgent` opts out of the inherited `search` binding. If no agent should inherit a tool, prefer a separate agentless owner component rather than adding the binding to a component that exports agents.
+
+For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
+
+### Tool middleware
+
+Tool middleware has its own namespace under `tools.middleware`, so `middleware` is reserved and cannot be used as a tool name. A declaration selects one locally discovered implementation, optionally using `component` to disambiguate it, or one published release. Configuration in the declaration is consumer-owned and is not copied from a publisher:
+
+```yaml
+tools:
+  middleware:
+    audit:
+      component: acme:audit
+      config:
+        logLevel: info
+    path-policy:
+      release:
+        account: middleware@example.com
+        name: path-policy
+        version: "1.2.0"
+      config:
+        allowedPrefix: /documents
+```
+
+As with tools, `release: { releaseId: "..." }` is the exact-ID alternative to the `account`, `name`, and `version` coordinates. A remote declaration causes deployment to reconcile an automatically managed grant for the selected environment. Administrators can manage grants independently with `golem tool middleware grant create`, `list`, `get`, `delete`, and `restore`. Release lifecycle commands are under `golem tool middleware release`. Consumers can read the granted middleware descriptor but not the publisher's component identity, configuration, environment, files, or plugins.
+
+Publish a local middleware from an environment deployment with `toolMiddlewareReleases`:
+
+```yaml
+toolMiddlewareReleases:
+  production:
+    audit: {}
+```
+
+Publication and lifecycle follow tool releases: publication is committed atomically with deployment, the environment's `deployment.versionCheck` controls immutability, and removing an entry does not de-publish it. Existing deployment snapshots remain pinned when a release or grant changes.
+
+Universal means schema-agnostic, not environment-wide: universal middleware preserves the tool shape and can be installed either for the whole environment or on selected tool bindings. The environment-wide list accepts only universal middleware; per-tool lists accept both universal and monomorphic middleware. Per-tool middleware can be added at the environment, component, and agent binding layers. Lists preserve order and duplicate occurrences; each occurrence may have separate parameters and filesystem access:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      middleware:
+        - name: audit
+          parameters: { channel: security }
+        - name: audit
+          parameters: { channel: operations }
+      search:
+        middleware:
+          - name: path-policy
+            filesystemAccess: denied
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        middleware: []
+        middlewareMergeMode: replace
+```
+
+The effective chain is the environment-wide list `U`, followed by the merged per-tool list `P`, followed by the leaf tool: `U ++ P ++ [leaf]`, outermost first. On agent tool bindings, `middlewareMergeMode` is `prepend` by default and can be `append` or `replace`; it changes only `P`. Environment tool bindings cannot set it. In the example, replacing `P` removes `path-policy` for `SupportAgent`, but both `audit` occurrences remain. To apply `audit` only to `search`, install it under that tool's `middleware` instead of the environment-wide list. Compact entries such as `path-policy@1.2.0` are also accepted. An installation's `account` and `version`, when present, assert the selected declaration rather than selecting another release.
+
+`deployment.toolCompatibilityMode` controls monomorphic middleware edge checks. `structural-subtype` (the default) accepts compatible projections and emits deployment warnings for input fields that a middleware discards. `strict-equality` requires equal runtime shapes while ignoring documentation and schema-version metadata. `nominal` requires the named command and its named input and error structures to match, then dynamically checks runtime values against those shapes. Universal middleware does not declare expected or presented schemas and leaves the next layer's tool definition unchanged.
+
+Like the other deployment options, `toolCompatibilityMode` is an environment property synchronized by `golem environment sync-deployment-options` or before deploying content changes. Updating it does not redeploy or recompile the active revision: the next deployment uses the new mode, while existing deployment snapshots retain their recorded mode and compiled plans for replay and rollback.
+
+### Secret policy
+
+`secretKeysReadable` and `secretKeysRevealable` accept either `"*"` or a list of secret paths. Policies are narrowing-only across an agent's binding layers, and revealable keys outside the effective readable scope are dropped with a deployment warning. The only supported secret merge mode is `intersect`, which is also the default.
+
+```yaml
+environments:
+  production:
+    server: cloud
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        secretKeysReadable: "*"
+        secretKeysRevealable:
+          - credentials.search.token
+    presets:
+      app-env:production:
+        tools:
+          search:
+            secretKeysReadable:
+              - credentials.search.token
+              - credentials.search.endpoint
+            secretKeysRevealable:
+              - credentials.search.token
+```
+
+### Publishing and consuming exact releases
+
+A publisher opts a local tool into the registry for each environment. A successful deployment of this environment publishes a grantable release that records the component revision, tool version, metadata version, and metadata digest:
+
+```yaml
+tools:
+  search: {}
+
+toolReleases:
+  production:
+    search: {}
+
+environments:
+  production:
+    server: cloud
+```
+
+A release is not globally visible. A consumer selects an exact release once with `tools.<name>.release` and owns the provision configuration and bindings used by its deployment. Golem derives an automatically managed environment grant from this manifest declaration. The grant is an authorization checkpoint for adding tools to the environment, allows the deployment to read the selected release, and provides a revocation handle:
+
+```yaml
+tools:
+  search:
+    release:
+      account: publisher@example.com
+      name: search
+      version: "1.2.0"
+    config:
+      index: consumer-documents
+    env:
+      LOG_LEVEL: info
+
+environments:
+  production:
+    server: cloud
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        secretKeysReadable:
+          - credentials.search.token
+```
+
+Registry subjects can use `releaseId` instead of the `account`, `name`, and `version` coordinate. A release ID remains pinned to that release. A coordinate-following grant moves to a replacement release published at the same coordinate when the publisher environment has `versionCheck` disabled; an ID-pinned grant stays on the previous release. Environments with `versionCheck` enabled accept only immutable releases and prevent mutable coordinate replacement while an active coordinate-following grant exists. Deployment planning shows the automatic grant changes implied by registry-backed tool declarations. Deployment creates missing grants before reading registry metadata or building bridge clients, and removes obsolete automatically managed grants. Protected system grants and grants created separately by an administrator are retained. The deploy actor must have permission to make the planned grant changes.
+
+`toolReleases` is additive. Removing a name from the manifest does not de-publish its release, and rolling a deployment back does not undo publication. Manage lifecycle explicitly with `golem tool release list`, `get`, `de-publish`, and `restore`. De-publishing makes a release unavailable to new deployments but retains its grants; those grants become available again when the same release is restored. A deployment cannot restore or replace a de-published coordinate—you must restore it explicitly first. Superseded releases cannot be de-published or restored.
+
+Tool publication changes are planned separately from staged deployment state. The CLI's staged/current `SAME` or `DIFFERENT` comparison excludes tool publications; check the tool publication section of the deployment plan for those changes.
+
+Publishing a new version does not move an existing consumer deployment. Selecting it creates a new deployment snapshot and reconciles its grant. Existing deployment snapshots and historical replay continue to use their pinned source. When loose publication replaces an existing coordinate, coordinate-following grants move to the replacement while ID-pinned grants continue to resolve the superseded release.
+
+Runtime discovery and admission use the consumer deployment snapshot and the caller's environment policy.
+
+### System-provided tools
+
+Golem can ship two kinds of system-provided tool. A component-implemented built-in tool is a protected, immutable, grantable release. It behaves like any other registry release at consumption time: select its exact published coordinate with `tools.<name>.release`, then add a separate `agents.<agent-type>.tools.<name>` binding to make it available to that agent. Selecting a release does not itself bind the tool to an agent.
+
+A native tool is compiled into the Golem host and provisioned as ambient. Do not declare it in the top-level `tools` map and do not specify a release coordinate. It is available to agents in the environment by default; an agent binding with the native tool's name can narrow its parameters and policies.
+
+Ambient tool names must not collide with application tools or selected account-owned tool releases. If a later Golem release adds an ambient tool with a name your application already uses, existing deployment snapshots remain unchanged, but preparing the next deployment fails until you resolve the name collision. Golem does not silently choose one implementation over another. This check applies to the entire ambient catalog, even when the manifest has no agent binding for that name.
+
+Both kinds use the normal effective binding policy. In particular, `configKeysReadable` is narrowing-only: the effective scope is the intersection of the system or environment binding and the agent binding. Calls made by a native implementation through Golem's config host helper are checked against that effective scope; running in the host does not grant unrestricted config access.
+
+Golem currently ships these component-implemented built-ins:
+
+- `read-file@0.3.0`, `write-file@0.3.0`, and `edit-file@0.3.0` provide filesystem operations. Their agent bindings must grant `filesystemAccess: allowed`.
+- `web-fetch@0.1.0` performs read-only HTTP and HTTPS GET requests. It requires no filesystem grant and is marked open-world because it contacts external services.
+
+For example, select and bind `web-fetch` as follows:
+
+```yaml
+tools:
+  web-fetch:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: web-fetch
+      version: 0.1.0
+
+agents:
+  ResearchAgent:
+    tools:
+      web-fetch: {}
+```
+
+The tool requires a URL on each call. It also accepts `--timeout-ms` (default `10000`, allowed range `1`–`30000`), `--max-response-bytes` (default `2097152`, allowed range `1`–`5242880`), `--max-redirects` (default `5`, allowed range `0`–`10`), and `--convert-html-to-text` (default `false`) as optional **invocation arguments**. These are not manifest parameters or deployment configuration, and the safety limits' hard ceilings cannot be overridden. A zero redirect limit disables redirect following.
+
+`web-fetch` returns the final URL, HTTP status, original content type when present, textual content, and whether the result was truncated. Non-success HTTP statuses are returned normally with supported textual bodies. HTML is returned as decoded source unless `--convert-html-to-text` is enabled. Binary responses, invalid text encodings, unsafe redirects, redirect cycles, and elapsed deadlines return typed errors.
+
+Completed results and typed errors are durable and replay without another HTTP request. If execution is interrupted before the result is recorded, recovery may retry the GET request; endpoints should therefore tolerate repeated GETs.
+
+### Bridge generation
+
+Bridge generation accepts canonical ambient native-tool names without a top-level `tools` declaration, release grant, or local implementation component. It resolves ambient metadata from the selected environment, so the CLI must be authenticated to read that environment's deployment plan:
+
+```yaml
+bridge:
+  rust:
+    internal:
+      tools: [native-search]
+```
+
+Name-only component dependencies use the same lookup. Declared local and registry-backed tools resolve from the application; otherwise the name is resolved from the selected environment's ambient catalog and then from its MCP imports:
+
+```yaml
+components:
+  my-app:consumer:
+    dependencies:
+      tools: [native-search, catalog-search]
+```
+
+`"*"` under `bridge.<language>.internal.tools` includes all visible ambient and MCP-imported tools in addition to application tools. Explicit names avoid MCP discovery when ambient metadata already satisfies every request. Ambient and application tool names may not collide; ambient names take precedence over MCP projections, and earlier MCP imports take precedence over later imports.
+
+Generated clients always invoke the canonical Golem tool name through `tool-rpc`. They contain no native host implementation ID, MCP endpoint, transport, or credentials. Native provision, binding, and middleware configuration is deployment-only and does not change the generated API or generation cache identity.
+
+For registry-backed tools, the generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. A missing grant is planned and created before metadata access; planning fails clearly when the deploy actor lacks permission to reconcile the grant.
+
+<Fields>
+  ## Field reference
+
+  <Field meta={{
+    path: "manifestVersion",
+  }}>
+    ***Optional manifest schema version*** string.
+  </Field>
+
+  <Field meta={{
+    path: "includes",
+  }}>
+    ***Optional list of glob patterns*** that are used for adding search patterns for other _Application Manifests_
+    when using auto discovery of them. The patterns are relative to the manifest document in which they are defined.
+
+    The default search pattern is `**/golem.yaml`, which searches for `golem.yaml` documents in every subdirectory
+    recursively. Templates and examples provided by Golem usually use more specific search patterns to make the lookups
+    more efficient.
+
+    The `includes` fields can be defined in _one manifest only_, usually in the project root directory.
+    Defining it multiple times results in validation error.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      includes:
+      - components-dir/*/golem.yaml
+      - custom-templates/golem-*.yaml
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "app",
+    since: Release.R_1_4_0
+  }}>
+    ***Required application name*** which will be used as the deployment name for the application.
+
+  </Field>
+
+  <Field meta={{
+    path: "localServer",
+  }}>
+    ***Optional local server configuration*** that defines where the built-in local preset lives. `golem server run` uses it to bind the local server, other `golem` commands targeting the preset use it to connect, `golem server clean` uses it to locate stored state, and local deployment subdomain expansion uses the relevant ports. CLI flags passed to `golem server run` override these values. Path values are resolved relative to the manifest that declares `localServer`. Do not set manifest ports to `0`; port `0` is only allowed when passed directly as a `golem server run` port flag.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.routerAddr",
+  }}>
+    ***Optional bind address*** for the built-in local preset's main API. `golem server run` binds to this address, and other `golem` commands targeting the preset connect to it. When it is `0.0.0.0`, commands connect through `127.0.0.1`. Must be an IPv4 address literal; host names are not supported. Defaults to `0.0.0.0` for binding and `localhost` for connections. It only applies to the main API: the HTTP API and MCP listeners (`customRequestPort`, `mcpPort`) always bind all interfaces, and deployment `subdomain` values always expand to `<subdomain>.localhost:<port>`, which resolves only on the machine running the server. To reach local deployments from another machine, use `domain` with a host name that resolves there.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.routerPort",
+  }}>
+    ***Optional port*** for the built-in local preset's main API. `golem server run` binds to this port, and other `golem` commands targeting the preset connect to it. Defaults to `9881`. Do not set this to `0` in the manifest; use `--router-port 0` directly with `golem server run` when you need an OS-assigned free port.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.customRequestPort",
+  }}>
+    ***Optional HTTP API port*** for local custom requests. Defaults to `9006`; HTTP deployments using `subdomain` resolve to `<subdomain>.localhost:<customRequestPort>`. Requests are routed by matching their `Host` header against this expansion, so the server has to bind the same port: if `golem server run` is started with a different `--custom-request-port` (including `0`), it warns that subdomain deployments are not reachable. Do not set this to `0` in the manifest; use `--custom-request-port 0` directly with `golem server run` when you need an OS-assigned free port.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.mcpPort",
+  }}>
+    ***Optional MCP server port*** for local MCP requests. Defaults to `9007`; MCP deployments using `subdomain` resolve to `<subdomain>.localhost:<mcpPort>`. Requests are routed by matching their `Host` header against this expansion, so the server has to bind the same port: if `golem server run` is started with a different `--mcp-port` (including `0`), it warns that subdomain deployments are not reachable. Do not set this to `0` in the manifest; use `--mcp-port 0` directly with `golem server run` when you need an OS-assigned free port.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.portsFile",
+  }}>
+    ***Optional path*** where the local server writes the actually-bound ports as JSON on startup. Useful together with direct `golem server run` port flags such as `--custom-request-port 0`.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.dataDir",
+  }}>
+    ***Optional directory*** used by `golem server run` and removed by `golem server clean` or `golem server run --clean`. Before deleting it, the CLI displays the resolved absolute path and asks for confirmation; pass `-Y` or `--yes` only after verifying the target. Filesystem roots are always rejected. Defaults to `$XDG_STATE_HOME/golem`. Pass `-X` to `server clean` to ignore the manifest and clean the platform default.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.systemMemoryOverride",
+  }}>
+    ***Optional positive byte-size string*** that overrides detected system memory for local agent admission and eviction, leaving room for other applications. For example, `2GiB` sets a 2 GiB budget; the executor uses 80% for admission and reserves 20% for host overhead. Flag, environment variable, and manifest accept the same case-insensitive units: `1mb` and `1MB` mean 1,000,000 bytes; `1MiB` means 1,048,576 bytes. Whole-number quantities and ASCII spaces are accepted; use `1536 MiB` instead of `1.5 GiB`. Quote unitless byte values in YAML. Precedence is `--system-memory-override`, then `GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE`, then this field, then automatic host/cgroup memory detection. The value maps to the executor's `memory.system_memory_override`. This is not a hard process RSS limit: compilation and other host allocations can exceed the budget.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.agentFilesystemRoot",
+  }}>
+    ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_segment>/`. The agent segment is the agent name with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters, then `-` and the BLAKE3 hash of the agent id.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional object*** for defining HTTP API deployments.
+    Deployments can be defined in multiple manifests, and they are merged during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of HTTP API deployments*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of HTTP API deployments*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].domain",
+    since: Release.R_1_5_0
+  }}>
+    ***Full concrete domain*** for the deployment. Use `domain` for custom registered domains and custom server environments. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].subdomain",
+    since: Release.R_1_5_0
+  }}>
+    ***Built-in server subdomain*** for the deployment. Must be a single DNS label (lowercase letters, digits, and hyphens only). In a local environment it resolves to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set to a stable nonzero port. In a cloud environment it resolves to `<subdomain>.apps.golem.cloud`. Cannot be used with custom server environments — use `domain` instead. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].scheme",
+  }}>
+    ***Public HTTP API scheme***: `http` or `https`. When omitted, defaults to `http` for the built-in local server (including the implicit local target), and `https` for the built-in cloud server. Custom server environments require an explicit value. An explicit value always overrides the default; the management API URL does not determine the public scheme. This controls the origin advertised in generated OpenAPI documents, not TLS configuration.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].webhookUrl",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional webhook URL*** for the deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of HTTP API deployment options*** by **agent type name**.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].agents.<agent-type-name>.securityScheme",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional security scheme*** for the agent in this deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].agents.<agent-type-name>.testSessionHeaderName",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional test session header name*** for the agent in this deployment.
+  </Field>
+
+  <Field meta={{
+    path: "mcp",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional object*** for defining MCP deployments.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of MCP deployments*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of MCP deployments*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].domain",
+    since: Release.R_1_5_0
+  }}>
+    ***Full concrete domain*** for the MCP deployment. Use `domain` for custom registered domains and custom server environments. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].subdomain",
+    since: Release.R_1_5_0
+  }}>
+    ***Built-in server subdomain*** for the MCP deployment. Must be a single DNS label (lowercase letters, digits, and hyphens only). In a local environment it resolves to `<subdomain>.localhost:9007` by default, or `<subdomain>.localhost:<mcpPort>` when `localServer.mcpPort` is set to a stable nonzero port. In a cloud environment it resolves to `<subdomain>.mcps.golem.cloud`. Cannot be used with custom server environments — use `domain` instead. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of MCP deployment options*** by **agent type name**.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].agents.<agent-type-name>.securityScheme",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional security scheme*** for the agent in this MCP deployment.
+  </Field>
+
+  <Field meta={{
+    path: "environments",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional application environments*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.default",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set to true marks the environment as default. Only one environment can be marked as default. If missing, the first environment is used as default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.account",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional account*** that owns the application environment. When not specified then the current user will be used.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional server configuration*** for the environment. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "local", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "cloud", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+
+    or a ***custom server object*** with the fields documented below.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.url",
+    since: Release.R_1_4_0
+  }}>
+    ***Required URL*** for custom servers.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.workerUrl",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional custom URL*** for golem worker service.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.allowInsecure",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it allows insecure connections to the server.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.auth.oauth2",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set to true selects OAuth2 based authentication.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.auth.staticToken",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional string*** static token for authentication when using static token based authentication.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.componentPresets",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional preset name or list of preset names*** which will be used for the application in the given environment.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.format",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional default format*** for the environment, accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "text", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "json", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "pretty-json", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "pretty", since: Release.R_1_4_0}}>alias for `pretty-json`</EnumValue>
+      <EnumValue meta={{value: "yaml", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "pretty-yaml", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.autoConfirm",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set enables the auto-confirm (*yes*) flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.redeployAgents",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set enables *redeploy-agents* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.reset",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set enables *reset* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.deployment.compatibilityCheck",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** to enable compatibility checks during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.deployment.toolCompatibilityMode",
+  }}>
+    ***Optional tool middleware compatibility mode***. Accepted values are `structural-subtype` (the default), `strict-equality`, and `nominal`. Structural subtype mode warns about inputs discarded by a middleware; strict equality ignores documentation and schema-version metadata; nominal mode checks named command, input, and error structures and dynamically validates runtime shapes.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.deployment.versionCheck",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** to enable strict version checks during deployment. Published tool releases are immutable when enabled. When disabled, publishing changed content at an existing coordinate creates a replacement release, marks the previous release as superseded, and moves active coordinate-following grants to the replacement. Strict environments cannot use mutable releases.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.deployment.securityOverrides",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** to allow security overrides during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "toolReleases.<environment-name>",
+  }}>
+    ***Optional additive map of local tool names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication records the exact source and metadata of the deployed local tool and follows the environment's `deployment.versionCheck` policy. Removing a name does not de-publish an existing release; use `golem tool release de-publish <release-id>` for that explicit lifecycle action.
+  </Field>
+
+  <Field meta={{
+    path: "toolMiddlewareReleases.<environment-name>",
+  }}>
+    ***Optional additive map of local tool middleware names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication and lifecycle follow tool releases and the environment's `deployment.versionCheck` policy.
+  </Field>
+
+  <Field meta={{
+    path: "components",
+  }}>
+    ***Optional map of Golem components indexed by `component-name`-s*** used for defining components.
+
+    The `components` field can be defined in multiple manifest documents, but the used `component-name`-s must be
+    _unique_ across all the used manifest documents. Using the same `component-name` more then once results in
+    validation error.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          componentWasm: # ...
+          # ...
+        pack:comp-b:
+          componentWasm: # ...
+          # ...
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.templates",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional template name or list of template names*** which will be used for creating the component fields.
+
+    The _template name_ must be one of that are defined in <FieldLink path="componentTemplates"/>.
+
+    Templates can also inherit other templates, but every template may be inherited only through a single path:
+    e.g. using two templates that both inherit the same template is rejected.
+
+    See <FieldLink path="componentTemplates"/> and [Template variable and functions](#template-variables-and-functions)
+    for defining templates.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.presets",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional map of presets*** used to define preset variations for a component.
+
+    A _preset_ contains the same fields as a component. Presets can also specify a <FieldLink path="components.<component-name>.presets.<preset-name>.default"/> flag to mark it as the default preset for selection.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.presets.<preset-name>.default",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.dir",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional base directory*** for resolving component paths. The path is relative to the manifest document.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.buildMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.build"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.files",
+  }}>
+    ***Optional list of files entries,*** which can be used for defining the _Initial File System_ for the component.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          files:
+          - sourcePath: ./files/foo.txt
+            targetPath: /files/foo.txt
+            permissions: read-only
+          - sourcePath: ./files/bar.txt
+            targetPath: /files/bar.txt
+            permissions: read-write
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.filesMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.files"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.files[*].sourcePath",
+    }}
+  >
+    ***Required source path*** of the file to be added to the _Initial File System_. The path can be a
+    _file path_ relative to the manifest document or an _URL_.
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.files[*].targetPath",
+    }}
+  >
+    ***Required target path*** of the file in the _Initial File System_. The path must be an absolute
+    path.
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.files[*].permissions",
+    }}
+  >
+    ***Optional string enum*** which controls file permissions. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "read-only", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "read-write"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins",
+    since: Release.R_1_2_2
+  }}>
+    ***Optional list of component plugin installation entries,***
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.pluginsMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.plugins"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].name",
+    since: Release.R_1_2_2
+  }}>
+    ***Required name*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].version",
+    since: Release.R_1_2_2
+  }}>
+    ***Required version*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].account",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional account*** used for installing the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].parameters",
+    since: Release.R_1_2_2
+  }}>
+    ***Optional string map*** of plugin parameters.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.config",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional configuration*** for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.env",
+  }}>
+    ***Optional string map*** of environment variables for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** inherited by agents exported by the component and used as the authorization baseline for fresh component owners, including tools-only MCP calls.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.tools"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace"}}></EnumValue>
+      <EnumValue meta={{value: "remove"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.dependencies.tools",
+  }}>
+    ***Optional canonical tool names*** whose guest clients the component consumes. A declared local tool creates a component build dependency; a declared registry-backed tool uses its selected release. A name with no declaration is resolved from the selected environment's ambient native tools first and MCP imports second, without requiring a local implementation component or release grant.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.envMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.env"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.wasiConfig",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of WASI configuration variables for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.wasiConfigMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.wasiConfig"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.componentWasm",
+  }}>
+    ***Optional file path*** for the built _WASM_ component.
+
+    The path is relative to the manifest document in which the field is defined.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          componentWasm: build/component.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.outputWasm",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional file path*** for the output _WASM_ component which is ready to be uploaded to Golem.
+
+    The path is relative to the manifest document in which the field is defined.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          outputWasm: build/output.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build",
+  }}>
+    ***Optional list of build steps*** that creates <FieldLink path="components.<component-name>.componentWasm"/>.
+
+    Each build step can be one of:
+    - an **external command** (with `command` field)
+    - a **QuickJS crate generation** step (with `generateQuickjsCrate` field)
+    - a **QuickJS d.ts generation** step (with `generateQuickjsDts` field)
+    - an **inject to prebuilt QuickJS** step (with `injectToPrebuiltQuickjs` field)
+    - a **JS preinitialization** step (with `preinitializeJs` field)
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          build:
+          - command: bindgen-tool src component.wasm
+          - command: build-tool src component.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.build[*].command",
+    }}
+  >
+    ***Required external command*** that will be used as a build step for creating
+    <FieldLink path="components.<component-name>.componentWasm"/>.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].dir",
+  }}>
+    ***Optional directory path*** which will be used as working directory when executing
+    <FieldLink path="components.<component-name>.build[*].command"></FieldLink>.
+
+    The path is relative to the manifest document, and defaults to `.`.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].env",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of environment variables for the build command.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].rmdirs",
+  }}>
+    ***Optional list of directory paths*** which will be deleted **before** executing the command.
+
+    The path is relative to <FieldLink path="components.<component-name>.build[*].dir"/>.
+
+    The `rmdirs` field is useful when a binding generator does not automatically clean stale bindings.
+
+    Directories are not removed if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="components.<component-name>.build[*].sources"/> and
+    <FieldLink path="components.<component-name>.build[*].targets"/>.
+
+    Directories are removed **before** executing <FieldLink path="components.<component-name>.build[*].mkdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].mkdirs",
+  }}>
+    ***Optional list of directory paths*** which will be created **before** executing the command if they do not exists.
+
+    The path is relative to <FieldLink path="components.<component-name>.build[*].dir"/>.
+
+    The `mkdirs` field is useful when a build of binding generator tool does not automatically create
+    required nested folders.
+
+    Directories are not created if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="components.<component-name>.build[*].sources"/> and
+    <FieldLink path="components.<component-name>.build[*].targets"/>.
+
+    Directories are created **after** executing <FieldLink path="components.<component-name>.build[*].rmdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].sources",
+  }}>
+    ***Optional list of paths and globs*** which are used as sources for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="components.<component-name>.build[*].targets"/> also have to be used.
+
+    The up-to-date check
+    - _skips_ executing <FieldLink path="components.<component-name>.build[*].command"/>
+    - if all matching files defined by <FieldLink path="components.<component-name>.build[*].targets"/>
+    - are newer then the matched files defined by `sources`.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          build:
+          - command: build-tool src-dir out.wasm
+            sources:
+            - src-dir/*
+            targets:
+            - out.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].targets",
+  }}>
+    ***Optional list of paths and globs*** which are used as targets for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="components.<component-name>.build[*].sources"/> also have to be used.
+
+    See <FieldLink path="components.<component-name>.build[*].sources"/> for _up-to-date_ check details.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.customCommands",
+  }}>
+    ***Optional map of component specific external commands***, which are useful for defining e.g. one time
+    _installation_
+    or _update_ related commands for the component.
+
+    The commands can be executed using:
+    ```shell
+    golem exec command-name
+    ```
+
+    Multiple components can use the same `command-name`, the above command will execute _all matching_
+    commands in this case, both component specific and project ones.
+
+    For defining project level custom commands see <FieldLink path="customCommands"/>.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          customCommands:
+            npm-install:
+            - command: npm install
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].dir",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].env",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].rmdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].sources",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].targets",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.clean",
+    }}
+  ></Field>
+
+
+
+
+
+  <Field meta={{
+    path: "clean",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of paths*** which are added as targets to the `golem clean` command.
+
+    The paths are relative to the manifest document.
+
+    The `clean` command deletes the following paths:
+    - build and custom command `target`s
+    - the paths defined in common and component specific `clean` fields.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional map of custom external commands***, which are useful for defining e.g. one time _installation_
+    or _update_ related project commands.
+
+    The commands can be executed using:
+    ```shell
+    golem exec command-name
+    ```
+
+    Components specific custom commands can use the same `command-name`, the above command will execute _all matching_
+    commands in this case, both component specific and project ones.
+
+    For defining component specific custom commands see <FieldLink path="components.<component-name>.customCommands"/>.
+
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      customCommands:
+        npm-install:
+        - command: npm install
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].dir",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional directory path*** which will be used as working directory when executing
+    <FieldLink path="customCommands.<command-name>[*].command"></FieldLink>.
+
+    The path is relative to the manifest document, and defaults to `.`.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].env",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of environment variables for the command.
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].rmdirs",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of directory paths*** which will be deleted **before** executing the command.
+
+    The path is relative to <FieldLink path="customCommands.<command-name>[*].dir"/>.
+
+    The `rmdirs` field is useful when a binding generator does not automatically clean stale bindings.
+
+    Directories are not removed if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="customCommands.<command-name>[*].sources"/> and
+    <FieldLink path="customCommands.<command-name>[*].targets"/>.
+
+    Directories are removed **before** executing <FieldLink path="customCommands.<command-name>[*].mkdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].mkdirs",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of directory paths*** which will be created **before** executing the command if they do not exists.
+
+    The path is relative to <FieldLink path="customCommands.<command-name>[*].dir"/>.
+
+    The `mkdirs` field is useful when a build of binding generator tool does not automatically create
+    required nested folders.
+
+    Directories are not created if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="customCommands.<command-name>[*].sources"/> and
+    <FieldLink path="customCommands.<command-name>[*].targets"/>.
+
+    Directories are created **after** executing <FieldLink path="customCommands.<command-name>[*].rmdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].sources",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of paths and globs*** which are used as sources for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="customCommands.<command-name>[*].targets"/> also have to be used.
+
+    The up-to-date check
+    - _skips_ executing <FieldLink path="customCommands.<command-name>[*].command"/>
+    - if all matching files defined by <FieldLink path="customCommands.<command-name>[*].targets"/>
+    - are newer then the matched files defined by `sources`.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].targets",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of paths and globs*** which are used as targets for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="customCommands.<command-name>[*].sources"/> also have to be used.
+
+    See <FieldLink path="customCommands.<command-name>[*].sources"/> for _up-to-date_ check details.
+
+  </Field>
+
+  <Field meta={{
+    path: "componentTemplates",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional map of named templates***, which can be used in <FieldLink path="components.<component-name>.templates"/>.
+
+    Templates help in extracting common _build patterns_ and reuse them for multiple components.
+
+    The `templates` field can be defined in multiple application manifest documents, but the _template names_ must be
+    unique.
+
+    See [Template variable and functions](#template-variables-and-functions) for more information about templating.
+
+  </Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.guestLanguage",
+      noSpecialization: true,
+    }}
+  >
+    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala` or `moonbit`.
+
+    A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `scala`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
+
+  </Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.componentWasm",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.outputWasm",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.buildMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].command",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].dir",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].env",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].rmdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].sources",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].targets",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].dir",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].env",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].rmdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].sources",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].targets",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.clean",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.config",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.env",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.envMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.wasiConfig",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.wasiConfigMergeMode",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.plugins",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.pluginsMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.filesMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files[*].sourcePath",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files[*].targetPath",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files[*].permissions",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.presets",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.presets.<preset-name>.default",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field meta={{
+    path: "agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of agents*** by **agent type name**.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.templates",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional template name or list of template names*** which will be used for creating the agent fields.
+
+    As for components, every template may be inherited only through a single path: e.g. listing a template
+    together with another template that inherits it is rejected.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.config",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional configuration*** for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.env",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of environment variables for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** merged over bindings inherited from the implementing component. Agent bindings affect real agents only and cannot authorize fresh component owners.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.tools"/>: `upsert` (the default), `replace`, or `remove`.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.envMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.env"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.wasiConfig",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of WASI configuration variables for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.wasiConfigMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.wasiConfig"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of plugin installations*** for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.pluginsMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.plugins"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].name",
+    since: Release.R_1_5_0
+  }}>
+    ***Required name*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].version",
+    since: Release.R_1_5_0
+  }}>
+    ***Required version*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].account",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional account*** used for installing the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].parameters",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of plugin parameters.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.files",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of files entries*** for defining the _Initial File System_ for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.filesMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.files"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field
+    meta={{
+      path: "agents.<agent-type-name>.files[*].sourcePath",
+      since: Release.R_1_5_0,
+    }}
+  >
+    ***Required source path*** of the file. The path can be a _file path_ relative to the manifest document or an _URL_.
+  </Field>
+
+  <Field
+    meta={{
+      path: "agents.<agent-type-name>.files[*].targetPath",
+      since: Release.R_1_5_0,
+    }}
+  >
+    ***Required target path*** of the file. The path must be an absolute path.
+  </Field>
+
+  <Field
+    meta={{
+      path: "agents.<agent-type-name>.files[*].permissions",
+      since: Release.R_1_5_0,
+    }}
+  >
+    ***Optional string enum*** which controls file permissions. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "read-only", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "read-write"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.presets",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of presets*** for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.presets.<preset-name>.default",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+  </Field>
+
+  <Field meta={{
+    path: "tools",
+  }}>
+    ***Optional map of canonical tool declarations*** indexed by the tool's lower-kebab-case logical name. A declaration either matches a locally discovered implementation, selects one with `component`, or selects an exact published release with `release`. Release coordinates are specified only here; agents, component dependencies, bridge generation, and other consumers refer to the logical name. Provision fields such as `config`, `env`, `plugins`, and `files` belong to the consuming deployment.
+  </Field>
+
+  <Field meta={{
+    path: "tools.<tool-name>.release",
+  }}>
+    ***Optional exact published release reference***. Specify either `releaseId` or all of `account`, `name`, and `version`. Golem derives and reconciles an automatically managed environment grant from this declaration; planned changes remain visible during deployment. Omit `release` for a locally implemented tool.
+  </Field>
+
+  <Field meta={{
+    path: "tools.<tool-name>.component",
+  }}>
+    ***Optional local implementing component name***. Use it to disambiguate components that export the same tool name and to let a name-only `dependencies.tools` entry resolve to its local build dependency.
+  </Field>
+
+  <Field meta={{
+    path: "tools.middleware.<middleware-name>",
+  }}>
+    ***Optional canonical tool middleware declaration***. Select a local implementation with `component` or an exact published release with `release`; these source forms are mutually exclusive. Consumer-owned provision fields include `config`, `env`, `plugins`, and `files`.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.tools.middleware",
+  }}>
+    ***Optional ordered environment-wide middleware list*** applied before every per-tool middleware chain. Only universal (schema-agnostic) middleware is accepted here. Duplicate middleware occurrences are preserved.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.middleware",
+  }}>
+    ***Optional ordered per-tool middleware list*** accepting universal or monomorphic middleware. Entries may be compact `name@version` strings or records with `name`, optional `version`, `account`, `parameters`, and `filesystemAccess`.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.middlewareMergeMode",
+  }}>
+    ***Optional agent per-tool middleware list merge mode***: `prepend` (the default), `append`, or `replace`. It is not valid on environment tool bindings and never changes the environment-wide middleware list.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.filesystemAccess",
+  }}>
+    ***Optional filesystem policy*** for a tool binding. Accepted values are `unset`, `allowed`, and `denied`. Middleware installation records support the same field per occurrence.
+  </Field>
+
+  <Field meta={{
+    path: "bridge",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional object*** for configuring Bridge SDK generation.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.ts",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional TypeScript SDK configuration***.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.ts.agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of agent type names***, component names, or `"*"` for including all agents.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.ts.outputDir",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional custom output directory*** for the generated TypeScript SDK.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional Rust SDK configuration***.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust.agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of agent type names***, component names, or `"*"` for including all agents.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust.outputDir",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional custom output directory*** for the generated Rust SDK.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.<language>.internal.tools",
+  }}>
+    ***Optional canonical tool names, local component matchers, or `"*"`*** for generated guest bridge clients. Names declared under `tools` resolve to their local or registry-backed implementations; undeclared names resolve from the selected environment's ambient native tools and MCP imports. `"*"` includes every visible tool. Release coordinates and native host identities cannot be specified here.
+  </Field>
+
+  <Field meta={{
+    path: "secretDefaults",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of secret defaults*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "secretDefaults.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional object of secret default values*** for the environment, nested by secret path (e.g. `db: { password: ... }` for the `db.password` secret). Defaults are only applied to secrets that do not exist yet in the environment. String values can reference environment variables with `{{ VAR }}`; these are only required for secrets that get created.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of retry policy defaults*** by **environment name**. Policies defined here are created in the environment during deployment if they don't already exist.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of retry policy default entries*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].name",
+    since: Release.R_1_5_0
+  }}>
+    ***Required unique name*** for this retry policy.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].priority",
+    since: Release.R_1_5_0
+  }}>
+    ***Required integer*** defining selection priority — higher values are evaluated first.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].predicate",
+    since: Release.R_1_5_0
+  }}>
+    ***Required predicate tree*** defining when this policy applies. Supports composable predicates including
+    property comparisons (`propEq`, `propNeq`, `propGt`, `propGte`, `propLt`, `propLte`),
+    property checks (`propExists`, `propIn`, `propMatches`, `propStartsWith`, `propContains`),
+    and logical combinators (`and`, `or`, `not`).
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].policy",
+    since: Release.R_1_5_0
+  }}>
+    ***Required retry policy tree*** defining the retry strategy. Supports base strategies
+    (`"immediate"`, `"never"`, `periodic`, `exponential`, `fibonacci`) and composable modifiers
+    (`countBox`, `timeBox`, `clamp`, `addDelay`, `jitter`, `filteredOn`, `andThen`, `union`, `intersect`).
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of quota resource defaults*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of resource definition entries*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].name",
+    since: Release.R_1_5_0
+  }}>
+    ***Required name*** of the resource.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].limit",
+    since: Release.R_1_5_0
+  }}>
+    ***Required resource limit*** definition. Can be one of:
+    - **Rate** limit: `{"type": "Rate", "value": <int>, "period": <timePeriod>, "max": <int>}`
+    - **Capacity** limit: `{"type": "Capacity", "value": <int>}`
+    - **Concurrency** limit: `{"type": "Concurrency", "value": <int>}`
+
+    Where `timePeriod` is one of: `second`, `minute`, `hour`, `day`, `month`, `year`.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].enforcementAction",
+    since: Release.R_1_5_0
+  }}>
+    ***Required enforcement action*** for the resource, accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "reject", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "throttle", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "terminate", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].unit",
+    since: Release.R_1_5_0
+  }}>
+    ***Required string*** for the single unit of measurement (e.g., `token`, `request`).
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].units",
+    since: Release.R_1_5_0
+  }}>
+    ***Required string*** for the plural units of measurement (e.g., `tokens`, `requests`).
+  </Field>
+
+  ## Fields and changes by releases
+
+  <FieldReleases></FieldReleases>
+
+</Fields>

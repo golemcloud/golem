@@ -277,7 +277,8 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
 Completed reconstructions are fenced: `HistoricalReconstruction` / `ReconstructionClaimState`
 (`durable_host/concurrent/replay.rs`) keep `PendingReplayToLive` fail-closed until every active
 body has validated
-(`tests/tool_streaming.rs::completed_reconstruction_claim_blocks_concurrent_replay_to_live`).
+(`replay_state/tests.rs::primary_publication_requires_completed_reconstruction_validation`,
+`tests/tool_streaming/mod.rs::incomplete_custom_durability_waits_for_completed_reconstruction`).
 An incomplete tool entity must additionally be admitted by
 `OwnerToolOperation::activate_live_attachment_memory_accounting` (`tool/operation.rs`), which
 returns `Admitted` or `ResourceExhausted`, before `ReplayToLiveRole::NonPrimary` sets the entity

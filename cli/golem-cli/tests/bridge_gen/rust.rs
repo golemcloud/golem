@@ -2146,6 +2146,55 @@ fn configured_agent_bridges_compile_with_local_custom_derive_dependency() {
 }
 
 #[test]
+fn guest_agent_and_tool_bridges_use_the_selected_sdk_source() {
+    use golem_cli::bridge_gen::rust::tool::RustToolBridgeGenerator;
+    use golem_cli::sdk_overrides::{RustDependency, sdk_overrides, workspace_root};
+
+    let dir = TempDir::new().unwrap();
+    let root = Utf8Path::from_path(dir.path()).unwrap();
+    for testing in [false, true] {
+        let agent_target = root.join(format!("agent-{testing}"));
+        let tool_target = root.join(format!("tool-{testing}"));
+        let mut agent_generator = RustBridgeGenerator::new_with_mode(
+            minimal_agent_type("AlphaAgent"),
+            &agent_target,
+            testing,
+            RustBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+        agent_generator.generate().unwrap();
+        RustToolBridgeGenerator::new(grep_tool(), &tool_target, testing)
+            .unwrap()
+            .generate()
+            .unwrap();
+
+        let expected = if testing {
+            RustDependency::Path(workspace_root().unwrap().join("sdks/rust/golem-rust"))
+        } else {
+            sdk_overrides().unwrap().golem_rust_dependency()
+        };
+        for target in [agent_target, tool_target] {
+            let manifest = std::fs::read_to_string(target.join("Cargo.toml"))
+                .unwrap()
+                .parse::<toml_edit::DocumentMut>()
+                .unwrap();
+            let dependency = &manifest["dependencies"]["golem-rust"];
+            assert!(dependency.get("git").is_none());
+            match &expected {
+                RustDependency::Path(path) => {
+                    assert_eq!(dependency["path"].as_str(), path.to_str());
+                    assert!(dependency.get("version").is_none());
+                }
+                RustDependency::Version(version) => {
+                    assert_eq!(dependency["version"].as_str(), Some(version.as_str()));
+                    assert!(dependency.get("path").is_none());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn rust_tool_generation_compiles_unchanged() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();

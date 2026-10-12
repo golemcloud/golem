@@ -22,7 +22,7 @@ use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, Pr
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, stdout_event_matching};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, start, start_with_overrides,
@@ -110,9 +110,8 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
     executor
         .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let mut end = executor.gate_next_call_end(&worker_id, true).await;
-    let mut cancelled = executor.gate_next_wall_clock_now(&owner).await?;
+    let mut output = executor.make_worker_log_event_stream(&worker_id).await?;
     let key = IdempotencyKey::fresh();
     executor
         .invoke_agent_with_key(
@@ -137,9 +136,16 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
     );
     // The guest retains the unpolled receive until its loss End is durable, then drops it.
     executor.complete_promise(&cancel, vec![1]).await?;
-    tokio::time::timeout(Duration::from_secs(10), cancelled.entered()).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = output.message().await? {
+            if stdout_event_matching(&event, "report-loss receive discarded\n") {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+        Err(anyhow!("guest output ended before receive discard"))
+    })
+    .await??;
     drop(end);
-    cancelled.release();
     assert!(
         executor
             .invoke_and_await_agent_with_key(

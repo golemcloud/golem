@@ -22,6 +22,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::oplog::PublicUpdateDescription;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     OplogErrorKind, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
 };
@@ -47,6 +48,7 @@ use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotUploadConfig, OplogConfig, SnapshotPolicy,
 };
+use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -648,39 +650,14 @@ async fn snapshot_after_auto_update_recovers_with_updated_component_context(
         )
         .await?;
 
-    let snapshots_before_invocation = executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await?
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-    let before_snapshot = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "loaded_snapshot_revision",
-            data_value!(),
-        )
+    let revision_before_snapshot = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
         .await?;
-    assert_eq!(before_snapshot.into_typed::<u32>()?, 0);
+    assert_eq!(revision_before_snapshot.into_typed::<u32>()?, 2);
 
     // Automatic snapshot creation is queued after the invocation result is published.
-    let snapshot_count = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let count = executor
-                .get_oplog(&worker_id, OplogIndex::INITIAL)
-                .await?
-                .iter()
-                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-                .count();
-            if count > snapshots_before_invocation {
-                break Ok::<_, anyhow::Error>(count);
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
-    assert_eq!(snapshot_count, snapshots_before_invocation + 1);
+    let invocation_start = last_start_of(&executor, &worker_id, "revision_two_only").await?;
+    wait_for_snapshot_after(&executor, &worker_id, invocation_start).await?;
 
     drop(executor);
     let executor = start_with_snapshot_policy(
@@ -3875,6 +3852,288 @@ async fn manual_update_on_idle_with_failing_load(
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 
+    Ok(())
+}
+
+struct SnapshotLoadKeyValueService {
+    inner: Arc<dyn KeyValueService>,
+    entered: tokio::sync::mpsc::UnboundedSender<String>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait::async_trait]
+impl KeyValueService for SnapshotLoadKeyValueService {
+    async fn get(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        if bucket == "snapshot-load" {
+            self.entered.send(key.clone())?;
+            self.release.acquire().await?.forget();
+        }
+        self.inner.get(environment_id, bucket, key).await
+    }
+
+    async fn delete(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<()> {
+        self.inner.delete(environment_id, bucket, key).await
+    }
+
+    async fn delete_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Arc<[String]>,
+    ) -> anyhow::Result<()> {
+        self.inner.delete_many(environment_id, bucket, keys).await
+    }
+
+    async fn exists(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<bool> {
+        self.inner.exists(environment_id, bucket, key).await
+    }
+
+    async fn get_keys(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+    ) -> anyhow::Result<Vec<String>> {
+        self.inner.get_keys(environment_id, bucket).await
+    }
+
+    async fn get_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Arc<[String]>,
+    ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
+        self.inner.get_many(environment_id, bucket, keys).await
+    }
+
+    async fn set(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+        outgoing_value: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .set(environment_id, bucket, key, outgoing_value)
+            .await
+    }
+
+    async fn set_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key_values: Arc<[(String, Vec<u8>)]>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .set_many(environment_id, bucket, key_values)
+            .await
+    }
+}
+
+/// The update agent of a manual update test, on revision 2 with `f1` called once, so its state is
+/// 150. The env of the agent steers the load of the target revision 3 (`LOAD_SNAPSHOT`).
+async fn manual_update_agent_with_load(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    agent_update_v2: &PrecompiledComponent,
+    http_server: &TestHttpServer,
+    load: &str,
+) -> anyhow::Result<(
+    ComponentDto,
+    golem_common::model::agent::ParsedAgentId,
+    AgentId,
+    ComponentDto,
+)> {
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .store()
+        .await?;
+    let agent_id = agent_id!("UpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([
+                ("PORT".to_string(), http_server.port().to_string()),
+                ("LOAD_SNAPSHOT".to_string(), load.to_string()),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
+        .await?;
+    Ok((component, agent_id, worker_id, target))
+}
+
+/// An interrupt during the snapshot load of a manual update leaves the update pending. The load is
+/// held at its key-value read while the interrupt arrives. The resume waits until the interrupted
+/// start has unloaded the agent: a resume while the agent is still loaded starts nothing. The next
+/// start loads the snapshot again, and only that load applies the update.
+#[test]
+#[timeout("120s")]
+async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next_start_loads_it_again(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (entered, mut loads) = tokio::sync::mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let release_service = release.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_service: Some(Arc::new(move |inner| {
+                Arc::new(SnapshotLoadKeyValueService {
+                    inner,
+                    entered: entered.clone(),
+                    release: release_service.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let http_server = TestHttpServer::start().await;
+    let (component, agent_id, worker_id, target) = manual_update_agent_with_load(
+        &executor,
+        &context,
+        agent_update_v2,
+        &http_server,
+        "read-key",
+    )
+    .await?;
+    let before_update = executor
+        .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
+        .await?;
+
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let snapshot_key = before_update.clone().into_typed::<u64>()?.to_string();
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(30), loads.recv()).await?,
+        Some(snapshot_key.clone())
+    );
+    executor
+        .interrupt_loaded_worker(
+            &worker_id,
+            golem_service_base::error::worker_executor::InterruptKind::Interrupt(
+                golem_common::model::Timestamp::now_utc(),
+            ),
+        )
+        .await?;
+    release.add_permits(1);
+    let interrupted = executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(30),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    executor.resume(&worker_id, false).await?;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(30), loads.recv()).await?,
+        Some(snapshot_key)
+    );
+    release.add_permits(1);
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+    let after_update = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    let updated = executor.get_worker_metadata(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    http_server.abort();
+
+    assert_eq!(interrupted.component_revision, component.revision);
+    assert_eq!(update_counts(&interrupted), (1, 0, 0));
+    assert_eq!(before_update, after_update);
+    assert_eq!(updated.component_revision, target.revision);
+    assert_eq!(update_counts(&updated), (0, 1, 0));
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_)))
+    );
+    Ok(())
+}
+
+/// A guest exit during the snapshot load of a manual update fails the update with a message that
+/// names the exit, and the agent stays on its source revision with its state.
+#[test]
+#[timeout("120s")]
+async fn a_guest_exit_during_the_snapshot_load_fails_a_manual_update_and_keeps_the_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let http_server = TestHttpServer::start().await;
+    let (component, agent_id, worker_id, target) =
+        manual_update_agent_with_load(&executor, &context, agent_update_v2, &http_server, "exit")
+            .await?;
+
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let state = executor
+        .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    http_server.abort();
+
+    let details = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        details,
+        "Manual update failed to load snapshot: the agent exited during the snapshot load"
+    );
+    assert_eq!(state, 150);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(metadata.status, AgentStatus::Idle);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
     Ok(())
 }
 
