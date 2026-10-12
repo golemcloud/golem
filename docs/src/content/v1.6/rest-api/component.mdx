@@ -1,0 +1,4013 @@
+# Component API
+
+## List all components in the environment
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/components`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "componentName": "string",
+      "hash": "string",
+      "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+      "componentSize": 0,
+      "metadata": {
+        "knownExports": {
+          "agentGuestInterface": "string",
+          "saveSnapshotInterface": "string",
+          "loadSnapshotInterface": "string",
+          "oplogProcessorInterface": "string",
+          "toolGuestInterface": "string",
+          "toolMiddlewareGuestInterface": "string"
+        },
+        "producers": [
+          {
+            "fields": [
+              {
+                "name": "string",
+                "values": [
+                  {
+                    "name": "string",
+                    "version": "string"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "memories": [
+          {
+            "initial": 0,
+            "maximum": 0,
+            "shared": false
+          }
+        ],
+        "rootPackageName": "string",
+        "rootPackageVersion": "string",
+        "configSchema": {
+          "schema": {
+            "root": {
+              "kind": "record",
+              "value": {
+                "fields": []
+              }
+            }
+          }
+        },
+        "componentProvisionConfig": {
+          "initialPermissions": {
+            "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+            "parentIds": [
+              "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+            ],
+            "lowerPositive": [
+              "string"
+            ],
+            "lowerNegative": [
+              "string"
+            ],
+            "upperPositive": [
+              "string"
+            ],
+            "upperNegative": [
+              "string"
+            ],
+            "createdAt": "2019-08-24T14:15:22Z",
+            "expiresAt": "2019-08-24T14:15:22Z",
+            "systemCard": true
+          },
+          "env": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "config": [
+            {
+              "path": [
+                "string"
+              ],
+              "value": {
+                "graph": {
+                  "defs": [
+                    {
+                      "id": "string",
+                      "name": "string",
+                      "body": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "root": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "value": {
+                  "kind": "bool",
+                  "value": true
+                }
+              }
+            }
+          ],
+          "plugins": [
+            {
+              "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+              "priority": 0,
+              "parameters": {
+                "property1": "string",
+                "property2": "string"
+              },
+              "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+              "pluginName": "string",
+              "pluginVersion": "string",
+              "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+              "oplogProcessorComponentRevision": 0
+            }
+          ],
+          "files": [
+            {
+              "contentHash": "string",
+              "path": "string",
+              "permissions": "read-only",
+              "size": 0
+            }
+          ]
+        },
+        "agentTypes": [],
+        "agentMethodStreams": {
+          "property1": {
+            "property1": {
+              "input": true,
+              "output": true
+            },
+            "property2": {
+              "input": true,
+              "output": true
+            }
+          },
+          "property2": {
+            "property1": {
+              "input": true,
+              "output": true
+            },
+            "property2": {
+              "input": true,
+              "output": true
+            }
+          }
+        },
+        "agentTypeProvisionConfigs": {},
+        "tools": {},
+        "toolMiddlewares": {}
+      },
+      "createdAt": "2019-08-24T14:15:22Z",
+      "wasmHash": "string"
+    }
+  ]
+}
+```
+
+## Create a new component in the environment
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/components`|POST|Yes
+
+The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+
+**Request Form**: `multipart/form-data`
+
+> Make sure to include `Content-Type: multipart/form-data` Header
+
+**Field `metadata`**: JSON
+```json copy
+{
+  "componentName": "string",
+  "configSchema": {
+    "schema": {
+      "root": {
+        "kind": "record",
+        "value": {
+          "fields": []
+        }
+      }
+    }
+  },
+  "componentProvisionConfig": {
+    "config": [],
+    "env": {},
+    "files": {},
+    "initialPermissions": {
+      "lowerBound": {
+        "negative": [],
+        "positive": []
+      },
+      "upperBound": {
+        "negative": [],
+        "positive": []
+      }
+    },
+    "pluginInstallations": []
+  },
+  "agentTypes": [],
+  "agentTypeProvisionConfigs": {},
+  "tools": [],
+  "toolDeploymentConfigs": {},
+  "toolMiddlewares": [],
+  "toolMiddlewareProvisionConfigs": {}
+}
+```
+
+**Field `componentWasm`**: string binary
+
+**Field `files`**: string binary
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "componentName": "string",
+  "hash": "string",
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "componentSize": 0,
+  "metadata": {
+    "knownExports": {
+      "agentGuestInterface": "string",
+      "saveSnapshotInterface": "string",
+      "loadSnapshotInterface": "string",
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string",
+      "toolMiddlewareGuestInterface": "string"
+    },
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "memories": [
+      {
+        "initial": 0,
+        "maximum": 0,
+        "shared": false
+      }
+    ],
+    "rootPackageName": "string",
+    "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
+    "agentTypes": [],
+    "agentMethodStreams": {
+      "property1": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      },
+      "property2": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      }
+    },
+    "agentTypeProvisionConfigs": {},
+    "tools": {},
+    "toolMiddlewares": {}
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "wasmHash": "string"
+}
+```
+
+## Get a component in the environment by name
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/components/{component_name}`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "componentName": "string",
+  "hash": "string",
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "componentSize": 0,
+  "metadata": {
+    "knownExports": {
+      "agentGuestInterface": "string",
+      "saveSnapshotInterface": "string",
+      "loadSnapshotInterface": "string",
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string",
+      "toolMiddlewareGuestInterface": "string"
+    },
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "memories": [
+      {
+        "initial": 0,
+        "maximum": 0,
+        "shared": false
+      }
+    ],
+    "rootPackageName": "string",
+    "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
+    "agentTypes": [],
+    "agentMethodStreams": {
+      "property1": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      },
+      "property2": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      }
+    },
+    "agentTypeProvisionConfigs": {},
+    "tools": {},
+    "toolMiddlewares": {}
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "wasmHash": "string"
+}
+```
+
+## List all components in a specific deployment
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/components`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "componentName": "string",
+      "hash": "string",
+      "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+      "componentSize": 0,
+      "metadata": {
+        "knownExports": {
+          "agentGuestInterface": "string",
+          "saveSnapshotInterface": "string",
+          "loadSnapshotInterface": "string",
+          "oplogProcessorInterface": "string",
+          "toolGuestInterface": "string",
+          "toolMiddlewareGuestInterface": "string"
+        },
+        "producers": [
+          {
+            "fields": [
+              {
+                "name": "string",
+                "values": [
+                  {
+                    "name": "string",
+                    "version": "string"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "memories": [
+          {
+            "initial": 0,
+            "maximum": 0,
+            "shared": false
+          }
+        ],
+        "rootPackageName": "string",
+        "rootPackageVersion": "string",
+        "configSchema": {
+          "schema": {
+            "root": {
+              "kind": "record",
+              "value": {
+                "fields": []
+              }
+            }
+          }
+        },
+        "componentProvisionConfig": {
+          "initialPermissions": {
+            "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+            "parentIds": [
+              "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+            ],
+            "lowerPositive": [
+              "string"
+            ],
+            "lowerNegative": [
+              "string"
+            ],
+            "upperPositive": [
+              "string"
+            ],
+            "upperNegative": [
+              "string"
+            ],
+            "createdAt": "2019-08-24T14:15:22Z",
+            "expiresAt": "2019-08-24T14:15:22Z",
+            "systemCard": true
+          },
+          "env": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "config": [
+            {
+              "path": [
+                "string"
+              ],
+              "value": {
+                "graph": {
+                  "defs": [
+                    {
+                      "id": "string",
+                      "name": "string",
+                      "body": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "root": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "value": {
+                  "kind": "bool",
+                  "value": true
+                }
+              }
+            }
+          ],
+          "plugins": [
+            {
+              "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+              "priority": 0,
+              "parameters": {
+                "property1": "string",
+                "property2": "string"
+              },
+              "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+              "pluginName": "string",
+              "pluginVersion": "string",
+              "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+              "oplogProcessorComponentRevision": 0
+            }
+          ],
+          "files": [
+            {
+              "contentHash": "string",
+              "path": "string",
+              "permissions": "read-only",
+              "size": 0
+            }
+          ]
+        },
+        "agentTypes": [],
+        "agentMethodStreams": {
+          "property1": {
+            "property1": {
+              "input": true,
+              "output": true
+            },
+            "property2": {
+              "input": true,
+              "output": true
+            }
+          },
+          "property2": {
+            "property1": {
+              "input": true,
+              "output": true
+            },
+            "property2": {
+              "input": true,
+              "output": true
+            }
+          }
+        },
+        "agentTypeProvisionConfigs": {},
+        "tools": {},
+        "toolMiddlewares": {}
+      },
+      "createdAt": "2019-08-24T14:15:22Z",
+      "wasmHash": "string"
+    }
+  ]
+}
+```
+
+## Get component in a deployment by name
+
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/components/{component_name}`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "componentName": "string",
+  "hash": "string",
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "componentSize": 0,
+  "metadata": {
+    "knownExports": {
+      "agentGuestInterface": "string",
+      "saveSnapshotInterface": "string",
+      "loadSnapshotInterface": "string",
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string",
+      "toolMiddlewareGuestInterface": "string"
+    },
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "memories": [
+      {
+        "initial": 0,
+        "maximum": 0,
+        "shared": false
+      }
+    ],
+    "rootPackageName": "string",
+    "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
+    "agentTypes": [],
+    "agentMethodStreams": {
+      "property1": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      },
+      "property2": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      }
+    },
+    "agentTypeProvisionConfigs": {},
+    "tools": {},
+    "toolMiddlewares": {}
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "wasmHash": "string"
+}
+```
+
+## Get a component by id
+
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "componentName": "string",
+  "hash": "string",
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "componentSize": 0,
+  "metadata": {
+    "knownExports": {
+      "agentGuestInterface": "string",
+      "saveSnapshotInterface": "string",
+      "loadSnapshotInterface": "string",
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string",
+      "toolMiddlewareGuestInterface": "string"
+    },
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "memories": [
+      {
+        "initial": 0,
+        "maximum": 0,
+        "shared": false
+      }
+    ],
+    "rootPackageName": "string",
+    "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
+    "agentTypes": [],
+    "agentMethodStreams": {
+      "property1": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      },
+      "property2": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      }
+    },
+    "agentTypeProvisionConfigs": {},
+    "tools": {},
+    "toolMiddlewares": {}
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "wasmHash": "string"
+}
+```
+
+## Delete the component
+
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}`|DELETE|Yes
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+current_revision|integer|Yes|-
+
+## Update a component
+
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}`|PATCH|Yes
+
+The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+
+**Request Form**: `multipart/form-data`
+
+> Make sure to include `Content-Type: multipart/form-data` Header
+
+**Field `metadata`**: JSON
+```json copy
+{
+  "currentRevision": 0,
+  "configSchema": {
+    "schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
+    },
+    "declarations": [
+      {
+        "source": "Local",
+        "path": [
+          "string"
+        ],
+        "value_type": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "componentProvisionConfig": {
+    "initialPermissions": {
+      "lowerBound": {
+        "negative": [],
+        "positive": []
+      },
+      "upperBound": {
+        "negative": [],
+        "positive": []
+      }
+    },
+    "env": {},
+    "config": [],
+    "pluginInstallations": [],
+    "files": {}
+  },
+  "agentTypes": [
+    {
+      "type_name": "string",
+      "kind": "regular",
+      "description": "string",
+      "source_language": "string",
+      "schema": {
+        "defs": [
+          {
+            "id": "string",
+            "name": "string",
+            "body": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "root": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      },
+      "constructor": {
+        "name": "string",
+        "description": "string",
+        "prompt_hint": "string",
+        "input_schema": {
+          "tag": "parameters",
+          "value": [
+            {
+              "name": "string",
+              "source": {
+                "tag": "user-supplied"
+              },
+              "schema": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              },
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "methods": [
+        {
+          "name": "string",
+          "description": "string",
+          "prompt_hint": "string",
+          "input_schema": {
+            "tag": "parameters",
+            "value": [
+              {
+                "name": "string",
+                "source": {
+                  "tag": "user-supplied"
+                },
+                "schema": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                },
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            ]
+          },
+          "output_schema": {
+            "tag": "unit"
+          },
+          "http_endpoint": [
+            {
+              "httpMethod": {
+                "type": "Any"
+              },
+              "pathSuffix": [
+                {
+                  "type": "Literal",
+                  "value": "string"
+                }
+              ],
+              "headerVars": [
+                {
+                  "headerName": "string",
+                  "variableName": "string"
+                }
+              ],
+              "queryVars": [
+                {
+                  "queryParamName": "string",
+                  "variableName": "string"
+                }
+              ],
+              "authDetails": {
+                "required": true
+              },
+              "corsOptions": {
+                "allowedPatterns": [
+                  "string"
+                ]
+              },
+              "durableStreams": {
+                "slots": [
+                  {
+                    "source": {
+                      "type": "input",
+                      "name": "string"
+                    },
+                    "name": "string",
+                    "contentType": "string"
+                  }
+                ],
+                "allowExternalWrites": true,
+                "allowStreamDelete": true,
+                "allowInvocationDelete": true,
+                "load": {
+                  "maxConcurrentReadersPerStream": 0,
+                  "maxAppendRequestsPerSecondPerStream": 0
+                }
+              }
+            }
+          ],
+          "read_only": {
+            "cachePolicy": {
+              "type": "UntilWrite"
+            },
+            "usesPrincipal": true
+          }
+        }
+      ],
+      "dependencies": [
+        {
+          "type_name": "string",
+          "description": "string",
+          "schema": {
+            "defs": [
+              {
+                "id": "string",
+                "name": "string",
+                "body": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "root": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          },
+          "constructor": {
+            "name": "string",
+            "description": "string",
+            "prompt_hint": "string",
+            "input_schema": {
+              "tag": "parameters",
+              "value": [
+                {
+                  "name": "string",
+                  "source": {
+                    "tag": "user-supplied"
+                  },
+                  "schema": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  },
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "methods": [
+            {
+              "name": "string",
+              "description": "string",
+              "prompt_hint": "string",
+              "input_schema": {
+                "tag": "parameters",
+                "value": [
+                  {
+                    "name": "string",
+                    "source": {
+                      "tag": "user-supplied"
+                    },
+                    "schema": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    },
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                ]
+              },
+              "output_schema": {
+                "tag": "unit"
+              },
+              "http_endpoint": [
+                {
+                  "httpMethod": {
+                    "type": "Any"
+                  },
+                  "pathSuffix": [
+                    {
+                      "type": "Literal",
+                      "value": "string"
+                    }
+                  ],
+                  "headerVars": [
+                    {
+                      "headerName": "string",
+                      "variableName": "string"
+                    }
+                  ],
+                  "queryVars": [
+                    {
+                      "queryParamName": "string",
+                      "variableName": "string"
+                    }
+                  ],
+                  "authDetails": {
+                    "required": true
+                  },
+                  "corsOptions": {
+                    "allowedPatterns": [
+                      "string"
+                    ]
+                  },
+                  "durableStreams": {
+                    "slots": [
+                      {
+                        "source": {
+                          "type": "input",
+                          "name": "string"
+                        },
+                        "name": "string",
+                        "contentType": "string"
+                      }
+                    ],
+                    "allowExternalWrites": true,
+                    "allowStreamDelete": true,
+                    "allowInvocationDelete": true,
+                    "load": {
+                      "maxConcurrentReadersPerStream": 0,
+                      "maxAppendRequestsPerSecondPerStream": 0
+                    }
+                  }
+                }
+              ],
+              "read_only": {
+                "cachePolicy": {
+                  "type": "UntilWrite"
+                },
+                "usesPrincipal": true
+              }
+            }
+          ]
+        }
+      ],
+      "mode": "Durable",
+      "http_mount": {
+        "pathPrefix": [
+          {
+            "type": "Literal",
+            "value": "string"
+          }
+        ],
+        "authDetails": {
+          "required": true
+        },
+        "phantomAgent": true,
+        "phantomIdBinding": {
+          "type": "Path",
+          "name": "string",
+          "optional": true
+        },
+        "corsOptions": {
+          "allowedPatterns": [
+            "string"
+          ]
+        },
+        "webhookSuffix": [
+          {
+            "type": "Literal",
+            "value": "string"
+          }
+        ],
+        "staticBindings": [
+          {
+            "type": "Exact",
+            "publicPath": [
+              "string"
+            ],
+            "filePath": "string"
+          }
+        ],
+        "filesystemBindings": [
+          {
+            "type": "Exact",
+            "publicPath": [
+              "string"
+            ],
+            "filePath": "string"
+          }
+        ],
+        "fileResponseHeaders": [
+          {
+            "name": "string",
+            "value": "string"
+          }
+        ],
+        "openapiProviderMethod": "string"
+      },
+      "snapshotting": {
+        "type": "Disabled"
+      },
+      "config": [
+        {
+          "source": "Local",
+          "path": [
+            "string"
+          ],
+          "value_type": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "agentTypeProvisionConfigUpdates": {
+    "property1": {
+      "initialPermissions": {
+        "lowerBound": {
+          "negative": [],
+          "positive": []
+        },
+        "upperBound": {
+          "negative": [],
+          "positive": []
+        }
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {}
+        }
+      ],
+      "pluginUpdates": [],
+      "filesToAddOrUpdate": {},
+      "filesToRemove": [],
+      "filePermissionUpdates": {}
+    },
+    "property2": {
+      "initialPermissions": {
+        "lowerBound": {
+          "negative": [],
+          "positive": []
+        },
+        "upperBound": {
+          "negative": [],
+          "positive": []
+        }
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {}
+        }
+      ],
+      "pluginUpdates": [],
+      "filesToAddOrUpdate": {},
+      "filesToRemove": [],
+      "filePermissionUpdates": {}
+    }
+  },
+  "tools": [
+    {
+      "version": "string",
+      "requires_filesystem": true,
+      "commands": {
+        "nodes": [
+          {
+            "name": "string",
+            "aliases": [
+              "string"
+            ],
+            "doc": {
+              "summary": "string",
+              "description": "string",
+              "examples": [
+                {
+                  "title": "string",
+                  "body": "string"
+                }
+              ]
+            },
+            "globals": {
+              "options": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "shape": {
+                    "kind": "scalar",
+                    "value": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "kind": "bool",
+                    "value": true
+                  },
+                  "required": true,
+                  "env_var": "string"
+                }
+              ],
+              "flags": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "shape": {
+                    "kind": "bool-flag",
+                    "value": {
+                      "default": true,
+                      "negatable": true
+                    }
+                  },
+                  "env_var": "string"
+                }
+              ]
+            },
+            "subcommands": [
+              0
+            ],
+            "body": {
+              "positionals": {
+                "fixed": [
+                  {
+                    "name": "string",
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "value_name": "string",
+                    "type_": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    },
+                    "default": {
+                      "kind": "bool",
+                      "value": true
+                    },
+                    "required": true,
+                    "accepts_stdio": true
+                  }
+                ],
+                "tail": {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "item_type": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  },
+                  "min": 0,
+                  "max": 0,
+                  "separator": "string",
+                  "verbatim": true,
+                  "accepts_stdio": true
+                }
+              },
+              "options": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "shape": {
+                    "kind": "scalar",
+                    "value": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "kind": "bool",
+                    "value": true
+                  },
+                  "required": true,
+                  "env_var": "string"
+                }
+              ],
+              "flags": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "shape": {
+                    "kind": "bool-flag",
+                    "value": {
+                      "default": true,
+                      "negatable": true
+                    }
+                  },
+                  "env_var": "string"
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "value": [
+                    {
+                      "kind": "present",
+                      "value": "string"
+                    }
+                  ]
+                }
+              ],
+              "stdin": {
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "mime": [
+                  "string"
+                ],
+                "required": true
+              },
+              "stdout": {
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "mime": [
+                  "string"
+                ],
+                "required": true
+              },
+              "stderr": {
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "mime": [
+                  "string"
+                ],
+                "required": true
+              },
+              "result": {
+                "type_": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                },
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "formatters": [
+                  {
+                    "name": "string",
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "default_formatter": "string"
+              },
+              "errors": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "kind": "usage-error",
+                  "exit_code": 0,
+                  "payload": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "annotations": {
+                "read_only": true,
+                "destructive": true,
+                "idempotent": true,
+                "open_world": true
+              }
+            }
+          }
+        ]
+      },
+      "schema": {
+        "defs": [
+          {
+            "id": "string",
+            "name": "string",
+            "body": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "root": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "toolDeploymentConfigUpdates": {
+    "property1": {
+      "provision": {
+        "config": {},
+        "env": {
+          "property1": "string",
+          "property2": "string"
+        },
+        "pluginUpdates": [],
+        "filesToAddOrUpdate": {},
+        "filesToRemove": [],
+        "filePermissionUpdates": {}
+      },
+      "environmentBinding": {
+        "op": "set",
+        "value": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        }
+      },
+      "componentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        },
+        "property2": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        }
+      },
+      "agentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        },
+        "property2": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        }
+      }
+    },
+    "property2": {
+      "provision": {
+        "config": {},
+        "env": {
+          "property1": "string",
+          "property2": "string"
+        },
+        "pluginUpdates": [],
+        "filesToAddOrUpdate": {},
+        "filesToRemove": [],
+        "filePermissionUpdates": {}
+      },
+      "environmentBinding": {
+        "op": "set",
+        "value": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        }
+      },
+      "componentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        },
+        "property2": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        }
+      },
+      "agentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        },
+        "property2": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "prepend"
+        }
+      }
+    }
+  },
+  "toolMiddlewares": [
+    {
+      "name": "string",
+      "version": "string",
+      "aliases": [
+        "string"
+      ],
+      "doc": {
+        "summary": "string",
+        "description": "string",
+        "examples": [
+          {
+            "title": "string",
+            "body": "string"
+          }
+        ]
+      },
+      "scope": {
+        "kind": "monomorphic",
+        "value": {
+          "presented": {
+            "version": "string",
+            "requires_filesystem": true,
+            "commands": {
+              "nodes": [
+                {
+                  "name": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "globals": {
+                    "options": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "value_name": "string",
+                        "shape": {
+                          "kind": "scalar",
+                          "value": {
+                            "kind": "ref",
+                            "value": {}
+                          }
+                        },
+                        "default": {
+                          "kind": "bool",
+                          "value": true
+                        },
+                        "required": true,
+                        "env_var": "string"
+                      }
+                    ],
+                    "flags": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "shape": {
+                          "kind": "bool-flag",
+                          "value": {
+                            "default": true,
+                            "negatable": true
+                          }
+                        },
+                        "env_var": "string"
+                      }
+                    ]
+                  },
+                  "subcommands": [
+                    0
+                  ],
+                  "body": {
+                    "positionals": {
+                      "fixed": [
+                        {
+                          "name": "string",
+                          "doc": {
+                            "summary": "string",
+                            "description": "string",
+                            "examples": [
+                              null
+                            ]
+                          },
+                          "value_name": "string",
+                          "type_": {
+                            "kind": "ref",
+                            "value": {}
+                          },
+                          "default": {
+                            "kind": "bool",
+                            "value": true
+                          },
+                          "required": true,
+                          "accepts_stdio": true
+                        }
+                      ],
+                      "tail": {
+                        "name": "string",
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "value_name": "string",
+                        "item_type": {
+                          "kind": "ref",
+                          "value": {
+                            "id": "string",
+                            "metadata": {
+                              "aliases": [],
+                              "examples": []
+                            }
+                          }
+                        },
+                        "min": 0,
+                        "max": 0,
+                        "separator": "string",
+                        "verbatim": true,
+                        "accepts_stdio": true
+                      }
+                    },
+                    "options": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "value_name": "string",
+                        "shape": {
+                          "kind": "scalar",
+                          "value": {
+                            "kind": "ref",
+                            "value": {}
+                          }
+                        },
+                        "default": {
+                          "kind": "bool",
+                          "value": true
+                        },
+                        "required": true,
+                        "env_var": "string"
+                      }
+                    ],
+                    "flags": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "shape": {
+                          "kind": "bool-flag",
+                          "value": {
+                            "default": true,
+                            "negatable": true
+                          }
+                        },
+                        "env_var": "string"
+                      }
+                    ],
+                    "constraints": [
+                      {
+                        "kind": "requires-all",
+                        "value": [
+                          {
+                            "kind": "present",
+                            "value": "string"
+                          }
+                        ]
+                      }
+                    ],
+                    "stdin": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "stdout": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "stderr": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "result": {
+                      "type_": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      },
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "formatters": [
+                        {
+                          "name": "string",
+                          "doc": {
+                            "summary": "string",
+                            "description": "string",
+                            "examples": [
+                              null
+                            ]
+                          }
+                        }
+                      ],
+                      "default_formatter": "string"
+                    },
+                    "errors": [
+                      {
+                        "name": "string",
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "kind": "usage-error",
+                        "exit_code": 0,
+                        "payload": {
+                          "kind": "ref",
+                          "value": {
+                            "id": "string",
+                            "metadata": {
+                              "aliases": [],
+                              "examples": []
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "annotations": {
+                      "read_only": true,
+                      "destructive": true,
+                      "idempotent": true,
+                      "open_world": true
+                    }
+                  }
+                }
+              ]
+            },
+            "schema": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "expected": {
+            "version": "string",
+            "requires_filesystem": true,
+            "commands": {
+              "nodes": [
+                {
+                  "name": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "globals": {
+                    "options": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "value_name": "string",
+                        "shape": {
+                          "kind": "scalar",
+                          "value": {
+                            "kind": "ref",
+                            "value": {}
+                          }
+                        },
+                        "default": {
+                          "kind": "bool",
+                          "value": true
+                        },
+                        "required": true,
+                        "env_var": "string"
+                      }
+                    ],
+                    "flags": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "shape": {
+                          "kind": "bool-flag",
+                          "value": {
+                            "default": true,
+                            "negatable": true
+                          }
+                        },
+                        "env_var": "string"
+                      }
+                    ]
+                  },
+                  "subcommands": [
+                    0
+                  ],
+                  "body": {
+                    "positionals": {
+                      "fixed": [
+                        {
+                          "name": "string",
+                          "doc": {
+                            "summary": "string",
+                            "description": "string",
+                            "examples": [
+                              null
+                            ]
+                          },
+                          "value_name": "string",
+                          "type_": {
+                            "kind": "ref",
+                            "value": {}
+                          },
+                          "default": {
+                            "kind": "bool",
+                            "value": true
+                          },
+                          "required": true,
+                          "accepts_stdio": true
+                        }
+                      ],
+                      "tail": {
+                        "name": "string",
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "value_name": "string",
+                        "item_type": {
+                          "kind": "ref",
+                          "value": {
+                            "id": "string",
+                            "metadata": {
+                              "aliases": [],
+                              "examples": []
+                            }
+                          }
+                        },
+                        "min": 0,
+                        "max": 0,
+                        "separator": "string",
+                        "verbatim": true,
+                        "accepts_stdio": true
+                      }
+                    },
+                    "options": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "value_name": "string",
+                        "shape": {
+                          "kind": "scalar",
+                          "value": {
+                            "kind": "ref",
+                            "value": {}
+                          }
+                        },
+                        "default": {
+                          "kind": "bool",
+                          "value": true
+                        },
+                        "required": true,
+                        "env_var": "string"
+                      }
+                    ],
+                    "flags": [
+                      {
+                        "long": "string",
+                        "short": null,
+                        "aliases": [
+                          "string"
+                        ],
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "shape": {
+                          "kind": "bool-flag",
+                          "value": {
+                            "default": true,
+                            "negatable": true
+                          }
+                        },
+                        "env_var": "string"
+                      }
+                    ],
+                    "constraints": [
+                      {
+                        "kind": "requires-all",
+                        "value": [
+                          {
+                            "kind": "present",
+                            "value": "string"
+                          }
+                        ]
+                      }
+                    ],
+                    "stdin": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "stdout": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "stderr": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "result": {
+                      "type_": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      },
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "formatters": [
+                        {
+                          "name": "string",
+                          "doc": {
+                            "summary": "string",
+                            "description": "string",
+                            "examples": [
+                              null
+                            ]
+                          }
+                        }
+                      ],
+                      "default_formatter": "string"
+                    },
+                    "errors": [
+                      {
+                        "name": "string",
+                        "doc": {
+                          "summary": "string",
+                          "description": "string",
+                          "examples": [
+                            {}
+                          ]
+                        },
+                        "kind": "usage-error",
+                        "exit_code": 0,
+                        "payload": {
+                          "kind": "ref",
+                          "value": {
+                            "id": "string",
+                            "metadata": {
+                              "aliases": [],
+                              "examples": []
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "annotations": {
+                      "read_only": true,
+                      "destructive": true,
+                      "idempotent": true,
+                      "open_world": true
+                    }
+                  }
+                }
+              ]
+            },
+            "schema": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameter_schema": {
+        "defs": [
+          {
+            "id": "string",
+            "name": "string",
+            "body": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "root": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "toolMiddlewareProvisionConfigUpdates": {
+    "property1": {
+      "config": {},
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "pluginUpdates": [],
+      "filesToAddOrUpdate": {},
+      "filesToRemove": [],
+      "filePermissionUpdates": {}
+    },
+    "property2": {
+      "config": {},
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "pluginUpdates": [],
+      "filesToAddOrUpdate": {},
+      "filesToRemove": [],
+      "filePermissionUpdates": {}
+    }
+  },
+  "allowIncompatibleConfig": false
+}
+```
+
+**Field `newComponentWasm`**: string binary
+
+**Field `newFiles`**: string binary
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "componentName": "string",
+  "hash": "string",
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "componentSize": 0,
+  "metadata": {
+    "knownExports": {
+      "agentGuestInterface": "string",
+      "saveSnapshotInterface": "string",
+      "loadSnapshotInterface": "string",
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string",
+      "toolMiddlewareGuestInterface": "string"
+    },
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "memories": [
+      {
+        "initial": 0,
+        "maximum": 0,
+        "shared": false
+      }
+    ],
+    "rootPackageName": "string",
+    "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
+    "agentTypes": [],
+    "agentMethodStreams": {
+      "property1": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      },
+      "property2": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      }
+    },
+    "agentTypeProvisionConfigs": {},
+    "tools": {},
+    "toolMiddlewares": {}
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "wasmHash": "string"
+}
+```
+
+## Get specific revision of a component
+
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/revisions/{revision}`|GET|Yes
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "componentName": "string",
+  "hash": "string",
+  "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "componentSize": 0,
+  "metadata": {
+    "knownExports": {
+      "agentGuestInterface": "string",
+      "saveSnapshotInterface": "string",
+      "loadSnapshotInterface": "string",
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string",
+      "toolMiddlewareGuestInterface": "string"
+    },
+    "producers": [
+      {
+        "fields": [
+          {
+            "name": "string",
+            "values": [
+              {
+                "name": "string",
+                "version": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "memories": [
+      {
+        "initial": 0,
+        "maximum": 0,
+        "shared": false
+      }
+    ],
+    "rootPackageName": "string",
+    "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
+    "agentTypes": [],
+    "agentMethodStreams": {
+      "property1": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      },
+      "property2": {
+        "property1": {
+          "input": true,
+          "output": true
+        },
+        "property2": {
+          "input": true,
+          "output": true
+        }
+      }
+    },
+    "agentTypeProvisionConfigs": {},
+    "tools": {},
+    "toolMiddlewares": {}
+  },
+  "createdAt": "2019-08-24T14:15:22Z",
+  "wasmHash": "string"
+}
+```
+
+## Get the component wasm binary of a specific revision
+
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/revisions/{revision}/wasm`|GET|Yes
+
+**Response Body:** `WASM Binary File`
+## Component API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"code":"string","errors":["string"]}`
+401|Unauthorized request|`{"code":"string","error":"string"}`
+403|Forbidden Request|`{"code":"string","error":"string"}`
+404|Entity not found|`{"code":"string","error":"string"}`
+409||`{"code":"string","error":"string"}`
+422|Limits of the plan exceeded|`{"code":"string","error":"string"}`
+500|Internal server error|`{"code":"string","error":"string"}`

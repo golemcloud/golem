@@ -2,6 +2,7 @@ import { Callout } from "nextra/components"
 import { Cards } from "nextra/components"
 import { Tabs } from "nextra/components"
 import {ArtifactLink} from "@/components/releaselink"
+import { NEXT_RELEASE_VERSION } from "@/lib/releases"
 
 # Golem CLI Introduction
 
@@ -32,25 +33,25 @@ You can download the precompiled version of `golem` (and `golem-cli`) from the f
   
   | Platform | Link |
   | -------- | ---- |
-  | Mac ARM64 | <ArtifactLink artifact="golem" platform="mac-arm64" /> |
-  | Mac x86_64 | <ArtifactLink artifact="golem" platform="mac-x64" /> |
-  | Linux ARM64 | <ArtifactLink artifact="golem" platform="linux-arm64" /> |
-  | Linux x86_64 | <ArtifactLink artifact="golem" platform="linux-x64" /> |
-  | Windows x86_64 | <ArtifactLink artifact="golem" platform="windows-x64" /> |
+  | Mac ARM64 | <ArtifactLink artifact="golem" platform="mac-arm64" version={NEXT_RELEASE_VERSION} /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem" platform="mac-x64" version={NEXT_RELEASE_VERSION} /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem" platform="linux-arm64" version={NEXT_RELEASE_VERSION} /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem" platform="linux-x64" version={NEXT_RELEASE_VERSION} /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem" platform="windows-x64" version={NEXT_RELEASE_VERSION} /> |
   </Tabs.Tab>
   <Tabs.Tab>
   ##### Lightweight client version, to work with an existing Golem cluster
   
   | Platform | Link |
   | -------- | ---- |
-  | Mac ARM64 | <ArtifactLink artifact="golem-cli" platform="mac-arm64" /> |
-  | Mac x86_64 | <ArtifactLink artifact="golem-cli" platform="mac-x64" /> |
-  | Linux ARM64 | <ArtifactLink artifact="golem-cli" platform="linux-arm64" /> |
-  | Linux x86_64 | <ArtifactLink artifact="golem-cli" platform="linux-x64" /> |
-  | Windows x86_64 | <ArtifactLink artifact="golem-cli" platform="windows-x64" /> |
+  | Mac ARM64 | <ArtifactLink artifact="golem-cli" platform="mac-arm64" version={NEXT_RELEASE_VERSION} /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem-cli" platform="mac-x64" version={NEXT_RELEASE_VERSION} /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem-cli" platform="linux-arm64" version={NEXT_RELEASE_VERSION} /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem-cli" platform="linux-x64" version={NEXT_RELEASE_VERSION} /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem-cli" platform="windows-x64" version={NEXT_RELEASE_VERSION} /> |
   
   <Callout type="info">
-      Windows is not supported for the current version, and is expected to be added in a future patch release.
+      On Windows, use WSL (Windows Subsystem for Linux) and follow the Linux instructions. Native Windows binaries are available to try, but Windows is not fully supported and operation is not guaranteed.
   </Callout>
   </Tabs.Tab>
 </Tabs>

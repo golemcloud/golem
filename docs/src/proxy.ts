@@ -4,7 +4,7 @@ import { DEFAULT_VERSION, VERSION_SLUGS } from "./lib/versions"
 /**
  * Redirect legacy un-versioned URLs (e.g., `/quickstart` from old inbound
  * links or search-engine results) to the default version's equivalent
- * (`/v1.5/quickstart`). Requests that already start with a known version
+ * (`/v1.6/quickstart`). Requests that already start with a known version
  * slug are passed through unchanged.
  *
  * Static assets, Next.js internals, the search index, and anything with a

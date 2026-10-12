@@ -188,4 +188,3 @@ If you see `This action requires confirmation, but the current shell is non-inte
 - Full docs: https://learn.golem.cloud
 - golem-rust SDK: https://docs.rs/golem-rust
 <!-- golem-managed:guide:rust:end -->
-

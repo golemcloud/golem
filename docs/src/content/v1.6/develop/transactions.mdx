@@ -1,0 +1,408 @@
+import { Callout, Tabs } from "nextra/components"
+
+# High-level transactions
+
+On top of the [durability controls](/v1.6/develop/durability) and [retry controls](/v1.6/develop/retries), the SDKs also provide high level functions for defining transactions supporting **compensation actions** in case of getting reverted.
+
+Although Golem's automatic retry policies and low-level atomic regions provide a lot of power automatically, a set of external operations such as HTTP requests often needs to be executed **transactionally**; if one operation fails, compensation actions may need to undo earlier successful operations.
+
+The SDK provides support for two different types of transactions:
+
+- **fallible transactions** are only dealing with domain errors
+- **infallible transactions** compensate domain errors and rewind for an immediate retry
+
+### Fallible transactions
+
+Many times external operations (such as HTTP calls to remote hosts) need to be executed transactionally. If some operations failed, the transaction needs to be rolled back; compensation actions need to undo whatever the already successfully performed operations did.
+
+A **fallible transaction** deals with domain errors. Successful steps register compensations. Propagating a domain error out of the transaction body triggers these compensations in reverse order; handling the error inside the body does not automatically trigger rollback. The failing step has no registered compensation. TypeScript, Rust and Scala stop at the first compensation error and report partial rollback. Effect's `withFallibleCompensation` continues the remaining compensations and reports the first compensation error.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        In TypeScript, a fallible saga can be executed using the async `fallibleSaga` function, by
+        passing an async callback that can execute operations on the open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Effect TypeScript, wrap an Effect program with `Saga.fallibleTransaction`. Expected typed failures trigger registered compensations and return a `TransactionFailure` through the Effect error channel.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Rust, a fallible transaction can be executed using the async `fallible_transaction` function in
+        `golem_rust`, by passing a closure wrapped with `boxed(async move { ... })` that can execute operations on the
+        open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Scala, a fallible transaction can be executed using `Transactions.fallibleTransaction`, by passing a
+        `Future`-returning function that can execute operations on the open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In MoonBit, the SDK does not currently provide a dedicated high-level fallible transaction helper. Implement
+        the same pattern manually by combining lower-level durability helpers such as `with_atomic_operation` with
+        explicit compensation logic for the operations you need to roll back.
+    </Tabs.Tab>
+</Tabs>
+
+### Infallible transactions
+
+In an infallible transaction, a propagated domain error runs compensations and then rewinds for an immediate, retry-policy-independent restart. Unexpected failures follow host recovery semantics and do not guarantee compensation. In Effect, interruption triggers compensation: the fallible helper propagates the interruption, while the infallible helper rewinds.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        In TypeScript, an infallible saga can be executed using the async `infallibleSaga` function, by
+        passing an async callback that can execute operations on the open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        `Saga.infallibleTransaction` currently requires a body whose typed error channel is `never`. `Saga.operation` includes `DurabilityHostError` in its error channel, so operations cannot be passed directly to this helper as in the fallible example.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Rust, an infallible transaction can be executed using the async `infallible_transaction` function in
+        `golem_rust`, by passing a closure wrapped with `boxed(async move { ... })` that can execute operations on the
+        open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Scala, an infallible transaction can be executed using `Transactions.infallibleTransaction`, by passing a
+        `Future`-returning function that can execute operations on the open transaction (see below).
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In MoonBit, the SDK does not yet provide a dedicated high-level infallible transaction helper. Implement the
+        same pattern manually by saving the oplog position with `get_oplog_index`, wrapping each step in
+        `with_atomic_operation`, and rewinding with `set_oplog_index` after running compensations so the whole
+        transaction is retried from the saved checkpoint.
+    </Tabs.Tab>
+</Tabs>
+
+### Operations
+
+Both transaction types require the definition of **operations**.
+
+It is defined with the following interface:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        ```typescript
+        /**
+        * Represents an atomic operation of the transaction which has a rollback action.
+        *
+        * Implement this interface and use it within a saga block.
+        * Compensable steps can also be constructed with `compensable`.
+        */
+        export interface Compensable<In, Out, Err> {
+        /**
+         * The action to execute.
+         * @param input - The input to the operation.
+         * @returns A promise resolving to the result of the operation.
+         */
+        execute(input: In): Promise<Result<Out, Err>>
+        /**
+         * Compensation to perform in case of failure.
+         * Compensations should not throw errors.
+         * @param input - The input to the operation.
+         * @param result - The result of the operation.
+         * @returns A promise resolving to the result of the compensation.
+         */
+        compensate(input: In, result: Out): Promise<Result<void, Err>>
+    }
+        ```
+
+        There are two ways to define a compensable step:
+
+        1. Implement the `Compensable` interface manually
+        2. Use the `compensable` function to create one from a pair of closures
+
+        ```typescript
+        export function compensable<In, Out, Err>(
+            execute: (input: In) => Promise<Result<Out, Err>>,
+            compensate: (input: In, result: Out) => Promise<Result<void, Err>>,
+        ): Compensable<In, Out, Err>
+        ```
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        `Saga.operation` creates a reusable Effect step. The compensation receives the input, successful output, and failure cause, and must have an infallible (`never`) error channel:
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Saga } from "@golemcloud/effect-golem"
+
+        const op = Saga.operation({
+          execute: (idx: number) => Effect.succeed(`id-${idx}`),
+          compensate: (idx, id, _cause) =>
+            Effect.log(`reverting ${id}, ${idx}`),
+        })
+        ```
+
+        Use `Saga.withFallibleCompensation` instead when a compensation itself can fail.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+      ```rust
+
+      /// Represents an atomic operation of the transaction which has a rollback action.
+      ///
+      /// Implement this trait and use it within a `transaction` block.
+      /// Operations can also be constructed from closures using `operation`.
+      pub trait Operation: Clone {
+          type In: Clone;
+          type Out: Clone;
+          type Err: Clone;
+
+          /// Executes the operation which may fail with a domain error
+          async fn execute(&self, input: Self::In) -> Result<Self::Out, Self::Err>;
+
+          /// Executes a compensation action for the operation.
+          async fn compensate(&self, input: Self::In, result: Self::Out) -> Result<(), Self::Err>;
+      }
+
+
+      ```
+
+        There are two ways to define an operation:
+
+        1. Implement the `Operation` interface manually
+        2. Use the `operation` function to create an operation from a pair of closures
+
+        ```rust
+     /// Constructs an `Operation` from two closures: one for executing the operation,
+     /// and one for rolling it back. The rollback operation always sees the input and
+     /// the output of the operation.
+     ///
+     /// This operation can run the compensation in both fallible and infallible transactions.
+     pub fn operation<In: Clone, Out: Clone, Err: Clone>(
+         execute_fn: impl Fn(In) -> Pin<Box<dyn Future<Output = Result<Out, Err>>>> + 'static,
+         compensate_fn: impl Fn(In, Out) -> Pin<Box<dyn Future<Output = Result<(), Err>>>> + 'static,
+     ) -> impl Operation<In = In, Out = Out, Err = Err> {
+         FnOperation {
+             execute_fn: Rc::new(execute_fn),
+             compensate_fn: Rc::new(compensate_fn),
+         }
+     }
+        ```
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        ```scala
+        trait Operation[-In, Out, Err] {
+
+          def execute(input: In): Future[Either[Err, Out]]
+
+          def compensate(input: In, output: Out): Future[Either[Err, Unit]]
+        }
+        ```
+
+        There are two ways to define an operation:
+
+        1. Implement the `Operation` trait manually
+        2. Use the `Transactions.operation` function to create an operation from a pair of closures
+
+        ```scala
+        def operation[In, Out, Err](
+          run: In => Future[Either[Err, Out]]
+        )(
+          compensate: (In, Out) => Future[Either[Err, Unit]]
+        ): Operation[In, Out, Err]
+        ```
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        MoonBit has no high-level saga API. The following are application-defined illustrative types, not SDK exports:
+
+        ```moonbit
+        pub(all) struct Operation[In, Out, Err] {
+          execute : (In) -> Result[Out, Err]
+          compensate : (In, Out) -> Result[Unit, Err]
+        }
+        ```
+
+        There are two ways to define an operation:
+
+        1. Construct the `Operation` struct manually
+        2. Use the `operation` function to create an operation from a pair of closures
+
+        ```moonbit
+        pub fn[In, Out, Err] operation(
+          execute : (In) -> Result[Out, Err],
+          compensate : (In, Out) -> Result[Unit, Err],
+        ) -> Operation[In, Out, Err] {
+          { execute, compensate }
+        }
+        ```
+
+    </Tabs.Tab>
+
+</Tabs>
+
+### Executing operations
+
+The defined operations can be executed in _fallible_ or _infallible_ mode:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    ```typescript
+    import { compensable, fallibleSaga, infallibleSaga, Result } from "@golemcloud/golem-ts-sdk"
+
+    // example operation with compensation
+    const op = compensable<number, string, string>(
+      async (idx) => {
+        // the operation / side effect
+        return Result.ok("id-" + idx)
+      },
+      async (idx, id) => {
+        // compensation
+        console.log(`reverting ${id}, ${idx}`)
+        return Result.ok(undefined)
+      }
+    )
+
+    // With fallibleSaga, errors are propagated using Result.
+    const resultFallible = await fallibleSaga(async tx => {
+      const firstId = await tx.execute(op, 1)
+      if (firstId.isErr()) return firstId
+
+      const secondId = await tx.execute(op, 2)
+      if (secondId.isErr()) return secondId
+
+      return Result.ok([firstId.val, secondId.val])
+    })
+
+    const resultInfallible = await infallibleSaga(async tx => {
+      const firstId = await tx.execute(op, 1)
+      const secondId = await tx.execute(op, 2)
+      return [firstId, secondId]
+    })
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```typescript
+    import { Effect } from "effect"
+    import { Saga } from "@golemcloud/effect-golem"
+
+    const op = Saga.operation({
+      execute: (idx: number) => Effect.succeed(`id-${idx}`),
+      compensate: (idx, id, _cause) =>
+        Effect.log(`reverting ${id}, ${idx}`),
+    })
+
+    // Construct an Effect program to yield from an agent method.
+    const resultFallible = Saga.fallibleTransaction(
+      Effect.gen(function* () {
+        const firstId = yield* op(1)
+        const secondId = yield* op(2)
+        return [firstId, secondId] as const
+      }),
+    )
+
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```rust
+    use golem_rust::{boxed, fallible_transaction, infallible_transaction, operation};
+
+    let op = operation::<i32, String, String>(
+        |idx| boxed(async move { Ok(format!("id-{idx}")) }),
+        |idx, id| {
+            boxed(async move {
+                println!("reverting {id}, {idx}");
+                Ok(())
+            })
+        },
+    );
+
+    let result_fallible = fallible_transaction(|tx| {
+        let op = op.clone();
+        boxed(async move {
+            let first_id = tx.execute(op.clone(), 1).await?;
+            let second_id = tx.execute(op, 2).await?;
+            Ok((first_id, second_id))
+        })
+    })
+    .await;
+
+    let result_infallible = infallible_transaction(|tx| {
+        let op = op.clone();
+        boxed(async move {
+            let first_id = tx.execute(op.clone(), 1).await;
+            let second_id = tx.execute(op, 2).await;
+            (first_id, second_id)
+        })
+    })
+    .await;
+
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```scala
+    import golem.Transactions
+
+    import scala.concurrent.Future
+    import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
+    val op = Transactions.operation[Int, String, String](
+      idx => Future.successful(Right(s"id-$idx"))
+    )(
+      (idx, id) => {
+        println(s"reverting $id, $idx")
+        Future.successful(Right(()))
+      }
+    )
+
+    val resultFallible: Future[Either[Transactions.TransactionFailure[String], (String, String)]] =
+      Transactions.fallibleTransaction[(String, String), String] { tx =>
+        tx.execute(op, 1).flatMap {
+          case Right(firstId) =>
+            tx.execute(op, 2).map(_.map(secondId => (firstId, secondId)))
+          case Left(error) =>
+            Future.successful(Left(error))
+        }
+      }
+
+    val resultInfallible: Future[(String, String)] =
+      Transactions.infallibleTransaction { tx =>
+        for {
+          firstId <- tx.execute(op, 1)
+          secondId <- tx.execute(op, 2)
+        } yield (firstId, secondId)
+      }
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    <Callout type="info">
+    The MoonBit SDK does not yet provide high-level `fallibleTransaction` / `infallibleTransaction` helpers like the other languages. The saga pattern must be implemented manually using oplog primitives as shown below.
+    </Callout>
+
+    Add the API package alias to the component's `moon.pkg`; MoonBit source files do not contain import declarations:
+
+    ```moonbit
+    import {
+      "golemcloud/golem_sdk/api" @api,
+    }
+    ```
+
+    The following is pseudocode for domain-error handling, not a complete SDK implementation:
+
+    ```text
+    checkpoint = get_oplog_index()
+    completed = []
+
+    for each step:
+      result = with_atomic_operation(step.execute)
+      if result succeeded:
+        append the step's compensation to completed
+      else:
+        compensate completed steps in reverse order
+        preserve every compensation result
+
+        if a compensation failed:
+          in fallible mode, return partial-rollback(original error, compensation error)
+          in infallible mode, do not rewind; apply an application-specific failure policy
+
+        if all compensations succeeded:
+          in fallible mode, return the original domain error
+          in infallible mode, set_oplog_index(checkpoint) to rewind and retry
+    ```
+
+    Per-step atomic regions do not undo external effects and do not by themselves make the whole sequence crash-atomic. External operations must be idempotent. A stronger crash-reexecution guarantee requires an enclosing atomic region and application-specific handling of compensation failures.
+    </Tabs.Tab>
+</Tabs>

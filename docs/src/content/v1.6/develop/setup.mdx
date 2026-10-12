@@ -1,0 +1,110 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Setting up the development environment
+
+Building Golem agents requires the `golem` CLI and the toolchain of the language you write agents in. Golem 1.6 has six SDKs across five languages: TypeScript, Effect, Rust, Scala, MoonBit, and Go. `golem build` checks the required tools and versions for the languages in your application and reports anything that is missing.
+
+<Callout type="info">
+On Windows, use WSL (Windows Subsystem for Linux) and follow the Linux instructions. Native Windows binaries are available to try, but Windows is not fully supported and operation is not guaranteed.
+</Callout>
+
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+Golem's TypeScript toolchain uses npm as the underlying build tool.
+Install **Node.js 24.11 or newer** and **npm 11.6.2 or newer** by following the official [instructions](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
+</Tabs.Tab>
+
+<Tabs.Tab>
+Golem's Effect toolchain uses npm, TypeScript, and Rollup. Install **Node.js 24.11 or newer** and **npm 11.6.2 or newer** by following the official [instructions](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
+
+Generated projects include compatible versions of `effect` and `@golemcloud/effect-golem`. Keep those versions aligned when updating dependencies; the Effect SDK currently uses Effect 4 APIs.
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup Rust
+
+Developing **Golem agents** in **Rust** requires a stable Rust compiler (**rustc and cargo 1.94 or newer**) and the WASM target used by Golem 1.6.
+
+#### Installing Rust
+
+Use the [official guide](https://www.rust-lang.org/learn/get-started) to install the latest **stable** version of the Rust compiler.
+
+<Callout type="info">
+For MacOS the recommended way is using `rustup` by running the following installation script:
+
+```shell
+$ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+</Callout>
+
+#### Enabling WebAssembly targets
+
+With **Rust** and `rustup` installed, the next step is to enable the **WebAssembly** target used by Golem builds:
+
+```shell
+$ rustup target add wasm32-wasip2
+```
+
+To verify if this step was successful, run:
+
+```shell
+$ rustup target list --installed | grep wasm32-wasip2
+wasm32-wasip2
+```
+
+Golem 1.6 uses the standard `cargo build` toolchain, so no additional `cargo` subcommands need to be installed.
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup Scala
+
+Developing **Golem agents** in **Scala** requires a Java Development Kit and `sbt`, because Golem 1.6 compiles Scala agents through **Scala.js** using an `sbt` plugin.
+
+#### Installing Java
+
+Install **Java 17 or newer** (JDK) using your preferred distribution.
+
+#### Installing `sbt`
+
+Install `sbt` by following the [official installation guide](https://www.scala-sbt.org/download/).
+
+Once Java and `sbt` are installed, `golem build` will drive the full Scala.js-based build pipeline for Scala components.
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup MoonBit
+
+Developing **Golem agents** in **MoonBit** requires the MoonBit toolchain and `wasm-tools`, because Golem 1.6 compiles MoonBit agents to WebAssembly using `moon` and packages them as components with `wasm-tools`.
+
+#### Installing MoonBit
+
+Install the latest stable version of the MoonBit toolchain by following the official [instructions](https://docs.moonbitlang.com/).
+
+#### Installing `wasm-tools`
+
+Install `wasm-tools` **1.227.1 or newer** by following the [official installation guide](https://github.com/bytecodealliance/wasm-tools?tab=readme-ov-file#installation).
+
+Once `moon` and `wasm-tools` are installed, `golem build` will install the required MoonBit dependencies and drive the full MoonBit-to-WASM build pipeline for MoonBit components.
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup Go
+
+Golem 1.6 ships Go SDK 0.1.0. Go agents are compiled to WebAssembly components with `componentize-go`, which each generated component pins through a `tool` directive in its `go.mod`.
+
+#### The Golem Go toolchain
+
+`componentize-go` needs a Go runtime with patches that upstream Go does not have yet, so Go components are not built with the `go` you have installed. On the first Go build, the Golem CLI downloads Golem's patched Go toolchain (based on Go 1.27.1) from [golemcloud/go](https://github.com/golemcloud/go) and uses it for every Go command in the build. Prebuilt toolchains are published for Linux (x86_64 and ARM64), macOS (x86_64 and ARM64), and Windows (x86_64).
+
+Offline builds require the toolchain to be installed already, or the `GOLEM_GO_TOOLCHAIN` environment variable to point at a Go toolchain built from [golemcloud/go](https://github.com/golemcloud/go).
+
+#### Installing Go
+
+A regular **Go 1.27.1 or newer** installation is recommended for your editor, `go test`, and `go vet`, but it is not required to build. Install it from [go.dev/dl](https://go.dev/dl/).
+
+#### Installing `wasm-tools`
+
+Install `wasm-tools` **1.227.1 or newer** by following the [official installation guide](https://github.com/bytecodealliance/wasm-tools?tab=readme-ov-file#installation). The release build preset uses it to strip components.
+</Tabs.Tab>
+</Tabs>
