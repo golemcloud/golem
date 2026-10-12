@@ -59,6 +59,15 @@ pub struct Session {
         )
     )]
     time_limit: Option<std::time::Duration>,
+    /// The caller's request to stop the script (see [`Session::set_stop_request`]).
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(
+            dead_code,
+            reason = "only wasm32 runs a call's script as a process to stop"
+        )
+    )]
+    stop_request: Option<futures::future::LocalBoxFuture<'static, ()>>,
 }
 
 impl Session {
@@ -112,6 +121,7 @@ impl Session {
             commands: Arc::new(InvocationCommands::default()),
             command_string: true,
             time_limit: None,
+            stop_request: None,
         };
         session.set_identity()?;
         session.enable_stateless_mode();
@@ -279,6 +289,13 @@ impl Session {
     /// are stopped as at any other end. Without a limit a call runs until its script ends.
     pub fn set_time_limit(&mut self, limit: std::time::Duration) {
         self.time_limit = Some(limit);
+    }
+
+    /// Stops the script when `stop` completes: INT to the script and all it started, KILL a
+    /// second later, and the run returns exit code 130. Without it nothing but the time limit
+    /// stops a script.
+    pub fn set_stop_request(&mut self, stop: impl Future<Output = ()> + 'static) {
+        self.stop_request = Some(Box::pin(stop));
     }
 
     /// Sets `$0`, as `bash -c SCRIPT NAME` does.
@@ -512,35 +529,40 @@ impl Session {
             brush_core::execution::process::Dispositions::from_traps(self.shell.traps());
         let completed = std::cell::Cell::new(false);
         let time_limit = self.time_limit;
+        // Taken before the script borrows the session for as long as it runs.
+        let stop_request = self.stop_request.take();
+        // Registered before its first turn, so a stop request that is already there ends it.
+        let process = brush_core::execution::process::NumberedProcess::register(
+            &table,
+            table.shell_pid(),
+            dispositions,
+        );
         let script = async {
-            let result = brush_core::execution::process::run_numbered_process(
-                &table,
-                table.shell_pid(),
-                dispositions,
-                async {
+            let result = process
+                .run(async {
                     let result = self.evaluate(script, here_document_warnings, &params).await;
                     completed.set(true);
                     result
-                },
-            )
-            .await;
+                })
+                .await;
             // A signal ended the script before it finished: its EXIT trap still runs, as in bash.
             if !completed.get() {
                 self.shell.exit_trap_after_signal(&result, &params).await;
             }
             result
         };
-        let timed_out = std::cell::Cell::new(false);
-        let result = match time_limit {
-            None => script.await,
-            Some(limit) => {
-                let watchdog = stop_at_time_limit(&table, services, limit, &timed_out);
-                // The watchdog is polled first, so its wait starts before anything the script
-                // does. Once the timer is due, the script is stopped before it runs further, live
+        let stopped = std::cell::Cell::new(None);
+        let result = match (time_limit, stop_request) {
+            (None, None) => script.await,
+            (limit, request) => {
+                let watchdog = stop_when_due(&table, services, limit, request, &stopped);
+                // The watchdog is polled first, so its waits start before anything the script
+                // does. Once one is due, the script is stopped before it runs further, live
                 // and on replay alike.
                 match futures::future::select(std::pin::pin!(watchdog), std::pin::pin!(script))
                     .await
                 {
+                    // The script outlived its KILL and is abandoned; its status is set below.
                     futures::future::Either::Left(((), _)) => {
                         Ok(brush_core::ExecutionResult::new(TIMED_OUT))
                     }
@@ -548,12 +570,17 @@ impl Session {
                 }
             }
         };
-        let result = if timed_out.get() {
-            let seconds = time_limit.unwrap_or_default().as_secs_f64();
-            log::warn!("the call exceeded its {seconds} s time limit");
-            Ok(brush_core::ExecutionResult::new(TIMED_OUT))
-        } else {
-            result
+        let result = match stopped.get() {
+            Some(Stop::TimeLimit) => {
+                let seconds = time_limit.unwrap_or_default().as_secs_f64();
+                log::warn!("the call exceeded its {seconds} s time limit");
+                Ok(brush_core::ExecutionResult::new(TIMED_OUT))
+            }
+            Some(Stop::Request) => {
+                log::info!("the call was stopped on its caller's request");
+                Ok(brush_core::ExecutionResult::new(INTERRUPTED))
+            }
+            None => result,
         };
         // The shell's descriptors close as it exits, so an output process substitution it made
         // one of them (`exec > >(tee log)`) sees the end of its input and finishes.
@@ -563,7 +590,7 @@ impl Session {
         drop(params);
         let (out, out_truncated) = stdout.take_text();
         let (mut err, err_truncated) = stderr.take_text();
-        if timed_out.get() {
+        if stopped.get() == Some(Stop::TimeLimit) {
             let seconds = time_limit.unwrap_or_default().as_secs_f64();
             err.extend_from_slice(
                 format!("bash: the call exceeded its {seconds} s time limit\n").as_bytes(),
@@ -698,22 +725,57 @@ impl Session {
 #[cfg(target_arch = "wasm32")]
 const TIMED_OUT: u8 = 124;
 
-/// Waits out `limit`, then stops the script (process `$$`) and every process it started as
-/// `timeout(1)` stops a command: TERM, and KILL a second later. A script that still runs a
-/// second after that (its EXIT trap, which runs after the signal) is abandoned when this ends.
-/// The timers are the same in every run that reaches the limit: one for the limit, then one per
-/// second of grace, each created only once the one before it has fired.
+/// The exit code of a script stopped on its caller's request, as a shell reports SIGINT.
 #[cfg(target_arch = "wasm32")]
-async fn stop_at_time_limit(
+const INTERRUPTED: u8 = 130;
+
+/// Why the watchdog stopped the script.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    TimeLimit,
+    Request,
+}
+
+/// Waits for the time limit or the caller's stop request, then stops the script (process `$$`)
+/// and every process it started: TERM for the limit as `timeout(1)` does, INT for a request as
+/// a terminal does, and KILL a second later. A script that still runs a second after that (its
+/// EXIT trap, which runs after the signal) is abandoned when this ends. The limit's timer is
+/// created first, then the request is polled, in every run alike; each second of grace is a
+/// timer created only once the wait before it has ended.
+#[cfg(target_arch = "wasm32")]
+async fn stop_when_due(
     table: &brush_core::process_table::ProcessTable,
     services: crate::ExecutionServices,
-    limit: std::time::Duration,
-    timed_out: &std::cell::Cell<bool>,
+    limit: Option<std::time::Duration>,
+    request: Option<futures::future::LocalBoxFuture<'static, ()>>,
+    stopped: &std::cell::Cell<Option<Stop>>,
 ) {
     use brush_core::execution::process::{self, signals};
-    (services.sleep)(limit).await;
-    timed_out.set(true);
-    process::signal_process_group(table, table.shell_pid(), signals::TERM);
+    use futures::future::Either;
+    let timer = async {
+        match limit {
+            Some(limit) => (services.sleep)(limit).await,
+            None => std::future::pending().await,
+        }
+    };
+    let request = async {
+        match request {
+            Some(request) => request.await,
+            None => std::future::pending().await,
+        }
+    };
+    let cause = match futures::future::select(std::pin::pin!(timer), std::pin::pin!(request)).await
+    {
+        Either::Left(_) => Stop::TimeLimit,
+        Either::Right(_) => Stop::Request,
+    };
+    stopped.set(Some(cause));
+    let signal = match cause {
+        Stop::TimeLimit => signals::TERM,
+        Stop::Request => signals::INT,
+    };
+    process::signal_process_group(table, table.shell_pid(), signal);
     (services.sleep)(std::time::Duration::from_secs(1)).await;
     process::signal_process_group(table, table.shell_pid(), signals::KILL);
     (services.sleep)(std::time::Duration::from_secs(1)).await;
@@ -975,6 +1037,183 @@ mod end_of_run_tests {
         let (code, stdout, stderr, sleeps) = run_limited("echo done; exit 7", LIMIT);
         assert_eq!((code, stdout.as_str(), stderr.as_str()), (7, "done\n", ""));
         assert_eq!(sleeps, [LIMIT]);
+    }
+
+    /// What a run with a stop request returned, and the sleeps it asked for.
+    struct Outcome {
+        code: u8,
+        stdout: String,
+        stderr: String,
+        cwd: String,
+        sleeps: Vec<Duration>,
+    }
+
+    /// Runs `script` with a stop request, and with a time limit if one is given.
+    fn run_stopped(
+        script: &str,
+        stop: impl Future<Output = ()> + 'static,
+        limit: Option<Duration>,
+    ) -> Outcome {
+        SLEEPS.with_borrow_mut(Vec::clear);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(tokio::task::LocalSet::new().run_until(async {
+            let services = crate::ExecutionServices {
+                sleep: counting_sleep,
+                ..crate::ExecutionServices::default()
+            };
+            let mut session = Session::new_with_execution_services(services)
+                .await
+                .unwrap();
+            if let Some(limit) = limit {
+                session.set_time_limit(limit);
+            }
+            session.set_stop_request(stop);
+            session.run(script).await
+        }));
+        Outcome {
+            code: result.exit_code,
+            stdout: String::from_utf8(result.stdout).unwrap(),
+            stderr: String::from_utf8(result.stderr).unwrap(),
+            cwd: result.cwd,
+            sleeps: SLEEPS.with_borrow(Clone::clone),
+        }
+    }
+
+    /// A stop request that comes `delay` after the script starts.
+    async fn stop_after(delay: Duration) {
+        tokio::time::sleep(delay).await;
+    }
+
+    const STOP: Duration = Duration::from_millis(50);
+    const SECOND: Duration = Duration::from_secs(1);
+
+    /// A stop request ends a script that waits, with INT: status 130, as a shell reports SIGINT,
+    /// what the script wrote so far, and no note on stderr.
+    #[test]
+    fn a_stop_request_ends_a_waiting_script() {
+        let run = run_stopped("echo start; sleep 300; echo end", stop_after(STOP), None);
+        assert_eq!(
+            (run.code, run.stdout.as_str(), run.stderr.as_str()),
+            (130, "start\n", "")
+        );
+    }
+
+    /// It reaches a loop of commands that never wait too, as the time limit does.
+    #[test]
+    fn a_stop_request_ends_a_script_that_computes() {
+        for script in [
+            "echo start; while :; do x=1; done",
+            "echo start; while [[ 1 ]]; do x=$((x+1)); done",
+            "echo start; for ((;;)); do :; done",
+        ] {
+            let run = run_stopped(script, stop_after(STOP), None);
+            assert_eq!(run.code, 130, "{script}");
+            assert_eq!(run.stdout, "start\n", "{script}");
+            assert_eq!(run.stderr, "", "{script}");
+            // No time limit, so the only timer is the second of grace that follows the INT.
+            assert_eq!(run.sleeps, [SECOND], "{script}");
+        }
+    }
+
+    /// A script that ignores INT is killed a second later, and the status is still 130.
+    #[test]
+    fn a_script_that_ignores_the_stop_is_killed() {
+        let run = run_stopped(
+            "trap '' INT; echo start; while :; do :; done",
+            stop_after(STOP),
+            None,
+        );
+        assert_eq!((run.code, run.stdout.as_str()), (130, "start\n"));
+        assert_eq!(run.sleeps, [SECOND, SECOND]);
+    }
+
+    /// A script that catches INT runs its handler at once, also while a `sleep` is in front: the
+    /// INT goes to everything the script started, as Ctrl+C at a terminal does, so the `sleep`
+    /// ends and the handler follows it. The script ends by itself, before the KILL, and the
+    /// status is 130 whatever the handler does.
+    #[test]
+    fn a_script_that_catches_the_stop() {
+        let run = run_stopped(
+            "trap 'echo caught' INT; echo start; sleep 300",
+            stop_after(STOP),
+            None,
+        );
+        assert_eq!((run.code, run.stdout.as_str()), (130, "start\ncaught\n"));
+        assert_eq!(run.sleeps, [Duration::from_secs(300), SECOND]);
+
+        let run = run_stopped(
+            "trap 'echo caught; exit 3' INT; echo start; sleep 300",
+            stop_after(STOP),
+            None,
+        );
+        assert_eq!((run.code, run.stdout.as_str()), (130, "start\ncaught\n"));
+    }
+
+    /// A caller that never asks for a stop gets the script's own result.
+    #[test]
+    fn a_stop_request_that_never_comes_changes_nothing() {
+        let run = run_stopped("echo a; echo b", std::future::pending(), None);
+        assert_eq!(
+            (run.code, run.stdout.as_str(), run.stderr.as_str()),
+            (0, "a\nb\n", "")
+        );
+        assert!(run.sleeps.is_empty());
+    }
+
+    /// The run does not wait for a stop request once its script has ended.
+    #[test]
+    fn a_stop_after_the_script_ended_changes_nothing() {
+        let started = std::time::Instant::now();
+        let run = run_stopped("echo done", stop_after(2 * SECOND), None);
+        assert!(started.elapsed() < SECOND, "{:?}", started.elapsed());
+        assert_eq!(
+            (run.code, run.stdout.as_str(), run.stderr.as_str()),
+            (0, "done\n", "")
+        );
+    }
+
+    /// A stop request that is already there when the script starts ends it before it runs
+    /// anything, as a signal ends a process that has not had its first turn.
+    #[test]
+    fn a_stop_before_the_script_starts_ends_it_at_once() {
+        let run = run_stopped("echo start; sleep 300", std::future::ready(()), None);
+        assert_eq!(
+            (run.code, run.stdout.as_str(), run.stderr.as_str()),
+            (130, "", "")
+        );
+        assert_eq!(run.sleeps, [SECOND]);
+    }
+
+    /// A stopped run still says where its script was, so the caller can continue there.
+    #[test]
+    fn a_stopped_script_reports_its_directory() {
+        let run = run_stopped("cd /tmp; sleep 300", stop_after(STOP), None);
+        assert_eq!((run.code, run.cwd.as_str()), (130, "/tmp"));
+    }
+
+    /// A time limit and a stop request due at the same moment end as the time limit does. The
+    /// limit's timer is created before the request is first polled, so it is due no later than a
+    /// request with the same delay, and the limit is checked first.
+    #[test]
+    fn the_time_limit_wins_when_both_are_due() {
+        let run = run_stopped("echo start; sleep 30", stop_after(LIMIT), Some(LIMIT));
+        assert_eq!((run.code, run.stdout.as_str()), (124, "start\n"));
+        assert_eq!(run.stderr, "bash: the call exceeded its 0.2 s time limit\n");
+    }
+
+    /// A background job ignores INT, as in bash, so the stop leaves it to the end of the run,
+    /// which stops and reports it as after any other script.
+    #[test]
+    fn a_stop_leaves_background_jobs_to_the_end_of_run() {
+        let run = run_stopped("sleep 300 & echo start; sleep 300", stop_after(STOP), None);
+        assert_eq!((run.code, run.stdout.as_str()), (130, "start\n"));
+        assert_eq!(
+            run.stderr,
+            "bash: stopped job [1] (pid 2, hangup): sleep 300\n"
+        );
     }
 }
 

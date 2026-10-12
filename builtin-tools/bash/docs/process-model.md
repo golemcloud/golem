@@ -150,6 +150,12 @@ Job inheritance follows bash for asynchronous commands without job control:
 - A background job reads `/dev/null`, unless the subshell or compound command it runs in reads a
   pipe or redirects standard input (bash's `stdin_redir`): `echo hi | { cat & wait; }` prints `hi`.
 
+A caller's stop request (the cancel of `run`'s `stdin` stream) sends INT to the main script and
+every process it started, as Ctrl+C at a terminal sends it to the foreground process group. A
+command in front, such as a `sleep`, ends at once. A script that catches INT then runs its
+handler, and one that ignores it runs on until the KILL that follows a second later. Background
+jobs ignore INT as before, so the stop leaves them to the end of the run.
+
 Where bash's behavior is subtle, the Bash 5 oracle in the cooperative matrix is the reference.
 
 ### Brush: builtins on WASM
@@ -210,9 +216,11 @@ turns to finish, and then:
    `bash: stopped job [1] (pid 1043, hangup): sleep 1000` or `(pid 1043, killed)`. A job the
    script did not start itself has no job number: `bash: stopped job (pid 1044, hangup): …`.
 
-The script's own exit status is returned unchanged. A job that finished before the script ended is
-not reported. This deliberately differs from bash, whose non-interactive scripts leave background
-jobs running after exit, because a job cannot survive the transient Store.
+The script's own exit status is returned unchanged. Two stops replace it, whatever status the
+script ended with: the call's time limit returns 124, and the caller's stop request returns 130.
+A job that finished before the script ended is not reported. This deliberately differs from bash,
+whose non-interactive scripts leave background jobs running after exit, because a job cannot
+survive the transient Store.
 
 ### Bash tool: cancellable sibling tool calls
 
@@ -262,6 +270,8 @@ POST or PATCH twice; a script that needs exactly-once sends its own `Idempotency
 keeps on the resent request. At this Golem version that recovery is unreliable (see the README).
 `curl -m` and `wget -T` race a durable timer against the request, and the call's own time limit
 (`run`'s `timeout`) is one durable wait, started before the script and pending alongside it.
+When the caller passes `stdin`, the read that waits for its stop request is a second pending host
+call, started after the limit's timer and before the script.
 
 ## Error Handling
 

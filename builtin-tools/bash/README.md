@@ -1,7 +1,7 @@
 # Bash built-in tool
 
 This standalone Golem application builds the `bash` component, which the registry provisions as
-the grantable `bash@0.2.0` system tool. It exports one command, `run`, for finite shell execution. A
+the grantable `bash@0.3.0` system tool. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
@@ -15,7 +15,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: bash
-      version: "0.2.0"
+      version: "0.3.0"
 agents:
   MyAgent:
     tools:
@@ -52,7 +52,7 @@ The component does not depend on it.
 ## Contract
 
 ```text
-run(cwd: string = "", script: string, timeout: u32 = 600)
+run(cwd: string = "", script: string, timeout: u32 = 600, stdin?: stream)
   -> { stdout: string, stderr: string, exit_code: u8, cwd: string }
 ```
 
@@ -60,7 +60,16 @@ run(cwd: string = "", script: string, timeout: u32 = 600)
 after the call started (600 by default, at most 3600; otherwise the declared `invalid-timeout`
 error, before anything runs) is stopped as `timeout(1)` stops a command: TERM to the script and
 everything it started, so its TERM trap runs, and KILL a second later. The call then returns what
-the script wrote, exit code 124 and `bash: the call exceeded its 600 s time limit` on stderr. Each call creates a fresh shell, as `bash -c`
+the script wrote, exit code 124 and `bash: the call exceeded its 600 s time limit` on stderr.
+
+`stdin` is the call's optional input stream. It is not the script's input: a script reads an empty
+input, and data sent on the stream is dropped. A caller that cancels the stream stops the script as
+Ctrl+C stops a command at a terminal: INT to the script and everything it started, so its INT trap
+runs, and KILL a second later. The call then returns what the script wrote and exit code 130; the
+stop adds no line to stderr. A stream that ends in any other way stops nothing, and without a
+stream only the time limit stops a script.
+
+Each call creates a fresh shell, as `bash -c`
 does, and completes all owned tasks before returning. Output is collected until completion; it is
 not a live terminal. The shell reads no startup files (`/etc/profile`, `~/.bashrc`). An agent has
 no HOME unless its configuration sets one and no passwd entry, so, as in bash, `~` expands to `/`
@@ -447,6 +456,14 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   that only waits (a `sleep`, a polling loop, a bound tool that sleeps) can be suspended by Golem
   in the middle of the call (see Implementation). At this Golem version the replay that resumes
   it can hang or permanently fail the owner; that is for Golem to fix.
+- **Stop.** A caller that cancels the call's `stdin` stream stops the script (see
+  [Contract](#contract)). The stop reaches what the time limit reaches: a loop of commands that
+  never wait is stopped within 64 commands, and one command that computes for long without
+  waiting ends first. A script that ignores INT (`trap '' INT`) is killed a second later, and one
+  that catches it runs its handler; the call returns 130 in each case. A stream cancelled before
+  the script starts ends the call before any of the script runs. Background jobs ignore INT, as
+  bash's do without job control, so the end of the run stops and reports them like any leftover
+  job.
 - **HTTP.** `curl` and `wget` hold at most 64 MiB of a response body when they must buffer it
   (`curl --compressed` decodes the whole body first): past that they fail with
   `curl: response body exceeded 67108864 bytes` (status 4). `curl -m`/`wget -T` bound the whole
