@@ -113,10 +113,15 @@ not add a feature-specific recovery path or immediate restart.
   observer, not at host take time. Its oplog position is the guest boundary; there is no extra
   durable call or delivery marker. Packed bytes record only the consumed portion. A crash before
   consumption leaves no record and recovery re-reads the source by offset. Host projections keep
-  take-time journaling. Native read cancellation does not yet reconstruct the inline-versus-blocked
-  return disposition. If cancellation cannot retain a recorded guest delivery, replay fails with
-  `UnexpectedOplogEntry` and poisons the shared cursor instead of discarding the value or waiting
-  forever. The canonical cancellation policy is unchanged; do not force always-blocked returns.
+  take-time journaling. A zero-progress native read cancellation retains the producer's receive
+  and prepared observation for the next read; only dropping the readable end cancels the durable
+  source. A retained receive keeps its original runtime activity binding; a later transfer stays
+  unclassified until it completes. Finishing the original activity is not owner suspension and
+  must not prevent the receive from returning. Native read cancellation does not yet reconstruct
+  the inline-versus-blocked return disposition. If cancellation cannot retain a recorded guest
+  delivery, replay fails with `UnexpectedOplogEntry` and poisons the shared cursor instead of
+  discarding the value or waiting forever. The canonical cancellation policy is unchanged; do not
+  force always-blocked returns.
 - Atomic rollback retains logical consumer input, including its ordinal, source offset and nested
   reader identities. Re-executing a read whose physical boundary a `Jump` deleted appends one
   consumer record with `reobserves` referencing the original record. Append and replay validate
