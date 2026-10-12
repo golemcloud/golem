@@ -18,7 +18,7 @@
  *
  * @since 1.5.0
  */
-import { Effect, Option, Stream } from "effect"
+import { Effect, Option, Predicate, Stream } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { PromiseClient } from "./host/PromiseClient.js"
@@ -84,8 +84,36 @@ type RawOplogIndex = ApiHost.OplogIndex
 export class AgentsHostError {
   readonly _tag = "AgentsHostError"
   readonly message: string
-  constructor(readonly cause: unknown) {
-    this.message = `AgentsHostError: ${cause instanceof Error ? cause.message : String(cause)}`
+  constructor(
+    readonly cause: unknown,
+    operation?: string,
+  ) {
+    const permissionDenied =
+      Predicate.hasProperty(cause, "tag") && cause.tag === "permission-denied"
+    const reason = permissionDenied
+      ? "permission-denied"
+      : Predicate.hasProperty(cause, "tag") &&
+          cause.tag === "backend-error" &&
+          Predicate.hasProperty(cause, "val") &&
+          Predicate.isString(cause.val)
+        ? `backend-error: ${cause.val}`
+        : cause instanceof Error
+          ? cause.message
+          : String(cause)
+    this.message = `AgentsHostError: ${operation === undefined ? "" : `${operation}: `}${reason}`
+    if (operation === "get-self-metadata" && permissionDenied) {
+      this.message +=
+        ". Reading self metadata requires view permission on the running agent. Check the effective permission card and the initialCard upper bound."
+    }
+  }
+
+  /**
+   * Preserve the diagnostic when a trap formatter converts the error to a string.
+   * @since 1.6.0
+   * @category formatting
+   */
+  toString(): string {
+    return this.message
   }
 }
 
@@ -314,8 +342,10 @@ const isFilter = (v: unknown): v is Filter => v instanceof Filter
 
 /**
  * Read the running agent's full metadata through a durable host call
- * on each execution. `SelfAgentId.SelfAgentId` reads only its identity
- * through the same host API.
+ * on each execution. Requires view permission on the running agent.
+ * `SelfAgentId.SelfAgentId` extracts its identity through the same host
+ * API and requires the same permission. Metadata includes stored env
+ * and config fields; view permission is not an identity-only grant.
  *
  * @since 1.5.0
  * @category operations
@@ -325,7 +355,7 @@ export const getSelfMetadata: Effect.Effect<RawAgentMetadata, AgentsHostError, A
     const ah = yield* AgentHostClient
     return yield* Effect.try({
       try: () => ah.getSelfMetadata(),
-      catch: (e) => new AgentsHostError(e),
+      catch: (e) => new AgentsHostError(e, "get-self-metadata"),
     })
   })
 

@@ -638,6 +638,46 @@ middleware. The sender must not inspect or reuse a transferred card. Transaction
 does not consume it if validation or another sibling conversion fails, so a corrected retry remains
 possible. The SDK intentionally has no card inspection, wallet, derivation, or installation API.
 
+### Restrictive evaluator permissions
+
+Pure agent initialization does not read self metadata and does not require self-view permission.
+For an ephemeral evaluator, keep `init` and the handler independent of host services, declare no
+tools or secrets, and keep agent operations outside the `initialCard` upper bound. Grant only the
+operations needed by the evaluator runtime; for nested JavaScript runtime startup, this can include
+filesystem stat on the agent's root. The upper bound is a ceiling, not a grant: each required
+operation must also be admitted by the effective permission card.
+
+Self metadata is read in these cases:
+
+| Operation                                                                  | Self-view required?                                  |
+| -------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Pure initialization and methods without metadata or identity reads         | No                                                   |
+| `Agents.getSelfMetadata`                                                   | Yes                                                  |
+| `SelfAgentId.SelfAgentId`, including when used in `init`                   | Yes                                                  |
+| Restoration with an explicit snapshot strategy, including `Snapshot.ref()` | Yes, to populate the restoration context's `agentId` |
+| Plain schema-state restoration without a snapshot strategy                 | No implicit self-metadata read                       |
+
+Every snapshot load also reads `GOLEM_AGENT_ID` through the WASI environment API,
+including plain schema-state restoration. This requires environment-read permission
+for that variable independently of self-view; neither permission grants the other.
+
+`SelfAgentId.SelfAgentId` extracts the identity from the full metadata response; it is not an
+identity-only host operation. If self-view is needed for trusted code, the permission target is
+`agent(?agent) @ ?agent : view : *`. The effective card must admit that operation and the
+`initialCard` upper bound must permit it. Do not add this grant merely to initialize a pure evaluator.
+
+Self metadata includes stored environment and configuration fields. The metadata host operation
+checks agent view permission, but does not apply the per-key env/config permission filters used by
+WASI reads. An empty or denied WASI environment/configuration read therefore does not establish
+that those fields are inaccessible through metadata. Keep self-view denied for untrusted code that
+must not read those fields; do not treat self-view as a harmless bootstrap permission.
+
+A denied metadata read reports `get-self-metadata: permission-denied` and identifies the required
+view permission. `Agents.getSelfMetadata` returns an `AgentsHostError` in the Effect error channel.
+`SelfAgentId.SelfAgentId` preserves its defect-based failure contract and reports the same diagnostic,
+including during restoration with an explicit snapshot strategy. Neither path changes the card or retries with broader
+permissions.
+
 ## Tool middleware
 
 Standalone middleware imports only the middleware-safe entry point:

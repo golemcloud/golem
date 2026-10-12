@@ -3,7 +3,8 @@
  */
 import { Effect } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { AgentHostClient } from "./host/AgentHostClient.js"
+import { getSelfMetadata } from "./Agents.js"
+import type { AgentHostClient } from "./host/AgentHostClient.js"
 
 /**
  * Read the running agent's own structured
@@ -19,15 +20,22 @@ import { AgentHostClient } from "./host/AgentHostClient.js"
  * For richer fields (component revision, status, retry count, env,
  * config), use `Agents.getSelfMetadata` directly.
  *
+ * Requires view permission on the running agent because it reads full
+ * self metadata before extracting the identity. Pure agent initialization
+ * does not execute this effect. Restoration with an explicit snapshot
+ * strategy, including `Snapshot.ref()`, does, to populate the restoration
+ * context's `agentId`. Plain schema-state restoration without a strategy
+ * does not execute this effect.
+ *
  * Outside the dispatcher (e.g. unit tests), provide `AgentHostClient`
- * with a host implementation. Host failures become Effect defects.
+ * with a host implementation. Host failures become Effect defects
+ * containing an `AgentsHostError` with the operation and cause.
  *
  * @since 1.5.0
  * @category host services
  */
-export const SelfAgentId: Effect.Effect<CoreTypes.AgentId, never, AgentHostClient> = Effect.gen(
-  function* () {
-    const host = yield* AgentHostClient
-    return yield* Effect.sync(() => host.getSelfMetadata().agentId)
-  },
-)
+export const SelfAgentId: Effect.Effect<CoreTypes.AgentId, never, AgentHostClient> =
+  getSelfMetadata.pipe(
+    Effect.map((metadata) => metadata.agentId),
+    Effect.orDie,
+  )

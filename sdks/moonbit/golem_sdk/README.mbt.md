@@ -6,6 +6,27 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## Self metadata and authority
+
+`@api.get_self_metadata()` calls the host operation `get-self-metadata`. It requires
+the self-view permission in the effective permission card. The agent's
+`initialCard` is an upper bound on that authority; an invocation cannot grant a
+permission outside that bound. The SDK traps with an operation-specific diagnostic
+when the host returns permission-denied or backend-error.
+
+Pure initialization does not implicitly read self metadata. Keep metadata reads out
+of an untrusted evaluator instead of granting self-view for bootstrap. Declare no
+tools or secrets and admit only the host operations the evaluator needs.
+Self metadata is a host operation, not a pure source of identity. Snapshot restoration reads
+`GOLEM_AGENT_ID` through the WASI environment API rather than self metadata, so it
+requires the separate environment-read permission for that variable. Granting
+self-view does not grant environment-read permission, and granting environment-read
+permission does not grant self-view.
+
+Self metadata contains the full stored environment and configuration. Those fields
+are not filtered per key like WASI environment reads. Treat self-view as authority
+to read those complete fields, and do not log the metadata to diagnose a denial.
+
 ## Quick Start
 
 Golem CLI 1.6.0 includes built-in MoonBit templates for ordinary agent components, pure tool

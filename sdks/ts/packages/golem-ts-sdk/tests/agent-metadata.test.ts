@@ -20,8 +20,52 @@ import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
 import { golemTool010Guest, guest, tool } from '../src';
+import { getSelfMetadata } from '../src/host/hostapi';
+import { getSelfMetadata as rawGetSelfMetadata } from 'golem:api/host@1.5.0';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
+
+describe('self metadata failures', () => {
+  it.each([
+    {
+      cause: { tag: 'permission-denied', privateData: 'must-not-appear' },
+      message:
+        'get-self-metadata: permission-denied. Reading self metadata requires view permission on the running agent. Check the effective permission card and the initialCard upper bound.',
+    },
+    {
+      cause: { tag: 'backend-error', val: 'metadata unavailable' },
+      message: 'get-self-metadata: backend-error: metadata unavailable',
+    },
+  ])('reports $message and retains the host cause', ({ cause, message }) => {
+    vi.mocked(rawGetSelfMetadata).mockImplementationOnce(() => {
+      throw cause;
+    });
+    try {
+      getSelfMetadata();
+      expect.fail('metadata read should fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(message);
+      expect((error as Error).cause).toBe(cause);
+      expect(String(error)).toBe(`Error: ${message}`);
+    }
+  });
+
+  it.each([new Error('native failure'), 'host unavailable', { tag: 'unknown' }])(
+    'preserves unrecognized host failures',
+    (cause) => {
+      vi.mocked(rawGetSelfMetadata).mockImplementationOnce(() => {
+        throw cause;
+      });
+      try {
+        getSelfMetadata();
+        expect.fail('metadata read should fail');
+      } catch (error) {
+        expect(error).toBe(cause);
+      }
+    },
+  );
+});
 
 describe('agent metadata (Phase 3)', () => {
   it('exports the canonical empty tool guest', () => {

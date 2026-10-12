@@ -169,9 +169,27 @@ export function resolveAgentIdStrict(
 
 /**
  * Get the current agent's metadata.
+ * Requires view permission on the running agent. Stored env/config fields
+ * are not filtered by the per-key permissions used for WASI reads.
+ * Tagged host failures become readable Errors retaining the host value as cause.
  */
 export function getSelfMetadata(): AgentMetadata {
-  return wrapAgentMetadata(rawGetSelfMetadata());
+  try {
+    return wrapAgentMetadata(rawGetSelfMetadata());
+  } catch (cause) {
+    if (typeof cause === 'object' && cause !== null && 'tag' in cause) {
+      if (cause.tag === 'permission-denied') {
+        throw new Error(
+          'get-self-metadata: permission-denied. Reading self metadata requires view permission on the running agent. Check the effective permission card and the initialCard upper bound.',
+          { cause },
+        );
+      }
+      if (cause.tag === 'backend-error' && 'val' in cause && typeof cause.val === 'string') {
+        throw new Error(`get-self-metadata: backend-error: ${cause.val}`, { cause });
+      }
+    }
+    throw cause;
+  }
 }
 
 /**
