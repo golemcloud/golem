@@ -112,7 +112,11 @@ impl RouteResolver {
             generation: Arc::new(AtomicU64::new(0)),
             max_age: config.router_cache_ttl,
             api_definition_lookup,
-            trusted_ingress_addresses: config.trusted_ingress_addresses.clone(),
+            trusted_ingress_addresses: config
+                .trusted_ingress_addresses
+                .iter()
+                .map(IpAddr::to_canonical)
+                .collect(),
         }
     }
 
@@ -178,7 +182,10 @@ impl RouteResolver {
         let trusted = request
             .remote_addr()
             .as_socket_addr()
-            .is_some_and(|address| self.trusted_ingress_addresses.contains(&address.ip()));
+            .is_some_and(|address| {
+                self.trusted_ingress_addresses
+                    .contains(&address.ip().to_canonical())
+            });
         super::http_envelope::origin_from_request(request, trusted)
             .map_err(|_| "Invalid request origin".to_string())
     }
@@ -1742,6 +1749,18 @@ pub(super) mod tests {
                 http::Version::HTTP_11,
                 "/",
                 Ok(("https", "public.example:443")),
+            ),
+            (
+                "trusted-forwarding-through-dual-stack-listener",
+                std::net::IpAddr::V6(std::net::Ipv4Addr::new(10, 0, 0, 1).to_ipv6_mapped()),
+                vec![
+                    ("host", "internal"),
+                    ("x-forwarded-proto", "https"),
+                    ("x-forwarded-host", "public.example"),
+                ],
+                http::Version::HTTP_11,
+                "/",
+                Ok(("https", "public.example")),
             ),
             (
                 "trusted-partial-forwarding",
