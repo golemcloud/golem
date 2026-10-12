@@ -386,14 +386,29 @@ impl SdkOverrides {
     }
 
     fn load_test_values() -> anyhow::Result<HashMap<String, String>> {
-        if !should_apply_test_layer()
-            || SDK_OVERRIDES_DEFAULT_TEST_PROFILE == SdkOverridesTestProfile::PublishedArtifacts
-            || !running_from_golem_workspace_checkout()
-        {
-            Ok(HashMap::new())
-        } else {
-            Self::local_workspace_test_values(&workspace_root()?)
+        if !should_apply_test_layer() || !running_from_golem_workspace_checkout() {
+            return Ok(HashMap::new());
         }
+        match SDK_OVERRIDES_DEFAULT_TEST_PROFILE {
+            SdkOverridesTestProfile::LocalWorkspace => {
+                Self::local_workspace_test_values(&workspace_root()?)
+            }
+            SdkOverridesTestProfile::PublishedArtifacts => {
+                Self::unpublished_sdk_test_values(&workspace_root()?)
+            }
+        }
+    }
+
+    /// The Go SDK modules have no published release, so tests build them from the workspace
+    /// in every profile.
+    fn unpublished_sdk_test_values(
+        workspace_dir: &Path,
+    ) -> anyhow::Result<HashMap<String, String>> {
+        Ok(Self {
+            go_sdk_path: Some(fs::path_to_str(&workspace_dir.join("sdks/go/golem"))?.to_string()),
+            ..Default::default()
+        }
+        .to_env_vars())
     }
 
     #[cfg(test)]
