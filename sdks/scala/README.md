@@ -214,6 +214,7 @@ object Example {
 - **[Transaction helpers](docs/transactions.md)** - Infallible and fallible transaction patterns
 - **[Retry policies](docs/retry.md)** - Host-managed policies and local `Future` retries
 - **[Result helpers](docs/result.md)** - WIT-friendly `Result` type for error handling
+- **[Unstructured text and binary](docs/unstructured.md)** - `UnstructuredText` / `UnstructuredBinary` values and raw HTTP bodies
 - **[Tool middleware](docs/tool-middleware.md)** - Transparent, adapter, and universal middleware authoring
 - **[Supported versions](docs/supported-versions.md)** - Compatibility matrix
 
@@ -246,7 +247,9 @@ ZIO-Golem maps Scala types to WIT (WebAssembly Interface Types) through
 constructor input, method parameter, or return value, and the SDK derives the
 `golem.schema.IntoSchema[T]` / `golem.schema.FromSchema[T]` instances needed to cross the
 `golem:core/types@2.0.0` value boundary. Standard WIT component-model shapes (records, variants,
-enums, lists, options, results, primitives, etc.) are supported out of the box.
+enums, lists, options, results, primitives, etc.) are supported out of the box. Free-form content
+uses `golem.schema.UnstructuredText[L]` / `golem.schema.UnstructuredBinary[M]`; see
+[Unstructured text and binary](docs/unstructured.md).
 
 ### Annotations
 

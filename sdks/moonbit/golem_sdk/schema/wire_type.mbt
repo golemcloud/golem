@@ -27,6 +27,17 @@ pub fn WireTypeEncoder::push(
 }
 
 ///|
+pub fn WireTypeEncoder::push_with_metadata(
+  self : WireTypeEncoder,
+  body : @types.SchemaTypeBody,
+  metadata : @types.MetadataEnvelope,
+) -> Int {
+  let index = self.nodes.length()
+  self.nodes.push({ body, metadata, })
+  index
+}
+
+///|
 pub fn WireTypeEncoder::named(
   self : WireTypeEncoder,
   id : String,

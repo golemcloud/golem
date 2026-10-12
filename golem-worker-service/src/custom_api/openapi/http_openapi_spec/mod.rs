@@ -403,17 +403,15 @@ fn request_body_value(description: &str, content: Vec<(String, Value)>) -> Value
 }
 
 fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
-    let headers_value = build_response_headers(&model);
-
     let mut responses = Map::new();
-    for (status_code, body) in model.body_and_status_codes {
+    for (status_code, response_model) in model.responses {
         let mut response = Map::new();
         response.insert(
             "description".to_string(),
             json!(format!("Response {status_code}")),
         );
 
-        match body {
+        match response_model.body {
             ResponseBodyOpenApiSchema::Known {
                 schema,
                 content_type,
@@ -433,33 +431,26 @@ fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
             ResponseBodyOpenApiSchema::NoBody => {}
         }
 
-        if let Some(headers) = &headers_value {
-            response.insert("headers".to_string(), headers.clone());
+        if !response_model.headers.is_empty() {
+            let mut headers = Map::new();
+            for (name, header) in response_model.headers {
+                headers.insert(
+                    name.clone(),
+                    json!({
+                        "description": format!("Response header: {name}"),
+                        "style": "simple",
+                        "required": header.required,
+                        "schema": header.schema,
+                    }),
+                );
+            }
+            response.insert("headers".to_string(), Value::Object(headers));
         }
 
         responses.insert(status_code.to_string(), Value::Object(response));
     }
 
     Value::Object(responses)
-}
-
-fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Value> {
-    if model.headers.is_empty() {
-        return None;
-    }
-    let mut headers = Map::new();
-    for (name, header) in &model.headers {
-        headers.insert(
-            name.clone(),
-            json!({
-                "description": format!("Response header: {name}"),
-                "style": "simple",
-                "required": header.required,
-                "schema": header.schema.clone(),
-            }),
-        );
-    }
-    Some(Value::Object(headers))
 }
 
 pub(super) fn build_security(
