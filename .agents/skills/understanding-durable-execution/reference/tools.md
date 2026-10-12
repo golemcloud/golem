@@ -3,9 +3,58 @@
 Detailed mechanics behind the "Tool invocations and entity bodies" section of `SKILL.md`. Paths
 are relative to `golem-worker-executor/src/` unless stated.
 
-`durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. The ambient invocation is
-authorized once against the outer tool surface; middleware descendants retain that original
-calling principal rather than authorizing their transformed inner surfaces again.
+`durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. Every live tool admission is
+authorized, ambient or underlying; middleware descendants also retain the original calling
+principal, but the principal is identity, not authority.
+
+### Authorization of every admission
+
+`prepare_tool_call` builds one Tool permission target for both `ToolCallTarget` variants. The
+owner path is `caller_tool_owner` over the owner component metadata and `ToolCallTarget::tool_name`,
+which for `Underlying` is the terminal tool of the pinned plan. The owner path therefore names the
+calling component and the logical tool, never the middleware or implementation component. This
+departs from the Agent Permissions specification, which names the declaring component. The resource
+is the command path and canonical arguments that the selected layer receives, after
+`boundary::prepare_underlying_tool_call` has projected the request and `describe_tool_command` has
+validated it.
+
+An `Underlying` capability only makes the next plan layer reachable. Reachability and permission
+are both required: a grant for the outer command does not cover a different inner command or
+different arguments, so an adapter that rewrites a request needs grants for both representations.
+There is no inverse projection from inner to outer permissions.
+
+- Replay claims in `dispatch_tool_attempt` precede `prepare_tool_call`. A recorded acceptance or
+  rejection replays without consulting current authority; an incomplete accepted call is repaired
+  under its original `Start`; only an admission at the live tail is checked.
+- Authorization can await the synchronized authority boundary. The capability is checked again
+  where the child operation is registered, so a use that loses the race with handler return is
+  rejected with `Denied`, never admitted after revocation.
+- Asynchronous admissions (`Underlying` `invoke`, ambient `invoke` and `async-invoke-and-await`)
+  hold a `TailActivity` (`tool_admission_activity`) until the rejection is recorded or the
+  execution is spawned. A guest task may return while such a call is still being admitted, and
+  nothing else keeps the Store from settling with an unrecorded call. Synchronous
+  `invoke-and-await` blocks its guest task and needs no guard.
+
+### Authority in entity Stores
+
+An entity Store authorizes with the owner's wallet and the invocation scope of the Store that
+started its invocation. The scope is resident state: `EntityInvocationDurability::from_started_request`
+captures `current_invocation_scope_card` from the calling Store (the primary's admitted scope or an
+entity's inherited one) into `EntityInvocationScope`, live and on replay, because the calling Store
+has reinstalled its own scope from recorded data by then. Nothing about the scope is added to the
+entity `Start`.
+
+- `set_entity_invocation_scope` installs the card as `inherited_invocation_scope`, separate from
+  `invocation_scope_card`, so `self_wallet` never hands the caller's scope to middleware code.
+- The inherited roots start `Unchecked`. The entity's first live authority boundary checks them
+  with the card service. Until they are `Live`, and after any root is revoked or expires, the entity
+  surface is empty: an invalid scope fails closed and never falls back to the bare wallet.
+- `rederive_agent_effective_surface_from_wallet` re-derives entity surfaces too. Card events are
+  consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary an
+  entity Store excludes every card the worker status lists as revoked or pending revocation and
+  re-checks its inherited roots against that set.
+- Known gap: card installs and transfers drained by another Store do not reach an existing entity
+  Store's wallet copy. Only revocations are coherent across the owner's Stores.
 
 ### Durable discovery
 

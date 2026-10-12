@@ -16,8 +16,9 @@
 //!
 //! The interface is wired into the linker for every agent component. Tool
 //! discovery is implemented as a durable environment-state read. Tool
-//! invocation authorization is enforced here before the invocation backend,
-//! which is implemented separately on top of sidecar instances.
+//! invocation authorization is enforced here for every admission, including
+//! middleware underlying calls, before the invocation backend, which is
+//! implemented separately on top of sidecar instances.
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
