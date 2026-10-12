@@ -336,22 +336,6 @@ async fn cancelled_stream_read_reports_divergence_before_and_after_preparation()
     }
 }
 
-// Cancelling a replayed native read must retain its recorded positive guest delivery,
-// including the return disposition, until the guest consumes it at the journal boundary.
-#[test]
-#[ignore]
-async fn cancelled_stream_read_retains_recorded_positive_delivery() {
-    let (task, receiver) = recorded_input_observation().await;
-    drop(receiver);
-    let mut preparation = Box::pin(task.prepare());
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), preparation.as_mut())
-            .await
-            .is_err(),
-        "cancellation must retain, not reject or discard, the recorded positive read"
-    );
-}
-
 #[test]
 #[test_r::timeout("10s")]
 async fn durable_read_wait_late_binding_preserves_source_and_revokes_on_ready_or_drop() {

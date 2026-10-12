@@ -683,6 +683,25 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching` and
   `claim_start_matching_request`); a `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
+- A delivery barrier blocks physical advancement, not adoption of already-retained history.
+  `with_claim_tx` first polls one gate waiter, then uses the restricted `RetainedClaims`
+  capability under the state mutex while that gate is unavailable. Using retained history means
+  claiming a `Start` the reader has already passed, registering its resolver, and publishing its
+  claimed position in `last_replayed_non_hint_index`. It does not move the physical reader.
+  Advancing the reader means reading and committing the next entries through a gate-owning
+  `CursorTx`. On a retained miss the claim keeps the same waiter and rechecks retained state on
+  progress; only a gated transaction may classify absence or enter missing-scope settlement.
+  This preserves the cleanup fence's queue ordering.
+  Resolution likewise prefers a ready gate and completes the ordinary drain, but can return an
+  already-routed host result when the gate remains held. Host readiness is not guest delivery:
+  the actual observer still waits for its exact marker. The marker-consuming owned operation
+  constructs the `ReplayDeliveryBarrier` before returning, so discarding its unobserved result
+  latches failure and releases the gate rather than silently acknowledging delivery.
+  The owned resolution task also keeps its receiver and `HistoricalReconstruction` guard when
+  the caller cancels. The guard cannot settle reconstruction while a surviving transaction still
+  uses it. Cancellation does not authorize generation replacement: the surviving operation must
+  finish and reconstruction fences must settle. A cursor-operation fence alone does not prove
+  reconstruction has settled.
 - Retaining is not consuming. Retained `Start`s and their attached terminals are committed
   through `commit_retained_entry`, which does not advance `last_replayed_non_hint_index`; the
   position is published by `publish_claimed_position` only when the owner claims the `Start`.
@@ -978,7 +997,8 @@ record. A record with a name on an executor without filesystem snapshots gives `
 `prepare_instance` (`durable_host/mod.rs`) then branches on the pending update:
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
-  already be live, and `finalize_pending_snapshot_update` loads it into the new revision.
+  already be live, and `finalize_pending_snapshot_update` loads it into the new revision. It writes
+  `SuccessfulUpdate` only after the load completed.
 - `SnapshotAssistedAutomatic` — `try_load_snapshot` loads the application snapshot of the selected
   record `S` into the target, after `materialize` restored its filesystem snapshot. `resume_replay`
   replays the stopped-source tail with the source revision's metadata: the executable metadata,
@@ -998,8 +1018,8 @@ lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `Manu
 `InitialFiles`, `AutomaticPending`, `AssistedPending`, `AssistedPromoted`). It gives a
 `StartAction`: `FailUpdate { entry, reject }` with the entry already built from the paired queue
 element (attempt index, the snapshot-assisted details of the head, `snapshot_fault`, and the
-details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry`, `Succeed`
-or `ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
+details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry` or
+`ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
 entry. After `FailUpdate` the start returns `RetryDecision::Immediate` and the outer loop rebuilds
 on the source revision. The details have the form `CODE: text: cause`, and the text says what to
 do next (`Code::prefix`), for example request the update again, or use a manual snapshot-based
@@ -1048,7 +1068,10 @@ the load's `Retry`; for an assisted head also `RecoveryRequired` and `Interrupte
 assisted head retries with the same `S`; for a plain automatic head also `RecoveryRequired` (a
 store failure of the baseline payload). A replay `Interrupted` error that reaches `decide` fails a plain
 automatic update with `UPDATE_REPLAY_FAILED`, and `RecoveryRequired` or `Interrupted` fail a
-pending manual update. A plain automatic head whose authoritative baseline does not restore
+pending manual update. The load of a pending manual update reports its own `ManualLoadResult`: a
+failed load and a guest exit (`Exited`) fail the update without a code, and an interrupted load
+(`Interrupted(kind)`) passes its interrupt, writes nothing, and leaves the update pending, so the
+next start loads the payload again. A plain automatic head whose authoritative baseline does not restore
 (`Disabled`, `Restore(Lost | Fixed | DiskFull)`) takes the cell of that baseline: the start fails
 with a visible cause and writes no failed update.
 

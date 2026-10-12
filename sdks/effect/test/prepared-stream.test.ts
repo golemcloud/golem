@@ -55,6 +55,10 @@ describe("stream transfer preparation", () => {
       kind: "native",
       value: { [Symbol.asyncIterator]: open },
     })
+    const later = new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
+      kind: "native",
+      value: { [Symbol.asyncIterator]: open },
+    })
     const close = vi.fn()
     const pulls: Array<Promise<IteratorResult<SchemaValueTree>>> = []
     transport.wrap.mockReset()
@@ -66,7 +70,12 @@ describe("stream transfer preparation", () => {
       pulls.push(proxy[Symbol.asyncIterator]().next())
       throw new Error("second wrap failed")
     })
-    const tree = v.tuple([v.stream(first), v.stream(second)])
+    const tree = v.tuple([
+      v.list(Array.from({ length: 10000 }, (_, i) => v.u8((i * 37 + 19) % 256))),
+      v.option(v.stream(first)),
+      v.map([{ key: v.string("failed"), value: v.err(v.stream(second)) }]),
+      v.stream(later),
+    ])
     await expect(schemaValueToWitAsync(tree)).rejects.toThrow("second wrap failed")
     expect(await Promise.all(pulls)).toEqual([
       { done: true, value: undefined },
@@ -76,16 +85,14 @@ describe("stream transfer preparation", () => {
     expect(close).toHaveBeenCalledTimes(1)
     expect(first.peek()?.kind).toBe("native")
     expect(second.peek()?.kind).toBe("native")
+    expect(later.peek()?.kind).toBe("native")
     transport.wrap.mockImplementation(async () => ({ [Symbol.dispose]: vi.fn() }))
     const wire = await schemaValueToWitAsync(tree)
-    expect(wire.valueNodes.map((node) => node.tag)).toEqual([
-      "stream-value",
-      "stream-value",
-      "tuple-value",
-    ])
-    expect(wire.valueNodes[wire.root]).toEqual({ tag: "tuple-value", val: [0, 1] })
+    expect(wire.valueNodes.filter((node) => node.tag === "stream-value")).toHaveLength(3)
+    expect(wire.valueNodes[wire.root].tag).toBe("tuple-value")
     expect(first.peek()).toBeUndefined()
     expect(second.peek()).toBeUndefined()
+    expect(later.peek()).toBeUndefined()
   })
 
   it("isolates interruption and late wrap completion from a retry", async () => {

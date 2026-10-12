@@ -698,15 +698,21 @@ function typedArrayMarker<TArr, E extends number | bigint>(spec: {
     value instanceof spec.ctor
       ? ok(value)
       : fail(`Expected a ${spec.ctor.name} for a typed-array WIT list`);
-  const descriptor: MarkerDescriptor = () => {
-    const itemCodec: SchemaCodec = {
-      graph: { defs: new Map(), root: spec.elemType() },
-      toValue: (value) => spec.elemValue(value as E),
-      fromValue: (value) => (value as unknown as { value: E }).value,
-    };
+  const descriptor: MarkerDescriptor = (recurse) => {
+    const itemCodec = recurse(
+      marker<E>(
+        (value) => ok(value as E),
+        () => ({
+          graph: { defs: new Map(), root: spec.elemType() },
+          toValue: (value) => spec.elemValue(value as E),
+          fromValue: (value) => (value as unknown as { value: E }).value,
+        }),
+      ),
+    );
     return {
       graph: { defs: new Map(), root: t.list(itemCodec.graph.root) },
       listItem: itemCodec,
+      typedArrayConstructor: spec.ctor,
       toValue: (value) => v.list(Array.from(value as Iterable<E>).map((x) => spec.elemValue(x))),
       fromValue: (sv) => {
         const elements = (sv as Extract<SchemaValue, { tag: 'list' }>).elements;

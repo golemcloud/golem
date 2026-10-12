@@ -1,0 +1,104 @@
+# Golem CLI Plugins
+
+Plugins extend component and agent behavior. The `golem plugin` command manages the account-level plugin registry; plugin installation on components is declarative in `golem.yaml`.
+
+See [Oplog processor plugins](/v1.6/operate/plugins) for the underlying concepts.
+
+## List registered plugins
+
+Without an account option, the command lists plugins owned by the authenticated account plus plugins granted to the selected environment:
+
+```shell copy
+golem plugin list
+```
+
+An explicit account scope lists plugins owned by that account. Select it by email or ID; the options conflict:
+
+```shell copy
+golem plugin list --account owner@example.com
+golem plugin list --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211
+```
+
+## Get a plugin
+
+Use the complete name/version identity, optionally scoped to an account:
+
+```shell copy
+golem plugin get <NAME> <VERSION>
+golem plugin get <NAME> <VERSION> --account owner@example.com
+```
+
+Alternatively, use its globally unique ID:
+
+```shell copy
+golem plugin get --id <PLUGIN_ID>
+```
+
+`NAME` and `VERSION` must be supplied together. `--id` conflicts with both positional arguments and with `--account`/`--account-id`. A UUID without `--id` is parsed as `NAME`, not as an ID, and is rejected because `VERSION` is missing.
+
+## Register a plugin
+
+Register from a JSON or YAML manifest path, or use `-` to read it from standard input:
+
+```shell copy
+golem plugin register ./my-plugin.yaml
+cat my-plugin.yaml | golem plugin register -
+```
+
+Use `--account` or `--account-id` to register for an explicitly selected account. Otherwise the authenticated account is used.
+
+The manifest has these fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Plugin name |
+| `version` | Yes | Plugin version |
+| `description` | Yes | Short description shown in plugin listings |
+| `icon` | Yes | Path to the icon file uploaded with the registration |
+| `homepage` | Yes | Plugin homepage URL |
+| `specs` | Yes | Type-specific plugin definition |
+
+The registry currently accepts oplog-processor plugins. Their `specs` object identifies the component and revision that process agent oplog entries:
+
+```yaml
+name: my-oplog-processor
+version: 1.0.0
+description: Exports selected oplog entries
+icon: ./plugin.svg
+homepage: https://example.com/my-oplog-processor
+specs:
+  type: OplogProcessor
+  componentId: 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890
+  componentRevision: 0
+```
+
+## Unregister a plugin
+
+Unregister with the same two supported identities:
+
+```shell copy
+golem plugin unregister <NAME> <VERSION>
+golem plugin unregister --id <PLUGIN_ID>
+```
+
+Account scope is valid only with the name/version form. The CLI resolves that natural identity before deleting the plugin by ID.
+
+## Install plugins through the app manifest
+
+Declare plugins on a component or agent in `golem.yaml`:
+
+```yaml
+components:
+  my:example:
+    template: ts
+    plugins:
+      - name: golem-otlp-exporter
+        version: "1.1.5"
+        parameters:
+          endpoint: "http://localhost:4318"
+          signals: "traces,logs"
+```
+
+The `name` and `version` must identify a plugin available to the target environment. `parameters` are plugin-specific key/value pairs. Multiple entries are applied in manifest order. Run `golem deploy` to reconcile the declared installations with the deployed component.
+
+Manifest configuration is the source of truth; retired `component plugin` and `project plugin` commands are not part of the current CLI.

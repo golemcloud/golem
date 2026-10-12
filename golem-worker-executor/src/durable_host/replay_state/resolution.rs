@@ -29,8 +29,10 @@ impl ReplayState {
 
     /// Drains every *awaited terminal* (`End`/`Cancelled` whose `start_index` has a registered
     /// awaiter) currently at the cursor head, routing each to its awaiter, then stops at the first
-    /// non-terminal entry without consuming it. This is the cursor-driving half of
-    /// [`Self::await_resolution_outcome`]; it never blocks (it parks by returning, not suspending).
+    /// non-terminal entry without consuming it. This test-only helper uses the same head drain as
+    /// [`Self::await_resolution_outcome`], but has no gate-versus-receiver arbitration. It waits
+    /// for the advance gate and returns at the first positional blocker.
+    #[cfg(test)]
     pub(super) async fn drain_awaited_terminals(&self) -> Result<(), WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
             // `|_| false` never matches a non-terminal, so the transaction only auto-drains the
@@ -65,6 +67,9 @@ impl ReplayState {
         &self,
         outcome: ResolutionOutcome,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
+        if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
+            return Err(WorkerExecutorError::runtime(failure));
+        }
         let marker = match &outcome {
             ResolutionOutcome::Resolved(Resolution::Completed {
                 end_idx,
@@ -119,23 +124,32 @@ impl ReplayState {
             tokio::pin!(progress);
             progress.as_mut().enable();
 
-            let gate = self
+            let barrier = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
-                            tx.consume_delivery_boundary(start_index, marker_index)
-                                .await
+                            Ok(tx
+                                .consume_delivery_boundary(start_index, marker_index)
+                                .await?
+                                .map(|gate| match start_index {
+                                    Some(start_index) => ReplayDeliveryBarrier::new(
+                                        state.clone(),
+                                        start_index,
+                                        marker_index,
+                                        gate,
+                                    ),
+                                    None => ReplayDeliveryBarrier::for_stream(
+                                        state.clone(),
+                                        marker_index,
+                                        gate,
+                                    ),
+                                }))
                         })
                         .await
                 })
                 .await?;
-            if let Some(gate) = gate {
-                return Ok(match start_index {
-                    Some(start_index) => {
-                        ReplayDeliveryBarrier::new(self.clone(), start_index, marker_index, gate)
-                    }
-                    None => ReplayDeliveryBarrier::for_stream(self.clone(), marker_index, gate),
-                });
+            if let Some(barrier) = barrier {
+                return Ok(barrier);
             }
 
             if self.is_live() {
@@ -233,14 +247,18 @@ impl ReplayState {
     ///
     /// This is the genuine concurrent-replay suspend/resume path. The awaiter does not drive the
     /// cursor toward its own `End` directly; instead it repeatedly:
-    /// 1. drains the awaited terminals at the cursor head ([`Self::drain_awaited_terminals`]) —
+    /// 1. races the advance gate against its receiver, preferring the gate when both are ready;
+    /// 2. if the gate wins, drains all awaited terminals at the cursor head before checking its
+    ///    receiver —
     ///    resolving this call (when its `End` is at the head) and, in the interleaved case, routing
     ///    earlier-completing siblings' terminals to their own awaiters;
-    /// 2. checks its receiver;
     /// 3. if still unresolved and replay is not over, **suspends** until either its resolution
     ///    arrives (a concurrently-replaying sibling drove the cursor to this call's `End`) or the
     ///    cursor advances (a positional consumer or a sibling claim made progress past the blocker),
     ///    then loops.
+    ///
+    /// A ready receiver can bypass an unavailable gate without advancing the cursor. Resolution
+    /// readiness never substitutes for the recorded guest-delivery boundary.
     ///
     /// Cursor progress is registered (`Notified::enable`) *before* the cursor is inspected, so a
     /// progress signal racing the inspection is never lost. The cursor lock is released before the
@@ -251,7 +269,7 @@ impl ReplayState {
         &self,
         handle: ReplayCallHandle,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
-        let (start_idx, mut receiver, _historical_reconstruction) = handle.into_parts();
+        let (start_idx, mut receiver, mut historical_reconstruction) = handle.into_parts();
         let validate = |outcome: ResolutionOutcome| self.validate_resolved_outcome(outcome);
 
         loop {
@@ -263,7 +281,52 @@ impl ReplayState {
 
             // Drain the terminals at the head: resolves this call in the serial case, and any
             // already-claimed, earlier-completing sibling in the interleaved case.
-            self.drain_awaited_terminals().await?;
+            let (returned_receiver, reconstruction, routed) = self
+                .run_owned_cursor_op(move |state| async move {
+                    // Cancellation drops the caller, not this operation. Keep reconstruction
+                    // fenced until the surviving drain and its abandoned result have settled.
+                    let historical_reconstruction = historical_reconstruction;
+                    let gate = state.cursor.advance_gate.clone().lock_owned();
+                    tokio::pin!(gate);
+                    let routed = tokio::select! {
+                        biased;
+                        gate = gate.as_mut() => {
+                            let mut tx = state.cursor.tx_with_gate(gate).await?;
+                            let drained = tx.try_get_oplog_entry(|_| false).await;
+                            state.cursor.finish_tx(tx);
+                            drained?;
+                            None
+                        }
+                        routed = &mut receiver => Some(routed),
+                    };
+                    if let Some(failure) = state.cursor.delivery_failure.lock().unwrap().clone() {
+                        return Err(WorkerExecutorError::runtime(failure));
+                    }
+                    match routed {
+                        Some(Ok(outcome)) => {
+                            Ok((receiver, historical_reconstruction, Some(outcome)))
+                        }
+                        Some(Err(_)) => {
+                            state
+                                .cursor
+                                .state
+                                .lock()
+                                .await
+                                .concurrent_resolver
+                                .unregister(start_idx);
+                            Err(WorkerExecutorError::runtime(format!(
+                                "concurrent replay resolver channel closed for Start at {start_idx}"
+                            )))
+                        }
+                        None => Ok((receiver, historical_reconstruction, None)),
+                    }
+                })
+                .await?;
+            receiver = returned_receiver;
+            historical_reconstruction = reconstruction;
+            if let Some(outcome) = routed {
+                return validate(outcome);
+            }
 
             match receiver.try_recv() {
                 Ok(outcome) => return validate(outcome),
@@ -290,6 +353,7 @@ impl ReplayState {
                 // so the receiver never needs to be handed back.
                 let outcome = self
                     .run_owned_cursor_op(move |state| async move {
+                        let _historical_reconstruction = historical_reconstruction;
                         let mut st = state
                             .cursor
                             .state.lock()
