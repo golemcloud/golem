@@ -224,19 +224,24 @@ fn register_ambient_tool_name(
 }
 
 /// The names that an MCP import must not supply: the names of the default tools for which the
-/// deployment has a tool, as a default tool or as a tool of the application. The server has
-/// the same rule when it makes the deployment.
+/// deployment has a tool. That tool can be a default tool, a tool of the application, or a
+/// native tool of the server, which the server puts into each deployment. The server has the
+/// same rule when it makes the deployment.
 fn reserved_default_tool_names(
     default_tools: impl IntoIterator<Item = ToolName>,
     application_tool_names: &BTreeSet<String>,
+    native_tool_names: &BTreeSet<ToolName>,
 ) -> BTreeSet<ToolName> {
     default_tools
         .into_iter()
         .chain(
             golem_common::model::tool::DEFAULT_TOOLS
                 .iter()
-                .filter(|tool| application_tool_names.contains(tool.name))
-                .filter_map(|tool| ToolName::try_from(tool.name).ok()),
+                .filter_map(|tool| ToolName::try_from(tool.name).ok())
+                .filter(|name| {
+                    application_tool_names.contains(name.as_str())
+                        || native_tool_names.contains(name)
+                }),
         )
         .collect()
 }
@@ -1107,11 +1112,15 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::PrepareError)?;
 
-        let native_default_tools = self
-            .default_tools_with_a_native_tool(&environment)
+        let native_tool_names = self
+            .native_tool_names(&environment)
             .await
             .map_err(DeployError::PrepareError)?;
-        self.reject_mcp_tools_named_like_default_tools(&environment, &native_default_tools)
+        let native_default_tools = self
+            .default_tools_with_a_native_tool(&native_tool_names)
+            .await
+            .map_err(DeployError::PrepareError)?;
+        self.reject_mcp_tools_named_like_default_tools(&environment, &native_tool_names)
             .await
             .map_err(DeployError::PrepareError)?;
 
@@ -2174,26 +2183,26 @@ impl AppCommandHandler {
         Ok(build_tool_grant_reconciliation_plan(&desired, &current))
     }
 
-    /// The default tools that this deployment leaves to the server, because the server has a
-    /// native tool with the same name. The native tool can be another version of the tool.
-    async fn default_tools_with_a_native_tool(
+    /// The names of the native tools of the server, which the server puts into each deployment.
+    /// They are read only for a deployment that needs them: one that selects a default tool,
+    /// or one that has an MCP import.
+    async fn native_tool_names(
         &self,
         environment: &ResolvedEnvironmentIdentity,
     ) -> anyhow::Result<BTreeSet<ToolName>> {
-        let has_default_tools = {
+        let needed = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
-                .some_or_err()?
-                .application()
-                .default_tool_release_references()
-                .next()
-                .is_some()
+            let app = app_ctx.some_or_err()?.application();
+            app.default_tool_release_references().next().is_some()
+                || app
+                    .mcp_imports(app.environment_name())
+                    .is_some_and(|imports| !imports.is_empty())
         };
-        if !has_default_tools {
+        if !needed {
             return Ok(BTreeSet::new());
         }
 
-        let native_tool_names = self
+        Ok(self
             .ctx
             .golem_clients()
             .await?
@@ -2204,13 +2213,21 @@ impl AppCommandHandler {
             .ambient_tools
             .into_iter()
             .map(|tool| tool.name)
-            .collect::<BTreeSet<_>>();
+            .collect())
+    }
+
+    /// The default tools that this deployment leaves to the server, because the server has a
+    /// native tool with the same name. The native tool can be another version of the tool.
+    async fn default_tools_with_a_native_tool(
+        &self,
+        native_tool_names: &BTreeSet<ToolName>,
+    ) -> anyhow::Result<BTreeSet<ToolName>> {
         let replaced = {
             let app_ctx = self.ctx.app_context_lock().await;
             app_ctx
                 .some_or_err()?
                 .application()
-                .default_tools_with_a_native_tool(&native_tool_names)
+                .default_tools_with_a_native_tool(native_tool_names)
         };
         for name in &replaced {
             log_action(
@@ -2231,7 +2248,7 @@ impl AppCommandHandler {
     async fn reject_mcp_tools_named_like_default_tools(
         &self,
         environment: &ResolvedEnvironmentIdentity,
-        native_default_tools: &BTreeSet<ToolName>,
+        native_tool_names: &BTreeSet<ToolName>,
     ) -> anyhow::Result<()> {
         let (imports, reserved_names, native_tool_names) = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -2239,9 +2256,9 @@ impl AppCommandHandler {
             let application_tool_names = app.known_application_tool_names();
             let reserved_names = reserved_default_tool_names(
                 app.default_tool_release_references()
-                    .map(|(name, _)| name.clone())
-                    .filter(|name| !native_default_tools.contains(name)),
+                    .map(|(name, _)| name.clone()),
                 &application_tool_names,
+                native_tool_names,
             );
             // A reserved name is not given as a native name, so that an imported tool with
             // that name stays in the answer and can be found there.
@@ -2305,7 +2322,7 @@ impl AppCommandHandler {
             return Ok(());
         }
         bail!(
-            "{}. The name of a default tool is reserved in a deployment that has a tool with that name: give the import a prefix, exclude the tool from the import, or deploy without that tool (for a default tool, leave it out of tools.defaults for the environment)",
+            "{}. The name of a default tool is reserved in a deployment that has a tool with that name, also when that tool is a native tool of the server: give the import a prefix, or exclude the tool from the import. A default tool can also be left out of tools.defaults for the environment",
             clashes
                 .iter()
                 .map(|(index, name)| format!(
@@ -5009,19 +5026,33 @@ mod tests {
                 .map(|name| name.to_string())
                 .collect::<BTreeSet<_>>()
         };
+        let native = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| ToolName::try_from(*name).unwrap())
+                .collect::<BTreeSet<_>>()
+        };
 
         // The default tool of the deployment.
         assert_eq!(
-            reserved_default_tool_names([bash.clone()], &names(&["search"])),
+            reserved_default_tool_names([bash.clone()], &names(&["search"]), &native(&[])),
             BTreeSet::from([bash.clone()])
         );
         // A tool of the application that has the name of a default tool.
         assert_eq!(
-            reserved_default_tool_names([], &names(&["bash", "search"])),
+            reserved_default_tool_names([], &names(&["bash", "search"]), &native(&[])),
+            BTreeSet::from([bash.clone()])
+        );
+        // A native tool of the server that has the name of a default tool: the server puts it
+        // into each deployment, also into one that selects no default tool.
+        assert_eq!(
+            reserved_default_tool_names([], &names(&["search"]), &native(&["bash", "clock"])),
             BTreeSet::from([bash])
         );
         // No tool with the name of a default tool: an import can supply one.
-        assert!(reserved_default_tool_names([], &names(&["search"])).is_empty());
+        assert!(
+            reserved_default_tool_names([], &names(&["search"]), &native(&["clock"])).is_empty()
+        );
     }
 
     #[test]

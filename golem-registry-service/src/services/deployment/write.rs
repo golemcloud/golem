@@ -759,8 +759,9 @@ impl DeploymentWriteService {
             .filter_map(|tool| tool.definition.name().map(str::to_owned))
             .collect::<Vec<_>>();
         // The name of a default tool is reserved: an MCP import must not supply a tool with a
-        // name that a default tool has, when the deployment has a tool with that name. The
-        // tools of an import that cannot be read now are not known, so they are not compared.
+        // name that a default tool has, when the deployment has a tool with that name. That
+        // tool can be a tool of the application or a native tool of this server. The tools of
+        // an import that cannot be read now are not known, so they are not compared.
         let reserved_tool_names = registered_tool_names
             .iter()
             .filter(|name| DEFAULT_TOOLS.iter().any(|tool| tool.name == name.as_str()))

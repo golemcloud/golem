@@ -35,7 +35,7 @@ pub enum DeployValidationError {
         security_scheme: SecuritySchemeName,
     },
     #[error(
-        "MCP import {index} supplies a tool named '{tool_name}', which is the name of a default tool and of a tool of this deployment; give the import a prefix, exclude the tool from the import, or deploy without that tool"
+        "MCP import {index} supplies a tool named '{tool_name}', which is the name of a default tool and of a tool of this deployment; give the import a prefix, or exclude the tool from the import"
     )]
     McpImportToolHasDefaultToolName { index: u32, tool_name: String },
     #[error(
