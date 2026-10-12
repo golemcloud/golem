@@ -17,6 +17,7 @@ package schema
 import (
 	"encoding/json"
 	"math"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -261,6 +262,59 @@ func TestMalformedValuesAreRejected(t *testing.T) {
 		_, err := UnmarshalWireValue([]byte(data))
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: got %v, want an error mentioning %q", data, err, want)
+		}
+	}
+}
+
+// The shared corpus is checked against the host's codec in golem-common, so
+// passing it means Go reads and writes what the server does.
+func TestSharedRestWireFormCorpus(t *testing.T) {
+	raw, err := os.ReadFile("../../../../test-data/rest-wire-form/v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Version   string `json:"version"`
+		Roundtrip []struct {
+			ID   string          `json:"id"`
+			Wire json.RawMessage `json:"wire"`
+		} `json:"roundtrip"`
+		Reject []struct {
+			ID   string          `json:"id"`
+			Wire json.RawMessage `json:"wire"`
+		} `json:"reject"`
+	}
+	if err := json.Unmarshal(raw, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	if corpus.Version != "1.0.0" || len(corpus.Roundtrip) == 0 || len(corpus.Reject) == 0 {
+		t.Fatalf("corpus %s: %d round trips, %d rejections", corpus.Version, len(corpus.Roundtrip), len(corpus.Reject))
+	}
+	asJSON := func(data []byte) any {
+		var v any
+		if err := json.Unmarshal(data, &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, c := range corpus.Roundtrip {
+		v, err := UnmarshalWireValue(c.Wire)
+		if err != nil {
+			t.Errorf("%s: %v", c.ID, err)
+			continue
+		}
+		out, err := MarshalWireValue(v)
+		if err != nil {
+			t.Errorf("%s: marshal: %v", c.ID, err)
+			continue
+		}
+		if !reflect.DeepEqual(asJSON(out), asJSON(c.Wire)) {
+			t.Errorf("%s: %s came back as %s", c.ID, c.Wire, out)
+		}
+	}
+	for _, c := range corpus.Reject {
+		if v, err := UnmarshalWireValue(c.Wire); err == nil {
+			t.Errorf("%s: accepted %s as %#v", c.ID, c.Wire, v)
 		}
 	}
 }
