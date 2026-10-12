@@ -155,10 +155,19 @@ pub async fn preflight_registry_db_compat(data_dir: &Path) -> Result<(), CompatC
         .await
         .map_err(|err| CompatCheckError::sqlite(registry_db_path.clone(), err))?;
 
+    let result = check_registry_db_compat(&pool, registry_db_path).await;
+    pool.close().await;
+    result
+}
+
+async fn check_registry_db_compat(
+    pool: &SqlitePool,
+    registry_db_path: PathBuf,
+) -> Result<(), CompatCheckError> {
     let has_any_table = pool
         .with_ro("compat", "any_table_exists")
         .fetch_optional_as::<(i64,), _>(sqlx::query_as(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1;",
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' LIMIT 1;",
         ))
         .await
         .map_err(|err| CompatCheckError::sqlite(registry_db_path.clone(), err.into()))?
@@ -233,6 +242,12 @@ pub async fn write_registry_db_compat(data_dir: &Path) -> anyhow::Result<()> {
     let registry_db_path = registry_db_path(data_dir);
     let pool = sqlite_pool(&registry_db_path).await?;
 
+    let result = write_db_compat_version(&pool).await;
+    pool.close().await;
+    result
+}
+
+async fn write_db_compat_version(pool: &SqlitePool) -> anyhow::Result<()> {
     let mut tx = pool
         .with_rw("compat", "write_db_compat_version")
         .begin()
@@ -380,7 +395,10 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock went backwards")
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("golem-compat-test-{nanos}-{id}"));
+            let path = std::env::temp_dir().join(format!(
+                "golem-compat-test-{}-{nanos}-{id}",
+                std::process::id()
+            ));
             std::fs::create_dir_all(&path).expect("failed to create temp data dir");
             Self { path }
         }
@@ -413,18 +431,22 @@ mod tests {
             .expect("failed to create compat table");
     }
 
-    async fn create_other_table(data_dir: &Path) {
+    async fn create_table_named(data_dir: &Path, name: &str) {
         let db_path = registry_db_path(data_dir);
         let pool = sqlite_pool(&db_path)
             .await
             .expect("failed to initialize sqlite pool");
 
-        pool.with_rw("test", "create_other_table")
-            .execute(sqlx::query(
-                "CREATE TABLE some_other_table (id INTEGER PRIMARY KEY);",
-            ))
+        pool.with_rw("test", "create_table_named")
+            .execute(sqlx::query(&format!(
+                "CREATE TABLE {name} (id INTEGER PRIMARY KEY);"
+            )))
             .await
-            .expect("failed to create other table");
+            .expect("failed to create table");
+    }
+
+    async fn create_other_table(data_dir: &Path) {
+        create_table_named(data_dir, "some_other_table").await;
     }
 
     async fn insert_compat_row(data_dir: &Path, version: i64) {
@@ -462,6 +484,18 @@ mod tests {
     async fn preflight_rejects_missing_compat_table() {
         let data_dir = TestDataDir::new();
         create_other_table(&data_dir.path).await;
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(matches!(
+            result,
+            Err(CompatCheckError::MissingCompatTable { .. })
+        ));
+    }
+
+    #[test]
+    async fn preflight_rejects_table_whose_name_only_resembles_an_internal_table() {
+        let data_dir = TestDataDir::new();
+        create_table_named(&data_dir.path, "sqliteX_user_data").await;
 
         let result = preflight_registry_db_compat(&data_dir.path).await;
         assert!(matches!(
