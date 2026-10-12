@@ -65,34 +65,34 @@ In **Terminal 2**, generate an application named `agent-examples` from your lang
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 ```shell copy
-golem new --template ts --component-name example:counter --yes agent-examples
+golem new --template ts --yes agent-examples
 ```
   </Tabs.Tab>
   <Tabs.Tab>
 ```shell copy
-golem new --template effect --component-name example:counter --yes agent-examples
+golem new --template effect --yes agent-examples
 ```
 
 The Effect template names its agent type `Counter`, not `CounterAgent`.
   </Tabs.Tab>
   <Tabs.Tab>
 ```shell copy
-golem new --template rust --component-name example:counter --yes agent-examples
+golem new --template rust --yes agent-examples
 ```
   </Tabs.Tab>
   <Tabs.Tab>
 ```shell copy
-golem new --template scala --component-name example:counter --yes agent-examples
+golem new --template scala --yes agent-examples
 ```
   </Tabs.Tab>
   <Tabs.Tab>
 ```shell copy
-golem new --template moonbit --component-name example:counter --yes agent-examples
+golem new --template moonbit --yes agent-examples
 ```
   </Tabs.Tab>
   <Tabs.Tab>
 ```shell copy
-golem new --template go --component-name example:counter --yes agent-examples
+golem new --template go --yes agent-examples
 ```
 
 `golem build` installs the Golem Go toolchain on first use. Go builds also require `wasm-tools`.
@@ -334,10 +334,12 @@ golem agent oplog 'CounterAgent("my-counter")'
 
 ## Recover a method in the middle of its work
 
-The counter's state survived between calls. This second example shows Golem recovering a method that is still running. A `WorkflowAgent` starts a workflow, asks a `HumanAgent` for approval, and then waits inside its `start` method until the human decides. You restart the server while it waits.
+The counter's state survived between calls. This second example shows Golem recovering a method that is still running. A `WorkflowAgent` starts a workflow, asks a `HumanAgent` for approval, and then waits inside its `start` method until the human decides. You restart the server while it waits, approve the workflow afterwards, and the method continues from the line where it stopped.
 
-This part uses the TypeScript template. The `human-in-the-loop` template also exists for Rust, Scala, MoonBit, and Go, with equivalent agents. The heart of the workflow is ordinary code that waits on a promise:
+The example uses the `human-in-the-loop` template. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
 
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
 ```typescript
 // src/workflow-agent.ts (excerpt)
 async start({ approver }) {
@@ -357,25 +359,13 @@ async start({ approver }) {
 },
 ```
 
-In **Terminal 2**, leave the `agent-examples` directory, then create, build, and deploy the application:
-
 ```shell copy
 cd ..
-golem new --template ts/human-in-the-loop --component-name example:approvals --yes approvals
+golem new --template ts/human-in-the-loop --yes approvals
 cd approvals
 golem build
 golem deploy --yes
-```
-
-Start a workflow without waiting for it to finish. The idempotency key `report-q3` identifies this invocation, so you can ask for its result later:
-
-```shell copy
 golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
-```
-
-The workflow is now waiting for Alice. Her pending approvals contain the workflow's ID, and the workflow agent is suspended:
-
-```shell copy
 golem agent invoke 'HumanAgent("alice")' listPendingApprovals
 golem agent get 'WorkflowAgent("report-q3")'
 ```
@@ -387,15 +377,10 @@ Invocation result in TypeScript syntax:
   Status:                   Suspended
 ```
 
-In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output:
+In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
 
 ```shell copy
 golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
-```
-
-The approval completes the promise that `start` is waiting on, and the method continues from the line where it stopped, on a server that did not exist when it started. Ask for the result of the original invocation by repeating it with the same idempotency key:
-
-```shell copy
 golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
 ```
 
@@ -403,8 +388,127 @@ golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' star
 Invocation result in TypeScript syntax:
 "Workflow <workflow-id> was approved"
 ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+The Effect SDK has no `human-in-the-loop` template yet. The TypeScript tab runs the same example, with the same commands.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+// src/workflow_agent.rs (excerpt)
+async fn start(&mut self) -> String {
+    let approval_promise_id = create_promise();
 
-Golem returns the recorded result instead of starting a second workflow, because a method invocation executes exactly once per idempotency key. [Durable execution](/next/concepts/durable-execution) explains how recovery works, and [Agent communication](/next/concepts/communication) covers promises and waiting.
+    let mut approver = HumanAgentClient::get("bob".to_string());
+    approver
+        .request_approval(self.id.clone(), approval_promise_id.clone())
+        .await;
+
+    // The agent is suspended here until the promise is completed.
+    let result: Decision = await_promise_json(&approval_promise_id)
+        .await
+        .expect("Invalid promise payload");
+
+    if result == Decision::Approved {
+        format!("Workflow {} was approved ✅", self.id)
+    } else {
+        format!("Workflow {} was rejected ❌", self.id)
+    }
+}
+```
+
+In the Rust template, `WorkflowAgent` is a phantom agent without constructor parameters, and `start` always asks the human agent `"bob"`. Give the workflow an ID of your own choice in square brackets, as below, so every command reaches the same agent.
+
+```shell copy
+cd ..
+golem new --template rust/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
+golem agent invoke 'HumanAgent("bob")' list_pending_approvals
+golem agent get 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]'
+```
+
+```text
+Invocation result in Rust syntax:
+["<workflow-id>"]
+...
+  Status:                   Suspended
+```
+
+In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
+
+```shell copy
+golem agent invoke 'HumanAgent("bob")' decide_approval '"<workflow-id>"' 'Approved'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent()[7f1c2a9e-3b4d-4e5f-8a6b-9c0d1e2f3a4b]' start
+```
+
+```text
+Invocation result in Rust syntax:
+"Workflow <workflow-id> was approved ✅"
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+The Scala `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+  </Tabs.Tab>
+  <Tabs.Tab>
+The MoonBit `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+// agents/workflow/impl/impl.go (excerpt)
+agent.Handle(workflow.Start, func(ctx *golem.Context[state], in workflow.StartIn) string {
+	approval := golem.NewPromise[string]()
+
+	approver := human.Agent.Get(human.ID{Username: in.Approver})
+	human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
+		WorkflowId: ctx.State.workflowID,
+		PromiseId:  approval.ID(),
+	})
+
+	// The agent is suspended here until the promise is completed.
+	decision := approval.MustAwait()
+
+	if decision == "approved" {
+		return fmt.Sprintf("Workflow %s was approved", ctx.State.workflowID)
+	}
+	return fmt.Sprintf("Workflow %s was rejected", ctx.State.workflowID)
+})
+```
+
+```shell copy
+cd ..
+golem new --template go/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' listPendingApprovals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+```text
+Invocation result in Go syntax:
+["<workflow-id>"]
+...
+  Status:                   Suspended
+```
+
+In **Terminal 1**, stop the server with `Ctrl+C` and start it again with `golem server run`. Then, in **Terminal 2**, approve the workflow, using the ID from the previous output, and ask for the result of the original invocation by repeating it with the same idempotency key:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decideApproval '"<workflow-id>"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+```text
+Invocation result in Go syntax:
+"Workflow <workflow-id> was approved"
+```
+  </Tabs.Tab>
+</Tabs>
+
+The approval completed the promise that `start` was waiting on, and the method continued on a server that did not exist when it started. Repeating the invocation with the same idempotency key returned the recorded result instead of starting a second workflow, because a method invocation executes exactly once per idempotency key. [Durable execution](/next/concepts/durable-execution) explains how recovery works, and [Agent communication](/next/concepts/communication) covers promises and waiting.
 
 ## Next
 

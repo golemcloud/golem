@@ -16,11 +16,11 @@ An AI agent application usually has these parts:
 | Part | What it does | In a Golem application |
 |---|---|---|
 | Model | Generates text and chooses which tools to call | A model provider, called over HTTP |
-| Agent loop (also called a harness) | Calls the model, runs the tools it picks, decides when to stop | Your code, or a framework such as the Vercel AI SDK, running inside a Golem agent |
+| Agent loop (also called a harness) | Calls the model, runs the tools it picks, decides when to stop | Your code, or an agent framework for your language, running inside a Golem agent |
 | Runtime | Runs the code, keeps its state, isolates it, enforces permissions, serves results | Golem |
 | Tools | Run commands, edit files, fetch pages, call services | Golem tools, or remote services the agent calls |
 
-Agent frameworks such as LangChain, the Vercel AI SDK, or Mastra provide the agent loop. Inside Golem, you write the loop yourself or use a framework that runs on Golem's JavaScript runtime: the Vercel AI SDK and TanStack AI are tested, and other JavaScript frameworks can work if they avoid Node.js-specific internals and native addons. Golem is the layer underneath: it decides where the loop runs, what happens when it fails, what it may touch, and how its results reach users. Without such a runtime, those concerns are usually spread across a queue, a database for progress, a workflow engine, a sandbox service, and a web server. Coming from another system? [Familiar terms](/next/comparison#familiar-terms) maps its vocabulary to Golem's.
+Agent frameworks such as LangChain, the Vercel AI SDK, or Mastra provide the agent loop. Inside Golem, the loop is ordinary agent code in any of Golem's languages: TypeScript, Rust, Scala, MoonBit, or Go. You can write it yourself or use an agent framework or harness library for your language. In TypeScript, the Vercel AI SDK and TanStack AI are tested inside Golem agents. Golem is the layer underneath: it decides where the loop runs, what happens when it fails, what it may touch, and how its results reach users. Without such a runtime, those concerns are usually spread across a queue, a database for progress, a workflow engine, a sandbox service, and a web server. Coming from another system? [Familiar terms](/next/comparison#familiar-terms) maps its vocabulary to Golem's.
 
 <ThemedImage
   lightSrc="/images/getting-started/runtime-overview-light.webp"
@@ -92,7 +92,7 @@ Many useful agents write and run small programs for their users, even when the u
 
 Know these boundaries before you start:
 
-- TypeScript agents run on a WebAssembly JavaScript runtime based on QuickJS, not on Node.js. Most npm packages work; packages with native addons do not.
+- TypeScript agents run on a WebAssembly JavaScript runtime based on QuickJS, not on Node.js. Most npm packages work; packages with native addons do not. Rust, MoonBit, and Go agents compile directly to WebAssembly.
 - Tools that need native binaries, Python, Docker, or a full browser run on a remote sandbox or VM that the agent calls. Golem records those calls, not the remote machine's state.
 - There is no Python SDK. Python programs can call Golem agents over the REST API, MCP, or HTTP endpoints.
 

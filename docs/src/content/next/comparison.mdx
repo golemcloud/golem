@@ -69,7 +69,7 @@ Each of Golem's features exists in some form elsewhere. What Golem adds is havin
 
 ## Agent frameworks
 
-Agent frameworks provide the agent loop: prompting, tool calling, memory, and orchestration. On Golem, the loop runs inside a durable agent. The Vercel AI SDK and TanStack AI are tested inside Golem agents. Other JavaScript frameworks work if they run on Golem's QuickJS-based JavaScript runtime, which does not provide Node.js internals or native addons.
+Agent frameworks provide the agent loop: prompting, tool calling, memory, and orchestration. On Golem, the loop runs inside a durable agent, written in any of Golem's languages, by hand or with a framework for that language. In TypeScript, the Vercel AI SDK and TanStack AI are tested inside Golem agents; JavaScript libraries must work on Golem's QuickJS-based runtime, which does not provide Node.js internals or native addons.
 
 ### Vercel AI SDK, Workflow, and Sandbox
 
