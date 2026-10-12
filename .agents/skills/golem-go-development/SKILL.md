@@ -274,3 +274,24 @@ repository's own release tags are invisible to Go. With the default `GOPROXY` a 
 downloads only the module subtree. The mirror keeps a module permanently only if it detects
 a license, and Go has no metadata field for one, so each module directory carries its own
 `LICENSE`.
+
+The three modules release in lockstep at one version: a generated app requires the guest SDK
+and core, and a generated external client requires the bridge and core, all at
+`versions::sdk::GO`. To release version `X`:
+
+1. In `sdks/go/golem/go.mod` and `sdks/go/bridge/go.mod`, change `require …/sdks/go/core
+   v0.0.0` to `vX`. The `replace … => ../core` stays for in-repo builds, but a consumer
+   ignores a dependency's `replace`, so a published module that requires `v0.0.0` cannot be
+   resolved.
+2. Set `versions::sdk::GO` in `cli/golem-cli/src/versions.rs` to `X`.
+3. Tag the same commit `sdks/go/core/vX`, `sdks/go/golem/vX` and `sdks/go/bridge/vX`, and
+   push the three tags together.
+4. Check that the proxy resolves each module, for example
+   `GOPROXY=https://proxy.golang.org go list -m github.com/golemcloud/golem/sdks/go/golem@vX`,
+   and that pkg.go.dev shows the license.
+
+Two pins in `versions.rs` are released elsewhere and only change when their own release
+changes: `go_toolchain::TAG` (the `golemcloud/go` fork) and `go_dep::GO_PKG_FORK` (the
+`golemcloud/go-pkg` fork). The CLI writes the `go-pkg` replace into every component's
+`go.mod`, because the replace in the SDK's own `go.mod` does not reach them, so a change to
+the SDK's `go-pkg` replace needs the same change in `GO_PKG_FORK`.
