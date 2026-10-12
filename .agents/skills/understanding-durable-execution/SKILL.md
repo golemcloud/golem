@@ -609,9 +609,11 @@ Store that never goes live (a completed entity body); that child is then replaye
 call is resolved, so a wait that the guest dropped leaves no recorded read unclaimed. In every
 other case the outer replay is resolved before the child: a cancelled outer wait without a
 recorded child parks without issuing it, while an incomplete outer wait owns cancellation cleanup
-before reconstructing the deadline from recorded `now + duration`. A completed outer requires
-a recorded completed child. Cancelling after the child's End settles the outer wait without an
-internal delivery marker. Only the outer wait has a real guest-delivery boundary.
+before reconstructing the deadline from recorded `now + duration`. The claim of a wait matches
+the recorded duration, and waits of one parent with one duration take a turn until their `Start`
+is appended or claimed, so that waits started together get their own records. A completed outer
+requires a recorded completed child. Cancelling after the child's End settles the outer wait
+without an internal delivery marker. Only the outer wait has a real guest-delivery boundary.
 
 P3 timers always return `STARTED` before successful guest delivery, even for zero-duration or
 expired waits. Both live execution and replay yield before completing the outer timer. `wait-for`

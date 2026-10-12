@@ -33,8 +33,9 @@ use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestMonotonicClockDuration,
     HostRequestMonotonicClockTimestamp, HostRequestNoInput, HostResponseMonotonicClockTimestamp,
-    HostResponseP3MonotonicClockUnit, HostResponseWallClock,
+    HostResponseP3MonotonicClockUnit, HostResponseWallClock, OplogIndex,
 };
+use std::sync::Arc;
 use std::time::Duration;
 use wasmtime::component::Accessor;
 use wasmtime_wasi::clocks::WasiClocksView;
@@ -150,11 +151,27 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
-        let never_live = store.with(|mut access| {
-            super::expect_ctx::<Ctx, U>(access.data_mut())
-                .durable_ctx_mut()
-                .rejects_live_continuation_at_replay_tail()
+        let request = HostRequestMonotonicClockDuration {
+            duration_in_nanos: how_long,
+        };
+        // A guest can have several waits pending at once. Waits of one length record the same
+        // `Start`, so they start in turn, in the order in which the guest made them. Nothing
+        // may be awaited before this: the turn is taken while the guest makes the call.
+        let (start_order, never_live) = store.with(|mut access| {
+            let ctx = super::expect_ctx::<Ctx, U>(access.data_mut()).durable_ctx_mut();
+            (
+                ctx.state.replay_state.start_order(
+                    P3MonotonicClockWaitFor::FQFN,
+                    ctx.child_parent_start_index(
+                        &DurableFunctionType::ReadLocal,
+                        OplogIndex::INITIAL,
+                    ),
+                    how_long,
+                ),
+                ctx.rejects_live_continuation_at_replay_tail(),
+            )
         });
+        let start_order = Arc::new(start_order.lock_owned().await);
         // The first run reads the clock right after it starts the wait. When that read is in the
         // record, replay makes it before it resolves the wait: a wait that the guest dropped has
         // no terminal, and waiting for one would leave the recorded read unclaimed. The claim
@@ -173,13 +190,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
                 store,
                 super::durable_worker_ctx::<Ctx, U>,
                 DurableFunctionType::ReadLocal,
-                AccessClaimOptions::default(),
-                Some(recorded_read),
-                async move |_| {
-                    Ok(HostRequestMonotonicClockDuration {
-                        duration_in_nanos: how_long,
-                    })
+                AccessClaimOptions {
+                    // On replay each wait claims the `Start` that recorded its own length.
+                    request_identity: Some(request.clone().into()),
+                    start_order: Some(start_order),
+                    ..Default::default()
                 },
+                Some(recorded_read),
+                async move |_| Ok(request),
             )
             .await?;
         let owner = wait.host_internal_owner();

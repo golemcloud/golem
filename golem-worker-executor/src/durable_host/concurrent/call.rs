@@ -649,6 +649,10 @@ pub(crate) struct AccessClaimOptions {
     pub(crate) scope_replay_recovery: ScopeReplayRecovery,
     pub(crate) host_internal_owner: Option<HostInternalCallOwner>,
     pub(crate) require_recorded_start: bool,
+    /// The turn of this call among calls that record the same `Start` (see
+    /// [`crate::durable_host::replay_state::ReplayState::start_order`]). The start of the call
+    /// gives it up as soon as its own `Start` is appended or claimed.
+    pub(crate) start_order: Option<Arc<tokio::sync::OwnedMutexGuard<()>>>,
     /// The call that this call's host function makes under its own `Start` (see
     /// [`RecordedChildClaim`]). Set through
     /// [`DurableCallSession::start_access_with_recorded_child`], which returns the handle of the
@@ -2050,6 +2054,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             }
         }
 
+        // The turn of this call among calls that record the same `Start` (see
+        // `AccessClaimOptions::start_order`). It ends below, where that `Start` is claimed or
+        // appended, so that it cannot outlast the start of the call.
+        let mut start_order = prepared.claim_options.start_order.take();
         let mut recorded_child = None;
 
         // Claim before building the request. Concurrent replay may have reached the shared live
@@ -2078,6 +2086,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     });
                     (observer, Arc::new(activity))
                 });
+                // The claim runs as an owned cursor operation, which goes on when this future is
+                // dropped. It keeps the call's turn until it is done, so that the next call
+                // with the same recorded `Start` cannot claim before it.
+                let claim_turn = start_order.clone();
                 let (outcome, child) = prepared
                     .replay_state
                     .claim_start_with_recorded_child_for_store(
@@ -2085,6 +2097,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         store_continued_live,
                         prepared.claim_options.recorded_child.clone(),
                         move |index, entry| {
+                            let _claim_turn = &claim_turn;
                             if let Some((observer, _activity)) = &observer {
                                 observer.clone().started(index, entry, true);
                             }
@@ -2224,6 +2237,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         } else {
             None
         };
+        if replay.is_some() {
+            // The recorded `Start` is claimed: the next call with the same record may claim.
+            drop(start_order.take());
+        }
 
         // Build the request between the scope open and the host-call `Start` write/claim. It runs
         // on replay too so positional side entries written by the builder are consumed in the same
@@ -2340,6 +2357,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             },
                         )
                     })?;
+                // The `Start` has its index: the next call with the same record may start.
+                drop(start_order);
                 // The registered lease from prepare time when this call started live inside an
                 // open region; a replayed scope that switched to live mid-start falls back to an
                 // unregistered lease preserving its initiation-time classification.

@@ -9946,3 +9946,152 @@ async fn the_claim_of_a_retained_call_claims_its_retained_inner_call() {
     assert_eq!(end_of(&rs, inner).await, OplogIndex::from_u64(5));
     assert_eq!(end_of(&rs, outer).await, OplogIndex::from_u64(6));
 }
+
+#[test]
+async fn calls_with_one_recorded_identity_start_in_the_order_they_asked() {
+    let rs = replay_state_over(vec![noop()]).await;
+    let parent = Some(OplogIndex::from_u64(2));
+    let first = rs.start_order("wait-for", parent, 5).lock_owned().await;
+    let mut second = Box::pin(rs.start_order("wait-for", parent, 5).lock_owned());
+    let mut third = Box::pin(rs.start_order("wait-for", parent, 5).lock_owned());
+    assert!(futures::poll!(second.as_mut()).is_pending());
+    assert!(futures::poll!(third.as_mut()).is_pending());
+
+    // Calls with another request, another parent or another name are told apart by their
+    // record. They do not wait.
+    drop(rs.start_order("wait-for", parent, 6).lock_owned().await);
+    drop(rs.start_order("wait-for", None, 5).lock_owned().await);
+    drop(rs.start_order("wait-until", parent, 5).lock_owned().await);
+
+    drop(first);
+    assert!(
+        futures::poll!(third.as_mut()).is_pending(),
+        "the call that asked second starts before the call that asked third"
+    );
+    let second = second.await;
+    assert!(futures::poll!(third.as_mut()).is_pending());
+    drop(second);
+    third.await;
+}
+
+/// Claims 50 clock reads that follow each other, each with the claim that `claim` makes, and
+/// returns how many entries were read from the oplog for it.
+async fn entries_read_for_calls_in_turn(claim: impl Fn() -> StartClaim) -> usize {
+    let mut entries = vec![noop()];
+    for call in 0..50 {
+        entries.push(start_now());
+        entries.push(end_for(2 * call + 2, call));
+    }
+    let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+    oplog.reads.lock().unwrap().clear();
+
+    for call in 0..50 {
+        let ReplayStartClaimOutcome::Claimed { handle, .. } =
+            rs.claim_start_or_replay_end(claim()).await.unwrap()
+        else {
+            panic!("call {call} is recorded");
+        };
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(2 * call + 2));
+        assert_eq!(
+            end_of(&rs, handle).await,
+            OplogIndex::from_u64(2 * call + 3)
+        );
+    }
+    oplog.reads.lock().unwrap().len()
+}
+
+#[test]
+async fn calls_with_a_request_that_follow_each_other_are_claimed_without_a_scan() {
+    let with_a_request = entries_read_for_calls_in_turn(|| {
+        StartClaim::unowned_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &HostRequest::NoInput(HostRequestNoInput {}),
+        )
+    })
+    .await;
+    let without_a_request = entries_read_for_calls_in_turn(|| {
+        StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+    })
+    .await;
+    // Each claim finds its `Start` at the head of the replay buffer, so the request costs no
+    // read of the oplog.
+    assert_eq!(with_a_request, without_a_request);
+}
+
+#[test]
+async fn a_call_with_a_request_and_its_inner_call_are_claimed_without_a_scan() {
+    let record = || {
+        vec![
+            noop(),
+            start_now(),
+            start_with_parent(2),
+            end_for(3, 7),
+            end_for(2, 8),
+        ]
+    };
+    let (rs, oplog) = replay_state_and_oplog_over(record()).await;
+    oplog.reads.lock().unwrap().clear();
+    let claim = StartClaim::unowned_matching_request(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        &HostRequest::NoInput(HostRequestNoInput {}),
+    );
+    let (outer, inner) = claim_with_inner_clock_read(&rs, claim, false).await;
+    let inner = inner.expect("the inner call is claimed with the outer one");
+    assert_eq!(end_of(&rs, inner).await, OplogIndex::from_u64(4));
+    assert_eq!(end_of(&rs, outer).await, OplogIndex::from_u64(5));
+    let read_with_one_claim = oplog.reads.lock().unwrap().len();
+
+    // The same record costs as many entries read when two claims without a request take the
+    // two `Start`s one after the other: the request and the inner call add no read.
+    let (rs, oplog) = replay_state_and_oplog_over(record()).await;
+    oplog.reads.lock().unwrap().clear();
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let inner = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    end_of(&rs, inner).await;
+    end_of(&rs, outer).await;
+    assert_eq!(read_with_one_claim, oplog.reads.lock().unwrap().len());
+}
+
+#[test]
+async fn a_claim_with_a_request_passes_over_a_head_with_another_request() {
+    let other_request: HostRequest = HostRequestPollCount { count: 1 }.into();
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now_with_request_payload(OplogPayload::Inline(Box::new(other_request))),
+        start_now(),
+        end_for(3, 7),
+    ])
+    .await;
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(StartClaim::unowned_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &HostRequest::NoInput(HostRequestNoInput {}),
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("the call is recorded");
+    };
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(3));
+    // The head belongs to the call with the other request and is still unclaimed.
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+}

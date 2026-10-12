@@ -1863,6 +1863,51 @@ impl CursorTx<'_> {
             return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
         }
 
+        // The drain left the head in the replay buffer. When the head is the `Start` this claim
+        // wants, the scan below would read it from the oplog again and stop at it. It is
+        // claimed from the buffer instead, with the same result: claimed ahead of the cursor,
+        // which consumes it when it gets there. Calls that follow each other find their `Start`
+        // here and never scan.
+        let head = self.cursor.last_replayed_index().next();
+        let head_start = match self.st.replay_buffer.front() {
+            Some((index, entry))
+                if *index == head
+                    && head <= self.cursor.replay_target()
+                    && !self.st.claimed_starts.contains(&head)
+                    && !self.st.skipped_regions.is_in_deleted_region(head)
+                    && !self.is_stream_observation(head)
+                    && matches_identity(entry) =>
+            {
+                Some(entry)
+            }
+            _ => None,
+        };
+        if let Some(
+            entry @ OplogEntry::Start {
+                request: Some(recorded_request),
+                ..
+            },
+        ) = head_start
+            && recorded_request_payload_matches(
+                self.cursor.oplog.as_ref(),
+                recorded_request,
+                expected_request,
+            )
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to load durable call request payload at Start {head}: {err}"
+                ))
+            })?
+        {
+            let entry = Box::new(entry.clone());
+            self.st.claimed_starts.insert(head);
+            let handle = self
+                .register_claimed_start(head, start_parent(&entry))
+                .await?;
+            return Ok(StartClaimAttempt::Claimed(handle, entry));
+        }
+
         let already_claimed = self.st.claimed_starts.clone();
         let mut scan_start = self.cursor.last_replayed_index().next();
         let replay_target = self.cursor.replay_target();
@@ -1944,8 +1989,9 @@ impl CursorTx<'_> {
     /// found, at the terminal of the call that encloses the parent, or at the end of the
     /// invocation when no call encloses it.
     ///
-    /// It starts in the replay buffer, where the entries that follow the cursor may already be,
-    /// and reads the oplog from where the buffer ends.
+    /// It starts in the replay buffer. A claim that carries a request leaves its `Start` at the
+    /// head of the buffer with the entries that follow it, so a child that follows its parent
+    /// closely is classified without reading the oplog.
     pub(super) async fn recorded_child(
         &self,
         parent_start_index: OplogIndex,
@@ -2465,6 +2511,7 @@ impl ReplayState {
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
+            start_order: std::sync::Mutex::new(HashMap::new()),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -3081,6 +3128,32 @@ impl ReplayState {
             next = last_read.next();
         }
         None
+    }
+
+    /// The lock that orders the `Start`s of calls with one recorded identity.
+    ///
+    /// Calls of `function` that one parent starts together with equal requests leave the same
+    /// `Start` in the oplog, so replay can tell them apart only by the order of those `Start`s.
+    /// `request` is a number that is equal exactly when the requests are. Each such call takes
+    /// this lock as the first thing it does and holds it until its `Start` is appended or
+    /// claimed. The lock is fair and a host call first runs when the guest makes it, so the
+    /// `Start`s follow in the order in which the guest started the calls, in the first run and
+    /// in every replay.
+    pub(in crate::durable_host) fn start_order(
+        &self,
+        function: &'static str,
+        parent_start_index: Option<OplogIndex>,
+        request: u64,
+    ) -> Arc<Mutex<()>> {
+        let mut locks = self.cursor.start_order.lock().unwrap();
+        let key = (function, parent_start_index, request);
+        if let Some(lock) = locks.get(&key).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        lock
     }
 
     /// [`CursorTx::recorded_child`] for a parent that is read from the oplog.
