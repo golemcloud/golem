@@ -1945,10 +1945,10 @@ fn tool_attenuation_checks_both_bounds_and_preserves_denial_direction() {
     assert!(
         parent
             .validate_attenuation(
-                &[narrow.clone()],
-                &[stronger_denial.clone()],
-                &[narrow.clone()],
-                &[stronger_denial.clone()],
+                std::slice::from_ref(&narrow),
+                std::slice::from_ref(&stronger_denial),
+                std::slice::from_ref(&narrow),
+                std::slice::from_ref(&stronger_denial),
             )
             .is_ok()
     );
