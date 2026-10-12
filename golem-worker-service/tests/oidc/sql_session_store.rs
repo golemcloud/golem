@@ -51,10 +51,14 @@ const TABLES: [&str; 7] = [
     "mcp_proxy_code",
 ];
 
-/// Stores one record in every table that expires almost immediately, and one authenticated session
-/// that stays valid. The store must have a zero `pending_login_expiration`.
+/// Every record that the writer store stores, except the live session, expires after this delay.
+const WRITER_EXPIRATION: Duration = Duration::from_secs(1);
+
+/// Stores one record in every table that expires after [`WRITER_EXPIRATION`], and one authenticated
+/// session that stays valid. The store must have a `pending_login_expiration` of
+/// [`WRITER_EXPIRATION`].
 async fn store_expiring_and_live_records(store: &dyn SessionStore) -> anyhow::Result<SessionId> {
-    let soon = Utc::now() + TimeDelta::seconds(1);
+    let soon = Utc::now() + TimeDelta::from_std(WRITER_EXPIRATION)?;
     let binding = sample_binding();
 
     store
@@ -151,7 +155,7 @@ fn sqlite_store_config(
     cleanup_interval: Duration,
 ) -> SqliteSessionStoreConfig {
     SqliteSessionStoreConfig {
-        pending_login_expiration: Duration::ZERO,
+        pending_login_expiration: WRITER_EXPIRATION,
         cleanup_interval,
         sqlite_config: sqlite_config.clone(),
     }
@@ -162,14 +166,15 @@ fn postgres_store_config(
     cleanup_interval: Duration,
 ) -> PostgresSessionStoreConfig {
     PostgresSessionStoreConfig {
-        pending_login_expiration: Duration::ZERO,
+        pending_login_expiration: WRITER_EXPIRATION,
         cleanup_interval,
         postgres_config: postgres_config.clone(),
     }
 }
 
-// The writer store only runs its cleanup once, at construction, so all records are still present
-// when the cleaner store starts.
+// The writer store runs its cleanup only once, at construction. That first cleanup can run while
+// the records are written, so no record expires before `WRITER_EXPIRATION`. The test then waits
+// until all records except the live session have expired, and starts the cleaner store.
 
 #[test]
 #[timeout("30s")]
@@ -188,7 +193,7 @@ async fn sqlite_cleanup_deletes_only_expired_records(_tracing: &Tracing) -> anyh
     let live = store_expiring_and_live_records(&writer).await?;
     assert_eq!(sqlite_row_count(&pool).await?, 8);
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(WRITER_EXPIRATION).await;
     let _cleaner =
         SqliteSessionStore::configured(&sqlite_store_config(&config, Duration::from_millis(50)))
             .await?;
@@ -214,7 +219,7 @@ async fn postgres_cleanup_deletes_only_expired_records(
     let live = store_expiring_and_live_records(&writer).await?;
     assert_eq!(postgres_row_count(&pool).await?, 8);
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(WRITER_EXPIRATION).await;
     let _cleaner = PostgresSessionStore::configured(&postgres_store_config(
         &config,
         Duration::from_millis(50),
