@@ -451,7 +451,7 @@ async fn source_selected_item_finishes_consumer_commit_before_later_stop() {
             .await
             .unwrap()
     );
-    let reader_id = input.input.reader_id;
+    let reader_id = input.input.reader_id.clone().await.unwrap();
     let history = streams.consumer_history(reader_id).await.unwrap();
     assert_eq!(history.events.len(), 2);
     let first_offset = history.events[0].offset;
