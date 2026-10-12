@@ -2,7 +2,7 @@ import { Tabs, Callout } from "nextra/components"
 
 # Make Custom HTTP APIs for your Golem App
 
-Golem's [Gateway](/next/concepts/worker-gateway) service not only exposes the [low-level REST API for invocations](/next/invoke/http)
+Golem's [gateway](/next/operate/architecture#the-gateway) service not only exposes the [low-level REST API for invocations](/next/invoke/http)
 but also provides a way to expose agent methods as HTTP APIs.
 
 In Golem 1.5, HTTP endpoints are defined **directly in agent code** using language-native decorators and macros — no YAML route definitions or scripting languages needed.
@@ -305,8 +305,15 @@ Return types control the HTTP response:
 |-------------|---------------|
 | A value (e.g. `Task`) | `200 OK` with JSON body |
 | `Option<T>` / `T \| null` | `Some`/non-null → `200`; `None`/`null` → `404 Not Found` |
-| `Result<T, E>` | `Ok` → `200`; `Err` → `400 Bad Request` with JSON error |
+| `Result<T, E>` | `Ok` → `200`; `Err` → `500 Internal Server Error` with JSON error |
+| `Result<Option<T>, E>` | `Ok(Some)` → `200`; `Ok(None)` → `404 Not Found`; `Err` → `500` with JSON error |
 | `void` / `()` | `204 No Content` |
+| `UnstructuredText` / `UnstructuredBinary` | `200 OK` with the raw body (`text/plain` or the MIME type); a URL reference → `307 Temporary Redirect` |
+
+The success value of an `Option` or `Result` follows the same rules as a top-level value: an
+`UnstructuredText` or `UnstructuredBinary` inside `Some` / `Ok` is sent as the raw body, not as JSON.
+For example, `Result<Option<UnstructuredBinary>, E>` serves raw bytes, `404` when there is no
+content, and `500` with the JSON error.
 
 ### Binary Request Bodies
 

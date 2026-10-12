@@ -436,9 +436,10 @@ private[golem] object ToolGraphs {
           // refineText (the only `string`→`text` promotion). So an inherited
           // refined-`String` global (`text`) and a leaf redeclaring the same
           // plain `String` describe the same shape and must de-project. The
-          // exception is a `languages`-restricted `text`, which reflects a
-          // different Scala type (`UnstructuredText`) and stays incompatible
-          // with a plain `String`.
+          // exception is a `languages`-restricted `text`, which is the inline
+          // case of a different Scala type (`golem.schema.UnstructuredText`
+          // with a literal allow-list) and stays incompatible with a plain
+          // `String`.
           case (StringType, TextType(restrictions))     => restrictions.languages.isEmpty
           case (TextType(restrictions), StringType)     => restrictions.languages.isEmpty
           case (ResultType(oa, ea), ResultType(ob, eb)) =>

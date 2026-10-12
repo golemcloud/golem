@@ -1,0 +1,154 @@
+# Golem Application Manifest
+
+The Golem Application Manifest, normally named `golem.yaml`, defines how the CLI builds, deploys, and manages an application and its environments. See the [Application Manifest reference](/v1.6/app-manifest) for its complete schema.
+
+## Manifest discovery
+
+For manifest-aware commands, the CLI searches the current directory and its parents for the root `golem.yaml`. It then loads the files selected by that manifest's `includes` and merges the documents. Path bases are field-specific; for example, component artifact paths are resolved from the component directory.
+
+Select a different root explicitly with:
+
+```shell copy
+golem --app-manifest-path path/to/golem.yaml <command>
+```
+
+Use `--disable-app-manifest-discovery` when you intentionally want profile-only operation without a discovered application.
+
+## Create an application from templates
+
+List current templates, or filter them by language or name:
+
+```shell copy
+golem templates
+golem templates rust
+```
+
+Create a Rust application with the default Rust agent template:
+
+```shell copy
+golem new myapp --template rust --component-name myapp:counter
+```
+
+For a single-component Rust application, the generated application has this shape:
+
+```text
+myapp/
+├── Cargo.toml
+├── golem.yaml
+└── src/
+    ├── counter_agent.rs
+    └── lib.rs
+```
+
+The generated Rust source uses the current `golem-rust` macros:
+
+```rust
+use golem_rust::{agent_definition, agent_implementation, endpoint};
+
+#[agent_definition(mount = "/counters/{name}")]
+pub trait CounterAgent {
+    fn new(name: String) -> Self;
+
+    #[endpoint(post = "/increment")]
+    fn increment(&mut self) -> u32;
+}
+```
+
+To add another component, run `golem new` in the existing application:
+
+```shell copy
+cd myapp
+golem new . --template ts --component-name myapp:frontend
+```
+
+When a second component is added to an application whose first component lives at the root, the CLI proposes a multi-component layout upgrade. For Rust, it moves that component's `Cargo.toml`, `src`, and existing `target` directory into the component directory before generating the new component. In this example the original component moves under `counter/`. Review and confirm the plan before the files are moved.
+
+The default Rust and TypeScript templates both declare `CounterAgent`, and duplicate agent-type names across components are rejected. Before building this two-component example, rename the Rust type in `counter/src/counter_agent.rs` by updating the trait and its implementation together:
+
+```diff
+-pub trait CounterAgent {
++pub trait OtherCounterAgent {
+```
+
+```diff
+-impl CounterAgent for CounterImpl {
++impl OtherCounterAgent for CounterImpl {
+```
+
+Also rename the `CounterAgent` key to `OtherCounterAgent` under `httpApi.deployments.local[].agents` in the generated root `golem.yaml`.
+
+## Inspect the merged application
+
+Run `golem` without a subcommand inside an application to show the selected application, environment, server, components, HTTP and MCP deployments, and custom commands after manifest merging and directory-based component selection.
+
+Use source tracing when you need to see which manifest layer supplied a component property:
+
+```shell copy
+golem component manifest-trace
+```
+
+The current command prints the property trace for every component.
+
+## Start the local server
+
+```shell copy
+golem server run
+```
+
+The built-in local environment normally connects to this server. Manifest `localServer` settings can change its ports, data directory, and local executor options; direct `server run` flags take precedence.
+
+## Build and deploy
+
+Build all components selected by the current directory and manifest:
+
+```shell copy
+golem build
+```
+
+Select build components explicitly with positional names when needed:
+
+```shell copy
+golem build myapp:counter myapp:frontend
+```
+
+Deployment always plans the application as a whole:
+
+```shell copy
+golem deploy --plan
+golem deploy
+```
+
+In text format, the plan is a human-readable diff of changed entries. Add `--full-diff` to include unchanged deployment and environment-setup entries. Structured formats can emit a sequence of typed documents; consumers should branch on each document's `$type` rather than assume one fixed JSON object.
+
+`golem deploy` checks source changes and builds affected components automatically before applying the deployment.
+
+### Existing agents
+
+A normal deployment does not move existing agents to the latest component revision. Choose at most one post-deployment action:
+
+```shell copy
+# Attempt a durable update using the selected mode
+golem deploy --update-agents auto
+
+# Delete and recreate existing agents; state is lost
+golem deploy --redeploy-agents
+
+# Deploy, then delete existing agents of the deployed components; their state is lost
+golem deploy --reset
+```
+
+Both `--redeploy-agents` and `--reset` are destructive. Review the selected environment before confirming them.
+
+## Select an environment
+
+Templates normally define `local` and `cloud` environments. Select by name, convenience flag, or environment variable:
+
+```shell copy
+golem --environment cloud deploy
+golem --cloud deploy
+
+export GOLEM_ENVIRONMENT=cloud
+golem deploy
+```
+
+Without an explicit selection, the manifest's default environment applies. See [Environments and Profiles](/v1.6/cli/envs_and_profiles) for application-qualified and account-qualified environment references and profile-only operation.

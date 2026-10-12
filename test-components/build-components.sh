@@ -140,6 +140,7 @@ resolve_target_dir() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 cd "$SCRIPT_DIR"
+export GOLEM_RUST_PATH="${REPO_ROOT}/sdks/rust/golem-rust"
 if [[ -n "${CARGO_MAKE_CRATE_TARGET_DIRECTORY:-}" ]]; then
   TARGET_DIR="$CARGO_MAKE_CRATE_TARGET_DIRECTORY"
 else
@@ -227,8 +228,6 @@ build_rust_apps() {
   else
     echo "Building Rust test apps"
   fi
-  TEST_COMP_DIR="$(pwd)"
-  export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
   for subdir in "${apps[@]}"; do
     pushd "$subdir" || exit
 

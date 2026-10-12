@@ -172,7 +172,7 @@ agents:
 
 This tool-permission fragment permits `status` with a matching `cwd`, including additional flags, but rejects calls containing both `short` and `null` regardless of their order or other flags. It does not grant filesystem access; supply the separate resource permissions required by the tool. Initial cards must also fit the deployer's delegable authority.
 
-Use primary command and long-option names in manifests. Runtime derivation can resolve aliases against durably selected metadata, but initial-card validation has no such definition context. Values are attached with `=`; `*` and `**` are anchored value globs, while an entire resource of `*` permits any command. Positive repeated-option constraints require a matching occurrence, not that all occurrences are allowed. See [Tool permission patterns](/next/concepts/golem-native-tools#tool-permission-patterns) for quoting, positional prefixes, denials, and opaque streams.
+Use primary command and long-option names in manifests. Runtime derivation can resolve aliases against durably selected metadata, but initial-card validation has no such definition context. Values are attached with `=`; `*` and `**` are anchored value globs, while an entire resource of `*` permits any command. Positive repeated-option constraints require a matching occurrence, not that all occurrences are allowed. See [Tool permission patterns](/next/develop/tool-security#tool-permission-patterns) for quoting, positional prefixes, denials, and opaque streams.
 
 ### Tool middleware
 

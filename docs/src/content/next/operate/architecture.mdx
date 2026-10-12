@@ -1,0 +1,78 @@
+import { ThemedImage } from "@/components/themed-image"
+
+# Architecture
+
+Golem is a set of services that store components, run agents, and route calls to them. The same services run in one process on a laptop or as separately scaled deployments in a cluster.
+
+<ThemedImage
+  lightSrc="/images/getting-started/architecture-light.webp"
+  darkSrc="/images/getting-started/architecture-dark.webp"
+  alt="The CLI sends requests to the gateway and uploads components to the registry service. HTTP and MCP clients connect to the gateway, which routes each agent call to the executor that owns the agent's shard. The shard manager assigns shards to executors. The compilation service and all executors use blob storage; executors also use indexed storage for oplogs and key-value storage for cached agent metadata and promise state."
+  caption="Golem services and the storage behind them"
+  width={1536}
+  height={1024}
+/>
+
+## The CLI and the local server
+
+The `golem` binary contains the command-line interface and a complete local Golem. `golem server run` starts the registry service, the gateway, the shard manager, the component compilation service, and one executor in a single process, behind a built-in router. The lightweight `golem-cli` binary has the same commands without the server and connects to an existing deployment.
+
+| Port | Serves |
+| ---- | ------ |
+| 9881 | REST API, used by the CLI |
+| 9006 | HTTP endpoints defined by applications |
+| 9007 | MCP servers exported by applications |
+
+The local server keeps its data in SQLite databases and local files under the user's data directory, so agents and deployments survive a server restart. `golem server run --clean` deletes that data and starts empty.
+
+## The gateway
+
+The gateway, deployed as `golem-worker-service`, keeps no agent state and scales independently of the executors.
+
+1. **Route invocations.** The gateway maps the agent's identity to a shard, looks up the executor that owns that shard in the routing table published by the shard manager, and forwards the call to that executor.
+2. **Handle executor failure.** When an executor is unreachable or reports that it no longer owns the shard, the gateway refreshes its routing table, waits for the agent to be recovered on the shard's new owner, and retries the invocation.
+3. **Serve application surfaces.** The gateway serves the agent operations of the REST API, the [HTTP endpoints](/next/invoke/making-custom-apis) and [routers](/next/invoke/http-routers) an application defines, including the [files they serve](/next/invoke/http-router-reference), and the application's [MCP servers](/next/invoke/mcp).
+
+Agent-to-agent calls use the same routing. An executor delivers a call directly when it owns the target agent and otherwise sends it through the gateway.
+
+## The registry service
+
+The registry service stores accounts, applications, environments, components, deployments, plugins, tools, and policies. `golem deploy` uploads components to it. It keeps metadata in a relational database (PostgreSQL, or SQLite locally) and component WebAssembly files in blob storage. The gateway and the executors read component and deployment information from the registry.
+
+## Executors
+
+An executor runs agents. Each agent is an instance of an agent type, running in its own WebAssembly sandbox, and the executor records its interactions with the outside world in the agent's oplog. An executor removes waiting agents from memory and rebuilds them from their oplogs when the next event arrives; crashes and moves between executors use the same reconstruction path.
+
+## Shards and ownership
+
+Every agent identity hashes to one of a fixed number of shards (1024 by default). The shard manager assigns shards to executors and rebalances them when executors join or leave.
+
+Ownership is fenced. Each executor holds a lease on its assignment and renews it periodically. An executor whose lease lapses stops admitting new work for those shards, and the shard manager reassigns the shards of an executor that stops renewing. Each shard also carries an epoch that advances whenever it moves. An agent's oplog records the epoch allowed to write to it, and indexed storage checks every write against that record atomically, so an executor that has lost a shard cannot append to the oplogs of its agents. The new owner recovers those agents by replaying their oplogs.
+
+The shard manager runs in local mode (state in PostgreSQL or SQLite, exactly one instance) or distributed mode (state in etcd, any number of replicas with one elected leader). See [Shard Manager](/next/deploy#shard-manager) for lease timing and failover behavior.
+
+## The component compilation service
+
+Executors run components as native code compiled from WebAssembly. The registry service asks the component compilation service to compile each uploaded component, and the results are stored in blob storage shared with the executors, so an executor does not compile a component on first use.
+
+## Storage
+
+| Storage | Holds | Backends |
+| ------- | ----- | -------- |
+| Indexed storage | Oplogs | SQLite, PostgreSQL, Redis |
+| Blob storage | Component files, compiled code, archived oplog chunks, large payloads, initial agent files, filesystem snapshots | Local file system, S3, SQLite |
+| Key-value storage | Cached agent metadata, promise state | SQLite, PostgreSQL, Redis |
+| Relational database | Registry data | PostgreSQL, SQLite |
+
+The oplog is the source of truth for an agent's state; cached agent metadata is rebuilt from it when needed. Executors that share shards need indexed storage they can all reach, which means PostgreSQL or Redis. See [Persistence](/next/operate/persistence) for details, including scheduler storage.
+
+## Local and distributed deployments
+
+| | Local | Distributed |
+| - | ----- | ----------- |
+| Started by | `golem server run` | One container image per service |
+| Processes | One | Each service scaled separately, behind a reverse proxy |
+| Storage | SQLite and local files | PostgreSQL, Redis, S3 or a shared file system, optionally etcd |
+| Executors | One | Many, each owning a subset of shards |
+
+Agents, components, and the CLI behave the same in both. [Golem Cloud](/next/deploy/golem-cloud) runs the distributed form as a hosted service. To run it yourself, see [Deployment](/next/deploy), [Docker](/next/deploy/docker), and [Kubernetes](/next/deploy/kubernetes).

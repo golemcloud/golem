@@ -914,6 +914,13 @@ pub trait StreamingRpcCaller {
     ) -> StreamingRpcBenchmarkResult;
     fn create_input_gate(&self) -> PromiseId;
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
+    async fn recover_cancelled_output(
+        &self,
+        source_gate: PromiseId,
+        resume_gate: PromiseId,
+        after_delivery: bool,
+        pending_gate: Option<PromiseId>,
+    ) -> Vec<u32>;
     async fn transfer_input_after_timer(&self) -> Vec<u32>;
     async fn fork_drop_inherited_output(
         &self,
@@ -1162,6 +1169,71 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .collect()
             .await
             .expect("failed to collect transformed input after caller recovery")
+    }
+
+    async fn recover_cancelled_output(
+        &self,
+        source_gate: PromiseId,
+        resume_gate: PromiseId,
+        after_delivery: bool,
+        pending_gate: Option<PromiseId>,
+    ) -> Vec<u32> {
+        use std::future::poll_fn;
+        use std::task::Poll;
+
+        let output = StreamingRpcTargetClient::get(self.name.clone())
+            .benchmark_gated_output(7, 17, source_gate)
+            .await;
+        let mut reader = output.into_raw().await.expect("unwrap durable output");
+        let decode = |tree| {
+            u32::from_value(&golem_rust::decode_schema_value(tree).expect("decode raw item"))
+                .expect("decode u32 item")
+        };
+        let (_, prefix) = reader.read(Vec::with_capacity(1)).await;
+        assert_eq!(prefix.len(), 1);
+        let mut values = prefix.into_iter().map(decode).collect::<Vec<_>>();
+        assert_eq!(values, [17]);
+        for capacity in [3, 2] {
+            let mut read = Box::pin(reader.read(Vec::with_capacity(capacity)));
+            poll_fn(|cx| match read.as_mut().poll(cx) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(result) => panic!("read completed before source gate: {result:?}"),
+            })
+            .await;
+            if capacity == 3
+                && let Some(gate) = &pending_gate
+            {
+                log::info!("native read pending");
+                golem_rust::await_promise(gate).await;
+            }
+            let (result, buffer) = read.as_mut().cancel();
+            assert_eq!(format!("{result:?}"), "Cancelled");
+            assert!(buffer.is_empty());
+        }
+        log::info!("native reads cancelled");
+        if !after_delivery {
+            golem_rust::await_promise(&resume_gate).await;
+        }
+        let (_, first) = reader.read(Vec::with_capacity(1)).await;
+        assert_eq!(
+            first.len(),
+            1,
+            "retained output must deliver after cancellation"
+        );
+        values.extend(first.into_iter().map(decode));
+        if after_delivery {
+            golem_rust::await_promise(&resume_gate).await;
+        }
+        loop {
+            let (result, buffer) = reader.read(Vec::with_capacity(1)).await;
+            if format!("{result:?}") == "Dropped" {
+                assert!(buffer.is_empty());
+                break;
+            }
+            assert_eq!(buffer.len(), 1);
+            values.extend(buffer.into_iter().map(decode));
+        }
+        values
     }
 
     async fn fork_drop_inherited_output(
@@ -1612,6 +1684,16 @@ pub trait CancelTester {
     async fn grow_memory_after_rpc_result(&self, counter_name: String);
 
     async fn durable_operation_after_rpc_result(&self, counter_name: String, operation: String);
+
+    async fn replay_barrier_probe(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+        counter: String,
+        rounds: u32,
+    ) -> u64;
 }
 
 struct CancelTesterImpl {
@@ -1721,6 +1803,61 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 impl CancelTester for CancelTesterImpl {
     fn new(name: String) -> Self {
         Self { _name: name }
+    }
+
+    async fn replay_barrier_probe(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+        counter: String,
+        rounds: u32,
+    ) -> u64 {
+        let mut a = Box::pin(async move {
+            RpcBlockingCounterClient::get(target_a)
+                .inc_after_promise(gate_a)
+                .await
+        });
+        let mut b = Box::pin(async move {
+            let rpc = WasmRpc::new(
+                "RpcCounter",
+                encode_single_parameter(counter),
+                None,
+                Vec::new(),
+            );
+            for _ in 0..rounds {
+                rpc.invoke_and_await("inc_by", encode_single_parameter(3u64), None)
+                    .unwrap();
+            }
+            let value = RpcBlockingCounterClient::get(target_b)
+                .inc_after_promise(gate_b)
+                .await;
+            for _ in 0..rounds {
+                rpc.invoke_and_await("inc_by", encode_single_parameter(5u64), None)
+                    .unwrap();
+            }
+            value
+        });
+        let mut result_a = None;
+        let mut result_b = None;
+        std::future::poll_fn(|cx| {
+            if result_a.is_none()
+                && let std::task::Poll::Ready(value) = a.as_mut().poll(cx)
+            {
+                result_a = Some(value);
+            }
+            if result_b.is_none()
+                && let std::task::Poll::Ready(value) = b.as_mut().poll(cx)
+            {
+                result_b = Some(value);
+            }
+            match (result_a, result_b) {
+                (Some(a), Some(b)) => std::task::Poll::Ready(a + b),
+                _ => std::task::Poll::Pending,
+            }
+        })
+        .await
     }
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String) {

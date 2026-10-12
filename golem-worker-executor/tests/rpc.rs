@@ -63,6 +63,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+mod replay_barrier_probe;
 mod websocket_crash_probe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -3217,6 +3218,173 @@ async fn resident_ephemeral_streaming_output_resume_restores_cursors_without_dup
 ) -> anyhow::Result<()> {
     streaming_output_resume_restores_exact_cursors(last_unique_id, deps, agent_rpc_rust, false)
         .await
+}
+
+#[test]
+#[timeout("3 minutes")]
+async fn cancelled_stream_read_retains_recorded_positive_delivery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    for (crash, after_delivery, pending) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, true),
+        (true, true, true),
+    ] {
+        let name = format!("cancelled-read-{crash}-{after_delivery}-{pending}");
+        let target_id = agent_id!("StreamingRpcTarget", name.clone());
+        executor
+            .start_agent(&component.id, target_id.clone())
+            .await?;
+        let source_gate = executor
+            .invoke_and_await_agent(&component, &target_id, "create_output_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let caller_id = agent_id!("StreamingRpcCaller", name);
+        let worker = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let resume_gate = executor
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let pending_gate = if pending {
+            Some(
+                executor
+                    .invoke_and_await_agent(
+                        &component,
+                        &caller_id,
+                        "create_input_gate",
+                        data_value!(),
+                    )
+                    .await?
+                    .into_typed::<PromiseId>()?,
+            )
+        } else {
+            None
+        };
+        let mut output = executor.capture_output(&worker).await?;
+        let invocation = executor.invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "recover_cancelled_output",
+            data_value!(
+                source_gate.clone(),
+                resume_gate.clone(),
+                after_delivery,
+                pending_gate.clone()
+            ),
+        );
+        tokio::pin!(invocation);
+        let checkpoint = async {
+            loop {
+                let event = output
+                    .recv()
+                    .await
+                    .expect("caller output ended before cancellation");
+                if let Some(golem_api_grpc::proto::golem::worker::log_event::Event::Log(log)) =
+                    event.event
+                {
+                    if log.message.ends_with(": native read pending") {
+                        executor
+                            .complete_promise(pending_gate.as_ref().unwrap(), vec![])
+                            .await?;
+                    }
+                    if log.message.ends_with(": native reads cancelled") {
+                        break;
+                    }
+                }
+            }
+            if after_delivery {
+                executor.complete_promise(&source_gate, vec![]).await?;
+            }
+            loop {
+                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                let records = entries
+                    .iter()
+                    .filter_map(|entry| match &entry.entry {
+                        PublicOplogEntry::StreamSession(session) => {
+                            Some(StreamSessionRecord::from_value(session.record.value()).unwrap())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let deliveries = records
+                    .iter()
+                    .filter(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_)))
+                    .count();
+                let waiting = entries.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::Start(start)
+                        if start.function_name == "golem::api::get_promise_result")
+                });
+                if waiting && deliveries == if after_delivery { 2 } else { 1 } {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::select! {
+            result = invocation.as_mut() => panic!("retention settled before crash: {result:?}"),
+            checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoint) => checkpoint??,
+        }
+        let loads = executor.instance_load_count(&worker);
+        if crash {
+            executor.simulated_crash(&worker).await?;
+        }
+        executor.complete_promise(&resume_gate, vec![]).await?;
+        if !after_delivery {
+            executor.complete_promise(&source_gate, vec![]).await?;
+        }
+        let values = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut())
+            .await??
+            .into_typed::<Vec<u32>>()?;
+        assert_eq!(values, [17, 20, 23, 26, 29, 32, 35]);
+        if crash {
+            assert!(executor.instance_load_count(&worker) > loads);
+        }
+        let records = executor
+            .get_oplog(&worker, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                PublicOplogEntry::StreamSession(session) => {
+                    Some(StreamSessionRecord::from_value(session.record.value()).unwrap())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let ordinals = records
+            .iter()
+            .filter_map(|record| match record {
+                StreamSessionRecord::ConsumerItemValue(record) => {
+                    Some(record.consumer_read_ordinal)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ordinals, [0, 1, 2, 3, 4, 5, 6]);
+        let terminal_ordinals = records
+            .iter()
+            .filter_map(|record| match record {
+                StreamSessionRecord::ConsumerTerminal(record) => Some(record.consumer_read_ordinal),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminal_ordinals, [7]);
+        executor.delete_worker(&worker).await?;
+    }
+    Ok(())
 }
 
 async fn streaming_output_resume_restores_exact_cursors(

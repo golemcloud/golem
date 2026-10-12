@@ -1,0 +1,166 @@
+# Metrics
+
+## Overview
+
+Every Golem service exposes **Prometheus metrics** on its HTTP interface. The metrics are available at the `/metrics` endpoint for scraping.
+
+Beside the service-specific metrics each service exports a single **counter** called `version_info` in which the labels hold service-specific information.
+The currently available labels are:
+
+| Label     | Description                |
+| --------- | -------------------------- |
+| `version` | The version of the service |
+
+## Service-specific metrics
+
+### Component Service
+
+Component service exposes the following Prometheus metrics:
+
+| Metric                     | Type      | Labels                                                                                                     | Description                                                                     |
+| -------------------------- | --------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `poem_request_count`       | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts every request on the HTTP interface                                      |
+| `poem_errors_count`        | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
+| `poem_request_duration_ms` | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
+| `api_success_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
+| `api_failure_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `grpc_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
+| `http_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming HTTP streams                                            |
+
+### Component Compilation Service
+
+Component compilation service exposes the following Prometheus metrics:
+
+| Metric                               | Type      | Labels             | Description                                    |
+| ------------------------------------ | --------- | ------------------ | ---------------------------------------------- |
+| `cache_size`                         | gauge     | `cache`            | Current maximal capacity of the cache          |
+| `cache_hit_total`                    | counter   | `cache`            | Number of cache hits                           |
+| `cache_miss_total`                   | counter   | `cache`            | Number of cache misses                         |
+| `cache_eviction_total`               | counter   | `cache`, `trigger` | Number of cache evictions                      |
+| `component_compilation_queue_length` | gauge     |                    | Number of compilation requests enqueued        |
+| `compilation_time_seconds`           | histogram |                    | Time to compile a WASM component to native code |
+
+### Shard Manager
+
+Shard manager exposes the following Prometheus metrics:
+
+| Metric                              | Type      | Labels              | Description                                                                     |
+| ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
+| `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
+| `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
+| `http_api_active_streams`           | gauge     |                     | Number of open incoming HTTP streams                                            |
+| `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
+| `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
+| `external_call_retry_total`         | counter   | `target`, `op`      | Number of failed outgoing calls that got retried                                |
+| `external_call_failure_total`       | counter   | `target`, `op`      | Number of failed outgoing calls not to be retried                               |
+| `redis_success_seconds`             | histogram | `svc`, `api`, `cmd` | Duration of successful Redis calls                                              |
+| `redis_failure_total`               | counter   | `svc`, `api`, `cmd` | Number of failed Redis calls                                                    |
+| `redis_serialized_size_bytes`       | histogram | `svc`, `entity`     | Size of serialized Redis entities                                               |
+| `redis_deserialized_size_bytes`     | histogram | `svc`, `entity`     | Size of deserialized Redis entities                                             |
+| `shard_manager_is_leader`           | gauge     |                     | 1 while this replica holds the etcd leadership lease, 0 while it stands by (distributed mode only) |
+| `shard_manager_leader_since_epoch`  | gauge     |                     | Unix seconds at which this replica was elected, 0 while it stands by (distributed mode only) |
+| `shard_manager_campaign_attempt_failures_total` | counter |            | Attempts to reach etcd on the way to leadership that failed retriably and were retried (distributed mode only) |
+
+### Worker Executor
+
+Worker executors expose the following Prometheus metrics:
+
+| Metric                              | Type      | Labels              | Description                                                                     |
+| ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
+| `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
+| `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
+| `http_api_active_streams`           | gauge     |                     | Number of open incoming HTTP streams                                            |
+| `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
+| `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
+| `external_call_retry_total`         | counter   | `target`, `op`      | Number of failed outgoing calls that got retried                                |
+| `external_call_failure_total`       | counter   | `target`, `op`      | Number of failed outgoing calls not to be retried                               |
+| `redis_success_seconds`             | histogram | `svc`, `api`, `cmd` | Duration of successful Redis calls                                              |
+| `redis_failure_total`               | counter   | `svc`, `api`, `cmd` | Number of failed Redis calls                                                    |
+| `redis_serialized_size_bytes`       | histogram | `svc`, `entity`     | Size of serialized Redis entities                                               |
+| `redis_deserialized_size_bytes`     | histogram | `svc`, `entity`     | Size of deserialized Redis entities                                             |
+| `cache_size`                        | gauge     | `cache`             | Current maximal capacity of the cache                                           |
+| `cache_hit_total`                   | counter   | `cache`             | Number of cache hits                                                            |
+| `cache_miss_total`                  | counter   | `cache`             | Number of cache misses                                                          |
+| `cache_eviction_total`              | counter   | `cache`, `trigger`  | Number of cache evictions                                                       |
+| `compilation_time_seconds`          | histogram |                     | Time to compile a WASM component to native code                                 |
+| `event_total`                       | counter   | `event`             | Number of events produced by workers                                            |
+| `event_broadcast_total`             | counter   | `event`             | Number of events broadcasted by the executor                                    |
+| `worker_executor_call_total`        | counter   | `api`               | Number of calls to the worker layer                                             |
+| `promises_count_total`              | counter   |                     | Number of promises created                                                      |
+| `promises_scheduled_complete_total` | counter   |                     | Number of scheduled promise completions                                         |
+| `assigned_shard_count`              | gauge     |                     | Number of assigned shards                                                       |
+| `stale_shard_delivery_total`        | counter   | `delivery`          | Shard deliveries dropped for naming a revision older than the last one applied; `delivery` is `register`, `assign`, `revoke` or `renewal`. One is normal when a push and a renewal cross; a sustained rate is not |
+| `create_worker_seconds`             | histogram |                     | Time to create a new worker                                                     |
+| `create_worker_failure_total`       | counter   | `error`             | Number of failed worker creations                                               |
+| `invocation_total`                  | counter   | `mode`, `outcome`   | Number of invocations                                                           |
+| `invocation_consumption_total`      | histogram |                     | Amount of fuel consumed by an invocation                                        |
+| `allocated_memory_bytes`            | histogram |                     | Amount of memory allocated by a single `memory.grow` instruction                |
+| `host_function_call_total`          | counter   | `interface`, `name` | Number of calls to specific host functions                                      |
+| `resume_worker_seconds`             | histogram |                     | Time taken to resume a worker                                                   |
+| `replayed_functions_count`          | histogram |                     | Number of functions replayed per forker resumption                              |
+| `oplog_svc_call_total`              | counter   | `api`               | Number of calls to the oplog layer                                              |
+
+#### Durable Stream Sessions
+
+| Metric                                               | Type      | Labels                 | Description                                                        |
+| ---------------------------------------------------- | --------- | ---------------------- | ------------------------------------------------------------------ |
+| `golem_durable_stream_lifecycle_total`               | counter   | `event`                | Registered and terminal durable stream transitions                 |
+| `golem_durable_stream_open`                          | gauge     |                        | Open streams owned by loaded producers                             |
+| `golem_durable_stream_producer_operation_total`      | counter   | `operation`, `outcome` | Producer commits and replay no-ops                                  |
+| `golem_durable_stream_catch_up_distance_events`      | histogram |                        | Committed events read before joining a live tail                   |
+| `golem_durable_stream_live_join_total`               | counter   | `outcome`              | Accepted and rejected live-tail joins                              |
+| `golem_durable_stream_active_readers`                | gauge     |                        | Attached live-tail readers                                         |
+| `golem_durable_stream_backpressure_total`            | counter   |                        | Fan-outs that waited on a full reader queue                        |
+| `golem_durable_stream_attempt_total`                 | counter   | `operation`, `outcome` | Start, resume, and takeover attempts                               |
+| `golem_durable_stream_attachment_epoch`              | histogram |                        | Accepted attachment epochs                                         |
+| `golem_durable_stream_journal_lag_events`            | histogram |                        | Source events not yet recorded in the value-only consumer journal  |
+| `golem_durable_stream_attachment_operation_total`    | counter   | `operation`, `outcome` | Prepare, activate, renew, and finalize attachment operations       |
+| `golem_durable_stream_lease_remaining_seconds`       | histogram |                        | Lease headroom observed during attachment work                     |
+| `golem_durable_stream_reconciliation_total`          | counter   | `outcome`              | Reconciler decisions and failures                                  |
+| `golem_durable_stream_cascade_total`                 | counter   | `outcome`              | Durable producer-deletion cascade outcomes                         |
+| `golem_durable_stream_limit_violation_total`         | counter   | `limit`                | Rejections by bounded protocol-v1 limit category                   |
+
+For configuration, recovery, and deletion diagnostics, see [Operating Durable Stream Sessions](/v1.6/operate/durable_streams).
+
+#### Filesystem Snapshots
+
+| Metric                                            | Type      | Labels            | Description                                                                      |
+| ------------------------------------------------- | --------- | ----------------- | -------------------------------------------------------------------------------- |
+| `filesystem_snapshot_capture_seconds`             | histogram | `outcome`         | Time that a capture of an agent filesystem, or a check of its initial files on an executor without filesystem snapshots, stops the file calls |
+| `filesystem_snapshot_upload_seconds`              | histogram | `kind`, `outcome` | Time of an upload of a filesystem snapshot, with its retries                     |
+| `filesystem_snapshot_uploaded_bytes_total`        | counter   | `kind`            | File sizes of the trees of the uploaded filesystem snapshots                     |
+| `filesystem_snapshot_uploads_in_progress`         | gauge     |                   | Runs of uploads that hold a slot now                                             |
+| `filesystem_snapshot_restore_seconds`             | histogram | `outcome`         | Time of a restore of a filesystem snapshot, with the wait for a restore slot and the retries |
+| `filesystem_snapshot_dropped_confirmations_total` | counter   | `reason`          | Uploaded filesystem snapshots that no confirmation record names                  |
+| `filesystem_snapshot_leaked_cleanups_total`       | counter   | `operation`       | Clean-ups of filesystem snapshots that left snapshots in blob storage            |
+| `filesystem_snapshot_cleanups_pending`            | gauge     |                   | Agents with clean-up work of filesystem snapshots that waits or runs             |
+| `filesystem_snapshot_copy_seconds`                | histogram | `outcome`         | Time of a copy of the filesystem snapshots of a fork source                      |
+| `filesystem_snapshot_failed_space_reclaims_total` | counter   |                   | Deletes of filesystem snapshots after which the release of unused storage failed |
+
+For the label values and what to watch, see [Filesystem Snapshots](/v1.6/operate/filesystem_snapshots#metrics).
+
+### Worker Service
+
+Worker service exposes the following Prometheus metrics:
+
+| Metric                              | Type      | Labels                                                                                                     | Description                                                                     |
+| ----------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `poem_request_count`                | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts every request on the HTTP interface                                      |
+| `poem_errors_count`                 | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
+| `poem_request_duration_ms`          | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
+| `api_success_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
+| `api_failure_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `grpc_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
+| `http_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming HTTP streams                                            |
+| `external_call_success_seconds`     | histogram | `target`, `op`                                                                                             | Duration of successful outgoing calls                                          |
+| `external_call_response_size_bytes` | histogram | `target`, `op`                                                                                             | Size of the response of outgoing calls                                          |
+| `external_call_retry_total`         | counter   | `target`, `op`                                                                                             | Number of failed outgoing calls that got retried                                |
+| `external_call_failure_total`       | counter   | `target`, `op`                                                                                             | Number of failed outgoing calls not to be retried                               |
+| `cache_size`                        | gauge     | `cache`                                                                                                    | Current maximal capacity of the cache                                           |
+| `cache_hit_total`                   | counter   | `cache`                                                                                                    | Number of cache hits                                                            |
+| `cache_miss_total`                  | counter   | `cache`                                                                                                    | Number of cache misses                                                          |
+| `cache_eviction_total`              | counter   | `cache`, `trigger`                                                                                         | Number of cache evictions                                                       |
+
+For application-level observability with traces, logs, and metrics exported via OpenTelemetry, see the [Observability](/v1.6/develop/observability) page.
