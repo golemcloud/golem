@@ -129,15 +129,19 @@ function credentials(handle: Secret | undefined): Credentials | undefined {
 }
 
 const definition = toolDefinition("git", { requiresFilesystem: true })
-  .version("0.1.9")
+  .version("0.1.10")
   .doc({
     summary: "Run local and HTTP(S) remote Git workflows.",
     description:
-      "Git commands backed by isomorphic-git and WASI HTTP. Supports remote configuration, tracking, clone, fetch, push, pull, merge conflict resolution, and persistent linear rebase. SSH, git://, subprocess credential helpers, editors, and hooks are not supplied by this runtime. The shared tool interface requires long names for short-only Git options and accepts inherited -C after a subcommand.",
+      "Git commands backed by isomorphic-git and WASI HTTP. Supports remote configuration, tracking, clone, fetch, push, pull, merge conflict resolution, and persistent linear rebase. SSH, git://, subprocess credential helpers, editors, and hooks are not supplied by this runtime. The shared tool interface requires long names for short-only Git options and accepts inherited -C after a subcommand. Called from a shell it starts in the shell's current directory; any other caller starts at / unless it passes --cwd.",
     examples: [
       {
         title: "Inspect a repository",
         body: "git -C workspace status --short",
+      },
+      {
+        title: "Work in the shell's directory",
+        body: "cd workspace\ngit status --short",
       },
       {
         title: "Stage and commit a path",
@@ -148,6 +152,16 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
   .global("authentication", s.secret(authentication), {
     doc: "Opaque, invocation-scoped HTTP credentials bound to one origin. Never stored in Git config.",
   })
+  .global("cwd", z.string(), {
+    default: "/",
+    env: "PWD",
+    valueName: "PATH",
+    doc: {
+      summary: "Directory the caller is in.",
+      description:
+        "Where Git starts before any -C is applied. A shell supplies its current directory; other callers start at /.",
+    },
+  })
   .global("working-directory", z.string(), {
     short: "C",
     repeatable: "repeated",
@@ -155,7 +169,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
     doc: {
       summary: "Run as if Git started in PATH.",
       description:
-        "May be repeated. Each relative PATH is resolved from the result of the previous -C, matching Git.",
+        "May be repeated. Each relative PATH is resolved from the result of the previous -C, matching Git; the first one from the directory the caller is in.",
     },
   })
   .command("init", (command) =>
@@ -969,6 +983,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
   )
   .implement({
     rebase: async ({
+      cwd,
       workingDirectory,
       upstream,
       branch,
@@ -981,13 +996,14 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
           throw new Error("rebase lifecycle options are mutually exclusive");
         if ((continuing || skip || abort) && (upstream || branch))
           throw new Error("rebase lifecycle options do not accept revisions");
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         if (continuing) return continueRebase(repo);
         if (skip) return skipRebase(repo);
         if (abort) return abortRebase(repo);
         return rebaseCommand(repo, upstream, branch);
       }),
     merge: async ({
+      cwd,
       workingDirectory,
       ref,
       ff,
@@ -998,7 +1014,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       abort,
     }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         if ((continuing || abort) && (ref || ff || ffOnly || noFf || message))
           throw new Error(
             "merge lifecycle options do not accept a revision or merge options",
@@ -1014,6 +1030,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         return mergeCommand(repo, ref, { ff, ffOnly, noFf, message });
       }),
     pull: async ({
+      cwd,
       workingDirectory,
       remote,
       refspecs,
@@ -1028,7 +1045,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         if (rebase && noRebase)
           throw new Error("--rebase and --no-rebase are mutually exclusive");
         return pullCommand(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           remote,
           refspecs,
           {
@@ -1042,6 +1059,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         );
       }),
     push: async ({
+      cwd,
       workingDirectory,
       remote,
       refspecs,
@@ -1059,7 +1077,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       withIdempotenceMode(false, () =>
         withAuthentication(handle, async (auth) =>
           pushCommand(
-            await repository(workingDirectory ?? []),
+            await repository(workingDirectory ?? [], cwd),
             remote,
             refspecs,
             {
@@ -1078,6 +1096,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         ),
       ),
     clone: async ({
+      cwd,
       workingDirectory,
       repository: url,
       directory,
@@ -1097,7 +1116,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         if (singleBranch && noSingleBranch)
           throw new Error("single-branch options are mutually exclusive");
         return cloneCommand(
-          await validatedCwd(workingDirectory ?? []),
+          await validatedCwd(workingDirectory ?? [], cwd),
           url,
           directory,
           {
@@ -1117,6 +1136,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         );
       }),
     fetch: async ({
+      cwd,
       workingDirectory,
       remote,
       refspecs,
@@ -1139,7 +1159,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         if (prune && noPrune)
           throw new Error("prune options are mutually exclusive");
         return fetchCommand(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           remote,
           refspecs,
           {
@@ -1158,32 +1178,32 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         );
       }),
     remote: command(
-      async ({ workingDirectory, verbose }) =>
+      async ({ cwd, workingDirectory, verbose }) =>
         guard(async () =>
-          remoteList(await repository(workingDirectory ?? []), verbose),
+          remoteList(await repository(workingDirectory ?? [], cwd), verbose),
         ),
       {
-        add: async ({ workingDirectory, name, url }) =>
+        add: async ({ cwd, workingDirectory, name, url }) =>
           guard(async () => {
             await remoteAdd(
-              await repository(workingDirectory ?? []),
+              await repository(workingDirectory ?? [], cwd),
               name,
               url,
             );
             return { summary: `added remote ${name}`, paths: [] };
           }),
-        remove: async ({ workingDirectory, name }) =>
+        remove: async ({ cwd, workingDirectory, name }) =>
           guard(async () => {
             await remoteRenameOrRemove(
-              await repository(workingDirectory ?? []),
+              await repository(workingDirectory ?? [], cwd),
               name,
             );
             return { summary: `removed remote ${name}`, paths: [] };
           }),
-        rename: async ({ workingDirectory, name, newName }) =>
+        rename: async ({ cwd, workingDirectory, name, newName }) =>
           guard(async () => {
             await remoteRenameOrRemove(
-              await repository(workingDirectory ?? []),
+              await repository(workingDirectory ?? [], cwd),
               name,
               newName,
             );
@@ -1192,16 +1212,17 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
               paths: [],
             };
           }),
-        "get-url": async ({ workingDirectory, name, push, all }) =>
+        "get-url": async ({ cwd, workingDirectory, name, push, all }) =>
           guard(async () => {
             const urls = await remoteUrls(
-              await repository(workingDirectory ?? []),
+              await repository(workingDirectory ?? [], cwd),
               name,
               push,
             );
             return (all ? urls : urls.slice(0, 1)).map((url) => redact(url));
           }),
         "set-url": async ({
+          cwd,
           workingDirectory,
           name,
           url,
@@ -1212,7 +1233,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         }) =>
           guard(async () => {
             await remoteSetUrl(
-              await repository(workingDirectory ?? []),
+              await repository(workingDirectory ?? [], cwd),
               name,
               url,
               push,
@@ -1225,6 +1246,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       },
     ),
     "ls-remote": async ({
+      cwd,
       workingDirectory,
       repository: remote,
       heads,
@@ -1242,10 +1264,10 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         );
       }
       return guard(async () => {
-        const cwd = await validatedCwd(workingDirectory ?? []);
+        const directory = await validatedCwd(workingDirectory ?? [], cwd);
         let repo;
         try {
-          repo = await repository([cwd]);
+          repo = await repository([directory], cwd);
         } catch (error) {
           if ((error as { code?: string }).code !== "NotFoundError")
             throw error;
@@ -1253,10 +1275,10 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         return lsRemote(repo, remote, heads, tags, symref, wasiHttp, auth);
       }, auth);
     },
-    init: async ({ workingDirectory, directory, initialBranch }) =>
+    init: async ({ cwd, workingDirectory, directory, initialBranch }) =>
       guard(async () => {
         const dir = path.resolve(
-          await validatedCwd(workingDirectory ?? []),
+          await validatedCwd(workingDirectory ?? [], cwd),
           directory ?? ".",
         );
         await initializeRepository(dir, initialBranch ?? "main");
@@ -1265,15 +1287,16 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
           paths: [],
         };
       }),
-    status: async ({ workingDirectory, paths, null: zero }) =>
+    status: async ({ cwd, workingDirectory, paths, null: zero }) =>
       guard(async () => {
         const entries = await statusEntries(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           paths,
         );
         return { entries, stdout: formatStatus(entries, zero) };
       }),
     diff: async ({
+      cwd,
       workingDirectory,
       from,
       to,
@@ -1288,7 +1311,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
           (value): value is string => value !== undefined,
         );
         const result = await diff(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           refs,
           paths,
           cached,
@@ -1298,9 +1321,9 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         );
         return result;
       }),
-    log: async ({ workingDirectory, ref, maxCount, oneline }) =>
+    log: async ({ cwd, workingDirectory, ref, maxCount, oneline }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         const resolved = ref ? await resolveDocumentedRef(repo, ref) : "HEAD";
         const commits = await git.log({
           fs,
@@ -1319,6 +1342,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         return { commits: entries, stdout: formatLog(entries, oneline) };
       }),
     branch: async ({
+      cwd,
       workingDirectory,
       delete: shouldDelete,
       name,
@@ -1330,7 +1354,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       unsetUpstream,
     }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         if (setUpstreamTo !== undefined || unsetUpstream) {
           if (
             (setUpstreamTo !== undefined && unsetUpstream) ||
@@ -1356,11 +1380,11 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         }
         return branchCommand(repo, shouldDelete, name, startPoint);
       }),
-    add: async ({ workingDirectory, paths, all, update }) =>
+    add: async ({ cwd, workingDirectory, paths, all, update }) =>
       guard(async () => {
         if (all && update) throw new Error("-A and -u are mutually exclusive");
         const changed = await stage(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           paths,
           all,
           update,
@@ -1372,15 +1396,15 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
           paths: changed,
         };
       }),
-    commit: async ({ workingDirectory, message, author, allowEmpty }) =>
+    commit: async ({ cwd, workingDirectory, message, author, allowEmpty }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         const oid = await createCommit(repo, message, author, allowEmpty);
         return { oid, summary: message[0] ?? "" };
       }),
-    checkout: async ({ workingDirectory, newBranch, detach, ref, paths }) =>
+    checkout: async ({ cwd, workingDirectory, newBranch, detach, ref, paths }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         const tracking =
           ref && !newBranch && !detach && !paths.length
             ? await trackingCheckoutTarget(repo, ref)
@@ -1406,6 +1430,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         return result;
       }),
     config: async ({
+      cwd,
       workingDirectory,
       local,
       key,
@@ -1417,7 +1442,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
     }) =>
       guard(async () => {
         if (!local) throw new Error("only --local configuration is supported");
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         return configure(repo, key, value, { add, getAll, unset, unsetAll });
       }),
   });

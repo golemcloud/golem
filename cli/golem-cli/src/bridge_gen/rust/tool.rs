@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use super::schema_graph::{self, SchemaGraphRegistry};
-use super::{GolemDependencySource, RustBridgeGenerator, RustBridgeMode, RustRuntimeConfig, dep};
+use super::{RustBridgeGenerator, RustBridgeMode, RustRuntimeConfig, dep};
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{
     command_path, field_names, global_surfaces, idx_to_usize, synthetic_agent_type,
 };
-use crate::sdk_overrides::{sdk_overrides, workspace_root};
+use crate::sdk_overrides::{RustDependency, sdk_overrides, workspace_root};
 use anyhow::{Context, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::schema::graph::{SchemaGraph, reachable_defs};
@@ -122,13 +122,10 @@ impl RustToolBridgeGenerator {
     }
 
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let golem_source = if self.testing {
-            GolemDependencySource::Path(workspace_root()?)
+        let sdk_dependency = if self.testing {
+            RustDependency::Path(workspace_root()?.join("sdks/rust/golem-rust"))
         } else {
-            match sdk_overrides()?.golem_repo_root()? {
-                Some(repo_root) => GolemDependencySource::Path(repo_root),
-                None => GolemDependencySource::GitMain,
-            }
+            sdk_overrides()?.golem_rust_dependency()
         };
 
         let mut doc = DocumentMut::new();
@@ -141,7 +138,7 @@ impl RustToolBridgeGenerator {
         doc["dependencies"] = Item::Table(Table::default());
         doc["dependencies"]["chrono"] = dep("0.4", &[]);
         doc["dependencies"]["golem-rust"] =
-            golem_source.dep_item("sdks/rust/golem-rust", &["export_golem_agentic", "macro"])?;
+            sdk_dependency.as_toml_item(&["export_golem_agentic", "macro"])?;
         doc["dependencies"]["serde"] = dep("1", &["derive"]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 

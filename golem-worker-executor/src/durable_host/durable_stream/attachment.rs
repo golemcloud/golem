@@ -127,6 +127,11 @@ impl DurableStreamStore {
                     .download_payload(record)
                     .await
                     .map_err(StreamStoreError::Oplog)?;
+                Self::validate_consumer_reobservation(self.oplog.as_ref(), oplog_index, &record)
+                    .await?;
+                if record.reobserves().is_some() {
+                    continue;
+                }
                 match record {
                     StreamSessionRecord::ConsumerItemValue(record)
                         if record.session_key.qualify(

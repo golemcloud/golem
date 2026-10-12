@@ -1,0 +1,430 @@
+# Supported JS APIs
+
+## Feature Flags
+
+The generated crate supports three feature flags:
+
+| Feature   | Default | Description                              |
+| --------- | ------- | ---------------------------------------- |
+| `logging` | ✅ On   | Enables `wasi:logging` for `console` API |
+| `http`    | ✅ On   | Enables `wasi:http` for `fetch` API      |
+| `sqlite`  | ❌ Off  | Enables `node:sqlite` with embedded SQLite |
+
+## WIT–JS Type Mappings
+
+| WIT Type             | JS Type                                              | Notes                                |
+| -------------------- | ---------------------------------------------------- | ------------------------------------ |
+| `char`               | `string`                                             | —                                    |
+| `string`             | `string`                                             | —                                    |
+| `s8`, `u8`, `s16`, `u16`, `s32`, `u32` | `number`                          | —                                    |
+| `s64`, `u64`         | `bigint`                                             | —                                    |
+| `f32`, `f64`         | `number`                                             | —                                    |
+| `option<T>`          | `T \| undefined`                                     | Nested options encoded differently   |
+| `list<T>`            | `T[]`                                                | —                                    |
+| `result<T, E>`       | `{ tag: "ok", val: T } \| { tag: "err", val: E }`   | —                                    |
+| `tuple<A, B, C>`     | `Array`                                              | —                                    |
+| `enum { a, b, c }`   | `"a" \| "b" \| "c"`                                 | Matches WIT case names               |
+| `flags { a, b, c }`  | `{ a: boolean, b: boolean, c: boolean }`             | Keys are camelCase                   |
+| `record { .. }`      | `Object`                                             | Field names are camelCase            |
+| `variant { .. }`     | `{ tag: "x", val: X }`                               | `val` is `undefined` for unit cases  |
+
+## Mapping Limitations
+
+- Maximum of **26 function parameters**
+- **Anonymous interface exports/imports** are not supported
+- **Imported individual functions** into the world are not supported (only whole interfaces)
+
+## Available JavaScript APIs
+
+### Web Platform APIs
+
+#### Console
+
+Depends on `wasi:logging` (if `logging` feature is enabled), otherwise core WASI.
+
+- `assert`, `clear`, `count`, `countReset`, `debug`, `dir`, `dirXml`, `error`, `group`, `groupCollapsed`, `groupEnd`, `info`, `log`, `table`, `time`, `timeEnd`, `timeLog`, `trace`, `warn`
+
+#### HTTP (fetch)
+
+Requires `http` feature flag. Depends on `wasi:http`.
+
+- `fetch`, `Headers`, `Request`, `Response`, `FormData`, `Blob`, `File`
+
+#### URL
+
+- `URL` (including `createObjectURL`, `revokeObjectURL`)
+- `URLSearchParams`
+
+#### Streams
+
+Implemented via [web-streams-polyfill](https://github.com/MattiasBuelens/web-streams-polyfill).
+
+- `ByteLengthQueuingStrategy`, `CountQueuingStrategy`
+- `ReadableStream`, `ReadableStreamDefaultReader`, `ReadableStreamBYOBReader`, `ReadableStreamDefaultController`, `ReadableByteStreamController`, `ReadableStreamBYOBRequest`
+- `WritableStream`, `WritableStreamDefaultController`
+- `TransformStream`, `TransformStreamDefaultController`
+
+#### Timers
+
+- `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `setImmediate`
+
+#### Abort Controller
+
+- `AbortController`, `AbortSignal`, `DOMException`
+
+#### Encoding
+
+- `TextEncoder`, `TextDecoder`, `TextDecoderStream`, `TextEncoderStream`
+
+#### Messaging
+
+- `MessageChannel`, `MessagePort`
+
+#### Events
+
+- `Event`, `EventTarget`, `CustomEvent`
+
+#### Intl (Internationalization)
+
+Minimal `en-US` implementation — all locale inputs are accepted but resolved to `en-US`. When the `timezone` feature is enabled (default), `DateTimeFormat` supports all ~590 IANA timezones via `chrono-tz`.
+
+- `Intl.DateTimeFormat` — `format()`, `formatToParts()`, `resolvedOptions()`, `supportedLocalesOf()`
+- `Intl.NumberFormat` — `format()`, `formatToParts()`, `resolvedOptions()`, `supportedLocalesOf()`
+- `Intl.Collator` — `compare()`, `resolvedOptions()`, `supportedLocalesOf()`
+- `Intl.PluralRules` — `select()`, `selectRange()`, `resolvedOptions()`, `supportedLocalesOf()`
+- `Intl.getCanonicalLocales()`, `Intl.supportedValuesOf()`
+
+#### Crypto (global)
+
+- `crypto.randomUUID`, `crypto.getRandomValues`
+
+#### Structured Clone
+
+Via [ungap/structured-clone](https://github.com/ungap/structured-clone):
+
+- `structuredClone`
+
+### Node.js-Compatible Modules
+
+#### `node:assert`
+
+- `ok`, `equal`, `notEqual`, `strictEqual`, `notStrictEqual`
+- `deepEqual`, `notDeepEqual`, `deepStrictEqual`, `notDeepStrictEqual`, `partialDeepStrictEqual`
+- `throws`, `doesNotThrow`, `rejects`, `doesNotReject`
+- `ifError`, `match`, `doesNotMatch`, `fail`
+- `AssertionError`, `CallTracker`
+- `strict` — strict mode variant
+
+#### `node:async_hooks`
+
+- `AsyncLocalStorage` — `run`, `exit`, `getStore`, `enterWith`, `disable`, `snapshot`, `bind`
+- `AsyncResource` — `runInAsyncScope`, `asyncId`, `triggerAsyncId`, `bind`
+- `createHook` — stub (returns enable/disable no-ops)
+- `executionAsyncId`, `triggerAsyncId`, `executionAsyncResource` — stubs
+
+> ⚠️ **Limitation:** Context is **not** propagated across `await` boundaries (QuickJS internal behavior).
+
+#### `node:buffer`
+
+- `Buffer`, `Blob`, `File`, `SlowBuffer`
+- `resolveObjectURL`, `isAscii`, `isUtf8`
+- `INSPECT_MAX_BYTES`, `kMaxLength`, `kStringMaxLength`, `constants`
+
+#### `node:child_process` *(stub)*
+
+All spawn/exec functions throw `ENOSYS` — WASI does not support process creation.
+
+- `ChildProcess`, `exec`, `execFile`, `fork`, `spawn`, `execSync`, `execFileSync`, `spawnSync`
+
+#### `node:cluster` *(stub)*
+
+Clustering not supported in WASM.
+
+- `isPrimary`, `isMaster`, `isWorker`, `fork`, `disconnect`, `setupPrimary`
+
+#### `node:constants`
+
+Merged constants from `os.constants`, `fs.constants`, and `crypto.constants` (signal numbers, errno values, file flags, etc.)
+
+#### `node:crypto`
+
+- **Hashing:** `createHash`, `createHmac`, `hash`, `getHashes`
+- **Ciphers:** `createCipheriv`, `createDecipheriv`, `getCiphers`
+  - Supported ciphers: `aes-128/256-cbc`, `aes-128/256-ctr`, `aes-128/256-gcm`, `aes-128/192/256-wrap`, `id-aes128/192/256-wrap`, `id-aes128/192/256-wrap-pad`, `des-ede3-cbc`, `des3-wrap`, `chacha20-poly1305`
+- **Signing:** `createSign`, `createVerify` (Ed25519, ECDSA with P-256, P-384, secp256k1)
+- **Keys:** `createPublicKey`, `createPrivateKey`, `createSecretKey`, `KeyObject`, `generateKeyPairSync`, `generateKeyPair`
+- **ECDH:** `createECDH`, `ECDH`, `diffieHellman`, `getCurves`
+- **Certificate:** `Certificate` (`verifySpkac`, `exportPublicKey`, `exportChallenge`)
+- **Random:** `randomBytes`, `randomFillSync`, `randomFill`, `randomInt`, `randomUUID`, `pseudoRandomBytes`, `prng`, `rng`
+- **KDF:** `pbkdf2`, `pbkdf2Sync`, `scrypt`, `scryptSync`, `hkdf`, `hkdfSync`
+- **Primes:** `generatePrime`, `generatePrimeSync`, `checkPrime`, `checkPrimeSync`
+- **Other:** `timingSafeEqual`, `getFips`, `setFips`, `secureHeapUsed`
+
+#### `node:dgram`
+
+UDP datagram sockets built on WASI sockets.
+
+- `dgram.createSocket(type[, listener])` — `udp4` or `udp6`
+- `socket.bind`, `socket.send`, `socket.sendto`, `socket.connect`, `socket.disconnect`, `socket.close`
+- `socket.address()`, `socket.remoteAddress()`
+- `socket.setTTL`, `socket.setRecvBufferSize`/`getRecvBufferSize`, `socket.setSendBufferSize`/`getSendBufferSize`
+- `socket.ref()`/`socket.unref()` — no-op
+- Events: `message`, `listening`, `close`, `error`, `connect`
+
+> ⚠️ Multicast operations throw `ENOSYS`.
+
+#### `node:diagnostics_channel`
+
+- `channel`, `subscribe`, `unsubscribe`, `hasSubscribers`, `tracingChannel`
+- `Channel` — `subscribe`, `unsubscribe`, `publish`, `bindStore`, `unbindStore`, `runStores`, `hasSubscribers`, `name`
+- `TracingChannel` — `subscribe`, `unsubscribe`, `hasSubscribers`, `traceSync`, `tracePromise`, `traceCallback`
+- Built-in HTTP diagnostics channels: `http.client.request.created`, `http.client.request.start`, `http.client.request.error`, `http.client.response.finish`
+
+#### `node:dns`
+
+DNS resolution via WASI sockets.
+
+- `lookup`, `lookupService`, `resolve`, `resolve4`, `resolve6`
+- `resolveAny`, `resolveCname`, `resolveCaa`, `resolveMx`, `resolveNaptr`, `resolveNs`, `resolvePtr`, `resolveSoa`, `resolveSrv`, `resolveTxt`, `resolveTlsa`
+- `reverse`, `setServers`, `getServers`, `setDefaultResultOrder`, `getDefaultResultOrder`
+- `Resolver` class
+- `promises` — promise-based API
+- Error constants: `NODATA`, `FORMERR`, `SERVFAIL`, `NOTFOUND`, `NOTIMP`, `REFUSED`, `BADQUERY`, `BADNAME`, `BADFAMILY`, `BADRESP`, `CONNREFUSED`, `TIMEOUT`, `EOF`, `FILE`, `NOMEM`, `DESTRUCTION`, `BADSTR`, `BADFLAGS`, `NONAME`, `BADHINTS`, `NOTINITIALIZED`, `LOADIPHLPAPI`, `ADDRGETNETWORKPARAMS`, `CANCELLED`, `ADDRCONFIG`, `V4MAPPED`, `ALL`
+
+#### `node:domain`
+
+Deprecated sync-only error-handling domains.
+
+- `domain.create()`/`domain.createDomain()`, `domain.active`, `domain._stack`
+- `Domain` class (extends `EventEmitter`): `run`, `add`, `remove`, `bind`, `intercept`, `enter`, `exit`, `dispose`, `members`, `parent`
+- `process.domain` — reflects active domain
+- Error decoration: `error.domain`, `error.domainEmitter`, `error.domainBound`, `error.domainThrown`
+
+> ⚠️ No async context propagation via `async_hooks`.
+
+#### `node:events`
+
+- `EventEmitter` — `on`, `once`, `off`, `addListener`, `removeListener`, `removeAllListeners`, `emit`, `listenerCount`, `eventNames`, `listeners`, `rawListeners`, `prependListener`, `prependOnceListener`, `setMaxListeners`, `getMaxListeners`
+- Static: `once`, `on`, `getEventListeners`, `getMaxListeners`, `setMaxListeners`, `addAbortListener`, `errorMonitor`, `captureRejections`
+- `Event`, `EventTarget`, `CustomEvent`
+
+#### `node:fs`
+
+Comprehensive filesystem API on WASI filesystem.
+
+- **Sync:** `readFileSync`, `writeFileSync`, `appendFileSync`, `openSync`, `closeSync`, `readSync`, `writeSync`, `ftruncateSync`, `fsyncSync`, `fdatasyncSync`, `statSync`, `lstatSync`, `fstatSync`, `statfsSync`, `readdirSync`, `accessSync`, `existsSync`, `realpathSync`, `truncateSync`, `copyFileSync`, `linkSync`, `symlinkSync`, `readlinkSync`, `chmodSync`, `fchmodSync`, `lchmodSync`, `chownSync`, `fchownSync`, `lchownSync`, `utimesSync`, `futimesSync`, `lutimesSync`, `unlinkSync`, `renameSync`, `mkdirSync`, `rmdirSync`, `rmSync`, `mkdtempSync`, `opendirSync`, `readvSync`, `writevSync`, `cpSync`
+- **Async (callback):** `readFile`, `writeFile`, `appendFile`, `open`, `close`, `read`, `write`, `stat`, `lstat`, `fstat`, `statfs`, `ftruncate`, `fsync`, `fdatasync`, `readdir`, `access`, `exists`, `realpath`, `truncate`, `copyFile`, `link`, `symlink`, `readlink`, `chmod`, `fchmod`, `lchmod`, `chown`, `fchown`, `lchown`, `utimes`, `futimes`, `lutimes`, `unlink`, `rename`, `mkdir`, `rmdir`, `rm`, `mkdtemp`, `opendir`, `watch`, `watchFile`, `unwatchFile`, `readv`, `writev`, `cp`, `openAsBlob`
+- **Streams:** `createReadStream`, `createWriteStream`
+- **Classes:** `Stats`, `Dirent`, `Dir`, `FSWatcher`, `StatWatcher`, `ReadStream`, `WriteStream`
+- **Constants:** `F_OK`, `R_OK`, `W_OK`, `X_OK`, `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, and more
+
+#### `node:fs/promises`
+
+- `FileHandle`, `open`, `readFile`, `writeFile`, `appendFile`, `unlink`, `rename`, `mkdir`, `rmdir`, `rm`, `stat`, `lstat`, `readdir`, `opendir`, `access`, `realpath`, `truncate`, `copyFile`, `link`, `symlink`, `readlink`, `chmod`, `lchmod`, `chown`, `lchown`, `utimes`, `lutimes`, `mkdtemp`, `cp`, `watch`, `statfs`, `constants`
+
+#### `node:http` / `node:https`
+
+Requires `http` feature flag. Client uses `wasi:http` (TLS transparent). Server uses `wasi:sockets` for TCP-level HTTP/1.1.
+
+- `http.request`, `http.get`, `http.METHODS`, `http.STATUS_CODES`, `http.maxHeaderSize`, `http.validateHeaderName`, `http.validateHeaderValue`
+- `http.Agent`, `http.globalAgent`
+- `http.OutgoingMessage`, `http.ClientRequest`, `http.IncomingMessage`
+- `https.request`, `https.get`
+- `http.createServer`, `http.Server`, `http.ServerResponse`
+- Server-side `IncomingMessage` with `method`, `url`, `headers`, `rawHeaders`, `httpVersion`, `socket`, etc.
+- `node:_http_common` — `_checkIsHttpToken`, `_checkInvalidHeaderChar`
+- Supports: keep-alive, chunked transfer encoding, content-length bodies, sequential pipelining, idle connection cleanup
+
+> ⚠️ Not yet supported: HTTP Upgrade, 1xx events, server-side timeout enforcement, `https.createServer()`.
+
+#### `node:http2` *(stub)*
+
+- `connect`, `createServer`, `createSecureServer`, `Http2ServerRequest`, `Http2ServerResponse`
+
+#### `node:inspector` *(stub)*
+
+No V8 inspector in WASM.
+
+- `Session`, `open`, `close`, `url`, `waitForDebugger`, `console`, `Network`
+
+#### `node:module`
+
+- `require`, `createRequire`, `builtinModules`, `isBuiltin`, `runMain`, `_nodeModulePaths`
+
+#### `node:net`
+
+TCP sockets and servers on WASI sockets.
+
+- `net.createServer`, `net.createConnection`, `net.connect`
+- `net.isIP`, `net.isIPv4`, `net.isIPv6`
+- `net.getDefaultAutoSelectFamily`/`net.setDefaultAutoSelectFamily` — stubs
+- `net.Socket` (extends `stream.Duplex`): `connect`, `write`, `end`, `destroy`, `resetAndDestroy`, `setTimeout`, `setNoDelay`, `setKeepAlive`, `address`, `ref`, `unref`; properties: `remoteAddress`, `remotePort`, `remoteFamily`, `localAddress`, `localPort`, `localFamily`, `bytesRead`, `bytesWritten`, `connecting`, `pending`, `readyState`; events: `connect`, `ready`, `data`, `end`, `close`, `error`, `timeout`, `drain`, `lookup`
+- `net.Server` (extends `EventEmitter`): `listen`, `close`, `address`, `getConnections`, `ref`, `unref`; properties: `listening`, `maxConnections`; events: `listening`, `connection`, `close`, `error`, `drop`
+- `net.BlockList`, `net.SocketAddress`, `net.Stream`
+
+> ⚠️ Not supported: IPC/Unix domain sockets, `cluster` integration.
+
+#### `node:os`
+
+- `arch`, `platform`, `type`, `release`, `version`, `machine`, `hostname`, `homedir`, `tmpdir`, `endianness`
+- `cpus`, `loadavg`, `freemem`, `totalmem`, `uptime`, `availableParallelism`
+- `networkInterfaces`, `userInfo`, `getPriority`, `setPriority`
+- `EOL`, `devNull`, `constants`
+
+#### `node:path`
+
+- `sep`, `delimiter`, `basename`, `dirname`, `extname`, `isAbsolute`, `join`, `normalize`, `relative`, `resolve`, `parse`, `format`, `matchesGlob`, `toNamespacedPath`, `posix`
+
+#### `node:perf_hooks`
+
+- `performance` — `now()`, `timeOrigin`, `mark()`, `measure()`, `getEntries()`, `getEntriesByName()`, `getEntriesByType()`, `clearMarks()`, `clearMeasures()`, `toJSON()`
+- `PerformanceEntry`, `PerformanceObserver`
+- `monitorEventLoopDelay`, `createHistogram`, `constants`
+
+#### `node:process`
+
+- **Properties:** `argv`, `argv0`, `env`, `pid`, `ppid`, `platform` (`'wasi'`), `arch` (`'wasm32'`), `version`, `versions`, `config`, `features`, `execArgv`, `execPath`, `exitCode`, `stdout`, `stderr`
+- **Methods:** `exit`, `cwd`, `nextTick`, `hrtime`, `hrtime.bigint`, `uptime`, `cpuUsage`, `memoryUsage`, `kill`, `abort`, `emitWarning`
+- **User/Group:** `getuid`, `getgid`, `geteuid`, `getegid`, `getgroups`, `setuid`, `setgid`
+- Extends `EventEmitter` — supports `on('uncaughtException')`, `on('unhandledRejection')`, etc.
+
+#### `node:punycode`
+
+- `decode`, `encode`, `toASCII`, `toUnicode`, `ucs2`, `version`
+
+#### `node:querystring`
+
+- `stringify`/`encode`, `parse`/`decode`, `escape`, `unescape`, `unescapeBuffer`
+
+#### `node:readline`
+
+- `createInterface`, `Interface`, `clearLine`, `clearScreenDown`, `cursorTo`, `moveCursor`, `emitKeypressEvents`
+- `readline/promises` — promise-based API
+
+#### `node:repl` *(stub)*
+
+- `start`, `REPLServer`, `Recoverable`, `builtinModules`
+
+#### `node:sqlite`
+
+Requires `sqlite` feature flag. Synchronous API with embedded SQLite engine.
+
+- `DatabaseSync` — `prepare`, `exec`, `close`, `open`, `isOpen`, `isTransaction`, `createSession`, `applyChangeset`, `enableLoadExtension`, `function`, `aggregate`, `backup`
+- `StatementSync` — `run`, `get`, `all`, `iterate`, `columns`, `setReadBigInts`, `setAllowBareNamedParameters`, `sourceSQL`, `expandedSQL`
+- `Session` — `changeset`, `patchset`, `close`
+- Constants: `SQLITE_CHANGESET_OMIT`, `SQLITE_CHANGESET_REPLACE`, `SQLITE_CHANGESET_ABORT`
+
+> ⚠️ `loadExtension()` throws — native extensions cannot be loaded in WASM.
+
+#### `node:stream`
+
+- `Readable` (with `from`, `fromWeb`, `toWeb`, `wrap`, `map`, `filter`, `flatMap`, `take`, `drop`, `toArray`, `forEach`, `reduce`, `some`, `every`, `find`)
+- `Writable`, `Duplex`, `Transform`, `PassThrough`, `Stream`
+- `pipeline`, `finished`, `compose`, `duplexPair`, `addAbortSignal`
+- `getDefaultHighWaterMark`, `setDefaultHighWaterMark`, `isDisturbed`, `destroy`
+- `stream/consumers` — `arrayBuffer`, `blob`, `buffer`, `json`, `text`
+- `stream/promises` — promise-based `pipeline` and `finished`
+
+#### `node:string_decoder`
+
+- `StringDecoder`
+
+#### `node:test`
+
+Built-in test runner.
+
+- `test`, `describe`/`suite`, `it`, `before`, `after`, `beforeEach`, `afterEach`
+- `mock` — function mocking
+- `run` — programmatic test execution
+
+#### `node:timers`
+
+- `setTimeout`, `setInterval`, `setImmediate`, `clearTimeout`, `clearInterval`
+- `timers/promises` — promise-based `setTimeout`, `setInterval`, `setImmediate`
+
+#### `node:tls` *(stub)*
+
+TLS is handled transparently by the WASI-HTTP layer.
+
+- `SecureContext`, `TLSSocket`, `Server`, `connect`, `createServer`, `createSecureContext`, `checkServerIdentity`, `getCiphers`, `rootCertificates`
+- `DEFAULT_MIN_VERSION`, `DEFAULT_MAX_VERSION`, `DEFAULT_ECDH_CURVE`
+
+#### `node:trace_events`
+
+- `createTracing({ categories })` — creates a `Tracing` handle
+- `Tracing#enable()`/`Tracing#disable()`, `Tracing#enabled`, `Tracing#categories`
+- `getEnabledCategories()`
+
+> ⚠️ No native trace sink — API-surface compatibility only.
+
+#### `node:tty`
+
+- `isatty`, `ReadStream`, `WriteStream`
+
+#### `node:url`
+
+- `URL`, `URLSearchParams`
+- `parse`, `resolve`, `format` (legacy)
+- `fileURLToPath`, `pathToFileURL`, `urlToHttpOptions`
+
+#### `node:util`
+
+- `format`, `inspect`, `deprecate`, `debugLog`, `log`
+- Type checks: `isArray`, `isBoolean`, `isNull`, `isNullOrUndefined`, `isNumber`, `isString`, `isSymbol`, `isUndefined`, `isRegExp`, `isObject`, `isDate`, `isError`, `isFunction`, `isPrimitive`, `isBuffer`
+- `promisify`, `callbackify`
+- `parseEnv`, `styleText`, `getCallSite`, `getCallSites`, `toUSVString`, `_extend`
+- `TextEncoder`, `TextDecoder`
+
+#### `node:v8`
+
+- `getHeapStatistics`, `getHeapSpaceStatistics`, `getHeapSnapshot`, `getHeapCodeStatistics`
+- `setFlagsFromString`, `writeHeapSnapshot`, `takeCoverage`, `stopCoverage`
+- `serialize`, `deserialize`, `Serializer`, `Deserializer`, `DefaultSerializer`, `DefaultDeserializer`
+
+#### `node:vm`
+
+- `runInNewContext`, `runInContext`, `runInThisContext`, `createContext`, `isContext`, `compileFunction`
+- `Script`, `createScript`
+- `SourceTextModule` (experimental — limited `export const`/`export let`/`export var` support)
+
+#### `node:worker_threads` *(stub)*
+
+Workers not supported in single-threaded WASM.
+
+- `isMainThread`, `parentPort`, `workerData`, `threadId`, `resourceLimits`
+- `Worker`, `BroadcastChannel`, `MessagePort`, `MessageChannel`
+- `markAsUntransferable`, `moveMessagePortToContext`, `receiveMessageOnPort`
+- `getEnvironmentData`, `setEnvironmentData`
+
+#### `node:zlib`
+
+- **Classes:** `Deflate`, `Inflate`, `Gzip`, `Gunzip`, `DeflateRaw`, `InflateRaw`, `Unzip`, `BrotliCompress`, `BrotliDecompress`
+- **Factory:** `createGzip`, `createGunzip`, `createDeflate`, `createInflate`, `createDeflateRaw`, `createInflateRaw`, `createUnzip`, `createBrotliCompress`, `createBrotliDecompress`
+- **Async:** `gzip`, `gunzip`, `deflate`, `inflate`, `deflateRaw`, `inflateRaw`, `unzip`, `brotliCompress`, `brotliDecompress`
+- **Sync:** `gzipSync`, `gunzipSync`, `deflateSync`, `inflateSync`, `deflateRawSync`, `inflateRawSync`, `unzipSync`, `brotliCompressSync`, `brotliDecompressSync`
+- `crc32`, `constants`, `codes`
+
+### Internal / Compatibility Modules
+
+- `internal/url` — `isURL`
+- `internal/http` — `kOutHeaders` symbol
+- `base64-js` — `byteLength`, `toByteArray`, `fromByteArray`
+- `ieee754` — `read`, `write`
+
+### Built-in Language Features (from QuickJS)
+
+These come from QuickJS itself and are available globally without any import:
+
+**Globals:** `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `quickMicrotask`, `decodeURI`, `decodeURIComponent`, `encodeURI`, `encodeURIComponent`, `escape`, `unescape`, `Infinity`, `NaN`, `undefined`
+
+**Full built-in objects with all standard methods:**
+`Object`, `Function`, `Error`, `Generator`, `Iterator`, `Array`, `Number`, `Boolean`, `String`, `Symbol`, `Map`, `Set`, `WeakMap`, `WeakSet`, `GeneratorFunction`, `Math`, `Reflect`, `RegExp`, `JSON`, `Promise`, `AsyncFunction`, `AsyncIterator`, `AsyncGeneratorFunction`, `AsyncGenerator`, `Date`, `BigInt`, `ArrayBuffer`, `SharedArrayBuffer`
+
+**Typed Arrays:** `Int8Array`, `Uint8Array`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `BigInt64Array`, `BigUint64Array`, `Float32Array`, `Float64Array`, `Float16Array`
+
+**Other:** `DataView`, `Atomics`, `Performance`, `WeakRef`, `FinalizationRegistry`, `Callsite`, `Proxy`
+
+## Additional Resources
+
+- [NPM Library Compatibility Tracker](https://github.com/golemcloud/wasm-rquickjs/blob/main/tests/libraries/libraries.md)
+- [Node.js v22 Compatibility Report](https://github.com/golemcloud/wasm-rquickjs/blob/main/tests/node_compat/report.md)

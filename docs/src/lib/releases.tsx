@@ -1,3 +1,6 @@
+/** Release whose binaries the unreleased (`next`) docs link to. */
+export const NEXT_RELEASE_VERSION = "v1.6.0-rc2"
+
 export const RELEASE = {
   version: "v1.5.1",
   baseDownloadUrl: "https://github.com/golemcloud/golem/releases/download",
