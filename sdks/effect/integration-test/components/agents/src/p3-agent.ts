@@ -1,5 +1,5 @@
 import { Effect, Ref, Schema, Stream } from "effect"
-import { defineAgent, method, Schema as GolemSchema } from "@golemcloud/effect-golem"
+import { defineAgent, method, Schema as GolemSchema, WitTypes } from "@golemcloud/effect-golem"
 
 const Item = Schema.Struct({
   id: Schema.Number,
@@ -18,6 +18,10 @@ const StreamTarget = defineAgent({
   mode: "durable",
   id: { name: Schema.String },
   methods: {
+    transformBytes: method({
+      input: { prefix: Schema.Array(WitTypes.Uint8), bytes: WitTypes.Uint8ArraySchema },
+      success: WitTypes.Uint8ArraySchema,
+    }),
     sum: method({
       input: { values: GolemSchema.AgentStream(Schema.Number) },
       success: Schema.Number,
@@ -45,6 +49,10 @@ const StreamTarget = defineAgent({
 StreamTarget.implement({
   init: () => Ref.make(0),
   methods: (scheduledCount) => ({
+    transformBytes: ({ prefix, bytes }) =>
+      Effect.succeed(
+        Uint8Array.from(bytes, (byte, i) => (byte + (prefix[i % prefix.length] ?? 0)) % 256),
+      ),
     sum: ({ values }) =>
       values.pipe(
         Stream.runFold(
@@ -87,6 +95,7 @@ defineAgent({
   name: "EffectP3Caller",
   id: { name: Schema.String },
   methods: {
+    typedArrayRoundtrip: method({ input: {}, success: Schema.Boolean }),
     streamRoundtrip: method({ input: {}, success: Schema.Array(Schema.Number) }),
     nestedStreamCancellation: method({
       input: {},
@@ -112,6 +121,18 @@ defineAgent({
 }).implement({
   init: ({ name }) => Effect.succeed(name),
   methods: (name) => ({
+    typedArrayRoundtrip: () =>
+      Effect.gen(function* () {
+        const target = yield* StreamTarget.client.get({ name })
+        const prefix = Array.from({ length: 300 }, (_, i) => (i * 13 + 7) % 256)
+        const bytes = Uint8Array.from({ length: 10000 }, (_, i) => (i * 37 + 19) % 256)
+        const output = yield* target.transformBytes({ prefix, bytes })
+        return (
+          output instanceof Uint8Array &&
+          output.length === bytes.length &&
+          output.every((byte, i) => byte === (bytes[i]! + prefix[i % prefix.length]!) % 256)
+        )
+      }).pipe(Effect.orDie, Effect.scoped),
     streamRoundtrip: () =>
       Effect.gen(function* () {
         const target = yield* StreamTarget.client.get({ name })

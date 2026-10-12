@@ -117,6 +117,8 @@ export interface SchemaCodec {
   readonly optionInner?: SchemaCodec;
   /** Item codec for a WIT `list` or `fixed-list`. */
   readonly listItem?: SchemaCodec;
+  /** Concrete typed-array constructor for a WIT list marker. */
+  readonly typedArrayConstructor?: { new (length: number): unknown; readonly name: string };
   /** Item codec for a typed schema-value stream. */
   readonly streamItem?: SchemaCodec;
   /** Child codecs for a WIT `map`, when the source schema exposes them. */
@@ -361,17 +363,29 @@ function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec 
     if (!item) return undefined;
     return finish(
       {
-        write: (value, writer) =>
-          writer.add({
+        write: (value, writer) => {
+          if (codec.typedArrayConstructor && !(value instanceof codec.typedArrayConstructor))
+            throw new TypeError(
+              `Expected a ${codec.typedArrayConstructor.name} for a typed-array WIT list`,
+            );
+          const writeItem = (v: unknown) => requiredIndex(item.write(v, writer), 'list item');
+          return writer.add({
             tag: 'list-value',
-            val: (value as unknown[]).map((v) => requiredIndex(item.write(v, writer), 'list item')),
-          }),
+            val: codec.typedArrayConstructor
+              ? Array.from(value as Iterable<unknown>, writeItem)
+              : (value as unknown[]).map(writeItem),
+          });
+        },
         read: (reader, index) =>
-          reader.node(index, 'list-value', (node) =>
-            (node as Extract<WireValueNode, { tag: 'list-value' }>).val.map((i) =>
-              item.read(reader, i),
-            ),
-          ),
+          reader.node(index, 'list-value', (node) => {
+            const indices = (node as Extract<WireValueNode, { tag: 'list-value' }>).val;
+            if (!codec.typedArrayConstructor) return indices.map((i) => item.read(reader, i));
+            const out = new codec.typedArrayConstructor(indices.length) as Record<number, unknown>;
+            indices.forEach((i, position) => {
+              out[position] = item.read(reader, i);
+            });
+            return out;
+          }),
       },
       'list-value',
     );
