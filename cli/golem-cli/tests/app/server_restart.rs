@@ -25,6 +25,8 @@ inherit_test_dep!(Tracing);
 fn registry_migration_count() -> i64 {
     std::fs::read_dir(workspace_path().join("golem-registry-service/db/migration/sqlite"))
         .expect("failed to read the registry sqlite migrations")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
         .count() as i64
 }
 
@@ -73,7 +75,7 @@ impl TestContext {
                 "timed out waiting for the registry migrations of {}",
                 registry_db.display()
             );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         assert!(
@@ -81,9 +83,9 @@ impl TestContext {
             "the server finished its startup before it could be interrupted"
         );
 
-        let mut server_process = self
+        let server_process = self
             .server_process
-            .take()
+            .as_mut()
             .expect("server process should be running");
         let pid = server_process
             .id()
@@ -99,6 +101,7 @@ impl TestContext {
             .await
             .expect("timed out waiting for the interrupted server to exit")
             .expect("failed to wait for the interrupted server");
+        self.server_process = None;
         println!("> interrupted server exited: {exit_status}");
         assert!(
             !self.ports_file.exists(),
