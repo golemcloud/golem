@@ -283,19 +283,22 @@ async fn test_reader_that_leaves_after_the_first_output_ends_the_command_with_th
     let ctx = streaming_invocation_context().await;
 
     // An oplog that is much longer than the buffer of a pipe, so that the CLI is still printing
-    // when the reader leaves. The entry of a call holds its argument.
+    // when the reader leaves. The entry of a call holds its argument. Linux refuses a single
+    // command line argument above 128 KiB, so several calls each carry a shorter one.
     let oplog_agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
-    let long_argument = format!("\"{}\"", "x".repeat(300_000));
-    let created = ctx
-        .cli([
-            cmd::AGENT,
-            cmd::INVOKE,
-            &oplog_agent,
-            "bug_golem1265",
-            &long_argument,
-        ])
-        .await;
-    assert!(created.success_or_dump());
+    let long_argument = format!("\"{}\"", "x".repeat(100_000));
+    for _ in 0..3 {
+        let called = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                &oplog_agent,
+                "bug_golem1265",
+                &long_argument,
+            ])
+            .await;
+        assert!(called.success_or_dump());
+    }
     let complete = ctx.cli([cmd::AGENT, "oplog", &oplog_agent]).await;
     assert!(complete.success_or_dump());
     let complete_size: usize = complete.stdout().map(|line| line.len() + 1).sum();
