@@ -671,6 +671,22 @@ scan-ahead: it routes concurrent completions to the right awaiter. It does not l
 to make different calls; when no matching `Start` exists, replay fails with a divergence error
 (after any active entity body that owns the cursor head has consumed it; see below).
 
+**Invocation ids.** Scan-ahead alone cannot tell apart concurrent calls with the same identity:
+their host tasks reach the claim in an order that depends on host scheduling (a replayed 600 s
+watchdog `wait-for` could take the record of a completed 300 ms `wait-for` and fire at once). So a
+concurrent guest call
+also carries an invocation id. The guest import that makes the call reserves it
+(`reserve_invocation_id`, `durability.rs`) from the ordinal counter of the current agent or
+entity invocation, which root custom durable invocations also use, before the guest can make
+another import call. `RuntimeStore` (`worker/suspension.rs`) records the Store's newest guest
+import and refuses a later reservation, and all durable calls of one import share its id. Every
+`Start` the call records carries the id in `Start.invocation_id`, and the claim requires it, so
+calls with equal requests cannot swap either. A host function that `await`s before its first
+durable call reserves at entry (`reserve_invocation_id_before_await`); a task it spawns receives
+the id (`InvocationIdSource::Reserved`). Direct calls (serialized by the Store), host-internal
+children, tool and entity invocations (tool attempt ordinal), and calls observed by a custom
+invocation record no id.
+
 **Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
 positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
 entitled to nothing it did not record. Kind and owner are validated before consumption:
