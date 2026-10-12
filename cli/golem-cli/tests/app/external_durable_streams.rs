@@ -345,6 +345,16 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
         [json!("echo:shared"), json!("echo:fork-only")]
     );
 
+    // Arguments are written in the template's source language: Go spells a
+    // list `{…}`, the others as JSON.
+    let list = |items: &[&str]| {
+        if language == "go" {
+            let items: Vec<String> = items.iter().map(|item| json!(item).to_string()).collect();
+            format!("{{{}}}", items.join(", "))
+        } else {
+            json!(items).to_string()
+        }
+    };
     let guest_base =
         format!("{origin}/durable-stream-agents/protocol/echo/invocations/guest-local-session");
     let guest_source = format!("{guest_base}/streams/input");
@@ -354,14 +364,14 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
     );
     // Closing the small batch before reading avoids the separate open-stream
     // flag interoperability issue and keeps the entire payload in one batch.
-    let offset: Option<String> = invoke_template(
+    let offset: Option<String> = invoke_template_raw(
         &ctx,
         append,
         vec![
-            json!(guest_source),
-            json!("guest-local-producer"),
-            json!(["local-first", "local-tail"]),
-            json!(true),
+            json!(guest_source).to_string(),
+            json!("guest-local-producer").to_string(),
+            list(&["local-first", "local-tail"]),
+            true.to_string(),
         ],
     )
     .await;
@@ -375,20 +385,11 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
 
     let server = ReferenceServer::start().await;
     let external = server.create("/template", "application/json").await;
-    // Arguments are written in the template's source language: Go spells a
-    // list `{…}`, the others as JSON.
-    let list = |item: &str| {
-        if language == "go" {
-            format!("{{{}}}", json!(item))
-        } else {
-            json!([item]).to_string()
-        }
-    };
     let append_args = |producer: &str, item: &str, close: bool| {
         vec![
             json!(external).to_string(),
             json!(producer).to_string(),
-            list(item),
+            list(&[item]),
             close.to_string(),
         ]
     };
