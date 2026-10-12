@@ -153,8 +153,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
 use wasmtime::component::{
-    Accessor, AccessorTask, HasData, HasSelf, Linker, Resource, Source, StreamConsumer,
-    StreamReader, StreamResult,
+    Accessor, AccessorTask, Destination, HasData, HasSelf, Linker, Resource, Source,
+    StreamConsumer, StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime::{AsContextMut, Store, StoreContextMut};
 
@@ -428,9 +428,63 @@ impl<D> StreamConsumer<D> for UnderlyingToolStdinStreamConsumer {
     }
 }
 
+/// The source of the stdin of a tool call that a client started. It ends when the tool drops
+/// its side of the stdin: the unread input is then cancelled as an input whose reader dropped it,
+/// and not read again. It also ends on a cancel that it did not ask for: `Cancelled` answers
+/// only a request to finish.
+struct UnderlyingToolStdinStreamProducer<P> {
+    source: P,
+    tool_dropped_stdin: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl<P> UnderlyingToolStdinStreamProducer<P> {
+    fn new(source: P, observer: AttachmentObserver) -> Self {
+        Self {
+            source,
+            tool_dropped_stdin: Box::pin(async move {
+                // Every other terminal is the writer's or the owner's.
+                if !matches!(
+                    observer.wait_terminal().await,
+                    ByteStreamCloseCause::ConsumerCancelled
+                ) {
+                    std::future::pending::<()>().await;
+                }
+            }),
+        }
+    }
+}
+
+impl<D, P> StreamProducer<D> for UnderlyingToolStdinStreamProducer<P>
+where
+    P: StreamProducer<D> + Unpin,
+{
+    type Item = P::Item;
+    type Buffer = P::Buffer;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        store: StoreContextMut<'a, D>,
+        destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        if self.tool_dropped_stdin.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        match Pin::new(&mut self.source).poll_produce(cx, store, destination, finish) {
+            Poll::Ready(Ok(StreamResult::Cancelled)) if !finish => {
+                Poll::Ready(Ok(StreamResult::Dropped))
+            }
+            answer => answer,
+        }
+    }
+}
+
 struct ToolStdinStreamPumpTask<Ctx> {
     producer: AttachmentProducer,
     items: mpsc::UnboundedReceiver<ToolStdinStreamItem>,
+    /// Set by the source when its producer cancelled it; the stdin then ends with `cancelled`.
+    source_cancelled: Arc<AtomicBool>,
     _ctx: std::marker::PhantomData<fn() -> Ctx>,
 }
 
@@ -456,7 +510,12 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
                 return Ok(());
             }
         }
-        let _ = self.producer.finish();
+        // The source sets the flag before it ends, and the channel closes only after that.
+        if self.source_cancelled.load(Ordering::Acquire) {
+            let _ = self.producer.fail(ByteStreamFailure::Cancelled);
+        } else {
+            let _ = self.producer.finish();
+        }
         Ok(())
     }
 }
@@ -4851,20 +4910,22 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = stdin
                 .take_host_endpoint::<DurableInputEndpoint>()
                 .map_err(wasmtime::Error::msg)?;
-            let reader = accessor.with(|mut access| {
+            let source_cancelled = Arc::new(AtomicBool::new(false));
+            let source = accessor.with(|mut access| {
                 let ctx = access.get();
-                let producer = DurableByteInputProducer(
-                    DurableInputProducer::new(endpoint).with_drop_cleanup(
-                        ctx.state
-                            .dropped_call_event_sender()
-                            .expect("dropped-call event sender is always available"),
-                        ctx.stream_runtime_teardown_probe(),
-                    ),
-                );
-                StreamReader::new(&mut access, producer)
-            })?;
+                DurableByteInputProducer(
+                    DurableInputProducer::new(endpoint)
+                        .with_drop_cleanup(
+                            ctx.state
+                                .dropped_call_event_sender()
+                                .expect("dropped-call event sender is always available"),
+                            ctx.stream_runtime_teardown_probe(),
+                        )
+                        .with_producer_cancel_flag(source_cancelled.clone()),
+                )
+            });
             Some(
-                create_native_underlying_stdin(accessor, reader)
+                create_native_underlying_stdin(accessor, source, source_cancelled)
                     .map_err(wasmtime::Error::from_anyhow)?,
             )
         } else {
@@ -5289,19 +5350,22 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancelled: Arc::new(AtomicBool::new(false)),
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
     })
 }
 
-fn create_native_underlying_stdin<U, Ctx>(
+fn create_native_underlying_stdin<U, Ctx, P>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    source: StreamReader<u8>,
+    source: P,
+    source_cancelled: Arc<AtomicBool>,
 ) -> anyhow::Result<Resource<ToolStdinEntry>>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
+    P: StreamProducer<U, Item = u8> + Unpin,
 {
     accessor.with(|mut access| {
         let ctx = access.get();
@@ -5313,10 +5377,17 @@ where
         let (producer, consumer, observer) = attachment_pair(max_attachment_bytes, memory);
         let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
         let (items, received) = mpsc::unbounded_channel();
-        if let Err(error) = source.pipe(
+        let piped = StreamReader::new(
             &mut access,
-            UnderlyingToolStdinStreamConsumer::new(items, observer, max_attachment_bytes),
-        ) {
+            UnderlyingToolStdinStreamProducer::new(source, observer.clone()),
+        )
+        .and_then(|source| {
+            source.pipe(
+                &mut access,
+                UnderlyingToolStdinStreamConsumer::new(items, observer, max_attachment_bytes),
+            )
+        });
+        if let Err(error) = piped {
             return Err(cleanup_tool_endpoints(
                 error.into(),
                 || {
@@ -5330,6 +5401,7 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancelled,
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
@@ -6060,6 +6132,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             access.spawn(ToolStdinStreamPumpTask::<Ctx> {
                 producer,
                 items: received,
+                source_cancelled: Arc::new(AtomicBool::new(false)),
                 _ctx: std::marker::PhantomData,
             });
             Ok(stdin)
@@ -6514,13 +6587,13 @@ mod tests {
     use super::{
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolOutputEntry,
         ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, UnderlyingToolEntry,
-        WitRegisteredTool, await_native_entity_body, caller_tool_owner,
-        classify_tool_discovery_error, cleanup_tool_endpoints, first_output_limit_error,
-        materialize_output_writer, merge_discovered_tools, native_output_handles, option_args,
-        output_limit_error, publish_output_completions, recorded_tool_body_is_skipped,
-        resolve_tool_command, select_native_body_result, terminal_tool_discovery_error,
-        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
-        validate_stream_attachments,
+        UnderlyingToolStdinStreamConsumer, UnderlyingToolStdinStreamProducer, WitRegisteredTool,
+        await_native_entity_body, caller_tool_owner, classify_tool_discovery_error,
+        cleanup_tool_endpoints, first_output_limit_error, materialize_output_writer,
+        merge_discovered_tools, native_output_handles, option_args, output_limit_error,
+        publish_output_completions, recorded_tool_body_is_skipped, resolve_tool_command,
+        select_native_body_result, terminal_tool_discovery_error, validate_declared_tool_error,
+        validate_declared_tool_result, validate_native_tool_output, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -6917,6 +6990,92 @@ mod tests {
     #[test]
     async fn cancelling_typed_stdin_with_pending_acknowledgement_preserves_it_and_resumes() {
         assert_typed_stdin_operation_cancellation(true).await;
+    }
+
+    /// Stands in for the durable input of a tool's stdin: every read gets `answer`.
+    struct ScriptedStdinSource {
+        answer: Poll<wasmtime::component::StreamResult>,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl<D> wasmtime::component::StreamProducer<D> for ScriptedStdinSource {
+        type Item = u8;
+        type Buffer = Option<u8>;
+
+        fn poll_produce<'a>(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _store: wasmtime::StoreContextMut<'a, D>,
+            _destination: wasmtime::component::Destination<'a, Self::Item, Self::Buffer>,
+            _finish: bool,
+        ) -> Poll<wasmtime::Result<wasmtime::component::StreamResult>> {
+            self.reads.fetch_add(1, Ordering::AcqRel);
+            self.answer.map(Ok)
+        }
+    }
+
+    /// Pipes a source into the stdin of an external tool call and waits for the end of the
+    /// pipe. With `tool_drops_stdin` the tool's side goes away after the first read of the
+    /// source. Returns how often the source was read.
+    async fn reads_until_the_stdin_pipe_ends(
+        answer: Poll<wasmtime::component::StreamResult>,
+        tool_drops_stdin: bool,
+    ) -> wasmtime::Result<usize> {
+        let (_producer, consumer, observer) = attachment_pair(8, AttachmentMemory::inert());
+        let reads = Arc::new(AtomicUsize::new(0));
+        let source = ScriptedStdinSource {
+            answer,
+            reads: reads.clone(),
+        };
+        let (items, mut received) = mpsc::unbounded_channel();
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<usize> {
+                accessor.with(|mut store| {
+                    StreamReader::new(
+                        &mut store,
+                        UnderlyingToolStdinStreamProducer::new(source, observer.clone()),
+                    )?
+                    .pipe(
+                        &mut store,
+                        UnderlyingToolStdinStreamConsumer::new(items, observer, 8),
+                    )
+                })?;
+                while reads.load(Ordering::Acquire) == 0 {
+                    tokio::task::yield_now().await;
+                }
+                if tool_drops_stdin {
+                    drop(consumer);
+                }
+                // The pipe drops its consumer, and with it the sender, when it ends.
+                assert!(received.recv().await.is_none());
+                Ok(reads.load(Ordering::Acquire))
+            })
+            .await?
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn the_source_of_an_external_stdin_ends_when_the_tool_drops_its_stdin() {
+        let reads = reads_until_the_stdin_pipe_ends(Poll::Pending, true)
+            .await
+            .unwrap();
+        assert_eq!(reads, 1, "the source was read again after the tool left");
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn the_source_of_an_external_stdin_ends_on_a_cancel_nobody_asked_for() {
+        let reads = reads_until_the_stdin_pipe_ends(
+            Poll::Ready(wasmtime::component::StreamResult::Cancelled),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reads, 1);
     }
 
     #[test]

@@ -51,6 +51,9 @@ pub enum ClockRaceError {
 #[tool_definition(version = "1.0.0")]
 pub trait ClockRace {
     async fn race_p3_sleeps(&self, secs: Vec<u64>) -> Result<u64, ClockRaceError>;
+    async fn race_equal_p3_sleeps(&self, secs: u64) -> Result<u64, ClockRaceError>;
+    async fn drop_p3_sleep_early(&self, secs: u64, turns: u64) -> Result<u64, ClockRaceError>;
+    async fn sleep_p3_in_turn(&self, count: u64, nanos: u64) -> Result<u64, ClockRaceError>;
     async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError>;
     async fn polling_loop_vs_watchdog(&self) -> Result<String, ClockRaceError>;
     async fn follow_up(&self) -> Result<String, ClockRaceError>;
@@ -63,6 +66,45 @@ struct ClockRaceImpl;
 impl ClockRace for ClockRaceImpl {
     async fn race_p3_sleeps(&self, secs: Vec<u64>) -> Result<u64, ClockRaceError> {
         Ok(race_p3_sleeps(secs).await)
+    }
+
+    // Two waits of one length, started together. The result is the index of the one that ends
+    // first, so the caller can tell the two apart.
+    async fn race_equal_p3_sleeps(&self, secs: u64) -> Result<u64, ClockRaceError> {
+        let waits: Vec<_> = (0..2_u64)
+            .map(|index| async move {
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                    secs.saturating_mul(1_000_000_000),
+                )
+                .await;
+                index
+            })
+            .collect();
+        Ok(waits.race().await)
+    }
+
+    // Starts a wait, lets the host run for `turns` turns, and returns while the wait is pending.
+    async fn drop_p3_sleep_early(&self, secs: u64, turns: u64) -> Result<u64, ClockRaceError> {
+        let mut wait = std::pin::pin!(golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+            secs.saturating_mul(1_000_000_000),
+        ));
+        std::future::poll_fn(|cx| {
+            let _ = wait.as_mut().poll(cx);
+            std::task::Poll::Ready(())
+        })
+        .await;
+        for _ in 0..turns {
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        Ok(turns)
+    }
+
+    // Makes `count` waits of `nanos` each, one after the other.
+    async fn sleep_p3_in_turn(&self, count: u64, nanos: u64) -> Result<u64, ClockRaceError> {
+        for _ in 0..count {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(nanos).await;
+        }
+        Ok(count)
     }
 
     async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError> {
@@ -1538,6 +1580,8 @@ impl Streaming for StreamingImpl {
                 | "writer-abandonment"
                 | "finish-after-reader-drop"
                 | "stream-failure-success"
+                | "stdin-or-clock"
+                | "stdin-or-spin"
         ) {
             if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
                 for byte in MARKER {
@@ -1553,6 +1597,37 @@ impl Streaming for StreamingImpl {
 
         match mode.as_str() {
             "empty" => {}
+            // The read of stdin and the work run side by side. The first to end is written to
+            // stdout: how stdin ended, or that the work ended first.
+            "stdin-or-clock" | "stdin-or-spin" => {
+                let read = async {
+                    match stdin.next().await {
+                        None => "stdin-eof".to_string(),
+                        Some(Ok(_)) => "stdin-data".to_string(),
+                        Some(Err(ByteStreamFailure::Cancelled)) => "stdin-cancelled".to_string(),
+                        Some(Err(other)) => format!("stdin-failed:{other:?}"),
+                    }
+                };
+                let work = async {
+                    if mode == "stdin-or-clock" {
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                            .await;
+                        "clock".to_string()
+                    } else {
+                        // Computes without a host call and lets the other task run in between,
+                        // like an interpreter between two commands.
+                        let mut counter: u64 = 0;
+                        loop {
+                            for _ in 0..1_000_000 {
+                                counter = core::hint::black_box(counter.wrapping_add(1));
+                            }
+                            golem_rust::wasip3::wit_bindgen::yield_async().await;
+                        }
+                    }
+                };
+                let outcome = (read, work).race().await;
+                summary.output_closed = !write_chunk(&mut stdout, outcome.into_bytes()).await;
+            }
             "binary" => {
                 summary.output_closed =
                     !write_chunk(&mut stdout, vec![0, 255, 1, 128, 0, 13, 10, 254]).await;

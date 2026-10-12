@@ -85,7 +85,7 @@ use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -6247,6 +6247,9 @@ pub struct DurableInputProducer {
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Set when the stream ends because its producer cancelled it. A tool's stdin needs this
+    /// to end with `cancelled`; every other reader sees the end of the stream.
+    cancelled_by_producer: Option<Arc<AtomicBool>>,
 }
 
 type StreamReadObserver =
@@ -6667,6 +6670,7 @@ impl DurableInputProducer {
             dropping: false,
             drop_event_sink: None,
             runtime_teardown: Arc::new(|| false),
+            cancelled_by_producer: None,
         }
     }
 
@@ -6678,6 +6682,12 @@ impl DurableInputProducer {
     ) -> Self {
         self.drop_event_sink = Some(drop_event_sink);
         self.runtime_teardown = runtime_teardown;
+        self
+    }
+
+    /// Reports a cancel by the stream's producer through `flag`, set before the end is returned.
+    pub(crate) fn with_producer_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancelled_by_producer = Some(flag);
         self
     }
 
@@ -6724,6 +6734,17 @@ impl DurableInputProducer {
             CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) => Err(
                 anyhow::anyhow!("durable stream ended with error context: {error:?}"),
             ),
+            CommittedProducerStreamEventPayload::Cancel {
+                role: StreamCancelRole::InputProducer,
+                reason: StreamCancelReason::Cancelled,
+                ..
+            } => {
+                if let Some(flag) = &self.cancelled_by_producer {
+                    flag.store(true, Ordering::Release);
+                }
+                self.finished = true;
+                Ok(DurableInputEvent::End)
+            }
             CommittedProducerStreamEventPayload::Cancel {
                 role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
                 ..

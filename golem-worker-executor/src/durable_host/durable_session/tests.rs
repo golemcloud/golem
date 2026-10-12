@@ -4303,6 +4303,83 @@ async fn session_cancellation_retains_history_and_is_idempotent_under_backpressu
     assert_eq!(streams.oplog.current_oplog_index().await, committed);
 }
 
+/// Closes an input with `cancel`, or with a clean end, and reads it to its end through a producer
+/// that has a producer cancel flag. Returns the flag as it is after the end was read.
+async fn producer_cancel_flag_after_the_end_of_input(
+    cancel: Option<(StreamCancelRole, StreamCancelReason)>,
+) -> bool {
+    let (producer, streams, reader, handle) = backpressured_session_input().await;
+    drop(reader);
+    match cancel {
+        Some((role, reason)) => producer
+            .cancel_open(None, handle.stream_id, role, reason, None)
+            .await
+            .unwrap(),
+        None => {
+            producer
+                .end(None, handle.stream_id, 1, StreamEndResult::Ok)
+                .await
+                .unwrap();
+        }
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut consumer = DurableInputProducer::new(
+        streams
+            .endpoint(handle, 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+    )
+    .with_producer_cancel_flag(flag.clone());
+    assert!(matches!(
+        consumer.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::Item(SchemaValue::U8(1)))
+    ));
+    assert!(!flag.load(Ordering::Acquire));
+    assert!(matches!(
+        consumer.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::End)
+    ));
+    flag.load(Ordering::Acquire)
+}
+
+#[test]
+#[test_r::timeout("15s")]
+async fn a_cancel_by_the_input_producer_sets_the_flag_and_ends_the_input() {
+    assert!(
+        producer_cancel_flag_after_the_end_of_input(Some((
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::Cancelled,
+        )))
+        .await
+    );
+}
+
+#[test]
+#[test_r::timeout("15s")]
+async fn a_clean_end_does_not_set_the_flag() {
+    assert!(!producer_cancel_flag_after_the_end_of_input(None).await);
+}
+
+#[test]
+#[test_r::timeout("15s")]
+async fn other_producer_cancels_do_not_set_the_flag() {
+    for cancel in [
+        (
+            StreamCancelRole::OutputProducer,
+            StreamCancelReason::Cancelled,
+        ),
+        (
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::SourceUnavailable,
+        ),
+    ] {
+        assert!(
+            !producer_cancel_flag_after_the_end_of_input(Some(cancel)).await,
+            "{cancel:?}"
+        );
+    }
+}
+
 #[test]
 #[test_r::timeout("15s")]
 async fn late_output_cancellation_selects_fields_and_preserves_replay_drains() {

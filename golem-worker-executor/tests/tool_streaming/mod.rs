@@ -16980,3 +16980,1239 @@ async fn native_tool_secret_permissions_and_completed_replay(
     }
     Ok(())
 }
+
+/// How the client closes the stdin of an external tool call.
+#[derive(Clone, Copy)]
+enum StdinClose {
+    Cancel,
+    End,
+}
+
+/// What `streaming run` writes to stdout first in the modes that these tests use.
+const RUN_MARKER: &[u8] = b"marker:";
+
+/// An external tool call whose body runs: its marker arrived on stdout, and the client holds
+/// its stdin open.
+struct RunningExternalToolCall {
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    worker_id: golem_common::model::AgentId,
+    sender: tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    responses: tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    accepted: golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    stdout: Vec<u8>,
+}
+
+/// An external tool call that ended with a success, with what a test needs to go on with its
+/// agent.
+struct EndedExternalToolCall {
+    stdout_after_marker: String,
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    worker_id: golem_common::model::AgentId,
+}
+
+/// Starts `streaming run` in `mode` from outside the agent, with stdin and stdout attached.
+async fn start_external_streaming_run(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    worker_id: &golem_common::model::AgentId,
+    mode: &str,
+) -> anyhow::Result<(
+    tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    golem_api_grpc::proto::golem::worker::InvocationAccepted,
+)> {
+    use golem_api_grpc::proto::golem::worker::{
+        ExternalToolInvocation, InvocationRequest, InvocationStart, invocation_request,
+        invocation_response,
+    };
+    let metadata = executor.get_worker_metadata(worker_id).await?;
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "mode".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String(mode.to_string())],
+        },
+    );
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                agent_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: Some(
+                    Principal::GolemUser(GolemUserPrincipal {
+                        account_id: context.account_id,
+                    })
+                    .into(),
+                ),
+                environment_id: Some(context.default_environment_id.into()),
+                component_owner_account_id: Some(context.account_id.into()),
+                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                external_tool: Some(ExternalToolInvocation {
+                    tool_name: "streaming".to_string(),
+                    command_path: vec!["run".to_string()],
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    stdin: true,
+                    stdout: true,
+                    stderr: false,
+                    fresh_owner: false,
+                    expected_deployment_revision: None,
+                }),
+                ..Default::default()
+            })),
+        })
+        .await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let acceptance = responses.message().await?.expect("session acceptance");
+    let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response else {
+        anyhow::bail!("the session was not accepted: {acceptance:?}");
+    };
+    Ok((sender, responses, accepted))
+}
+
+/// The request with which the client closes the stdin of an accepted external tool call.
+fn stdin_close_request(
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    close: StdinClose,
+) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
+    use golem_api_grpc::proto::golem::worker::{
+        InputStreamEnd, InvocationRequest, StreamCancel, StreamCancelReason, StreamCancelRole,
+        ToolByteStreamRole, invocation_request,
+    };
+    let stdin = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32))
+        .expect("stdin role");
+    let transport_stream_id = stdin.transport_stream_id;
+    let durable_stream_id = stdin.handle.as_ref().unwrap().stream_id;
+    InvocationRequest {
+        request: Some(match close {
+            StdinClose::Cancel => invocation_request::Request::StreamCancel(StreamCancel {
+                transport_stream_id,
+                producer_sequence: 0,
+                role: StreamCancelRole::InputProducer as i32,
+                reason: StreamCancelReason::Cancelled as i32,
+                details: None,
+                durable_stream_id,
+                epoch: accepted.epoch,
+                durable_offset: Vec::new(),
+            }),
+            StdinClose::End => invocation_request::Request::InputEnd(InputStreamEnd {
+                transport_stream_id,
+                sequence: 0,
+                durable_stream_id,
+                epoch: accepted.epoch,
+            }),
+        }),
+    }
+}
+
+/// Reads the responses of an external tool call to their end and returns the rest of its
+/// stdout. Fails unless the tool returned a success and the session finished with a success.
+/// `awaited` names the end of the call in the error of the time limit.
+async fn stdout_of_a_successful_run(
+    responses: &mut tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    awaited: &str,
+) -> anyhow::Result<Vec<u8>> {
+    use golem_api_grpc::proto::golem::worker::{
+        invocation_response, invocation_session_completion, invocation_session_result,
+    };
+    use golem_common::model::oplog::PublicExternalToolResult;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let mut stdout = Vec::new();
+        let mut succeeded = false;
+        let mut finished = false;
+        while let Some(response) = responses.message().await? {
+            match response.response {
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    stdout.extend(item.packed_u8);
+                }
+                Some(invocation_response::Response::Result(result)) => {
+                    let Some(invocation_session_result::Result::ToolResult(result)) = result.result
+                    else {
+                        anyhow::bail!("the session returned a non-tool result");
+                    };
+                    let result: PublicExternalToolResult =
+                        result.try_into().map_err(anyhow::Error::msg)?;
+                    anyhow::ensure!(
+                        matches!(result, PublicExternalToolResult::Success(_)),
+                        "the tool call failed: {result:?}"
+                    );
+                    succeeded = true;
+                }
+                Some(invocation_response::Response::Finished(completion)) => {
+                    anyhow::ensure!(
+                        matches!(
+                            completion.outcome,
+                            Some(invocation_session_completion::Outcome::Success(_))
+                        ),
+                        "the session failed: {completion:?}"
+                    );
+                    finished = true;
+                }
+                _ => {}
+            }
+        }
+        anyhow::ensure!(succeeded, "the session ended without a tool result");
+        anyhow::ensure!(finished, "the session ended without its completion");
+        Ok(stdout)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 60 s for {awaited}"))?
+}
+
+/// Starts an executor and a new agent that has the `streaming` tool.
+async fn start_an_agent_with_the_streaming_tool(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    name: &str,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<(
+    TestContext,
+    Arc<TestEnvironmentStateService>,
+    TestWorkerExecutor,
+    golem_common::model::AgentId,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..overrides
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    // The tool may use the files of the agent, as bash may. Only a call from outside gives such
+    // a tool a live stdin: an agent's call hands the stdin over when it has ended.
+    for bindings in deployment.tool_bindings.values_mut() {
+        bindings
+            .get_mut(&ToolName::try_from("streaming").unwrap())
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Allowed;
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id!("ToolStreamingCaller", name))
+        .await?;
+    Ok((context, environment_state, executor, worker_id))
+}
+
+/// Starts `streaming run` in `mode` from outside a new agent and waits for the marker on
+/// stdout: the tool body runs, and the client holds its stdin open.
+async fn start_an_external_tool_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    mode: &str,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<RunningExternalToolCall> {
+    use golem_api_grpc::proto::golem::worker::invocation_response;
+    let (context, environment_state, executor, worker_id) = start_an_agent_with_the_streaming_tool(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &format!("external-{mode}"),
+        overrides,
+    )
+    .await?;
+    let (sender, mut responses, accepted) =
+        start_external_streaming_run(&executor, &context, &worker_id, mode).await?;
+    let mut stdout = Vec::new();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while stdout.len() < RUN_MARKER.len() {
+            match responses.message().await?.map(|response| response.response) {
+                Some(Some(invocation_response::Response::OutputItem(item))) => {
+                    stdout.extend(item.packed_u8);
+                }
+                other => anyhow::bail!("expected the marker on stdout, got {other:?}"),
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 60 s for the marker on stdout"))??;
+    anyhow::ensure!(
+        stdout == RUN_MARKER,
+        "expected the marker on stdout, got {stdout:?}"
+    );
+    Ok(RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        responses,
+        accepted,
+        stdout,
+    })
+}
+
+/// The client closes the stdin of a running external tool call, and the call must end with a
+/// success. What the tool wrote to stdout after the marker says how its stdin ended.
+async fn close_the_stdin_of_an_external_tool_call(
+    call: RunningExternalToolCall,
+    close: StdinClose,
+) -> anyhow::Result<EndedExternalToolCall> {
+    let RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        mut responses,
+        accepted,
+        mut stdout,
+    } = call;
+    sender.send(stdin_close_request(&accepted, close)).await?;
+    stdout.extend(
+        stdout_of_a_successful_run(
+            &mut responses,
+            "the end of the call after its stdin was closed",
+        )
+        .await?,
+    );
+    Ok(EndedExternalToolCall {
+        stdout_after_marker: String::from_utf8_lossy(&stdout[RUN_MARKER.len()..]).into_owned(),
+        context,
+        environment_state,
+        executor,
+        worker_id,
+    })
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn stdin_cancel_reaches_a_tool_that_computes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    // The body computes for a while before the client cancels.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn stdin_cancel_reaches_a_tool_that_waits_on_a_long_clock(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-clock",
+        TestExecutorOverrides {
+            // The interval of `long_clock_through_tool_entity_suspends_and_reconstructs_owner`,
+            // where the owner of a tool that waits on a clock is suspended.
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    // A client's open stdin keeps the owner in memory, so the cancel reaches a tool that was
+    // never unloaded.
+    let owned = OwnedAgentId::new(call.context.default_environment_id, &call.worker_id);
+    let loads = call.executor.instance_load_count(&call.worker_id);
+    let held_open = std::time::Instant::now();
+    while held_open.elapsed() < Duration::from_secs(3) {
+        assert!(
+            call.executor.worker_is_loaded(&owned).await,
+            "the owner was unloaded while a client held the stdin of its tool call open"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        call.executor
+            .get_oplog(&call.worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
+        "the owner was suspended while a client held the stdin of its tool call open"
+    );
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    assert_eq!(ended.executor.instance_load_count(&ended.worker_id), loads);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_clean_end_of_stdin_stays_a_clean_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::End).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-eof");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_call_that_ends_with_its_stdin_open_leaves_the_agent_usable(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (context, environment_state, executor, worker_id) = start_an_agent_with_the_streaming_tool(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "open-stdin",
+        Default::default(),
+    )
+    .await?;
+    let loads = executor.instance_load_count(&worker_id);
+    // The tool returns without a read of its stdin, and the client never closes that stdin.
+    for call in 1..=3 {
+        let (_stdin, mut responses, _) =
+            start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+        stdout_of_a_successful_run(
+            &mut responses,
+            &format!("the end of call {call} with an open stdin"),
+        )
+        .await?;
+    }
+    assert_eq!(
+        executor.instance_load_count(&worker_id),
+        loads,
+        "the agent was restarted between the calls"
+    );
+    drop(executor);
+
+    // The next call loads the agent on a new executor, and the load replays the three calls.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (_stdin, mut responses, _) =
+        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+    let next_call =
+        stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
+
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed,
+        "the agent failed after the restart"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "a call that ended with its stdin open must not fail the agent"
+    );
+    next_call?;
+    Ok(())
+}
+
+/// Covers a tool body that makes no other host call while it reads its stdin.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_cancelled_stdin_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
+    let EndedExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        ..
+    } = cancelled;
+    drop(executor);
+
+    // The new executor has no agent in memory. The next call loads the agent, and the load
+    // replays the cancelled call from the journals.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (_stdin, mut responses, _) =
+        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+    let next_call =
+        stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
+
+    // A replay that failed shows in the agent before it shows in the next call.
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed,
+        "the agent failed after the restart"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "the replay of the cancelled call must not fail"
+    );
+    next_call?;
+    Ok(())
+}
+
+/// An agent that has the `clock-race` tool, on its own executor.
+struct ClockToolOwner {
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    caller_component: golem_common::model::component::ComponentDto,
+    agent: golem_common::model::agent::ParsedAgentId,
+    worker_id: golem_common::model::AgentId,
+}
+
+impl ClockToolOwner {
+    async fn start(
+        last_unique_id: &LastUniqueId,
+        deps: &WorkerExecutorTestDependencies,
+        provider: &PrecompiledComponent,
+        caller: &PrecompiledComponent,
+        name: &str,
+    ) -> anyhow::Result<Self> {
+        let context = TestContext::new(last_unique_id);
+        let environment_state = Arc::new(TestEnvironmentStateService::default());
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                environment_state_service: Some(environment_state.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let provider_component = executor
+            .component_dep(&context.default_environment_id, provider)
+            .store()
+            .await?;
+        let caller_component = executor
+            .component_dep(&context.default_environment_id, caller)
+            .store()
+            .await?;
+        let metadata = extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", provider.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            caller_component.id,
+            caller_component.revision,
+            Some(deployment_state(
+                context.account_id,
+                provider_component.id,
+                provider_component.revision,
+                "golem-it:tool-streaming-rust-provider",
+                "ToolStreamingCaller",
+                metadata.tools,
+            )),
+        );
+        let agent = agent_id!("ToolStreamingCaller", name);
+        let worker_id = executor
+            .start_agent(&caller_component.id, agent.clone())
+            .await?;
+        Ok(Self {
+            context,
+            environment_state,
+            executor,
+            caller_component,
+            agent,
+            worker_id,
+        })
+    }
+
+    /// A client's call of a `clock-race` command, with no stream attached. Returns the number
+    /// that the command returned.
+    async fn call_clock_tool(
+        &self,
+        command: &str,
+        input: &[(&str, SchemaValue)],
+    ) -> anyhow::Result<u64> {
+        let fingerprint = self
+            .executor
+            .get_worker_metadata(&self.worker_id)
+            .await?
+            .fingerprint;
+        let schema_of = |value: &SchemaValue| match value {
+            SchemaValue::List { .. } => SchemaType::list(SchemaType::u64()),
+            _ => SchemaType::u64(),
+        };
+        let input = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(
+                input
+                    .iter()
+                    .map(|(name, value)| golem_common::schema::NamedFieldType {
+                        name: name.to_string(),
+                        body: schema_of(value),
+                        metadata: Default::default(),
+                    })
+                    .collect(),
+            )),
+            SchemaValue::Record {
+                fields: input.iter().map(|(_, value)| value.clone()).collect(),
+            },
+        );
+        let output = self
+            .executor
+            .invoke_external_tool(
+                &self.worker_id,
+                fingerprint,
+                IdempotencyKey::fresh(),
+                ToolName::try_from("clock-race").unwrap(),
+                vec![command.to_string()],
+                input,
+                InvocationContextStack::fresh(),
+                Principal::GolemUser(GolemUserPrincipal {
+                    account_id: self.context.account_id,
+                }),
+                None,
+            )
+            .await?;
+        let AgentInvocationResult::ExternalTool { result: Ok(result) } = output.result else {
+            anyhow::bail!("expected a successful `clock-race {command}`, got {output:?}");
+        };
+        match result.result.map(|value| value.into_parts().1) {
+            Some(SchemaValue::U64(value)) => Ok(value),
+            other => anyhow::bail!("expected a number from `clock-race {command}`, got {other:?}"),
+        }
+    }
+
+    /// Replaces the executor by a new one that has no agent in memory.
+    async fn restart_the_executor(
+        self,
+        deps: &WorkerExecutorTestDependencies,
+    ) -> anyhow::Result<Self> {
+        let Self {
+            context,
+            environment_state,
+            executor,
+            caller_component,
+            agent,
+            worker_id,
+        } = self;
+        drop(executor);
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                environment_state_service: Some(environment_state.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        Ok(Self {
+            context,
+            environment_state,
+            executor,
+            caller_component,
+            agent,
+            worker_id,
+        })
+    }
+
+    /// The agent's next call loads the agent, and the load replays every earlier call. The
+    /// replay must not fail, and the next call must run.
+    async fn the_next_call_runs_after_the_replay(&self) -> anyhow::Result<()> {
+        let next_call = tokio::time::timeout(
+            Duration::from_secs(60),
+            self.executor.invoke_and_await_agent(
+                &self.caller_component,
+                &self.agent,
+                "replay_probe",
+                data_value!(),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("waited 60 s for the call after the restart"));
+        // A replay that failed shows in the agent before it shows in the next call.
+        assert_ne!(
+            self.executor
+                .get_worker_metadata(&self.worker_id)
+                .await?
+                .status,
+            AgentStatus::Failed,
+            "the agent failed after the restart"
+        );
+        let oplog = self
+            .executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?;
+        assert!(
+            oplog
+                .iter()
+                .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "the replay of the earlier call must not fail"
+        );
+        assert_eq!(next_call??.into_typed::<String>()?, "replayed");
+        Ok(())
+    }
+}
+
+fn clock_seconds(secs: &[u64]) -> SchemaValue {
+    SchemaValue::List {
+        elements: secs.iter().map(|secs| SchemaValue::U64(*secs)).collect(),
+    }
+}
+
+/// The body races a 1 s wait against a 60 s wait and returns when the first ends. The 60 s wait
+/// is still pending then, with its clock read recorded.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_client_call_whose_body_dropped_a_pending_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner =
+        ClockToolOwner::start(last_unique_id, deps, provider, caller, "dropped-wait").await?;
+    let winner = owner
+        .call_clock_tool("race-p3-sleeps", &[("secs", clock_seconds(&[1, 60]))])
+        .await?;
+    assert_eq!(winner, 1);
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await
+}
+
+/// The same for tool calls that the agent makes: several bodies, each of which returns while a
+/// wait or a promise read is pending.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn an_agent_call_whose_tool_bodies_dropped_pending_waits_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "dropped-waits-of-agent-calls",
+    )
+    .await?;
+    let result = owner
+        .executor
+        .invoke_and_await_agent(
+            &owner.caller_component,
+            &owner.agent,
+            "clock_races_through_tool_entity",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(result, ["2", "2", "timer", "flag", "settled"]);
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await
+}
+
+/// A body whose only wait ends before the body returns.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_client_call_whose_body_finished_its_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner =
+        ClockToolOwner::start(last_unique_id, deps, provider, caller, "finished-wait").await?;
+    let winner = owner
+        .call_clock_tool("race-p3-sleeps", &[("secs", clock_seconds(&[1]))])
+        .await?;
+    assert_eq!(winner, 1);
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await
+}
+
+/// A body that makes fifty waits one after the other. Each ends before the next one starts.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_client_call_whose_body_made_waits_in_turn_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner =
+        ClockToolOwner::start(last_unique_id, deps, provider, caller, "waits-in-turn").await?;
+    let made = owner
+        .call_clock_tool(
+            "sleep-p3-in-turn",
+            &[
+                ("count", SchemaValue::U64(50)),
+                ("nanos", SchemaValue::U64(1_000_000)),
+            ],
+        )
+        .await?;
+    assert_eq!(made, 50);
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await
+}
+
+impl ClockToolOwner {
+    /// A client's call whose body starts a 60 s wait and returns while the wait is held at
+    /// `stage` of its clock read, so that the record of the wait ends at that stage.
+    async fn call_a_body_that_drops_a_wait_held_at(
+        &self,
+        stage: ReplayAdmissionStage,
+    ) -> anyhow::Result<()> {
+        let mut clock_read = self.executor.gate_next_replay_access_admission(
+            &self.worker_id,
+            "monotonic-clock::now",
+            stage,
+        );
+        // The body returns after this many turns of the host, long after the wait reached its
+        // clock read.
+        let turns = 10_000;
+        let input = [
+            ("secs", SchemaValue::U64(60)),
+            ("turns", SchemaValue::U64(turns)),
+        ];
+        let call = self.call_clock_tool("drop-p3-sleep-early", &input);
+        let held = tokio::time::timeout(Duration::from_secs(60), clock_read.entered());
+        let (returned, held) = tokio::join!(call, held);
+        held.map_err(|_| anyhow::anyhow!("the body returned before its wait read the clock"))?;
+        assert_eq!(returned?, turns);
+        Ok(())
+    }
+
+    /// What the oplog holds of the clock read of the agent's only wait: whether the read has a
+    /// `Start`, and whether it has an `End` or a `Cancelled`.
+    async fn recorded_clock_read(&self) -> anyhow::Result<(bool, bool)> {
+        self.executor.commit_oplog(&self.worker_id).await?;
+        let oplog = self
+            .executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?;
+        let start_of = |function: &str| {
+            oplog.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name.ends_with(function) => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+        };
+        assert!(
+            start_of("monotonic-clock::wait-for").is_some(),
+            "the wait is recorded"
+        );
+        let read = start_of("monotonic-clock::now");
+        let ended = read.is_some_and(|read| {
+            oplog.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == read,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == read,
+                _ => false,
+            })
+        });
+        Ok((read.is_some(), ended))
+    }
+}
+
+/// The body returns while its wait is recorded and the clock read of the wait is not.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_wait_dropped_before_its_clock_read_is_recorded_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "wait-dropped-before-its-read",
+    )
+    .await?;
+    owner
+        .call_a_body_that_drops_a_wait_held_at(ReplayAdmissionStage::BeforeDeferredStart)
+        .await?;
+    assert_eq!(owner.recorded_clock_read().await?, (false, false));
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await
+}
+
+/// The body returns while the clock read of its wait has a `Start` and no `End`.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_wait_dropped_while_its_clock_read_is_open_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "wait-dropped-in-its-read",
+    )
+    .await?;
+    owner
+        .call_a_body_that_drops_a_wait_held_at(ReplayAdmissionStage::AfterDeferredStart)
+        .await?;
+    assert_eq!(owner.recorded_clock_read().await?, (true, false));
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await
+}
+
+impl ClockToolOwner {
+    /// The number of entries in the agent's oplog.
+    async fn oplog_length(&self) -> anyhow::Result<usize> {
+        self.executor.commit_oplog(&self.worker_id).await?;
+        Ok(self
+            .executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .len())
+    }
+
+    /// The next call after a restart, with the replayed clock read of a wait held before it
+    /// starts until the body that made the wait has returned.
+    async fn the_next_call_runs_after_a_replay_that_holds_the_clock_read(
+        &self,
+    ) -> anyhow::Result<()> {
+        let mut clock_read = self.executor.gate_next_replay_access_admission(
+            &self.worker_id,
+            "monotonic-clock::now",
+            ReplayAdmissionStage::BeforeDeferredStart,
+        );
+        let held = tokio::time::timeout(Duration::from_secs(60), clock_read.entered());
+        let (next_call, held) = tokio::join!(self.the_next_call_runs_after_the_replay(), held);
+        held.map_err(|_| anyhow::anyhow!("the replayed wait did not come to its clock read"))?;
+        next_call
+    }
+}
+
+/// The body returns while its wait has read the clock. In the replay the body returns again
+/// before the replayed wait has started its clock read. The recorded read is claimed with the
+/// wait, so it is not left over.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_body_that_returns_before_its_replayed_wait_reads_the_clock_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "replayed-read-cut-off",
+    )
+    .await?;
+    owner
+        .call_a_body_that_drops_a_wait_held_at(ReplayAdmissionStage::AfterHostInternalTerminal)
+        .await?;
+    assert_eq!(owner.recorded_clock_read().await?, (true, true));
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner
+        .the_next_call_runs_after_a_replay_that_holds_the_clock_read()
+        .await
+}
+
+/// The same for a wait whose clock read has a `Start` and no `End`.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_body_that_returns_before_its_replayed_wait_reads_the_clock_is_replayed_with_an_open_read(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "replayed-open-read-cut-off",
+    )
+    .await?;
+    owner
+        .call_a_body_that_drops_a_wait_held_at(ReplayAdmissionStage::AfterDeferredStart)
+        .await?;
+    assert_eq!(owner.recorded_clock_read().await?, (true, false));
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner
+        .the_next_call_runs_after_a_replay_that_holds_the_clock_read()
+        .await
+}
+
+/// The replay of a body that dropped a wait only reads the record. After the reload the oplog
+/// has grown by the entries of the next call and by nothing else.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn the_replay_of_a_body_that_dropped_a_wait_appends_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "dropped-wait-appends-nothing",
+    )
+    .await?;
+    let winner = owner
+        .call_clock_tool("race-p3-sleeps", &[("secs", clock_seconds(&[1, 60]))])
+        .await?;
+    assert_eq!(winner, 1);
+
+    // What one more call adds while the agent is in memory.
+    let before = owner.oplog_length().await?;
+    owner.the_next_call_runs_after_the_replay().await?;
+    let recorded = owner.oplog_length().await?;
+    let one_call = recorded - before;
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await?;
+    assert_eq!(
+        owner.oplog_length().await? - recorded,
+        one_call,
+        "the reload appended entries of its own"
+    );
+    Ok(())
+}
+
+impl ClockToolOwner {
+    /// The next call after a restart, with the replay made to claim two waits that a body
+    /// started together in the other order: the wait that the body starts first is held before
+    /// it claims its record, until the wait that the body starts second had time to claim.
+    async fn the_next_call_runs_after_a_replay_that_claims_the_second_wait_first(
+        &self,
+    ) -> anyhow::Result<()> {
+        let mut first_wait = self.executor.gate_next_replay_access_admission(
+            &self.worker_id,
+            "monotonic-clock::wait-for",
+            ReplayAdmissionStage::BeforeScope,
+        );
+        let release_the_first_wait = async {
+            first_wait.entered().await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            first_wait.release();
+        };
+        let (next_call, ()) = tokio::join!(
+            self.the_next_call_runs_after_the_replay(),
+            release_the_first_wait
+        );
+        next_call
+    }
+}
+
+/// The body races a 1 s wait against a 60 s wait. Each replayed wait must get the record of its
+/// own length, whichever of the two claims first.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn two_pending_waits_of_different_lengths_are_replayed_from_their_own_records(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "waits-of-two-lengths",
+    )
+    .await?;
+    let winner = owner
+        .call_clock_tool("race-p3-sleeps", &[("secs", clock_seconds(&[1, 60]))])
+        .await?;
+    assert_eq!(winner, 1);
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner
+        .the_next_call_runs_after_a_replay_that_claims_the_second_wait_first()
+        .await
+}
+
+/// The body races two waits of 1 s and returns which of the two ended first. Their records
+/// differ only in their order, so the replayed waits must claim in the order in which the body
+/// started them.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn two_pending_waits_of_one_length_are_replayed_in_the_order_they_started(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "waits-of-one-length",
+    )
+    .await?;
+    let winner = owner
+        .call_clock_tool("race-equal-p3-sleeps", &[("secs", SchemaValue::U64(1))])
+        .await?;
+    assert!(
+        winner < 2,
+        "the index of one of the two waits, got {winner}"
+    );
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner
+        .the_next_call_runs_after_a_replay_that_claims_the_second_wait_first()
+        .await
+}
