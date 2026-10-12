@@ -45,6 +45,7 @@ mod scala_http_router;
 mod scala_tool_middleware;
 mod scala_tool_sources;
 mod secrets;
+mod self_identity;
 mod ssh;
 mod tool_metadata_conformance;
 mod tool_middleware;
@@ -86,6 +87,7 @@ tag_suite!(build_and_deploy_all, deploy_runtime);
 tag_suite!(builtin_bash, deploy_runtime);
 tag_suite!(cards, deploy_runtime);
 tag_suite!(secrets, deploy_runtime);
+tag_suite!(self_identity, deploy_runtime);
 tag_suite!(ssh, deploy_runtime);
 tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(directory_source_ifs, deploy);
@@ -110,6 +112,7 @@ tag_suite!(scala_http_router, agents_guest_bridge);
 tag_suite!(scala_tool_sources, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(secrets, deploy);
+tag_suite!(self_identity, deploy);
 tag_suite!(ssh, deploy);
 tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
@@ -177,6 +180,7 @@ fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
         let local_artifacts = [
             ("bash", "builtin-tools/bash.wasm"),
             ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
+            ("git_tool", "builtin-tools/git-tool.wasm"),
             ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
             ("otlp_exporter", "plugins/otlp-exporter.wasm"),
             ("typescript_tools", "builtin-tools/typescript-tools.wasm"),

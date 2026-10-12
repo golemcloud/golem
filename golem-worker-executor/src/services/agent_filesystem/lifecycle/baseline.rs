@@ -563,9 +563,10 @@ where
         .begin_transition()
         .map_err(|error| match error {
             AccessError::Transitioning => CaptureError::Busy,
-            AccessError::Revoked | AccessError::WrongGeneration | AccessError::NotPermitted => {
-                CaptureError::Invalidated
-            }
+            AccessError::Revoked
+            | AccessError::WrongGeneration
+            | AccessError::ReadOnly
+            | AccessError::NotPermitted => CaptureError::Invalidated,
         })?;
     let result = match tokio::time::timeout(wait, generation.registry.wait_for_calls()).await {
         Ok(()) => run(Arc::clone(&generation)).await,

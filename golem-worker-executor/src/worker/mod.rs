@@ -7341,7 +7341,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         mappings.push(binding);
                     }
                 }
-                StreamSessionRecord::ConsumerItemValue(record) => {
+                StreamSessionRecord::ConsumerItemValue(record) if record.reobserves.is_none() => {
                     for mapping in &record.recursive_mappings {
                         if !mappings.contains(mapping) {
                             mappings.push(mapping.clone());
@@ -9053,14 +9053,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) fn card_event_boundary_lock(&self) -> Arc<Mutex<()>> {
         self.card_event_boundary_lock.clone()
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn test_hold_invalidated_card_boundary(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        let guard = self.card_event_boundary_lock.clone().lock_owned().await;
-        self.published_authority_generation
-            .fetch_add(1, Ordering::AcqRel);
-        guard
     }
 
     pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {
@@ -11830,11 +11822,9 @@ impl RunningWorker {
             start_outcome::StartAction::ShardLost => Err(WorkerExecutorError::Interrupted {
                 kind: InterruptKind::ShardLost,
             }),
-            start_outcome::StartAction::Retry(_) | start_outcome::StartAction::Succeed => {
-                Err(WorkerExecutorError::runtime(
-                    "a failed start before the replay gave a replay outcome",
-                ))
-            }
+            start_outcome::StartAction::Retry(_) => Err(WorkerExecutorError::runtime(
+                "a failed start before the replay gave a replay outcome",
+            )),
         }
     }
 
@@ -11864,8 +11854,7 @@ impl RunningWorker {
             action @ (start_outcome::StartAction::FailUpdate { .. }
             | start_outcome::StartAction::SkipPeriodic(_)
             | start_outcome::StartAction::RejectPeriodic(_)
-            | start_outcome::StartAction::Retry(_)
-            | start_outcome::StartAction::Succeed) => {
+            | start_outcome::StartAction::Retry(_)) => {
                 let cleaned = cleanup(raw).await;
                 if matches!(
                     cleaned,
@@ -15448,7 +15437,7 @@ pub(crate) fn stream_session_record_reference(
         StreamSessionRecord::InvocationResult(record) => {
             (&record.session_key, &record.stream_mappings)
         }
-        StreamSessionRecord::ConsumerItemValue(record) => {
+        StreamSessionRecord::ConsumerItemValue(record) if record.reobserves.is_none() => {
             (&record.session_key, &record.recursive_mappings)
         }
         _ => return None,

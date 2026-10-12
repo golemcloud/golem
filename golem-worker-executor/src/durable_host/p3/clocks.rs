@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::DurabilityHost;
-use crate::durable_host::concurrent::{Cancellable, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
+};
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
 use crate::durable_host::suspendable_wait::{
     ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
@@ -125,6 +127,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         when: monotonic_clock::Mark,
     ) -> wasmtime::Result<()> {
+        // A timer must return STARTED even when its deadline has passed. An inline live
+        // delivery followed by a direct host call can deadlock replay when that call holds
+        // the Store before the replayed timer reaches its guest-delivery boundary.
+        tokio::task::yield_now().await;
         run_read_access::<_, _, Ctx, P3MonotonicClockWaitUntil, _>(
             store,
             HostRequestMonotonicClockTimestamp { nanos: when },
@@ -142,10 +148,39 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
-        let (now, mut delivery) =
-            DurableCallSession::<P3MonotonicClockNow, Cancellable>::invoke_access_deferred(
+        // The outer session owns cancellation throughout deadline reconstruction, including
+        // after the internal read completed but before the timer started waiting.
+        let wait = DurableCallSession::<P3MonotonicClockWaitFor, Cancellable>::start_access(
+            store,
+            super::durable_worker_ctx::<Ctx, U>,
+            HostRequestMonotonicClockDuration {
+                duration_in_nanos: how_long,
+            },
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
+        let owner = wait.host_internal_owner();
+        let (mut wait, replayed) = if wait.is_live() {
+            (Some(wait), None)
+        } else {
+            // Resolve the outer call first: cancellation can precede the internal read, and
+            // incomplete replay must own a live cancellation guard before a child can park.
+            match wait
+                .replay_access_deferred(store, super::durable_worker_ctx::<Ctx, U>)
+                .await?
+            {
+                DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                    (None, Some((response, delivery)))
+                }
+                DeferredCallReplayOutcome::Incomplete(wait) => (Some(wait), None),
+            }
+        };
+        let now =
+            DurableCallSession::<P3MonotonicClockNow, Cancellable>::invoke_host_internal_access(
                 store,
                 super::durable_worker_ctx::<Ctx, U>,
+                owner,
+                replayed.is_some(),
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
                 async || {
@@ -153,31 +188,38 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
                     Ok::<_, wasmtime::Error>(HostResponseMonotonicClockTimestamp { nanos })
                 },
             )
-            .await?;
-        if delivery.is_replay_discarded() {
-            std::future::pending::<()>().await;
-        }
-        delivery
-            .prepare_delivery(None)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        delivery.delivered();
-
+            .await;
+        let now = match now {
+            Ok(now) => now,
+            Err(error) => {
+                if let Some(wait) = &mut wait {
+                    wait.abandon_for_trap();
+                }
+                if let Some((_, delivery)) = replayed {
+                    delivery.suppress();
+                }
+                return Err(error);
+            }
+        };
         let when = now.nanos.saturating_add(how_long);
 
-        run_read_access::<_, _, Ctx, P3MonotonicClockWaitFor, _>(
-            store,
-            HostRequestMonotonicClockDuration {
-                duration_in_nanos: how_long,
-            },
-            DurableFunctionType::ReadLocal,
-            || async {
+        // Yield after reconstructing the deadline, not before reading the clock: the timer
+        // keeps its original deadline while live and replay both use deferred guest delivery.
+        tokio::task::yield_now().await;
+        if let Some((_, delivery)) = replayed {
+            if delivery.is_replay_discarded() {
+                std::future::pending::<()>().await;
+            }
+            delivery.deliver_at_accessor_terminal(store).await?;
+            return Ok(());
+        }
+        wait.expect("an incomplete wait retains its session")
+            .run_live_action_access(store, super::durable_worker_ctx::<Ctx, U>, async || {
                 wait_until_live::<U, Ctx>(store, when).await?;
-                Ok(HostResponseP3MonotonicClockUnit {})
-            },
-        )
-        .await
-        .map(|_| ())
+                Ok::<_, wasmtime::Error>(HostResponseP3MonotonicClockUnit {})
+            })
+            .await
+            .map(|_| ())
     }
 }
 

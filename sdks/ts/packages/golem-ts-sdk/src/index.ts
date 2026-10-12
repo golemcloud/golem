@@ -23,7 +23,6 @@ import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
-import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/multipart';
 import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
 import type { SnapshotPart } from './snapshot';
@@ -295,8 +294,6 @@ async function initialize(
       `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`,
     );
   }
-
-  setAgentId(getRawSelfAgentId());
 
   const initiateResult = await initiator.initiate(input, principal);
 

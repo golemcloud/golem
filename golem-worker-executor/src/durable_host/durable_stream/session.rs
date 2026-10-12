@@ -15,8 +15,145 @@
 use super::index::registration_coordinate_depth;
 use super::registration::registration_record;
 use super::*;
+use futures::future::BoxFuture;
+use golem_common::model::oplog::DurableStreamEventSummary;
+
+/// Admission and serialized payload retained until the guest consumes a native input read.
+/// Preparing this record does not reserve an oplog position or hold the mutation lane.
+pub(crate) struct PreparedConsumerObservation {
+    entry: OplogEntry,
+    record: StreamSessionRecord,
+    admission: Arc<StreamWriteAdmission>,
+}
+
+impl PreparedConsumerObservation {
+    pub(crate) fn enqueue(
+        self,
+        introduced: Option<oneshot::Sender<Result<OplogIndex, String>>>,
+    ) -> Result<BoxFuture<'static, Result<OplogIndex, StreamStoreError>>, StreamStoreError> {
+        let producer = self.admission.producer();
+        producer.ensure_healthy()?;
+        let activity = producer
+            .durable_activity
+            .try_enter()
+            .ok_or(StreamStoreError::RecoveryRequired)?;
+        // Reserve the position before returning to Wasmtime. Producer metadata and durability
+        // are joined independently, so the next guest call cannot overtake this observation.
+        let append = producer.oplog.enqueue_add(self.entry);
+        let (done, receipt) = oneshot::channel();
+        spawn_with_activity(async move {
+            let outcome = activity
+                .scope(async move {
+                    let appended = append.await.map_err(StreamStoreError::from);
+                    if let Some(introduced) = introduced {
+                        let _ = introduced
+                            .send(appended.as_ref().copied().map_err(ToString::to_string));
+                    }
+                    let index = appended?;
+                    self.admission
+                        .submit(move |owner, context| async move {
+                            context.begin_durable_effect();
+                            let keys = ProducerMetadataKey::session_record(
+                                &self.record,
+                                owner.environment_id,
+                                &owner.producer,
+                                owner.producer_fingerprint,
+                            );
+                            drop(owner.index_for(keys).await?);
+                            owner.commit(&context).await?;
+                            owner.notify_session_records_changed(Some(&context));
+                            Ok::<_, StreamStoreError>(())
+                        })
+                        .await?;
+                    self.admission.wait_published().await?;
+                    Ok(index)
+                })
+                .await;
+            if outcome.is_err() {
+                producer.poison();
+            }
+            let _ = done.send(outcome);
+        });
+        Ok(Box::pin(async move {
+            receipt
+                .await
+                .unwrap_or(Err(StreamStoreError::RecoveryRequired))
+        }))
+    }
+}
 
 impl DurableStreamStore {
+    pub(crate) async fn validate_consumer_reobservation(
+        oplog: &dyn Oplog,
+        index: OplogIndex,
+        record: &StreamSessionRecord,
+    ) -> Result<(), StreamStoreError> {
+        let Some(original_index) = record.reobserves() else {
+            return Ok(());
+        };
+        if original_index >= index {
+            return Err(StreamStoreError::CorruptHistory(
+                "consumer re-observation does not reference an earlier record".into(),
+            ));
+        }
+        let OplogEntry::StreamSession {
+            record: original, ..
+        } = oplog.read(original_index).await
+        else {
+            return Err(StreamStoreError::CorruptHistory(
+                "consumer re-observation does not reference a consumer record".into(),
+            ));
+        };
+        let original = oplog
+            .download_payload(original)
+            .await
+            .map_err(StreamStoreError::Oplog)?;
+        if !record.has_supported_format() || !record.matches_reobserved(&original) {
+            return Err(StreamStoreError::CorruptHistory(format!(
+                "consumer re-observation at {index} differs from original at {original_index}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn prepare_consumer_observation(
+        &self,
+        entity_parent_start_index: Option<OplogIndex>,
+        record: StreamSessionRecord,
+    ) -> Result<PreparedConsumerObservation, StreamStoreError> {
+        if !record.has_supported_format() {
+            return Err(StreamStoreError::CorruptHistory(
+                "invalid consumer observation".into(),
+            ));
+        }
+        Self::validate_consumer_reobservation(
+            self.oplog.as_ref(),
+            self.oplog.current_oplog_index().await.next(),
+            &record,
+        )
+        .await?;
+        let memory = golem_common::serialization::serialize(&record)
+            .map_err(StreamStoreError::Oplog)?
+            .len();
+        self.run_admitted(None, memory, false, move |owner, admission| async move {
+            let payload = owner
+                .oplog
+                .upload_payload(&record)
+                .await
+                .map_err(StreamStoreError::Oplog)?;
+            Ok(PreparedConsumerObservation {
+                entry: OplogEntry::stream_session(
+                    entity_parent_start_index,
+                    payload,
+                    DurableStreamEventSummary::session(&record),
+                ),
+                record,
+                admission,
+            })
+        })
+        .await
+    }
+
     /// Materializes persisted owner-relative bindings into transport mappings.
     pub async fn materialize_bindings(
         &self,
@@ -288,6 +425,14 @@ impl DurableStreamStore {
             return Err(StreamStoreError::CorruptHistory(
                 "unsupported or malformed durable Stream Session record".to_string(),
             ));
+        }
+        for record in &records {
+            Self::validate_consumer_reobservation(
+                self.oplog.as_ref(),
+                self.oplog.current_oplog_index().await.next(),
+                record,
+            )
+            .await?;
         }
         if records
             .iter()

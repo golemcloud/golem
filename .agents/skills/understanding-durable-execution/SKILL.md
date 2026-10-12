@@ -592,20 +592,38 @@ Every nondeterministic host function goes through `begin_durable_function` /
 `persist_durable_function_invocation` / `read_persisted_durable_function_invocation` with the same
 `Start`/`End` shape.
 
-Live (accessor path): append `Start` eagerly → run the live action → append `End` (or
+Live (guest-facing accessor path): append `Start` eagerly → run the live action → append `End` (or
 `Cancelled`) → hand the result to the guest → append `CompletionDelivered` (or
 `CompletionDiscarded` if the guest dropped the completion unread). The serialized direct path
 has no markers: its result is delivered when the host function returns. A trap while a call is
 in flight leaves `Start` incomplete (`abandon_for_trap`); a trap never writes `Cancelled`.
 
+**Host-internal results** use `DurableCallSession::invoke_host_internal_access`: Start/End
+remain durable and identity-validated, but End returns the recorded result directly to the host.
+There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless
+replay-tail gate. A Store-holding reader must never wait for progress whose only producer needs
+that Store's event loop. P3 `monotonic-clock::wait-for` records its outer Start first and owns the
+internal `now` read as a child. It resolves the outer replay before the child: a cancelled outer
+wait parks without issuing the child, while an incomplete outer wait owns cancellation cleanup
+before reconstructing the deadline from recorded `now + duration`. A completed outer requires
+a recorded completed child. Cancelling after the child's End settles the outer wait without an
+internal delivery marker. Only the outer wait has a real guest-delivery boundary.
+
+P3 timers always return `STARTED` before successful guest delivery, even for zero-duration or
+expired waits. Both live execution and replay yield before completing the outer timer. `wait-for`
+yields after deriving its deadline from the recorded clock read, so the yield does not restart
+the duration. Otherwise an inline live timer could record its delivery before a direct P2 call,
+while replay returns `STARTED` and enters that Store-holding call before it can deliver the timer.
+The direct call would wait behind a guest boundary that its own Store ownership prevents.
+
 Replay: claim the matching `Start` (`StartClaim`, identity + optional request payload match),
 resolve its terminal through `ConcurrentReplayResolver`, then classify with
-`classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by every path:
+`classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:
 
 | Recorded | `ReplayedResolution` | Guest handoff |
 |---|---|---|
 | `End` + `CompletionDelivered` | `Delivered`, `AtMarker` | released exactly at the recorded marker boundary (`ReplayDeliveryBarrier` holds the cursor gate) |
-| `End`, no marker (accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
+| `End`, no marker (guest-facing accessor) | `Delivered`, `AtReplayTail` | crash after host completion, before observation: withheld until the cursor drains (`await_natural_tail_end`, `replay_state/resolution.rs`), then delivered live-armed; the effect is **not** re-run |
 | `Cancelled { partial: Some }` | `Delivered`, `Immediate` | guest-initiated, deterministic drop point; no gating |
 | `Cancelled { partial: None }` or `End` + `CompletionDiscarded` | `Undelivered` | the guest never saw a value; the future is parked for the guest's deterministic drop |
 | `Start` without terminal | `Incomplete` | see below |
@@ -790,7 +808,8 @@ Three different facts are involved, each with its own owner:
 Tests: `entity_store_liveness_is_scoped_to_its_invocation_mode`,
 `pending_replay_to_live_is_fail_closed_until_finished`,
 `replay_state/tests.rs::switch_to_live_wakes_parked_awaiter_as_incomplete`,
-`tests/tool_streaming.rs::completed_reconstruction_claim_blocks_concurrent_replay_to_live`.
+`replay_state/tests.rs::primary_publication_requires_completed_reconstruction_validation`,
+`tests/tool_streaming/mod.rs::incomplete_custom_durability_waits_for_completed_reconstruction`.
 
 Consequences: a host function must not perform a live effect because "the cursor is at the end";
 it must observe `is_live` from the durable context. A markerless `End` is delivered once the
@@ -831,6 +850,14 @@ This execution-needing path acquires no capacity during preparation; cancellatio
 durably enqueued acceptance prefix. Read-only hits/followers persist no invocation/result/alias.
 Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart` — after an
 executor restart, an old key returns the recorded result without re-running the guest.
+
+P3 HTTP send arms a Store-owned request leak guard before Start admission, not just before
+replay resolution. Guest cancellation can drop the send while its claim waits at the cursor gate.
+The guard fences owned cursor operations, deletes and drains the request, and closes its installed
+durable scope if one exists. This releases the guest's body/trailer writes without re-issuing the
+request. A shared slot receives the scope index when admission returns the handle; before that,
+no scope is installed in the durable context. Both replay consumption and live execution disarm
+the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
 
 ## Durable RPC exactly-once
 
@@ -951,7 +978,8 @@ record. A record with a name on an executor without filesystem snapshots gives `
 `prepare_instance` (`durable_host/mod.rs`) then branches on the pending update:
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
-  already be live, and `finalize_pending_snapshot_update` loads it into the new revision.
+  already be live, and `finalize_pending_snapshot_update` loads it into the new revision. It writes
+  `SuccessfulUpdate` only after the load completed.
 - `SnapshotAssistedAutomatic` — `try_load_snapshot` loads the application snapshot of the selected
   record `S` into the target, after `materialize` restored its filesystem snapshot. `resume_replay`
   replays the stopped-source tail with the source revision's metadata: the executable metadata,
@@ -971,8 +999,8 @@ lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `Manu
 `InitialFiles`, `AutomaticPending`, `AssistedPending`, `AssistedPromoted`). It gives a
 `StartAction`: `FailUpdate { entry, reject }` with the entry already built from the paired queue
 element (attempt index, the snapshot-assisted details of the head, `snapshot_fault`, and the
-details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry`, `Succeed`
-or `ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
+details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry` or
+`ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
 entry. After `FailUpdate` the start returns `RetryDecision::Immediate` and the outer loop rebuilds
 on the source revision. The details have the form `CODE: text: cause`, and the text says what to
 do next (`Code::prefix`), for example request the update again, or use a manual snapshot-based
@@ -1021,7 +1049,10 @@ the load's `Retry`; for an assisted head also `RecoveryRequired` and `Interrupte
 assisted head retries with the same `S`; for a plain automatic head also `RecoveryRequired` (a
 store failure of the baseline payload). A replay `Interrupted` error that reaches `decide` fails a plain
 automatic update with `UPDATE_REPLAY_FAILED`, and `RecoveryRequired` or `Interrupted` fail a
-pending manual update. A plain automatic head whose authoritative baseline does not restore
+pending manual update. The load of a pending manual update reports its own `ManualLoadResult`: a
+failed load and a guest exit (`Exited`) fail the update without a code, and an interrupted load
+(`Interrupted(kind)`) passes its interrupt, writes nothing, and leaves the update pending, so the
+next start loads the payload again. A plain automatic head whose authoritative baseline does not restore
 (`Disabled`, `Restore(Lost | Fixed | DiskFull)`) takes the cell of that baseline: the start fails
 with a visible cause and writes no failed update.
 
@@ -1252,6 +1283,17 @@ a different oplog shape. The host-call observation counter is still incremented 
 fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
 the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
+Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
+capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
+filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
+return `not-permitted` without invalidation when a failed writable open rechecks a read-only regular
+file, or a failed hard link rechecks a directory at the source without following the final symlink.
+A failed cleanup prevents either policy recheck from replacing the storage failure. A failed recheck
+or an object that does not establish that guest-policy refusal leaves the original permission failure
+terminal. These rechecks use the current object and do not identify the object
+that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` and the permission
+failure table in the executor walkthrough.
+
 ## Concurrency and guest completion delivery
 
 `Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
@@ -1448,7 +1490,7 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   serializes filesystem-capable bodies. Exception: a terminal recorded with
   `body_execution: Skipped` is returned without invoking the export.
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
-  every completed body has validated (`completed_reconstruction_claim_blocks_concurrent_replay_to_live`).
+  every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
 - A body trap fails the owner invocation without inventing entity terminals.
 - Entity and native-tool invocation spans open on the invocation `Start` and close on its
   `End`/`Cancelled` terminal. `set_entity_invocation_scope` restores the recorded invocation

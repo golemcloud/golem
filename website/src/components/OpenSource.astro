@@ -93,8 +93,8 @@ import { openSource, languages, deployments } from "../data/homepage";
   }
 
   .languages {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.6rem;
     margin-top: 0.95rem;
   }
@@ -114,6 +114,11 @@ import { openSource, languages, deployments } from "../data/homepage";
   }
   .lang-note {
     font-size: 0.72rem;
+  }
+  @media (max-width: 480px) {
+    .languages {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   .pedigree {

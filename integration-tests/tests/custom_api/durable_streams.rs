@@ -123,7 +123,11 @@ async fn wait_for_closed(agent: &HttpTestContext, path: &str) -> anyhow::Result<
         loop {
             let response = agent.client.head(agent.base_url.join(path)?).send().await?;
             assert_eq!(response.status(), StatusCode::OK);
-            if header(&response, "stream-closed") == "true" {
+            if response
+                .headers()
+                .get("stream-closed")
+                .is_some_and(|value| value == "true")
+            {
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -666,7 +670,7 @@ async fn disabled_external_writes_allow_only_empty_open_forks(
         .send()
         .await?;
     assert_eq!(empty_head.status(), StatusCode::OK);
-    assert_eq!(header(&empty_head, "stream-closed"), "false");
+    assert!(!empty_head.headers().contains_key("stream-closed"));
     assert_eq!(
         agent
             .client
@@ -1209,7 +1213,7 @@ async fn post_input_accepts_json_batches_and_is_idempotently_closed(
 
     let batch = append_json(agent, &input, serde_json::json!(["a", "b"]), false).await?;
     assert_eq!(batch.status(), StatusCode::NO_CONTENT);
-    assert_eq!(header(&batch, "stream-closed"), "false");
+    assert!(!batch.headers().contains_key("stream-closed"));
     let first_offset = header(&batch, "stream-next-offset");
     let single = append_json(agent, &input, serde_json::json!("c"), false).await?;
     assert_eq!(single.status(), StatusCode::NO_CONTENT);
@@ -1485,7 +1489,7 @@ async fn post_input_validates_body_content_type_and_control_headers(
         .send()
         .await?;
     assert_eq!(ignored_close.status(), StatusCode::NO_CONTENT);
-    assert_eq!(header(&ignored_close, "stream-closed"), "false");
+    assert!(!ignored_close.headers().contains_key("stream-closed"));
     Ok(())
 }
 
@@ -2895,7 +2899,7 @@ async fn cancellation_closes_pending_output_without_waiting_for_guest(
         .head(agent.base_url.join(&path)?)
         .send()
         .await?;
-    assert_eq!(header(&head, "stream-closed"), "false");
+    assert!(!head.headers().contains_key("stream-closed"));
     let wrong_method = format!("/durable-stream-agents/ds3-{session}/json/1/invocations/{session}");
     assert_eq!(
         agent
@@ -2955,7 +2959,7 @@ async fn pending_output_and_data_share_long_poll_wait_budget(
         "waiting for an output handle must not start a second 30s data wait: {:?}",
         started.elapsed()
     );
-    assert_eq!(header(&result, "stream-closed"), "false");
+    assert!(!result.headers().contains_key("stream-closed"));
     assert_eq!(header(&result, "stream-up-to-date"), "true");
     Ok(())
 }
@@ -3042,7 +3046,7 @@ async fn sse_reconnect_etag_and_binary_encoding(
     );
 
     let catch_up = agent.client.get(agent.base_url.join(&path)?).send().await?;
-    assert_eq!(header(&catch_up, "stream-closed"), "false");
+    assert!(!catch_up.headers().contains_key("stream-closed"));
     assert_eq!(
         header(&catch_up, CACHE_CONTROL.as_str()),
         "public, max-age=31536000, immutable"

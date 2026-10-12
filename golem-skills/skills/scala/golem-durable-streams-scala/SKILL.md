@@ -101,8 +101,9 @@ not wrap the calls in custom durability or atomic scopes.
 
 Pass configured `golem.config.Secret[String]` directly as `auth = Some(config.token)`. The SDK
 borrows the host capability and never reveals plaintext; do not call `get`. HTTPS is required
-except when the host is exactly `localhost` or a loopback IP; a name such as `app.localhost` is not
-exempt. Redirects and URL userinfo are rejected.
+except when the host is `localhost`, a dot-delimited subdomain such as `app.localhost`, or a
+loopback IP. Localhost names are case-insensitive and may have one terminal DNS dot. The URL
+authority stays unchanged. Redirects and URL userinfo are rejected.
 
 ```shell
 golem build
