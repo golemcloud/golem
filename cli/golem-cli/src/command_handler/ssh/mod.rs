@@ -852,10 +852,28 @@ impl SshCommandHandler {
                 if let Some(ticker) = ticker {
                     ticker.command_stopping();
                 }
-                let waited = tokio::select! {
-                    answer = &mut call => Some(answer),
-                    _ = tokio::time::sleep(CANCEL_WAIT) => None,
-                    _ = tokio::signal::ctrl_c() => None,
+                // The stop reaches only a call that has started. A call that still waits in the
+                // agent's queue is cancelled under its key instead; that request does nothing to
+                // a call that has started.
+                let queued = self.cancel(session, key);
+                tokio::pin!(queued);
+                let mut answered = false;
+                let limit = tokio::time::sleep(CANCEL_WAIT);
+                tokio::pin!(limit);
+                let waited = loop {
+                    tokio::select! {
+                        answer = &mut call => break Some(answer),
+                        outcome = &mut queued, if !answered => {
+                            answered = true;
+                            if matches!(outcome, CancelOutcome::Cancelled) {
+                                let _ = give_up_tx.send(());
+                                let _ = call.await;
+                                return Submission::Interrupted(outcome);
+                            }
+                        }
+                        _ = &mut limit => break None,
+                        _ = tokio::signal::ctrl_c() => break None,
+                    }
                 };
                 match waited {
                     Some(answer) => (answer, true),

@@ -926,11 +926,19 @@ async fn ssh_ctrl_c_stops_the_command() {
     const DIRECTORY: &str = r#"BashOwner("stop-directory")"#;
     const COMMAND_MODE: &str = r#"BashOwner("stop-command-mode")"#;
     const INPUT_END: &str = r#"BashOwner("input-end")"#;
+    const QUEUED: &str = r#"BashOwner("stop-queued")"#;
 
     let ctx = context().await;
 
     // Each case has its own agent.
-    for agent in [WAITING, COMPUTING, DIRECTORY, COMMAND_MODE, INPUT_END] {
+    for agent in [
+        WAITING,
+        COMPUTING,
+        DIRECTORY,
+        COMMAND_MODE,
+        INPUT_END,
+        QUEUED,
+    ] {
         let made = ctx.cli(["--yes", "agent", "invoke", agent, "name"]).await;
         assert!(made.success_or_dump());
     }
@@ -984,6 +992,37 @@ async fn ssh_ctrl_c_stops_the_command() {
     .unwrap()
     .unwrap();
     assert_eq!((code, stdout.as_str()), (130, "start\n"));
+
+    // A command that waits behind another call of the agent has not started, so the stop cannot
+    // reach it. Ctrl+C cancels it at once, well inside the five seconds that the session gives
+    // a started command.
+    let made = ssh(&ctx, &[QUEUED, "-c", "true"], "").await;
+    assert_output(&made, 0, "", "");
+    let cli = BlockingCli::new(&ctx);
+    let busy = tokio::task::spawn_blocking(move || {
+        cli.run(&[
+            "--yes", "tool", "invoke", "--agent", QUEUED, "bash", "--", "run", "--", "sleep 20",
+        ])
+    });
+    ctx.cli_interactive(["ssh", QUEUED], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        // The other call has started when this command is sent.
+        std::thread::sleep(Duration::from_secs(5));
+        enter(session, "printf 'ne%s\\n' ver")?;
+        session.expect_str("Ctrl+C to stop\x1b[K")?;
+        session.send("\u{3}")?;
+        session.set_expect_timeout(Some(Duration::from_secs(3)));
+        session.expect_str("Cancelled before it started.")?;
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str("[130]")?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+    busy.await.unwrap().unwrap();
 
     // The end of the input does not stop a command: only a cancelled input does.
     let output = tokio::time::timeout(
