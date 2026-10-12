@@ -19,8 +19,9 @@ is the command path and canonical arguments that the selected layer receives, af
 validated it.
 
 An `Underlying` capability only makes the next plan layer reachable. Reachability and permission
-are both required: a grant for the outer command does not cover a different inner command or
-different arguments, so an adapter that rewrites a request needs grants for both representations.
+are both required: permission for the outer command does not automatically authorize a different
+inner command or different arguments. Both actual representations must be permitted, so an adapter
+that rewrites a request may need grants for both.
 There is no inverse projection from inner to outer permissions.
 
 - Replay claims in `dispatch_tool_attempt` precede `prepare_tool_call`. A recorded acceptance or
@@ -55,8 +56,11 @@ entity `Start`.
   consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary an
   entity Store excludes every card the worker status lists as revoked or pending revocation and
   re-checks its inherited roots against that set.
-- Known gap: card installs and transfers drained by another Store do not reach an existing entity
-  Store's wallet copy. Only revocations are coherent across the owner's Stores.
+- Known gap: entity Stores reconcile revocations recorded or pending in the owner status, but
+  cross-Store wallet updates and owner-wide card-interest registration remain incomplete. Card
+  installs and transfers drained by another Store do not reach an existing entity Store's wallet
+  copy, and a Store that refreshes card interest from a stale wallet can unregister a card that
+  another Store relies on, so a later revocation of that card may not reach the owner status.
 
 ### Durable discovery
 
