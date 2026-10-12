@@ -1,9 +1,9 @@
 export default {
   agents: "Agents",
-  "durable-by-default": "Durable by default",
+  "durable-execution": "Durable execution",
   tools: "Tools",
-  cards: "Authority: cards",
-  "agents-working-together": "Agents working together",
+  permissions: "Permissions",
+  communication: "Agent communication",
   artifacts: "Artifacts",
-  "living-with-agents": "Living with agents",
+  "agent-lifecycle": "Agent lifecycle",
 }

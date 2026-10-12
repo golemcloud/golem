@@ -2,7 +2,7 @@ import { Callout } from "nextra/components"
 
 # Cards reference
 
-This page is the reference for the card model. For an introduction to cards, defaults, and secrets, read [Authority: cards](/next/concepts/cards).
+This page is the reference for the card model. For an introduction to cards, defaults, and secrets, read [Permissions](/next/concepts/permissions).
 
 Golem uses **permission cards** to carry authority between accounts, environments, and agents. A card is a durable capability: it describes which operations its holder may perform, who the authority belongs to, which recipients may use it, and which resources it covers.
 
@@ -78,7 +78,7 @@ A new attempt to revoke an already or concurrently revoked card returns `card-re
 
 Persistent derivation, installation, and revocation participate in Golem's durable execution protocol: mutation results and audit events are written to the operation log. During replay, Golem reproduces the recorded result instead of performing the external mutation again, and verifies that the replayed card and wallet generation match the recorded event. Ordinary handle transfer travels in the surrounding durable call's value; it is not a separate audited card mutation.
 
-Permission operations return typed failures for conditions such as invalid grants or recipients, insufficient parent authority, a missing or changed wallet parent, unsupported installation targets, recipient mismatch, and expired, missing, or revoked cards. A failed installation does not partially add a card to the target wallet. Runtime and infrastructure failures can still fail the invocation according to the normal [durability and retry model](/next/concepts/durable-by-default).
+Permission operations return typed failures for conditions such as invalid grants or recipients, insufficient parent authority, a missing or changed wallet parent, unsupported installation targets, recipient mismatch, and expired, missing, or revoked cards. A failed installation does not partially add a card to the target wallet. Runtime and infrastructure failures can still fail the invocation according to the normal [durability and retry model](/next/concepts/durable-execution).
 
 ## Administration
 

@@ -6,9 +6,8 @@ export default {
   },
   "what-is-golem": "What is Golem?",
   quickstart: "Quickstart",
-  "build-with-ai": "Build with your coding agent",
   concepts: {
-    title: "Core concepts",
+    title: "Concepts",
   },
   "-- Evaluate": {
     type: "separator",

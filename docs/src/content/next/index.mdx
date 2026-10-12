@@ -1,38 +1,24 @@
 import { Cards } from "nextra/components"
-import { Bot, Code, LibraryBig, Rocket, SquareFunction, Terminal } from "lucide-react"
+import { BookOpen, Code, LibraryBig, Rocket, SquareFunction, Terminal } from "lucide-react"
 import { GolemIcon } from "@/components/golem-logo"
-import { ThemedImage } from "@/components/themed-image"
 
 # Golem documentation
 
-Golem is an open-source durable runtime for agents, their tools, and their artifacts. Agents keep their memory, files, and in-progress work through crashes, restarts, and deployments. Tools run in isolated sandboxes that can work on an agent's durable filesystem. Artifacts, such as web pages, reports, and live streams, are served from the same deployment. Permission cards limit what each agent may do.
+Golem is an open-source runtime for AI agents. Each agent is a long-lived, isolated instance with its own memory and filesystem that survives crashes, restarts, and deployments without repeating finished work. The same deployment runs the agents' tools, such as a shell, Node.js, npm, and the TypeScript compiler, and serves what they produce: APIs, web front-ends, files, and live streams. Permission cards limit what each agent may do.
 
-<ThemedImage
-  lightSrc="/images/getting-started/runtime-overview-light.webp"
-  darkSrc="/images/getting-started/runtime-overview-dark.webp"
-  alt="The Golem runtime: durable agents, each with its own memory, files, cards, and oplog, run a harness that calls model providers outside the runtime; the agents use tools behind host-enforced middleware and serve artifacts such as HTTP routes, web pages, live files, and streams from the same runtime."
-  caption="Agents, their tools, and their artifacts run on one runtime."
-  width={1536}
-  height={1024}
-/>
+You can run Golem on your machine from a single binary, on your own infrastructure, or on Golem Cloud.
 
-The **Golem runtime** runs on your machine or on your own servers. **Golem Cloud** is the hosted service that runs it for you; it is in Developer Preview, for building and trying things out. This documentation covers both and notes where they differ.
-
-## Start here
-
-Read what Golem takes responsibility for, then watch a counter agent keep its state through a crash and a server restart on your machine.
+## Get started
 
 <Cards num={3}>
-  <Cards.Card title="Understand Golem" href="/next/what-is-golem" icon={<GolemIcon />} />
-  <Cards.Card title="Test durability locally" href="/next/quickstart" icon={<Rocket />} />
-  <Cards.Card title="Build with your coding agent" href="/next/build-with-ai" icon={<Bot />} />
+  <Cards.Card title="What is Golem?" href="/next/what-is-golem" icon={<GolemIcon />} />
+  <Cards.Card title="Quickstart" href="/next/quickstart" icon={<Rocket />} />
+  <Cards.Card title="Concepts" href="/next/concepts/agents" icon={<BookOpen />} />
 </Cards>
 
-If you are evaluating Golem against durable execution engines, actor platforms, agent frameworks, or sandboxes, read [How Golem compares](/next/comparison).
+Comparing Golem with a durable execution engine, an actor platform, an agent framework, or a sandbox service? Read [How Golem compares](/next/comparison).
 
-## Find an implementation guide
-
-Develop covers defining, building, and deploying agents. Invoke covers calling them over HTTP, MCP, bridges, and the CLI. The CLI and REST API sections are command and endpoint references.
+## Guides and references
 
 <Cards num={2}>
   <Cards.Card title="Develop" href="/next/develop" icon={<Code />} />

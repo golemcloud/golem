@@ -3,99 +3,115 @@ import { ThemedImage } from "@/components/themed-image"
 
 # What is Golem?
 
-Golem is an open-source durable runtime for agents, their tools, and their artifacts. Each named agent is a small, isolated computer whose memory, files, and in-progress work survive crashes, restarts, and deployments.
+Golem is an open-source runtime for AI agents. You write an agent as an ordinary class in TypeScript, Rust, Scala, MoonBit, or Go, and deploy it to Golem. Golem runs each agent as a long-lived, isolated instance with its own memory and filesystem, and makes that instance **durable**: if a process crashes, a server restarts, or you deploy new code, the agent continues from where it was, without repeating work it already finished.
 
-An agent crashes at step 7 of 12 and starts over, paying for model calls again. A manager's approval disappears with the redeployed process that was waiting for it. A prompt forbids deleting data, but the code still has permission and deletes it. Golem puts recovery, durable waits, and enforced authority in the runtime.
+The same deployment also runs the agent's **tools** (a shell, file editing, Node.js and npm, the TypeScript compiler, web fetch, and tools you write) and serves what the agent produces, such as a web app, an API, files, or a live stream of output. Golem enforces what each agent is allowed to do, independently of the agent's code or prompts.
 
-## The runtime underneath your harness
+Golem runs on your machine from a single binary, on your own infrastructure, or on Golem Cloud.
 
-An application built around a language model has three layers:
+## Where Golem fits
 
-| Layer | Responsible for | Runs |
+An AI agent application usually has these parts:
+
+| Part | What it does | In a Golem application |
 |---|---|---|
-| Model | Choosing responses and tool calls | At a model provider, over HTTP |
-| Harness | Calling the model, running requested tools, deciding when to stop | Inside a Golem agent, as your code or a [compatible framework](/next/comparison#frameworks-and-harnesses) |
-| Runtime | Execution, state, isolation, authority, and delivery | Golem |
+| Model | Generates text and chooses which tools to call | A model provider, called over HTTP |
+| Agent loop (also called a harness) | Calls the model, runs the tools it picks, decides when to stop | Your code, or a framework such as the Vercel AI SDK, running inside a Golem agent |
+| Runtime | Runs the code, keeps its state, isolates it, enforces permissions, serves results | Golem |
+| Tools | Run commands, edit files, fetch pages, call services | Golem tools, or remote services the agent calls |
 
-Each agent has an address. `ReportAgent("acme", "q3")` is the report agent for tenant `acme` and quarter `q3`; Golem creates it on first use, with its own oplog and wallet of permission cards.
-
-An agent need not contain a model: a user, order, or conversation can be an agent. Ephemeral agents and HTTP routers handle stateless work. See [Agents](/next/concepts/agents).
+Agent frameworks such as LangChain, the Vercel AI SDK, or Mastra provide the agent loop. Inside Golem, you write the loop yourself or use a framework that runs on Golem's JavaScript runtime: the Vercel AI SDK and TanStack AI are tested, and other JavaScript frameworks can work if they avoid Node.js-specific internals and native addons. Golem is the layer underneath: it decides where the loop runs, what happens when it fails, what it may touch, and how its results reach users. Without such a runtime, those concerns are usually spread across a queue, a database for progress, a workflow engine, a sandbox service, and a web server. Coming from another system? [Familiar terms](/next/comparison#familiar-terms) maps its vocabulary to Golem's.
 
 <ThemedImage
   lightSrc="/images/getting-started/runtime-overview-light.webp"
   darkSrc="/images/getting-started/runtime-overview-dark.webp"
-  alt={'The Golem runtime contains three columns. Artifacts on the left: HTTP routes, web pages, live files, MCP server, and streams. Agents in the middle: ReportAgent("acme", "q3"), which contains a harness loop, and SupportAgent("acme"), each with memory, files, cards, and an oplog. Tools on the right: bash, git, node, npm, tsc, web-fetch, MCP, and your tools, behind host-enforced middleware. Outside the runtime, model providers are reached by the harness over HTTP. Two bands along the bottom: the oplog records calls and results for recovery, and cards check every gated effect.'}
-  caption="The harness runs inside an agent; tools and artifacts run on the same runtime; models stay outside."
+  alt={'The Golem runtime contains three columns. Artifacts on the left: HTTP routes, web pages, live files, MCP server, and streams. Agents in the middle: ReportAgent("acme", "q3"), which contains a harness loop, and SupportAgent("acme"), each with memory, files, cards, and an oplog. Tools on the right: bash, git, node, npm, tsc, web-fetch, MCP, and your tools, behind host-enforced middleware. Outside the runtime, model providers are reached over HTTP. Two bands along the bottom: the oplog records calls and results for recovery, and cards check every gated effect.'}
+  caption="Agents, their tools, and the artifacts they serve run on one runtime. Cards are each agent's permissions, held in its wallet; middleware is policy code that runs on tool calls. Model providers stay outside."
   width={1536}
   height={1024}
 />
 
-## Agents, tools, and artifacts
+## What Golem provides
 
-- **Agents** hold state and logic, including harnesses, and call each other through typed methods.
-- **Tools** run operations such as shell commands, file edits, and compilation. Component tools get a fresh, isolated instance per call and access the agent's files only through an allowed binding.
-- **Artifacts** deliver results: HTTP endpoints, web front-ends, files, and resumable streams.
+**Agents with identity.** An agent type is a class with state and methods. Each agent is addressed by its type and constructor arguments, such as `ReportAgent("acme", "q3")`, and Golem creates it the first time it is called. Every later call with the same arguments reaches the same agent and its state. See [Agents](/next/concepts/agents).
 
-The **oplog** records the agent's execution, including durable host calls and their results. Every tool call executes exactly once. Agent-to-agent calls execute exactly once. Completed model calls are recovered from the oplog rather than requested again. [Durable by default](/next/concepts/durable-by-default) explains recovery and the execution guarantees.
+**Durable execution.** Golem records every interaction an agent has with the outside world, such as HTTP requests, model calls, calls to other agents, tool calls, and clock reads, in a per-agent log called the **oplog**. After a failure, Golem rebuilds the agent by re-running its code against that log, so the agent ends up with the same memory and files and continues where it stopped. You write no checkpoints, step wrappers, or retry logic. Every tool call executes exactly once. Agent-to-agent calls execute exactly once. Completed model calls are recovered from the oplog rather than requested again. Requests to external services carry an automatic idempotency key, so a request that was in flight during a failure can be sent again safely to services that support such keys. See [Durable execution](/next/concepts/durable-execution).
 
-**Cards** determine authority. The host checks them before every gated effect, whatever the prompt says. The default card is broad; an explicit `initialCard` replaces it. See [Authority: cards](/next/concepts/cards).
+**Tools.** A Golem tool is a typed command, such as `bash`, `npm install`, or `tsc`, that runs in its own WebAssembly sandbox and can work on the calling agent's filesystem. Your agent loop offers these tools to the model like any other function-calling tool, and Golem runs each call in a sandbox with the agent's permissions. An agent can write code, install packages, compile, and run the result without a separate container or VM. See [Tools](/next/concepts/tools).
 
-Waiting agents are unloaded from memory and retain only durable storage. Throughput grows by adding agents, which Golem spreads across nodes. [Living with agents](/next/concepts/living-with-agents) covers lifecycle, scale, and cost.
+**Permissions.** An agent can only do what its **permission cards** allow: which hosts it may connect to, which files it may delete, which secrets it may read, which tools and agents it may call. Golem checks the cards on every operation, so a prompt or generated code cannot grant itself more access. See [Permissions](/next/concepts/permissions).
 
-## What Golem replaces
+**Agent communication.** Agents call each other through typed clients, across languages. An agent can wait for a person or an external system, for hours or months, and uses no memory while it waits. See [Agent communication](/next/concepts/communication).
 
-Without runtime support, applications must supply these responsibilities themselves:
+**Artifacts.** Agent methods can be exposed as HTTP endpoints and MCP tools. The same deployment can serve a web front-end, files the agent writes, and resumable streams of its output. See [Artifacts](/next/concepts/artifacts).
 
-| Problem | Infrastructure otherwise required | Golem mechanism |
+## A request, end to end
+
+A signed-in user asks a reporting application for a quarterly report:
+
+1. The browser sends `POST /reports/acme/q3`. Golem checks the user's login before any agent code runs.
+2. The request reaches `ReportAgent("acme", "q3")`, which Golem creates on first use.
+3. The agent's loop calls a model and runs the `web-fetch` and `write-file` tools. The agent's permission card allows network access only to the model provider and the company's data API, and the tools write into the agent's own filesystem.
+4. The agent waits for a manager's approval. While it waits, Golem unloads it from memory. The wait survives restarts and redeployments.
+5. After approval, the agent serves the report over HTTP and streams progress to the browser. If the page reloads, the stream resumes.
+
+If a server fails at any step, Golem rebuilds the agent on another server from its oplog. Model calls that already completed are not made again, and no tool call runs twice.
+
+<ThemedImage
+  lightSrc="/images/getting-started/one-request-light.webp"
+  darkSrc="/images/getting-started/one-request-dark.webp"
+  alt={`A signed-in browser sends POST /reports/acme/q3 through a login-required HTTP endpoint to ReportAgent("acme", "q3"), a durable agent. Inside it, an agent loop calls a model provider outside the runtime over network access allowed by the agent's card, and runs the web-fetch and write-file tools, each in a fresh instance, against the agent's own durable filesystem. The agent awaits a promise and is suspended until a manager approves. The report is served over HTTP and progress streams to the browser over a Durable Stream. The agent's oplog records every model call, tool call, card event, and the approval.`}
+  caption="One request: authenticated, addressed to a named agent, durable through waits and failures."
+  width={1536}
+  height={1024}
+/>
+
+## What you don't have to build
+
+| Requirement | Typical approach without Golem | With Golem |
 |---|---|---|
-| Lost progress after a crash | Saved progress and recovery jobs | Oplog recovery |
-| Duplicate or lost agent handoffs | Queues and deduplication logic | Exactly-once agent-to-agent calls |
-| Approval must survive a redeploy | Persisted approval state and callback handling | Durable promises and suspension |
-| Generated code needs a workspace | Workspace provisioning and file synchronization | Isolated tools on the agent's durable filesystem |
-| Prompt-only restrictions | Permission checks around effects | Cards and host-enforced middleware |
-| Results must reach users | File hosting and resumable-stream plumbing | Routes, files, and streams from the same deployment |
+| Resume an agent after a crash | Save progress to a database and write recovery jobs | Automatic, from the oplog |
+| Avoid repeating model and tool calls on retry | Idempotency tables and per-step wrappers | Recorded results are reused |
+| Hand work between agents reliably | A message queue and deduplication | Typed calls that execute exactly once |
+| Wait days for a human approval | Persist workflow state and handle callbacks | `await` a promise or webhook |
+| Run generated code safely | A container or VM sandbox, plus file syncing | Sandboxed tools on the agent's filesystem |
+| Limit what an agent can do | Checks in application code, rules in prompts | Permission cards enforced by the runtime |
+| Show results to users | A separate web server, file hosting, and stream buffering | HTTP endpoints, files, and streams from the same deployment |
 
-Suppose `ReportAgent("acme", "q3")` writes source files, calls `tsc`, then waits for approval. A crash during compilation recovers the same tool call and workspace; a crash during the wait preserves the pending approval. The harness, tools, files, and waits share one recovery and authority boundary. [How Golem compares](/next/comparison) covers alternative systems and combinations.
+## When to use Golem
 
-## Agent-complete: the coding-agent test
+Golem is a good fit when agents:
 
-A complete coding agent needs a shell, files, package installation, compilation, streaming output, sub-agents, waits, and enforced authority. That makes it a demanding runtime test, relevant even to report and support agents that write and run code.
+- run for longer than a single request, or must not lose work when something fails,
+- call tools, especially tools that run code or change files,
+- wait for people or external events,
+- need enforced limits on network, file, secret, and tool access,
+- serve results to users through an API or an interactive web front-end backed by the agents.
 
-Golem's internal TypeScript coding agent runs entirely inside the runtime, including `npm`, `npx`, and `tsc`. Its isolated [tools](/next/concepts/tools) use its durable filesystem; `path-policy` governs its file tools, and its [card](/next/concepts/cards) permits network egress only to the model provider. It streams progress and serves its own web front-end.
+Many useful agents write and run small programs for their users, even when the users never see code: a support agent that writes a script to reconcile an account, or an analyst agent that installs an npm package, transforms a spreadsheet, and publishes the result as a web page. These agents can run entirely inside Golem: the model loop, a shell, file editing, `npm`, `npx`, the TypeScript compiler, and Node.js-compatible execution all run in the runtime, on the agent's durable filesystem. Golem can host a complete coding agent this way. The same mechanisms support simpler agents, such as chat assistants, report generators, and approval workflows.
 
-For a first project, use the [Quickstart](/next/quickstart) counter.
+Know these boundaries before you start:
+
+- TypeScript agents run on a WebAssembly JavaScript runtime based on QuickJS, not on Node.js. Most npm packages work; packages with native addons do not.
+- Tools that need native binaries, Python, Docker, or a full browser run on a remote sandbox or VM that the agent calls. Golem records those calls, not the remote machine's state.
+- There is no Python SDK. Python programs can call Golem agents over the REST API, MCP, or HTTP endpoints.
 
 ## Where Golem runs
 
 | Option | What it is |
 |---|---|
-| Local | The complete runtime in the `golem` binary, started with `golem server run` |
-| [Golem Cloud](/next/deploy/golem-cloud) | The hosted service, in Developer Preview: free for evaluation and prototyping, not production |
-| [Self-hosted](/next/deploy) | Published Docker images for Docker Compose or Kubernetes |
+| Local | The `golem` binary contains the CLI and a complete Golem server: `golem server run` |
+| [Self-hosted](/next/deploy) | Docker images for Docker Compose or Kubernetes |
+| [Golem Cloud](/next/deploy/golem-cloud) | The hosted service, currently in Developer Preview for evaluation and prototyping |
 
-Golem has six SDKs across five languages: TypeScript, Effect, Rust, Scala, MoonBit, and Go.
+A self-hosted cluster runs Golem's services as separate containers (gateway, registry, shard manager, compilation service, and executors) on PostgreSQL, Redis, and S3 or a shared file system. Agents, components, and the CLI behave the same locally and in a cluster. [Architecture](/next/operate/architecture) describes the services and storage in detail.
 
-Golem is licensed under BUSL-1.1. Each version converts to Apache-2.0 four years after release. Production use is permitted, except offering Golem itself as a hosted developer platform.
-
-## When to use Golem
-
-Golem fits report pipelines, approval workflows, long-running support agents, and business agents that write and run code for their users.
-
-Check the execution boundary before choosing:
-
-- TypeScript, Effect, and Scala through Scala.js run on a QuickJS-based JavaScript runtime, not Node.js. Code requiring native addons must run outside the agent.
-- For native toolchains, containers, or full browsers, use a remote sandbox driven by a Golem agent. Golem journals calls and responses, not the remote machine's state.
-- There is no Python SDK in 1.6. Python programs call agents over the REST API, MCP, or HTTP endpoints.
-
-Golem makes runs inspectable; it does not improve models or replace evals.
+Golem has SDKs for TypeScript, Effect (TypeScript), Rust, Scala, MoonBit, and Go. It is licensed under BUSL-1.1, and each version converts to Apache-2.0 four years after release. Production use is permitted, including products whose agents run on Golem; the exception is offering Golem itself as a hosted developer platform.
 
 ## Next
 
-Continue with the [Quickstart](/next/quickstart) to watch a named agent recover from a crash.
-
-<Cards num={2}>
-  <Cards.Card title="Quickstart" href="/next/quickstart" />
-  <Cards.Card title="Build with your coding agent" href="/next/build-with-ai" />
-  <Cards.Card title="Core concepts" href="/next/concepts" />
+<Cards num={3}>
+  <Cards.Card title="Quickstart: crash an agent and watch it recover" href="/next/quickstart" />
+  <Cards.Card title="Concepts: start with Agents" href="/next/concepts/agents" />
   <Cards.Card title="How Golem compares" href="/next/comparison" />
 </Cards>
