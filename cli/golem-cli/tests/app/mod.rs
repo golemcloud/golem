@@ -46,6 +46,7 @@ mod scala_tool_middleware;
 mod scala_tool_sources;
 mod secrets;
 mod self_identity;
+#[cfg(unix)]
 mod server_restart;
 mod ssh;
 mod tool_metadata_conformance;
