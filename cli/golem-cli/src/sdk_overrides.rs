@@ -55,7 +55,7 @@ pub enum SdkOverridesTestProfile {
 
 /// This should be `PublishedArtifacts` in RC and release phase, otherwise `LocalWorkspace`.
 pub const SDK_OVERRIDES_DEFAULT_TEST_PROFILE: SdkOverridesTestProfile =
-    SdkOverridesTestProfile::PublishedArtifacts;
+    SdkOverridesTestProfile::LocalWorkspace;
 
 static SDK_OVERRIDES: LazyLock<anyhow::Result<SdkOverrides>> = LazyLock::new(SdkOverrides::load);
 
