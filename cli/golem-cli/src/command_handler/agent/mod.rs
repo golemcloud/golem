@@ -1048,7 +1048,17 @@ impl AgentCommandHandler {
         interval_ms: u64,
     ) -> anyhow::Result<()> {
         let duration = Duration::from_millis(interval_ms);
-        let mut screen = AlternateScreenGuard::enter()?;
+        let mut screen = match AlternateScreenGuard::enter() {
+            Ok(screen) => screen,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         let result: anyhow::Result<()> = async {
             loop {
                 let term_height = terminal_size()
@@ -1093,7 +1103,13 @@ impl AgentCommandHandler {
             }
         }
         .await;
-        screen.leave()?;
+        match screen.leave() {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) => {}
+            other => other?,
+        }
         result
     }
 

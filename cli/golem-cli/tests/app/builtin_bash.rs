@@ -445,6 +445,84 @@ fn assert_result(result: &BashResult, stdout: &str, stderr: &str, exit_code: u8)
 
 #[test]
 #[timeout("20 minutes")]
+async fn closed_stdout_keeps_the_exit_codes_of_tool_invoke_file_download_and_agent_list() {
+    let ctx = context().await;
+
+    // A tool that fails prints its failure and exits with status 1. A closed stdout must not change it.
+    let tool_args = [
+        flag::YES,
+        "--format",
+        "json",
+        cmd::TOOL,
+        cmd::INVOKE,
+        "--agent",
+        OWNER,
+        "bash",
+        "--",
+        "run",
+        "--cwd",
+        "tmp",
+        "--",
+        "true",
+    ];
+    let failing = ctx.cli_with_input(tool_args, &[]).await;
+    assert_eq!(failing.exit_code(), Some(1), "{}", failing.stderr_text());
+    let failing_closed = ctx.cli_with_broken_stdout(tool_args).await;
+    assert_eq!(
+        failing_closed.exit_code(),
+        Some(1),
+        "a failing tool with a closed stdout changed its exit code: {}",
+        failing_closed.stderr_text()
+    );
+    assert!(!failing_closed.stderr_text().contains("panicked"));
+
+    // The download of a file to a closed pipe ends with success.
+    let written = invoke(
+        &ctx,
+        OWNER,
+        "",
+        "mkdir -p /tmp/builtin-bash && printf 'downloaded bytes' > /tmp/builtin-bash/download.txt",
+    )
+    .await;
+    assert_result(&written, "", "", 0);
+    let download_args = [
+        cmd::AGENT,
+        "file-contents",
+        OWNER,
+        "/tmp/builtin-bash/download.txt",
+        "--output",
+        "-",
+    ];
+    let download = ctx.cli(download_args).await;
+    assert!(download.success_or_dump());
+    assert!(download.stdout_contains("downloaded bytes"));
+    let download_closed = ctx.cli_with_broken_stdout(download_args).await;
+    assert_eq!(
+        download_closed.exit_code(),
+        Some(0),
+        "the download into a closed pipe did not end with success: {}",
+        download_closed.stderr_text()
+    );
+    assert!(!download_closed.stderr_text().contains("panicked"));
+
+    // The refreshing list draws a screen; with a closed stdout it must end instead of looping.
+    let list_closed = tokio::time::timeout(
+        Duration::from_secs(30),
+        ctx.cli_with_broken_stdout([cmd::AGENT, "list", "--refresh=200"]),
+    )
+    .await
+    .expect("the refreshing agent list kept running with a closed stdout");
+    assert_eq!(
+        list_closed.exit_code(),
+        Some(0),
+        "the refreshing agent list into a closed pipe did not end with success: {}",
+        list_closed.stderr_text()
+    );
+    assert!(!list_closed.stderr_text().contains("panicked"));
+}
+
+#[test]
+#[timeout("20 minutes")]
 async fn bound_bash_executes_scripts_tools_and_recovers() {
     let ctx = context().await;
 
