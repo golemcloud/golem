@@ -2243,8 +2243,9 @@ impl AppCommandHandler {
 
     /// Refuses a deployment in which an MCP import supplies a tool with a reserved name: the
     /// name of a default tool, when the deployment has a tool with that name. That tool would
-    /// take the name, and the imported tool would be left out. This is an early message: the
-    /// server refuses such a deployment by itself when it can read the tools of the import.
+    /// take the name, and the imported tool would be left out. When the tools of the imports
+    /// cannot be read, it refuses a deployment in which an import can supply such a name by
+    /// its prefix and filters. This is an early message: the server has the same two rules.
     async fn reject_mcp_tools_named_like_default_tools(
         &self,
         environment: &ResolvedEnvironmentIdentity,
@@ -2287,6 +2288,12 @@ impl AppCommandHandler {
             .enumerate()
             .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
             .collect::<anyhow::Result<Vec<_>>>()?;
+        // The imports that can supply a reserved name by their prefix and filters. They decide
+        // what occurs when the tools of the imports cannot be read.
+        let can_supply_reserved_names = golem_mcp_import::tool::imports_that_can_supply(
+            &imports,
+            reserved_names.iter().map(|name| name.as_str()),
+        );
         let resolution = match self
             .ctx
             .golem_clients()
@@ -2303,11 +2310,23 @@ impl AppCommandHandler {
             .map_service_error()
         {
             Ok(resolution) => resolution,
-            Err(error) => {
+            Err(error) if can_supply_reserved_names.is_empty() => {
                 log_warn(format!(
-                    "Could not read the tools of the MCP imports, so the CLI does not compare their names with the default tools: {error}. The server compares them when it makes the deployment, if it can read them then."
+                    "Could not read the tools of the MCP imports: {error}. No import can supply a tool with the name of a default tool, because of its prefix or its filters, so the deployment continues."
                 ));
                 return Ok(());
+            }
+            Err(error) => {
+                bail!(
+                    "{}. The tools of the MCP imports cannot be read now ({error}), so nothing shows that the import does not supply that tool: give the import a prefix or exclude the name from the import, or deploy again when the imports can be read. A default tool can also be left out of tools.defaults for the environment",
+                    can_supply_reserved_names
+                        .iter()
+                        .map(|(index, name)| format!(
+                            "MCP import {index} can supply a tool named '{name}', which is the name of a default tool"
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                );
             }
         };
 

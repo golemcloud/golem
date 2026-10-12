@@ -73,6 +73,19 @@ pub struct DeploymentMcpImportDiscovery {
     pub warnings: Vec<DeployValidationWarning>,
     /// The imported tools that have a reserved name: the index of the import, and the name.
     pub reserved_name_conflicts: Vec<(u32, String)>,
+    /// Filled when the tools of the imports cannot be read: the imports that can supply a
+    /// reserved name by their prefix and filters.
+    pub unread_reserved_names: Vec<UnreadReservedName>,
+}
+
+/// An import that can supply a tool with a reserved name, when the tools of the imports
+/// cannot be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadReservedName {
+    pub import_index: u32,
+    pub tool_name: String,
+    /// Why the tools of the imports cannot be read.
+    pub reason: String,
 }
 
 #[derive(Clone, Debug)]
@@ -120,7 +133,8 @@ impl McpImportResolver {
     /// Reads the tools of the MCP imports of a deployment that is about to be committed.
     /// `reserved_names` are the names among `native_names` that an import must not supply: an
     /// imported tool with such a name is a conflict, and not a tool that the native tool
-    /// shadows with a warning. An import that cannot be read gives a warning and no conflict.
+    /// shadows with a warning. When the tools cannot be read, the result has the warning for
+    /// that, and each import that can supply a reserved name by its prefix and filters.
     pub async fn deployment_discovery(
         &self,
         environment_id: EnvironmentId,
@@ -138,6 +152,10 @@ impl McpImportResolver {
             .into_iter()
             .filter(|name| !reserved_names.contains(name))
             .collect();
+        let can_supply_reserved_names = golem_mcp_import::tool::imports_that_can_supply(
+            &imports,
+            reserved_names.iter().map(String::as_str),
+        );
         match self
             .preview(environment_id, imports, native_names, auth)
             .await
@@ -164,6 +182,7 @@ impl McpImportResolver {
                         })
                     })
                     .collect(),
+                unread_reserved_names: Vec::new(),
             },
             Err(error) => {
                 let (import_index, error) = match error {
@@ -173,6 +192,9 @@ impl McpImportResolver {
                     } => (Some(import_index as u32), *error),
                     other => (None, other),
                 };
+                // The read is one operation for all imports, so no import is known to be free
+                // of a reserved name.
+                let reason = error.to_string();
                 DeploymentMcpImportDiscovery {
                     warnings: vec![DeployValidationWarning::McpImportDiscovery(
                         McpImportDiscovery {
@@ -184,6 +206,14 @@ impl McpImportResolver {
                         },
                     )],
                     reserved_name_conflicts: Vec::new(),
+                    unread_reserved_names: can_supply_reserved_names
+                        .into_iter()
+                        .map(|(import_index, tool_name)| UnreadReservedName {
+                            import_index,
+                            tool_name,
+                            reason: reason.clone(),
+                        })
+                        .collect(),
                 }
             }
         }

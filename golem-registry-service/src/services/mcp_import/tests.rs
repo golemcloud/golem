@@ -547,11 +547,10 @@ async fn deployment_discovery_reports_an_import_that_supplies_a_reserved_name() 
 
 #[test]
 #[timeout("30s")]
-async fn deployment_discovery_has_no_conflict_without_the_reserved_tool_or_the_import() {
+async fn deployment_discovery_has_no_conflict_for_an_import_with_a_prefix() {
     let upstream = Upstream::new().await;
     let fixture = Fixture::new(&upstream).await;
     let resolver = fixture.resolver(Default::default());
-    let reserved = BTreeSet::from(["bash".to_string()]);
 
     // A prefix gives the imported tool another name.
     upstream.reply(200, json!({"tools":[tool("bash")]}));
@@ -563,29 +562,82 @@ async fn deployment_discovery_has_no_conflict_without_the_reserved_tool_or_the_i
                 ..declaration(&upstream.url)
             }],
             vec!["bash".into()],
-            &reserved,
+            &BTreeSet::from(["bash".to_string()]),
             AuthCtx::System,
         )
         .await;
     assert!(prefixed.reserved_name_conflicts.is_empty());
+    assert!(prefixed.unread_reserved_names.is_empty());
     assert!(prefixed.warnings.is_empty(), "{:?}", prefixed.warnings);
+}
 
-    // An import that cannot be read is a warning, as it is without a reserved name.
-    upstream.reply(503, json!({}));
-    let unreadable = resolver
-        .deployment_discovery(
-            fixture.source.environment_id,
-            vec![declaration(&upstream.url)],
-            vec!["bash".into()],
-            &reserved,
-            AuthCtx::System,
-        )
-        .await;
-    assert!(unreadable.reserved_name_conflicts.is_empty());
-    assert!(
-        matches!(&unreadable.warnings[..], [DeployValidationWarning::McpImportDiscovery(w)]
-        if w.import_index == Some(0) && w.upstream_tool_name.is_none())
+#[test]
+#[timeout("30s")]
+async fn deployment_discovery_of_imports_that_cannot_be_read_names_those_that_can_supply_a_reserved_name()
+ {
+    let upstream = Upstream::new().await;
+    let fixture = Fixture::new(&upstream).await;
+    let resolver = fixture.resolver(Default::default());
+    let reserved = BTreeSet::from(["bash".to_string()]);
+    let unread = |imports: Vec<McpImportDeployment>, reserved: BTreeSet<String>| {
+        let resolver = &resolver;
+        let upstream = &upstream;
+        let environment_id = fixture.source.environment_id;
+        async move {
+            for _ in &imports {
+                upstream.reply(503, json!({}));
+            }
+            let discovery = resolver
+                .deployment_discovery(
+                    environment_id,
+                    imports,
+                    vec!["bash".into()],
+                    &reserved,
+                    AuthCtx::System,
+                )
+                .await;
+            // The tools were not read, so no tool is known to have the name. The warning stays.
+            assert!(discovery.reserved_name_conflicts.is_empty());
+            assert!(
+                matches!(&discovery.warnings[..], [DeployValidationWarning::McpImportDiscovery(w)]
+                if w.upstream_tool_name.is_none())
+            );
+            discovery
+                .unread_reserved_names
+                .into_iter()
+                .map(|unread| {
+                    assert!(!unread.reason.is_empty());
+                    (unread.import_index, unread.tool_name)
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+    let plain = || declaration(&upstream.url);
+
+    // An import with no prefix and no filter can supply each name.
+    assert_eq!(
+        unread(vec![plain()], reserved.clone()).await,
+        [(0, "bash".to_string())]
     );
+    // An import cannot supply the name with a prefix, with a filter that leaves the name out,
+    // or when the deployment has no tool with a reserved name.
+    for import in [
+        McpImportDeployment {
+            prefix: Some("remote".into()),
+            ..plain()
+        },
+        McpImportDeployment {
+            exclude: Some(vec!["bash".into()]),
+            ..plain()
+        },
+        McpImportDeployment {
+            include: Some(vec!["search*".into()]),
+            ..plain()
+        },
+    ] {
+        assert!(unread(vec![import], reserved.clone()).await.is_empty());
+    }
+    assert!(unread(vec![plain()], BTreeSet::new()).await.is_empty());
 }
 
 #[test]

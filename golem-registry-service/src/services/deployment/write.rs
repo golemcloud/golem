@@ -760,8 +760,9 @@ impl DeploymentWriteService {
             .collect::<Vec<_>>();
         // The name of a default tool is reserved: an MCP import must not supply a tool with a
         // name that a default tool has, when the deployment has a tool with that name. That
-        // tool can be a tool of the application or a native tool of this server. The tools of
-        // an import that cannot be read now are not known, so they are not compared.
+        // tool can be a tool of the application or a native tool of this server. When the
+        // tools of the imports cannot be read now, an import that can supply such a name by
+        // its prefix and filters is refused too: nothing shows that it does not supply it.
         let reserved_tool_names = registered_tool_names
             .iter()
             .filter(|name| DEFAULT_TOOLS.iter().any(|tool| tool.name == name.as_str()))
@@ -777,15 +778,31 @@ impl DeploymentWriteService {
                 auth.clone(),
             )
             .await;
-        if !mcp_import_discovery.reserved_name_conflicts.is_empty() {
-            return Err(DeploymentWriteError::DeploymentValidationFailed(
+        let reserved_name_errors = mcp_import_discovery
+            .reserved_name_conflicts
+            .into_iter()
+            .map(
+                |(index, tool_name)| DeployValidationError::McpImportToolHasDefaultToolName {
+                    index,
+                    tool_name,
+                },
+            )
+            .chain(
                 mcp_import_discovery
-                    .reserved_name_conflicts
+                    .unread_reserved_names
                     .into_iter()
-                    .map(|(index, tool_name)| {
-                        DeployValidationError::McpImportToolHasDefaultToolName { index, tool_name }
-                    })
-                    .collect(),
+                    .map(
+                        |unread| DeployValidationError::McpImportNotReadWithDefaultToolName {
+                            index: unread.import_index,
+                            tool_name: unread.tool_name,
+                            reason: unread.reason,
+                        },
+                    ),
+            )
+            .collect::<Vec<_>>();
+        if !reserved_name_errors.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(
+                reserved_name_errors,
             ));
         }
         warnings.extend(mcp_import_discovery.warnings);

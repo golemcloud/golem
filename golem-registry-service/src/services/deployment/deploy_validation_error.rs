@@ -39,6 +39,14 @@ pub enum DeployValidationError {
     )]
     McpImportToolHasDefaultToolName { index: u32, tool_name: String },
     #[error(
+        "MCP import {index} can supply a tool named '{tool_name}', which is the name of a default tool and of a tool of this deployment, and the tools of the MCP imports cannot be read now ({reason}); give the import a prefix or exclude that name from the import, or deploy again when the imports can be read"
+    )]
+    McpImportNotReadWithDefaultToolName {
+        index: u32,
+        tool_name: String,
+        reason: String,
+    },
+    #[error(
         "Agent type {missing_agent_type} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
     )]
     HttpApiDeploymentMissingAgentType {
