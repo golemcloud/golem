@@ -164,8 +164,10 @@ use uuid::Uuid;
 
 const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
 
-fn builtin_artifact_sources() -> &'static [(Box<Path>, Box<str>)] {
-    static SOURCES: OnceLock<Box<[(Box<Path>, Box<str>)]>> = OnceLock::new();
+type BuiltinArtifactSource = (Box<Path>, Box<str>);
+
+fn builtin_artifact_sources() -> &'static [BuiltinArtifactSource] {
+    static SOURCES: OnceLock<Box<[BuiltinArtifactSource]>> = OnceLock::new();
 
     SOURCES.get_or_init(|| {
         let workspace = workspace_path().into_boxed_path();

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use cap_fs_ext::{FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _};
+use cap_fs_ext::{FollowSymlinks, MetadataExt as _};
 use std::ffi::{OsStr, OsString};
 use std::time::SystemTime;
 
@@ -405,7 +405,7 @@ fn set_host_directory_attributes(
 /// What a seed entry needs to make objects in one sandbox.
 #[derive(Clone, Copy)]
 pub(super) struct SeedContext {
-    pub(super) transfer: SeedTransfer,
+    pub(super) policy: SeedSyncPolicy,
     pub(super) access: SeedAccess,
     pub(super) placement: SeedPlacement,
 }
@@ -459,11 +459,17 @@ fn seed_file(
     directory: &cap_std::fs::Dir,
     destination: &Path,
 ) -> std::io::Result<()> {
-    let (parent, name) = create_capability_copy_parent(directory, destination, context.transfer)?;
-    let seeded = seed_file_resolved(context, source_directory, source, parent.as_dir(), &name);
-    finish_seed(seeded, || {
-        sync_seed_directory(context.transfer, parent.as_dir())
-    })
+    let (parent, name) = create_capability_copy_parent(directory, destination, context.policy)?;
+    finalize_operation(
+        || seed_file_resolved(context, source_directory, source, parent.as_dir(), &name),
+        || {
+            sync_seed_directories(
+                context.policy.directory_action(SeedDirectoryStage::Entry),
+                || Ok(()),
+                || sync_seed_directory(parent.as_dir()),
+            )
+        },
+    )
 }
 
 fn seed_file_resolved(
@@ -475,43 +481,61 @@ fn seed_file_resolved(
 ) -> std::io::Result<()> {
     let source_file = open_file_nofollow(source_directory, &source.relative)?;
     #[cfg(target_os = "macos")]
-    let mut temporary = match context.transfer {
+    let temporary = match context.policy.transfer {
         SeedTransfer::Reflink => CapabilityTempFile::from_clone(parent, &source_file)?,
         _ => CapabilityTempFile::new(parent)?,
     };
     #[cfg(not(target_os = "macos"))]
-    let mut temporary = CapabilityTempFile::new(parent)?;
-    let seeded = (|| {
-        let temporary_file = temporary.as_file().try_clone()?.into_std();
-        match context.transfer {
-            SeedTransfer::Bytes => {
-                std::io::copy(&mut &source_file, temporary.as_file_mut())?;
+    let temporary = CapabilityTempFile::new(parent)?;
+    temporary.finish(|temporary| {
+        let action = context.policy.file_action();
+        let temporary_file = match temporary.as_file().try_clone() {
+            Ok(file) => file.into_std(),
+            Err(error) => {
+                #[cfg(target_os = "macos")]
+                if action == SeedFileSyncAction::Ordinary {
+                    return finish_operation(Err(error), || {
+                        rustix::fs::fsync(temporary.as_file()).map_err(std::io::Error::from)
+                    });
+                }
+                return Err(error);
             }
-            SeedTransfer::Reflink => {
-                #[cfg(not(target_os = "macos"))]
-                transfer_file(FileCopyMode::Reflink, &source_file, &temporary_file)?;
+        };
+        let transfer = || {
+            match context.policy.transfer {
+                SeedTransfer::Bytes => {
+                    std::io::copy(&mut &source_file, temporary.as_file_mut())?;
+                }
+                SeedTransfer::Reflink => {
+                    #[cfg(not(target_os = "macos"))]
+                    transfer_file(FileCopyMode::Reflink, &source_file, &temporary_file)?;
+                }
+                SeedTransfer::ReflinkIntoProject(project_id) => {
+                    reflink_into_project(project_id, &temporary_file, &source_file)?
+                }
             }
-            SeedTransfer::ReflinkIntoProject(project_id) => {
-                reflink_into_project(project_id, &temporary_file, &source_file)?
+            Ok(())
+        };
+        let attributes = || {
+            temporary_file.set_permissions(seeded_permissions(
+                host_permissions(&source.permissions, &temporary_file)?,
+                context.access,
+            ))?;
+            if let Some(modified) = source.modified {
+                temporary_file.set_modified(modified)?;
             }
-        }
-        temporary_file.set_permissions(seeded_permissions(
-            host_permissions(&source.permissions, &temporary_file)?,
-            context.access,
-        ))?;
-        if let Some(modified) = source.modified {
-            temporary_file.set_modified(modified)?;
-        }
-        temporary_file.sync_all()?;
+            Ok(())
+        };
+        prepare_seed_file(action, transfer, attributes, || {
+            sync_seed_file(action, &temporary_file)
+        })?;
         // `CreateNew` makes the name with one no-clobber call. Its `AlreadyExists` error applies the
         // `Refuse` row of `placement_action` for every object that is already there, atomically.
         match context.placement {
-            SeedPlacement::CreateNew => temporary.persist_noclobber(name)?,
-            SeedPlacement::Replace => temporary.persist_replacing(name)?,
+            SeedPlacement::CreateNew => temporary.persist_noclobber(name),
+            SeedPlacement::Replace => temporary.persist_replacing(name),
         }
-        Ok(())
-    })();
-    finish_seed(seeded, || temporary.cleanup())
+    })
 }
 
 /// Makes a symlink to `link_target` at `destination` under `directory`, with the modification
@@ -527,11 +551,17 @@ fn seed_symlink(
     link_target: &Path,
     modified: Option<SystemTime>,
 ) -> std::io::Result<()> {
-    let (parent, name) = create_capability_copy_parent(directory, destination, context.transfer)?;
-    let seeded = seed_symlink_resolved(context, parent.as_dir(), &name, link_target, modified);
-    finish_seed(seeded, || {
-        sync_seed_directory(context.transfer, parent.as_dir())
-    })
+    let (parent, name) = create_capability_copy_parent(directory, destination, context.policy)?;
+    finalize_operation(
+        || seed_symlink_resolved(context, parent.as_dir(), &name, link_target, modified),
+        || {
+            sync_seed_directories(
+                context.policy.directory_action(SeedDirectoryStage::Entry),
+                || Ok(()),
+                || sync_seed_directory(parent.as_dir()),
+            )
+        },
+    )
 }
 
 fn seed_symlink_resolved(
@@ -546,18 +576,49 @@ fn seed_symlink_resolved(
         SeedPlacement::Replace => {
             let temporary =
                 PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path();
-            let seeded = make_symlink(directory, link_target, &temporary, modified)
-                .and_then(|()| clear_for_replacement(directory, name))
-                .and_then(|()| directory.rename(&temporary, directory, name));
-            let cleanup_needed = seeded.is_err();
-            finish_seed(seeded, || {
-                if cleanup_needed {
-                    directory.remove_file(&temporary)
-                } else {
+            let placed = std::cell::Cell::new(false);
+            finalize_operation(
+                || {
+                    make_symlink(directory, link_target, &temporary, modified)?;
+                    clear_for_replacement(directory, name)?;
+                    directory.rename(&temporary, directory, name)?;
+                    placed.set(true);
                     Ok(())
-                }
-            })
+                },
+                || {
+                    cleanup_seed_symlink(
+                        seed_symlink_cleanup_action(placed.get()),
+                        directory,
+                        &temporary,
+                    )
+                },
+            )
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeedSymlinkCleanupAction {
+    None,
+    RemoveTemporary,
+}
+
+fn seed_symlink_cleanup_action(placed: bool) -> SeedSymlinkCleanupAction {
+    if placed {
+        SeedSymlinkCleanupAction::None
+    } else {
+        SeedSymlinkCleanupAction::RemoveTemporary
+    }
+}
+
+fn cleanup_seed_symlink(
+    action: SeedSymlinkCleanupAction,
+    directory: &cap_std::fs::Dir,
+    temporary: &Path,
+) -> std::io::Result<()> {
+    match action {
+        SeedSymlinkCleanupAction::None => Ok(()),
+        SeedSymlinkCleanupAction::RemoveTemporary => directory.remove_file(temporary),
     }
 }
 
@@ -592,12 +653,12 @@ fn seed_directory(
     if destination.as_os_str().is_empty() {
         return seed_directory_contents(context, source, base);
     }
-    let (parent, name) = create_capability_copy_parent(base, destination, context.transfer)?;
+    let (parent, name) = create_capability_copy_parent(base, destination, context.policy)?;
     let seeded = seed_directory_at(context, parent.as_dir(), &name)?;
     let target = parent.as_dir().open_dir_nofollow(&name)?;
     seed_directory_contents(context, source, &target)?;
     if seeded == SeededDirectory::Made {
-        set_seeded_directory_attributes(context.transfer, parent.as_dir(), &name, source_entry)
+        set_seeded_directory_attributes(context.policy, parent.as_dir(), &name, source_entry)
     } else {
         Ok(())
     }
@@ -617,7 +678,7 @@ fn seed_directory_contents(
         seed_listed_entry(context, source, target, entry, made)
     })?;
     made.iter().rev().try_for_each(|entry| {
-        set_seeded_directory_attributes(context.transfer, target, &entry.relative, entry)
+        set_seeded_directory_attributes(context.policy, target, &entry.relative, entry)
     })
 }
 
@@ -634,14 +695,14 @@ fn seed_listed_entry<'a>(
 ) -> std::io::Result<Vec<&'a TreeEntry>> {
     match &entry.kind {
         TreeEntryKind::Directory => {
-            let sync = seed_sync_action(
-                native_seed_sync_platform(),
-                context.transfer,
-                SeedSyncStage::DirectoryPlacement(None),
-            );
-            let seeded = if sync == SeedSyncAction::Parent {
+            let sync = context
+                .policy
+                .directory_action(SeedDirectoryStage::DirectoryPlacement(
+                    DirectoryPlacementObservation::NotAttempted,
+                ));
+            let seeded = if sync == SeedDirectoryAction::Parent {
                 let (parent, name) =
-                    create_capability_copy_parent(target, &entry.relative, context.transfer)?;
+                    create_capability_copy_parent(target, &entry.relative, context.policy)?;
                 seed_directory_at(context, parent.as_dir(), &name)?
             } else {
                 seed_directory_at(context, target, &entry.relative)?
@@ -683,41 +744,46 @@ fn seed_directory_at(
     directory: &cap_std::fs::Dir,
     path: &Path,
 ) -> std::io::Result<SeededDirectory> {
-    let seeded = (|| match directory.create_dir(path) {
-        Ok(()) => Ok(SeededDirectory::Made),
-        Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
-        Err(error) => {
-            let occupant = occupant(&directory.symlink_metadata(path)?);
-            match placement_action(&TreeEntryKind::Directory, occupant, context.placement) {
-                PlacementAction::Merge => Ok(SeededDirectory::Merged),
-                PlacementAction::Refuse => Err(error),
-                PlacementAction::Overwrite => {
-                    directory.remove_file(path)?;
-                    directory.create_dir(path)?;
-                    Ok(SeededDirectory::Made)
-                }
-                PlacementAction::RemoveDirectory => {
-                    directory.remove_dir_all(path)?;
-                    directory.create_dir(path)?;
-                    Ok(SeededDirectory::Made)
+    let seeded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match directory.create_dir(path) {
+            Ok(()) => Ok(SeededDirectory::Made),
+            Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
+            Err(error) => {
+                let occupant = occupant(&directory.symlink_metadata(path)?);
+                match placement_action(&TreeEntryKind::Directory, occupant, context.placement) {
+                    PlacementAction::Merge => Ok(SeededDirectory::Merged),
+                    PlacementAction::Refuse => Err(error),
+                    PlacementAction::Overwrite => {
+                        directory.remove_file(path)?;
+                        directory.create_dir(path)?;
+                        Ok(SeededDirectory::Made)
+                    }
+                    PlacementAction::RemoveDirectory => {
+                        directory.remove_dir_all(path)?;
+                        directory.create_dir(path)?;
+                        Ok(SeededDirectory::Made)
+                    }
                 }
             }
         }
-    })();
-    let action = seed_sync_action(
-        native_seed_sync_platform(),
-        context.transfer,
-        SeedSyncStage::DirectoryPlacement(seeded.as_ref().ok().copied()),
-    );
-    finish_seed(seeded, || {
+    }));
+    let observed = match &seeded {
+        Ok(Ok(SeededDirectory::Made)) => DirectoryPlacementObservation::Made,
+        Ok(Ok(SeededDirectory::Merged)) => DirectoryPlacementObservation::Merged,
+        _ => DirectoryPlacementObservation::Failed,
+    };
+    let action = context
+        .policy
+        .directory_action(SeedDirectoryStage::DirectoryPlacement(observed));
+    finish_unwinding(seeded, || {
         sync_seed_directories(
             action,
             || {
                 directory
                     .open_dir_nofollow(path)
-                    .and_then(|child| sync_seed_directory(context.transfer, &child))
+                    .and_then(|child| sync_seed_directory(&child))
             },
-            || sync_seed_directory(context.transfer, directory),
+            || sync_seed_directory(directory),
         )
     })
 }
@@ -798,27 +864,25 @@ pub(super) fn clear_for_replacement(
 /// Gives the directory at `path` in `directory` the permissions and the modification time of its
 /// listed source entry.
 fn set_seeded_directory_attributes(
-    transfer: SeedTransfer,
+    policy: SeedSyncPolicy,
     directory: &cap_std::fs::Dir,
     path: &Path,
     source: &TreeEntry,
 ) -> std::io::Result<()> {
-    let action = seed_sync_action(
-        native_seed_sync_platform(),
-        transfer,
-        SeedSyncStage::DirectoryAttributes,
-    );
-    if action == SeedSyncAction::OpenedDirectory {
+    let action = policy.directory_action(SeedDirectoryStage::DirectoryAttributes);
+    if action == SeedDirectoryAction::OpenedDirectory {
         // Permissions can prevent path-based time changes and reopening the directory for sync.
         let opened = directory.open_dir_nofollow(path)?;
-        let attributed = (|| {
-            let file = opened.try_clone()?.into_std_file();
-            file.set_permissions(host_permissions(&source.permissions, &file)?)?;
-            source
-                .modified
-                .map_or(Ok(()), |modified| file.set_modified(modified))
-        })();
-        return finish_seed(attributed, || sync_seed_directory(transfer, &opened));
+        return finalize_operation(
+            || {
+                let file = opened.try_clone()?.into_std_file();
+                file.set_permissions(host_permissions(&source.permissions, &file)?)?;
+                source
+                    .modified
+                    .map_or(Ok(()), |modified| file.set_modified(modified))
+            },
+            || sync_seed_directories(action, || sync_seed_directory(&opened), || Ok(())),
+        );
     }
     directory.set_permissions(path, source.permissions.clone())?;
     if let Some(modified) = source.modified {
@@ -876,13 +940,13 @@ fn reflink_into_project(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SeedSyncPlatform {
+pub(super) enum SeedSyncPlatform {
     MacOs,
     Linux,
     Other,
 }
 
-fn native_seed_sync_platform() -> SeedSyncPlatform {
+pub(super) fn native_seed_sync_platform() -> SeedSyncPlatform {
     if cfg!(target_os = "macos") {
         SeedSyncPlatform::MacOs
     } else if cfg!(target_os = "linux") {
@@ -893,148 +957,304 @@ fn native_seed_sync_platform() -> SeedSyncPlatform {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SeedSyncStage {
-    Entry,
-    DirectoryPlacement(Option<SeededDirectory>),
-    Ancestor { opened: bool },
-    DirectoryAttributes,
-    Batch,
+enum SeedFileSyncAction {
+    Standard,
+    Ordinary,
+}
+
+fn seed_file_sync_action(platform: SeedSyncPlatform, transfer: SeedTransfer) -> SeedFileSyncAction {
+    match (platform, transfer) {
+        (SeedSyncPlatform::MacOs, SeedTransfer::Bytes | SeedTransfer::Reflink) => {
+            SeedFileSyncAction::Ordinary
+        }
+        _ => SeedFileSyncAction::Standard,
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SeedSyncPolicy {
+    platform: SeedSyncPlatform,
+    transfer: SeedTransfer,
+}
+
+impl SeedSyncPolicy {
+    pub(super) fn new(platform: SeedSyncPlatform, transfer: SeedTransfer) -> Self {
+        Self { platform, transfer }
+    }
+
+    fn file_action(self) -> SeedFileSyncAction {
+        seed_file_sync_action(self.platform, self.transfer)
+    }
+
+    fn directory_action(self, stage: SeedDirectoryStage) -> SeedDirectoryAction {
+        seed_directory_action(self.platform, self.transfer, stage)
+    }
+
+    pub(super) fn batch_action(self) -> SeedBatchAction {
+        seed_batch_action(self.platform, self.transfer)
+    }
+}
+
+fn sync_seed_file(action: SeedFileSyncAction, file: &File) -> std::io::Result<()> {
+    match action {
+        SeedFileSyncAction::Standard => file.sync_all(),
+        SeedFileSyncAction::Ordinary => {
+            #[cfg(unix)]
+            {
+                rustix::fs::fsync(file).map_err(std::io::Error::from)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = file;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "ordinary seed file sync is unavailable on this platform",
+                ))
+            }
+        }
+    }
+}
+
+fn prepare_seed_file(
+    action: SeedFileSyncAction,
+    transfer: impl FnOnce() -> std::io::Result<()>,
+    attributes: impl FnOnce() -> std::io::Result<()>,
+    sync: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match action {
+        SeedFileSyncAction::Ordinary => finalize_operation(
+            || {
+                transfer()?;
+                attributes()
+            },
+            sync,
+        ),
+        SeedFileSyncAction::Standard => {
+            transfer()?;
+            sync()?;
+            attributes()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SeedSyncAction {
+pub(super) enum SeedBatchAction {
+    None,
+    LinuxVolume,
+    MacFullFlush,
+    Unavailable,
+}
+
+fn seed_batch_action(platform: SeedSyncPlatform, transfer: SeedTransfer) -> SeedBatchAction {
+    match (platform, transfer) {
+        (SeedSyncPlatform::MacOs, SeedTransfer::Bytes | SeedTransfer::Reflink) => {
+            SeedBatchAction::MacFullFlush
+        }
+        (SeedSyncPlatform::Linux, SeedTransfer::Reflink | SeedTransfer::ReflinkIntoProject(_)) => {
+            SeedBatchAction::LinuxVolume
+        }
+        (SeedSyncPlatform::Other, SeedTransfer::Reflink | SeedTransfer::ReflinkIntoProject(_)) => {
+            SeedBatchAction::Unavailable
+        }
+        _ => SeedBatchAction::None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectoryPlacementObservation {
+    NotAttempted,
+    Failed,
+    Made,
+    Merged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeedDirectoryStage {
+    Entry,
+    DirectoryPlacement(DirectoryPlacementObservation),
+    Ancestor { opened: bool },
+    DirectoryAttributes,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeedDirectoryAction {
     None,
     Parent,
     OpenedDirectory,
     ChildThenParent,
-    Volume,
-    Unavailable,
 }
 
-/// Chooses synchronization from the platform, transfer and observations already made by a seed.
-fn seed_sync_action(
+/// Chooses directory synchronization from facts and observations already made by a seed.
+fn seed_directory_action(
     platform: SeedSyncPlatform,
     transfer: SeedTransfer,
-    stage: SeedSyncStage,
-) -> SeedSyncAction {
+    stage: SeedDirectoryStage,
+) -> SeedDirectoryAction {
     match (platform, transfer, stage) {
-        (SeedSyncPlatform::MacOs, SeedTransfer::Reflink, SeedSyncStage::Entry)
-        | (
-            SeedSyncPlatform::MacOs,
-            SeedTransfer::Reflink,
-            SeedSyncStage::DirectoryPlacement(None),
-        )
-        | (
-            SeedSyncPlatform::MacOs,
-            SeedTransfer::Reflink,
-            SeedSyncStage::Ancestor { opened: false },
-        ) => SeedSyncAction::Parent,
         (
             SeedSyncPlatform::MacOs,
-            SeedTransfer::Reflink,
-            SeedSyncStage::DirectoryPlacement(Some(SeededDirectory::Made))
-            | SeedSyncStage::Ancestor { opened: true },
-        ) => SeedSyncAction::ChildThenParent,
-        (SeedSyncPlatform::MacOs, SeedTransfer::Reflink, SeedSyncStage::DirectoryAttributes) => {
-            SeedSyncAction::OpenedDirectory
-        }
+            SeedTransfer::Bytes | SeedTransfer::Reflink,
+            SeedDirectoryStage::Entry
+            | SeedDirectoryStage::DirectoryPlacement(
+                DirectoryPlacementObservation::NotAttempted | DirectoryPlacementObservation::Failed,
+            )
+            | SeedDirectoryStage::Ancestor { opened: false },
+        ) => SeedDirectoryAction::Parent,
         (
-            SeedSyncPlatform::Linux,
-            SeedTransfer::Reflink | SeedTransfer::ReflinkIntoProject(_),
-            SeedSyncStage::Batch,
-        ) => SeedSyncAction::Volume,
+            SeedSyncPlatform::MacOs,
+            SeedTransfer::Bytes | SeedTransfer::Reflink,
+            SeedDirectoryStage::DirectoryPlacement(DirectoryPlacementObservation::Made)
+            | SeedDirectoryStage::Ancestor { opened: true },
+        ) => SeedDirectoryAction::ChildThenParent,
         (
-            SeedSyncPlatform::Other,
-            SeedTransfer::Reflink | SeedTransfer::ReflinkIntoProject(_),
-            SeedSyncStage::Batch,
-        ) => SeedSyncAction::Unavailable,
-        _ => SeedSyncAction::None,
+            SeedSyncPlatform::MacOs,
+            SeedTransfer::Bytes | SeedTransfer::Reflink,
+            SeedDirectoryStage::DirectoryAttributes,
+        ) => SeedDirectoryAction::OpenedDirectory,
+        _ => SeedDirectoryAction::None,
     }
 }
 
 /// Attempts the finalizer even after a failed operation and keeps the earliest error.
-pub(super) fn finish_seed<T, E>(
-    seeded: Result<T, E>,
+pub(super) fn finish_operation<T, E>(
+    result: Result<T, E>,
     finalize: impl FnOnce() -> Result<(), E>,
 ) -> Result<T, E> {
-    let finalized = finalize();
-    seeded.and_then(|value| finalized.map(|()| value))
+    let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(finalize));
+    match (result, finalized) {
+        (Err(error), _) => Err(error),
+        (Ok(value), Ok(finalized)) => finalized.map(|()| value),
+        (Ok(_), Err(panic)) => std::panic::resume_unwind(panic),
+    }
+}
+
+/// Runs cleanup before resuming the original panic, even if cleanup also panics.
+/// An ordinary operation error also keeps priority over a later finalizer panic.
+pub(super) fn finish_unwinding<T, E>(
+    result: std::thread::Result<Result<T, E>>,
+    finalize: impl FnOnce() -> Result<(), E>,
+) -> Result<T, E> {
+    let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(finalize));
+    match (result, finalized) {
+        (Err(panic), _) => std::panic::resume_unwind(panic),
+        (Ok(result), Ok(finalized)) => finish_operation(result, || finalized),
+        (Ok(Err(error)), Err(_)) => Err(error),
+        (Ok(Ok(_)), Err(panic)) => std::panic::resume_unwind(panic),
+    }
+}
+
+pub(super) fn finalize_operation<T, E>(
+    operation: impl FnOnce() -> Result<T, E>,
+    finalize: impl FnOnce() -> Result<(), E>,
+) -> Result<T, E> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
+    finish_unwinding(result, finalize)
 }
 
 fn sync_seed_directories(
-    action: SeedSyncAction,
+    action: SeedDirectoryAction,
     sync_opened: impl FnOnce() -> std::io::Result<()>,
     sync_parent: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     match action {
-        SeedSyncAction::None => Ok(()),
-        SeedSyncAction::Parent => sync_parent(),
-        SeedSyncAction::OpenedDirectory => sync_opened(),
-        SeedSyncAction::ChildThenParent => finish_seed(sync_opened(), sync_parent),
-        SeedSyncAction::Volume | SeedSyncAction::Unavailable => {
-            unreachable!("non-directory sync action in a directory finalizer")
-        }
+        SeedDirectoryAction::None => Ok(()),
+        SeedDirectoryAction::Parent => sync_parent(),
+        SeedDirectoryAction::OpenedDirectory => sync_opened(),
+        SeedDirectoryAction::ChildThenParent => finalize_operation(sync_opened, sync_parent),
     }
 }
 
 /// Finalizes a missing ancestor through its opened child and actual parent, including failures.
 pub(super) fn finish_seed_ancestor(
-    transfer: SeedTransfer,
-    child: std::io::Result<cap_std::fs::Dir>,
+    policy: SeedSyncPolicy,
+    open_child: impl FnOnce() -> std::io::Result<cap_std::fs::Dir>,
     parent: &cap_std::fs::Dir,
 ) -> std::io::Result<cap_std::fs::Dir> {
-    let action = seed_sync_action(
-        native_seed_sync_platform(),
-        transfer,
-        SeedSyncStage::Ancestor {
-            opened: child.is_ok(),
-        },
-    );
-    let synced = sync_seed_directories(
-        action,
-        || match &child {
-            Ok(child) => sync_seed_directory(transfer, child),
-            Err(_) => Ok(()),
-        },
-        || sync_seed_directory(transfer, parent),
-    );
-    finish_seed(child, || synced)
+    let child = std::panic::catch_unwind(std::panic::AssertUnwindSafe(open_child));
+    let action = policy.directory_action(SeedDirectoryStage::Ancestor {
+        opened: matches!(&child, Ok(Ok(_))),
+    });
+    let synced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sync_seed_directories(
+            action,
+            || match &child {
+                Ok(Ok(child)) => sync_seed_directory(child),
+                _ => Ok(()),
+            },
+            || sync_seed_directory(parent),
+        )
+    }));
+    finish_unwinding(child, || match synced {
+        Ok(synced) => synced,
+        Err(panic) => std::panic::resume_unwind(panic),
+    })
 }
 
-/// Syncs an APFS seed directory that may have changed, including on a failed operation.
-/// Other storage modes need no per-directory sync.
-pub(super) fn sync_seed_directory(
-    transfer: SeedTransfer,
-    directory: &cap_std::fs::Dir,
-) -> std::io::Result<()> {
-    let action = seed_sync_action(native_seed_sync_platform(), transfer, SeedSyncStage::Entry);
-    #[cfg(target_os = "macos")]
-    if action == SeedSyncAction::Parent {
-        return rustix::fs::fsync(directory).map_err(std::io::Error::from);
+fn sync_seed_directory(directory: &cap_std::fs::Dir) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return rustix::fs::fsync(directory).map_err(std::io::Error::from);
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "ordinary seed directory sync is unavailable on this platform",
+        ))
     }
-    let _ = (action, directory);
-    Ok(())
 }
 
-/// Syncs the XFS volume once after a seed batch, also when an entry fails.
-///
-/// APFS seeds sync directories that may have changed at each operation, including failures.
-/// Buffered copies do not sync the volume.
-pub(super) fn sync_after_reflink(
-    mode: FileCopyMode,
+#[cfg(any(target_os = "macos", test))]
+fn sync_seed_batch_submissions(
+    sync_file: impl FnOnce() -> std::io::Result<()>,
+    sync_root: impl FnOnce() -> std::io::Result<()>,
+    full_flush: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    finalize_operation(|| finalize_operation(sync_file, sync_root), full_flush)
+}
+
+/// Executes the selected batch action after all entry finalizers, including on failure or unwind.
+pub(super) fn sync_seed_batch(
+    action: SeedBatchAction,
+    root: &NativeRootHandles,
     materialization_root: &Path,
 ) -> std::io::Result<()> {
-    let transfer = seed_transfer(mode, QuotaAuthority::Unsupported);
-    let action = seed_sync_action(native_seed_sync_platform(), transfer, SeedSyncStage::Batch);
-    if action == SeedSyncAction::Volume {
-        #[cfg(target_os = "linux")]
-        return xfs::sync_volume(materialization_root);
+    let _ = (root, materialization_root);
+    match action {
+        SeedBatchAction::None => Ok(()),
+        SeedBatchAction::LinuxVolume => {
+            #[cfg(target_os = "linux")]
+            {
+                xfs::sync_volume(materialization_root)
+            }
+            #[cfg(not(target_os = "linux"))]
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Linux seed volume sync is unavailable on this platform",
+            ))
+        }
+        SeedBatchAction::MacFullFlush => {
+            #[cfg(target_os = "macos")]
+            {
+                sync_seed_batch_submissions(
+                    || rustix::fs::fsync(&root.seed_flusher).map_err(std::io::Error::from),
+                    || sync_seed_directory(&root.directory),
+                    || {
+                        rustix::fs::fcntl_fullfsync(&root.seed_flusher)
+                            .map_err(std::io::Error::from)
+                    },
+                )
+            }
+            #[cfg(not(target_os = "macos"))]
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "macOS fullflush is unavailable on this platform",
+            ))
+        }
+        SeedBatchAction::Unavailable => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "copy-on-write storage is unavailable on this platform",
+        )),
     }
-    if action == SeedSyncAction::Unavailable {
-        unreachable!("copy-on-write storage is unavailable on this platform");
-    }
-    let _ = materialization_root;
-    Ok(())
 }
 
 fn transfer_file(copy_mode: FileCopyMode, source: &File, target: &File) -> std::io::Result<()> {
@@ -1160,21 +1380,172 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn seed_sync_actions_follow_the_platform_transfer_and_observed_stage() {
-        use SeedSyncAction::{
-            ChildThenParent, None as NoSync, OpenedDirectory, Parent, Unavailable, Volume,
-        };
+    fn seed_file_submission_preserves_standard_order_and_finalizes_ordinary_failures() {
+        use SeedFileSyncAction::{Ordinary, Standard};
+        [
+            (
+                Standard,
+                false,
+                false,
+                &["transfer", "sync", "attributes"][..],
+            ),
+            (
+                Ordinary,
+                false,
+                false,
+                &["transfer", "attributes", "sync"][..],
+            ),
+            (Standard, true, false, &["transfer"][..]),
+            (Ordinary, true, false, &["transfer", "sync"][..]),
+            (
+                Standard,
+                false,
+                true,
+                &["transfer", "sync", "attributes"][..],
+            ),
+            (
+                Ordinary,
+                false,
+                true,
+                &["transfer", "attributes", "sync"][..],
+            ),
+        ]
+        .into_iter()
+        .for_each(|(action, transfer_fails, attributes_fail, expected)| {
+            let calls = std::cell::RefCell::new(Vec::new());
+            let result = prepare_seed_file(
+                action,
+                || {
+                    calls.borrow_mut().push("transfer");
+                    if transfer_fails {
+                        Err(std::io::Error::other("transfer failed"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    calls.borrow_mut().push("attributes");
+                    if attributes_fail {
+                        Err(std::io::Error::other("attributes failed"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    calls.borrow_mut().push("sync");
+                    Ok(())
+                },
+            );
+            assert_eq!(result.is_err(), transfer_fails || attributes_fail);
+            assert_eq!(
+                calls.borrow().as_slice(),
+                expected,
+                "{action:?} transfer failure={transfer_fails} attributes failure={attributes_fail}"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_seed_file_sync_executes_the_selected_native_action() {
+        use std::io::Write as _;
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(b"ordinary seed synchronization").unwrap();
+        sync_seed_file(SeedFileSyncAction::Ordinary, &file).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 29);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsupported_seed_batch_actions_return_errors_without_panicking() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = NativeRoot::new(
+            directory.path().to_path_buf(),
+            File::open(directory.path()).unwrap(),
+        )
+        .unwrap();
+        let admitted = root.directory.lock().unwrap().as_ref().unwrap().clone();
+        let unavailable =
+            sync_seed_batch(SeedBatchAction::Unavailable, &admitted, directory.path());
+        assert_eq!(
+            unavailable.unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
+        #[cfg(target_os = "macos")]
+        let wrong_platform = SeedBatchAction::LinuxVolume;
+        #[cfg(not(target_os = "macos"))]
+        let wrong_platform = SeedBatchAction::MacFullFlush;
+        let result = sync_seed_batch(wrong_platform, &admitted, directory.path());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn seed_file_sync_actions_use_ordinary_fsync_on_macos_and_standard_sync_elsewhere() {
+        use SeedFileSyncAction::{Ordinary, Standard};
+        use SeedSyncPlatform::{Linux, MacOs, Other};
+        let project = SeedTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
+        [
+            (MacOs, SeedTransfer::Bytes, Ordinary),
+            (MacOs, SeedTransfer::Reflink, Ordinary),
+            (Linux, SeedTransfer::Bytes, Standard),
+            (Linux, SeedTransfer::Reflink, Standard),
+            (Linux, project, Standard),
+            (Other, SeedTransfer::Bytes, Standard),
+            (Other, SeedTransfer::Reflink, Standard),
+            (Other, project, Standard),
+        ]
+        .into_iter()
+        .for_each(|(platform, transfer, expected)| {
+            assert_eq!(
+                seed_file_sync_action(platform, transfer),
+                expected,
+                "{platform:?} {transfer:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn seed_batch_actions_fullflush_macos_and_preserve_other_platform_policies() {
+        use SeedBatchAction::{LinuxVolume, MacFullFlush, None as NoSync, Unavailable};
+        use SeedSyncPlatform::{Linux, MacOs, Other};
+        let project = SeedTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
+        [
+            (MacOs, SeedTransfer::Bytes, MacFullFlush),
+            (MacOs, SeedTransfer::Reflink, MacFullFlush),
+            (MacOs, project, NoSync),
+            (Linux, SeedTransfer::Bytes, NoSync),
+            (Linux, SeedTransfer::Reflink, LinuxVolume),
+            (Linux, project, LinuxVolume),
+            (Other, SeedTransfer::Bytes, NoSync),
+            (Other, SeedTransfer::Reflink, Unavailable),
+            (Other, project, Unavailable),
+        ]
+        .into_iter()
+        .for_each(|(platform, transfer, expected)| {
+            assert_eq!(
+                seed_batch_action(platform, transfer),
+                expected,
+                "{platform:?} {transfer:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn seed_directory_actions_follow_the_platform_transfer_and_observed_stage() {
+        use DirectoryPlacementObservation::{Failed, Made, Merged, NotAttempted};
+        use SeedDirectoryAction::{ChildThenParent, None as NoSync, OpenedDirectory, Parent};
+        use SeedDirectoryStage::{Ancestor, DirectoryAttributes, DirectoryPlacement, Entry};
         use SeedSyncPlatform::{Linux, MacOs, Other};
         let project = SeedTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
         let stages = [
-            SeedSyncStage::Entry,
-            SeedSyncStage::DirectoryPlacement(Some(SeededDirectory::Made)),
-            SeedSyncStage::DirectoryPlacement(Some(SeededDirectory::Merged)),
-            SeedSyncStage::DirectoryPlacement(None),
-            SeedSyncStage::Ancestor { opened: true },
-            SeedSyncStage::Ancestor { opened: false },
-            SeedSyncStage::DirectoryAttributes,
-            SeedSyncStage::Batch,
+            Entry,
+            DirectoryPlacement(Made),
+            DirectoryPlacement(Merged),
+            DirectoryPlacement(Failed),
+            Ancestor { opened: true },
+            Ancestor { opened: false },
+            DirectoryAttributes,
+            DirectoryPlacement(NotAttempted),
         ];
         [
             (
@@ -1188,60 +1559,35 @@ mod tests {
                     ChildThenParent,
                     Parent,
                     OpenedDirectory,
+                    Parent,
+                ],
+            ),
+            (
+                MacOs,
+                SeedTransfer::Bytes,
+                [
+                    Parent,
+                    ChildThenParent,
                     NoSync,
+                    Parent,
+                    ChildThenParent,
+                    Parent,
+                    OpenedDirectory,
+                    Parent,
                 ],
             ),
-            (MacOs, SeedTransfer::Bytes, [NoSync; 8]),
             (MacOs, project, [NoSync; 8]),
-            (
-                Linux,
-                SeedTransfer::Reflink,
-                [
-                    NoSync, NoSync, NoSync, NoSync, NoSync, NoSync, NoSync, Volume,
-                ],
-            ),
-            (
-                Linux,
-                project,
-                [
-                    NoSync, NoSync, NoSync, NoSync, NoSync, NoSync, NoSync, Volume,
-                ],
-            ),
+            (Linux, SeedTransfer::Reflink, [NoSync; 8]),
+            (Linux, project, [NoSync; 8]),
             (Linux, SeedTransfer::Bytes, [NoSync; 8]),
             (Other, SeedTransfer::Bytes, [NoSync; 8]),
-            (
-                Other,
-                SeedTransfer::Reflink,
-                [
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    Unavailable,
-                ],
-            ),
-            (
-                Other,
-                project,
-                [
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    NoSync,
-                    Unavailable,
-                ],
-            ),
+            (Other, SeedTransfer::Reflink, [NoSync; 8]),
+            (Other, project, [NoSync; 8]),
         ]
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
             assert_eq!(
-                stages.map(|stage| seed_sync_action(platform, transfer, stage)),
+                stages.map(|stage| seed_directory_action(platform, transfer, stage)),
                 expected,
                 "{platform:?} {transfer:?}"
             );
@@ -1252,7 +1598,7 @@ mod tests {
     fn seed_directory_finalizers_attempt_the_parent_after_a_child_failure() {
         let attempts = std::cell::RefCell::new(Vec::new());
         let result = sync_seed_directories(
-            SeedSyncAction::ChildThenParent,
+            SeedDirectoryAction::ChildThenParent,
             || {
                 attempts.borrow_mut().push("child");
                 Err(std::io::Error::new(
@@ -1274,10 +1620,13 @@ mod tests {
     #[test]
     fn seed_directory_finalizers_do_only_the_selected_directory_work() {
         [
-            (SeedSyncAction::None, &[][..]),
-            (SeedSyncAction::Parent, &["parent"][..]),
-            (SeedSyncAction::OpenedDirectory, &["opened"][..]),
-            (SeedSyncAction::ChildThenParent, &["opened", "parent"][..]),
+            (SeedDirectoryAction::None, &[][..]),
+            (SeedDirectoryAction::Parent, &["parent"][..]),
+            (SeedDirectoryAction::OpenedDirectory, &["opened"][..]),
+            (
+                SeedDirectoryAction::ChildThenParent,
+                &["opened", "parent"][..],
+            ),
         ]
         .into_iter()
         .for_each(|(action, expected)| {
@@ -1299,7 +1648,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_finalization_keeps_the_first_error_and_runs_cleanup_before_sync() {
+    fn operation_finalization_keeps_the_first_error_and_runs_cleanup_before_sync() {
         ["transfer", "attributes", "file flush", "placement"]
             .into_iter()
             .for_each(|stage| {
@@ -1308,11 +1657,11 @@ mod tests {
                     std::io::ErrorKind::PermissionDenied,
                     stage,
                 ));
-                let cleaned = finish_seed(seeded, || {
+                let cleaned = finish_operation(seeded, || {
                     attempts.borrow_mut().push("cleanup");
                     Err(std::io::Error::other("cleanup"))
                 });
-                let result = finish_seed(cleaned, || {
+                let result = finish_operation(cleaned, || {
                     attempts.borrow_mut().push("parent sync");
                     Err(std::io::Error::other("parent sync"))
                 });
@@ -1321,12 +1670,12 @@ mod tests {
                 assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
                 assert_eq!(error.to_string(), stage);
             });
-        let result = finish_seed(Ok(17), || Err(std::io::Error::other("cleanup")));
+        let result = finish_operation(Ok(17), || Err(std::io::Error::other("cleanup")));
         assert_eq!(result.unwrap_err().to_string(), "cleanup");
-        let result = finish_seed(Ok(17), || Err(std::io::Error::other("sync")));
+        let result = finish_operation(Ok(17), || Err(std::io::Error::other("sync")));
         assert_eq!(result.unwrap_err().to_string(), "sync");
         assert_eq!(
-            finish_seed::<_, std::io::Error>(Ok(17), || Ok(())).unwrap(),
+            finish_operation::<_, std::io::Error>(Ok(17), || Ok(())).unwrap(),
             17
         );
     }
@@ -1334,7 +1683,7 @@ mod tests {
     #[test]
     fn seed_batch_finalization_runs_after_failure_and_keeps_the_seed_error() {
         let synced = std::cell::Cell::new(false);
-        let result = finish_seed(
+        let result = finish_operation(
             Err::<(), _>(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "seed",
@@ -1346,6 +1695,256 @@ mod tests {
         );
         assert!(synced.get());
         assert_eq!(result.unwrap_err().to_string(), "seed");
+    }
+
+    #[test]
+    fn batch_submissions_attempt_every_stage_and_keep_the_earliest_error() {
+        [
+            "entry",
+            "file submission",
+            "root submission",
+            "full flush",
+            "success",
+        ]
+        .into_iter()
+        .for_each(|failure| {
+            let attempts = std::cell::RefCell::new(Vec::new());
+            let stage = |name| {
+                attempts.borrow_mut().push(name);
+                if name == failure {
+                    Err(std::io::Error::other(name))
+                } else {
+                    Ok(())
+                }
+            };
+            let result = finalize_operation(
+                || stage("entry"),
+                || {
+                    sync_seed_batch_submissions(
+                        || stage("file submission"),
+                        || stage("root submission"),
+                        || stage("full flush"),
+                    )
+                },
+            );
+            assert_eq!(
+                *attempts.borrow(),
+                ["entry", "file submission", "root submission", "full flush"]
+            );
+            if failure == "success" {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().to_string(), failure);
+            }
+        });
+        let result = finalize_operation(
+            || Err::<(), _>(std::io::Error::other("entry")),
+            || {
+                sync_seed_batch_submissions(
+                    || Err(std::io::Error::other("file submission")),
+                    || Err(std::io::Error::other("root submission")),
+                    || Err(std::io::Error::other("full flush")),
+                )
+            },
+        );
+        assert_eq!(result.unwrap_err().to_string(), "entry");
+    }
+
+    #[test]
+    fn an_earlier_operation_error_survives_a_direct_finalizer_panic() {
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            finalize_operation(
+                || {
+                    finalize_operation(
+                        || {
+                            finish_operation(
+                                Err::<(), _>(std::io::Error::other("earlier operation error")),
+                                || {
+                                    attempts.borrow_mut().push("cleanup");
+                                    panic!("later cleanup panic")
+                                },
+                            )
+                        },
+                        || {
+                            attempts.borrow_mut().push("parent sync");
+                            Ok(())
+                        },
+                    )
+                },
+                || {
+                    sync_seed_batch_submissions(
+                        || {
+                            attempts.borrow_mut().push("file submission");
+                            Ok(())
+                        },
+                        || {
+                            attempts.borrow_mut().push("root submission");
+                            Ok(())
+                        },
+                        || {
+                            attempts.borrow_mut().push("full flush");
+                            Ok(())
+                        },
+                    )
+                },
+            )
+        }));
+        assert_eq!(
+            *attempts.borrow(),
+            [
+                "cleanup",
+                "parent sync",
+                "file submission",
+                "root submission",
+                "full flush"
+            ]
+        );
+        assert!(
+            finalized.is_ok(),
+            "a later finalizer panic must not replace the earlier ordinary error"
+        );
+        assert_eq!(
+            finalized.unwrap().unwrap_err().to_string(),
+            "earlier operation error"
+        );
+    }
+
+    #[test]
+    fn an_earlier_error_survives_later_panics_and_all_outer_finalizers_run() {
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let result = finalize_operation(
+            || {
+                finalize_operation(
+                    || {
+                        finalize_operation(
+                            || {
+                                attempts.borrow_mut().push("operation");
+                                Err::<(), _>(std::io::Error::other("earlier operation error"))
+                            },
+                            || {
+                                attempts.borrow_mut().push("cleanup");
+                                panic!("later cleanup panic")
+                            },
+                        )
+                    },
+                    || {
+                        attempts.borrow_mut().push("parent sync");
+                        Err(std::io::Error::other("parent sync"))
+                    },
+                )
+            },
+            || {
+                sync_seed_batch_submissions(
+                    || {
+                        attempts.borrow_mut().push("file submission");
+                        Err(std::io::Error::other("file submission"))
+                    },
+                    || {
+                        attempts.borrow_mut().push("root submission");
+                        panic!("later root submission panic")
+                    },
+                    || {
+                        attempts.borrow_mut().push("full flush");
+                        panic!("later full flush panic")
+                    },
+                )
+            },
+        );
+        assert_eq!(result.unwrap_err().to_string(), "earlier operation error");
+        assert_eq!(
+            *attempts.borrow(),
+            [
+                "operation",
+                "cleanup",
+                "parent sync",
+                "file submission",
+                "root submission",
+                "full flush"
+            ]
+        );
+    }
+
+    #[test]
+    fn symlink_cleanup_actions_follow_observed_placement() {
+        assert_eq!(
+            seed_symlink_cleanup_action(false),
+            SeedSymlinkCleanupAction::RemoveTemporary
+        );
+        assert_eq!(
+            seed_symlink_cleanup_action(true),
+            SeedSymlinkCleanupAction::None
+        );
+    }
+
+    #[test]
+    fn unwind_runs_local_and_batch_finalizers_before_resuming_the_original_panic() {
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            finalize_operation(
+                || {
+                    finalize_operation(
+                        || {
+                            finalize_operation(
+                                || {
+                                    finalize_operation(
+                                        || -> std::io::Result<()> {
+                                            attempts.borrow_mut().push("transfer");
+                                            panic!("original transfer panic")
+                                        },
+                                        || {
+                                            attempts.borrow_mut().push("file sync");
+                                            Ok(())
+                                        },
+                                    )
+                                },
+                                || {
+                                    attempts.borrow_mut().push("cleanup");
+                                    panic!("cleanup panic")
+                                },
+                            )
+                        },
+                        || {
+                            attempts.borrow_mut().push("parent sync");
+                            Err(std::io::Error::other("parent sync"))
+                        },
+                    )
+                },
+                || {
+                    sync_seed_batch_submissions(
+                        || {
+                            attempts.borrow_mut().push("file submission");
+                            panic!("submission panic")
+                        },
+                        || {
+                            attempts.borrow_mut().push("root submission");
+                            Ok(())
+                        },
+                        || {
+                            attempts.borrow_mut().push("full flush");
+                            Ok(())
+                        },
+                    )
+                },
+            )
+        }))
+        .unwrap_err();
+        assert_eq!(
+            panicked.downcast_ref::<&str>(),
+            Some(&"original transfer panic")
+        );
+        assert_eq!(
+            *attempts.borrow(),
+            [
+                "transfer",
+                "file sync",
+                "cleanup",
+                "parent sync",
+                "file submission",
+                "root submission",
+                "full flush"
+            ]
+        );
     }
 
     fn paths(items: &[&str]) -> HashSet<Box<Path>> {
@@ -1365,7 +1964,7 @@ mod tests {
 
     fn buffered_seed(placement: SeedPlacement) -> SeedContext {
         SeedContext {
-            transfer: SeedTransfer::Bytes,
+            policy: SeedSyncPolicy::new(native_seed_sync_platform(), SeedTransfer::Bytes),
             access: SeedAccess::FromSource,
             placement,
         }
@@ -1863,7 +2462,7 @@ mod tests {
             let destination = tempfile::tempdir().unwrap();
             let base = open(destination.path());
             let context = SeedContext {
-                transfer,
+                policy: SeedSyncPolicy::new(native_seed_sync_platform(), transfer),
                 access: SeedAccess::ReadOnly,
                 placement: SeedPlacement::CreateNew,
             };
@@ -1912,7 +2511,7 @@ mod tests {
             let destination = tempfile::tempdir().unwrap();
             let base = open(destination.path());
             let context = SeedContext {
-                transfer,
+                policy: SeedSyncPolicy::new(native_seed_sync_platform(), transfer),
                 access: SeedAccess::FromSource,
                 placement: SeedPlacement::CreateNew,
             };
@@ -1970,7 +2569,7 @@ mod tests {
             let mut entry = listed("merged", None);
             entry.kind = TreeEntryKind::Directory;
             let context = SeedContext {
-                transfer,
+                policy: SeedSyncPolicy::new(native_seed_sync_platform(), transfer),
                 access: SeedAccess::FromSource,
                 placement: SeedPlacement::CreateNew,
             };
@@ -1989,42 +2588,46 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn apfs_seed_syncs_directory_attributes_through_restrictive_permissions() {
-        let destination = tempfile::tempdir().unwrap();
-        let base = open(destination.path());
-        base.create_dir("made").unwrap();
-        let mut entry = listed("made", None);
-        entry.kind = TreeEntryKind::Directory;
-        entry.permissions =
-            cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o0));
-        let modified = UNIX_EPOCH + Duration::from_secs(1_234_567);
-        entry.modified = Some(modified);
-        let result = set_seeded_directory_attributes(
-            SeedTransfer::Reflink,
-            &base,
-            Path::new("made"),
-            &entry,
-        );
-        let mode = base.symlink_metadata("made").unwrap().permissions().mode() & 0o777;
-        std::fs::set_permissions(
-            destination.path().join("made"),
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
+    fn macos_seed_syncs_directory_attributes_through_restrictive_permissions() {
+        [SeedTransfer::Bytes, SeedTransfer::Reflink]
+            .into_iter()
+            .for_each(|transfer| {
+                let destination = tempfile::tempdir().unwrap();
+                let base = open(destination.path());
+                base.create_dir("made").unwrap();
+                let mut entry = listed("made", None);
+                entry.kind = TreeEntryKind::Directory;
+                entry.permissions =
+                    cap_std::fs::Permissions::from_std(std::fs::Permissions::from_mode(0o0));
+                let modified = UNIX_EPOCH + Duration::from_secs(1_234_567);
+                entry.modified = Some(modified);
+                let result = set_seeded_directory_attributes(
+                    SeedSyncPolicy::new(SeedSyncPlatform::MacOs, transfer),
+                    &base,
+                    Path::new("made"),
+                    &entry,
+                );
+                let mode = base.symlink_metadata("made").unwrap().permissions().mode() & 0o777;
+                std::fs::set_permissions(
+                    destination.path().join("made"),
+                    std::fs::Permissions::from_mode(0o700),
+                )
+                .unwrap();
 
-        assert!(
-            result.is_ok(),
-            "sync must use the open directory: {result:?}"
-        );
-        assert_eq!(mode, 0);
-        assert_eq!(
-            base.symlink_metadata("made")
-                .unwrap()
-                .modified()
-                .unwrap()
-                .into_std(),
-            modified
-        );
+                assert!(
+                    result.is_ok(),
+                    "sync must use the open directory: {result:?}"
+                );
+                assert_eq!(mode, 0);
+                assert_eq!(
+                    base.symlink_metadata("made")
+                        .unwrap()
+                        .modified()
+                        .unwrap()
+                        .into_std(),
+                    modified
+                );
+            });
     }
 
     #[test]

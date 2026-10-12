@@ -224,9 +224,21 @@ entity shutdown cases in `src/services/active_agents/tests.rs` and
 
 ## Filesystem snapshots on APFS
 
-For native seed timing limits and the fast Linux XFS comparison, see
-[APFS performance limits](../../../../docs/src/content/next/operate/filesystem_snapshots.mdx#apfs-performance-limits).
-These measurements are separate from the correctness checks below.
+For the macOS seed synchronization policy, see
+[macOS seed synchronization](../../../../docs/src/content/next/operate/filesystem_snapshots.mdx#macos-seed-synchronization).
+Changes to macOS seed synchronization must cover `Apfs`, `Directory` and `Temporary`: plain
+native `fsync` for each seeded regular file and the required scoped namespace `fsync` calls.
+Each fresh macOS filesystem has one precreated, unlinked regular-file descriptor owned by
+`NativeRoot`. Check that admission pins the root descriptor and the flusher descriptor atomically,
+and every admitted batch attempts one final `F_FULLFSYNC` through the pinned flusher. Include
+empty, symlink-only and directory-only batches, and batches that fail early. Verify that flush
+finalization creates no per-batch directory entry, does not change the root's modification time,
+works without a writable root, and cannot be redirected by pathname replacement. Distinguish
+a setup or admission failure before obtaining the pair, which has no pinned flusher to flush.
+Check that the namespace and batch finalizers attempt every required synchronization after an
+admitted batch error while preserving the first error. Keep Linux seed
+synchronization and explicit guest flush behavior unchanged. These are correctness checks,
+not performance or workload-suitability claims.
 
 The `apfs-tests` CI job builds the executor test binaries on a macOS runner and runs them on the
 runner's existing volume. It restores portable test-component and built-in artifact WASMs, not
@@ -236,15 +248,18 @@ Linux binaries. It needs no Lima VM, disk image or special volume. The tests use
 The focused commands are:
 
 ```shell
-cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- apfs_ hard_link_ capture_spelling_ scripted_namespace_resolution_exposes_only_opaque_semantic_facts seed_files_preserve_attributes_and_cleanup_after_placement_failure seed_symlinks_preserve_times_and_cleanup_after_placement_failure seed_merges_an_empty_directory_without_opening_it_for_sync the_reference_model_refuses_directory_link_collisions_without_following_symlinks terminal_raw_namespace_error_invalidates_despite_no_effect_postcondition a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives --test-threads 1 --report-time
-RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- filesystem_snapshots::apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay filesystem_snapshots::managed_snapshots_on_storage_without_copy_on_write_fail_at_startup --exact --test-threads 1 --report-time
+cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- sandbox_filesystem:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
+RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- :tag:local_filesystem --test-threads 1 --report-time
+cargo test --locked -j 4 --profile dev-ci -p golem --lib -- filesystem_config:: command_handler:: launch:: --test-threads 1 --report-time
 ```
 
-The library filter covers the clone test in `sandbox_filesystem::apfs::tests`, the startup probe,
-conservative filename coordination, the configuration round trip and the capture pressure check.
+The library module filters automatically select all new portable and macOS seed helper tests
+in those modules, without a naming prefix or a per-test filter edit. They cover the clone test
+in `sandbox_filesystem::apfs::tests`, the startup probe, conservative filename coordination,
+the configuration round trip and the capture pressure check.
 The portable seed tests also run their APFS branches. They check file attributes and temporary-file
 cleanup, symlink times and cleanup, and merging an unreadable empty directory without a sync-only
-child open. `apfs_seed_syncs_directory_attributes_through_restrictive_permissions` checks directory
+child open. `macos_seed_syncs_directory_attributes_through_restrictive_permissions` checks directory
 permissions and modification time through a descriptor opened before restrictive permissions.
 `apfs_conservative_coordination_covers_both_edit_observation_orders` polls contenders under held
 leases. It checks that observations run together, edits wait for observations, observations wait
@@ -262,9 +277,10 @@ a positive lookup proof from a canonical coordination label, even when the label
 `apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes` checks copy-on-write
 copies, unflushed writes, exclusions and hard-link groups through the sandbox operations.
 `apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload` checks capture admission.
-The integration filters also check that `Managed` refuses storage without copy-on-write at startup.
+The executor integration tag selects the native APFS restart case on macOS and the portable
+case that checks `Managed` refuses storage without copy-on-write at startup.
 
-The same library run includes `hard_link_` and the fixed-seed restore property. A directory hard link
+The same library run covers hard-link behavior and the fixed-seed restore property. A directory hard link
 must give `not-permitted` even when the destination exists. The scripted collision test programs
 `AlreadyExists` followed by a fresh directory observation. The preservation tests cover files,
 symlinks, stale directory hints and nonterminal proof failures. A terminal proof failure invalidates
@@ -274,20 +290,20 @@ from a sleep. The native minimized history runs the collision before and after c
 the tree with full replay, and checks a successful later write. The independent model tests keep
 ancestor and missing-source precedence and do not follow source symlinks.
 
-The restart test needs the `test-components/it_initial_file_system_release.wasm` fixture.
+The native APFS restart test needs the `test-components/it_initial_file_system_release.wasm` fixture.
 It takes a periodic snapshot, drops the executor, starts a new one over the same storage and
 compares the files with a full replay. It includes hard links. Build the fixture before a local run with the
 `modifying-test-components` skill. The CI job restores it from `merge-test-components` and compiles
 it to native code on macOS. A Linux precompiled component cannot replace that step.
 
-The same job builds `golem` and `golem-cli` and runs the `local_server_` library tests for
-configuration defaults, optional TOML, overrides and retained keys. It then runs
-`local_server_apfs_defaults_keep_the_key_across_starts` and
-`local_server_apfs_configuration_keeps_the_key_across_starts` in the CLI integration suite with
-`GOLEM_CLI_TEST_BIN_PROFILE=dev-ci`. The first test starts without filesystem TOML or environment
-settings and checks the default APFS root, local blob storage and key retention across starts.
-The second loads normal TOML and applies an environment root override. Both start the server twice.
-Their contexts need the checksum-pinned built-in artifacts, including `git_tool`, in the server cache.
+The same job runs the `golem` library's configuration, command-handler and launch modules.
+The focused wiring test parses the real `server run` command, forwards the argument or manifest
+root through the production launch builder, and applies filesystem settings through the same
+function as startup. It checks defaults, the root argument, TOML over that argument, and
+environment over TOML. Two preparations check retained repository key reuse and Unix permissions.
+These tests do not start services or provision built-in tools. Existing configuration cases also
+cover optional TOML, validation before key effects and corrupt or concurrent retained keys.
+The launch module checks that local blob storage remains at `<data_dir>/blobs`.
 Managed enables the snapshot service, but an agent still needs a snapshotting policy to save and
 restore snapshots. The executor restart test supplies that policy.
 

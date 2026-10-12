@@ -52,7 +52,7 @@ use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -198,14 +198,12 @@ async fn start_components(
     let worker_executor = {
         let mut config =
             worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
-        let (storage, snapshots) = crate::filesystem_config::prepare(
-            &args.data_dir,
+        configure_filesystem(
+            &mut config,
+            args,
             &golem_worker_executor::services::golem_config::make_config_loader().config_file_name,
-            args.agent_filesystem_root.as_deref(),
             golem_common::config::env_config_provider(),
         )?;
-        config.filesystem_storage = storage;
-        config.filesystem_snapshots = snapshots;
         run_worker_executor(config, join_set).await?
     };
 
@@ -216,6 +214,23 @@ async fn start_components(
         worker_service,
         prometheus_registry: prometheus::default_registry().clone(),
     })
+}
+
+pub(crate) fn configure_filesystem(
+    config: &mut WorkerExecutorConfig,
+    args: &LaunchArgs,
+    config_file: &Path,
+    environment: impl figment::Provider,
+) -> anyhow::Result<()> {
+    let (storage, snapshots) = crate::filesystem_config::prepare(
+        &args.data_dir,
+        config_file,
+        args.agent_filesystem_root.as_deref(),
+        environment,
+    )?;
+    config.filesystem_storage = storage;
+    config.filesystem_snapshots = snapshots;
+    Ok(())
 }
 
 fn blob_storage_config(args: &LaunchArgs) -> BlobStorageConfig {

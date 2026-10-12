@@ -1088,13 +1088,26 @@ lookup behavior. Users do not normalize names. Case sensitivity does not prove b
 because both APFS variants alias Unicode normalization forms. No special volume, disk image or
 privilege is required. The mode logs that it is for local development and tests only.
 
-The current development `Apfs` mode is not suitable for trees with thousands of small files.
-Native cloning and the existing durability policy remain in place, with per-file `sync_all`
-and immediate directory `fsync`. Linux XFS remains the supported production path. The shared
-native seed code was fast on XFS for the same measured 10,000-file tree. These measurements
-cover native seed work, not complete snapshot capture, blob upload or worker recovery.
-See [APFS performance limits](../../../docs/src/content/next/operate/filesystem_snapshots.mdx#apfs-performance-limits)
-for the measurements and the Rust file-flush distinction.
+On macOS, the shared `seed` path for `Apfs`, `Directory` and `Temporary` explicitly uses plain
+native `fsync` for each seeded regular file, rather than `File::sync_all` for each file. The
+directory scopes attempt the required namespace `fsync` calls before the final batch flush.
+Each fresh macOS filesystem has one precreated, unlinked regular-file descriptor owned by
+`NativeRoot`. Seed admission pins the root descriptor and the flusher descriptor atomically.
+Every admitted batch attempts one final `F_FULLFSYNC` through the pinned flusher. This includes
+empty, symlink-only and directory-only batches, and batches that fail early. The flusher creates
+no per-batch directory entry, so flush finalization does not change the root's modification time
+or require a writable root. A later pathname replacement cannot redirect the pinned flush.
+A setup or admission failure before obtaining the pair has no pinned flusher to flush.
+The namespace and batch finalizers still run when an admitted batch fails. They attempt every
+required synchronization and return the first error instead of replacing it with a later
+finalization error.
+
+This policy applies only to macOS seed synchronization. Native cloning and byte copying are
+unchanged. Linux seed synchronization and explicit guest flush operations keep their existing
+behavior. XFS remains the validated, supported production copy-on-write path. The policy does
+not guarantee seed, snapshot capture, blob upload or worker recovery time. See
+[macOS seed synchronization](../../../docs/src/content/next/operate/filesystem_snapshots.mdx#macos-seed-synchronization)
+for the operator policy.
 
 `Apfs` states `AgentAccounting::Unaccounted`, as `ReflinkXfs` does. All disk limits resolve to
 `Unlimited`; the mode has no project quotas or per-agent usage reports, and filesystem metering
@@ -1111,11 +1124,12 @@ parent directories, then applies `GOLEM__` environment variables. These settings
 defaults. An existing file with invalid TOML prevents startup. Standalone executors and local
 servers on other platforms keep disabled snapshots by default. To choose `Directory` or `Temporary`
 on macOS, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting
-policy. Without a configured `repository_key`, the local server generates a 64-byte key and keeps
-its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions `0600`
-on Unix. Later starts use the same key. A configured key takes precedence. Without one, a corrupt
-kept key prevents startup and is not replaced. The snapshot store uses the executor's blob storage,
-which the local server keeps at `<data_dir>/blobs`. There is no separate snapshot destination.
+policy. Without a configured `repository_key`, the local server generates a 64-byte repository key
+and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions
+`0600` on Unix. Later starts use the retained repository key. A configured key takes precedence.
+Without one, a corrupt retained repository key prevents startup and is not replaced. The snapshot
+store uses the executor's blob storage, which the local server keeps at `<data_dir>/blobs`. There
+is no separate snapshot destination.
 See `docs/src/content/next/operate/filesystem_snapshots.mdx` for the local setup and
 `reference/testing-patterns.md` for the native APFS checks.
 

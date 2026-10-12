@@ -16,7 +16,15 @@ These requirements apply to production. For local development and tests on macOS
 - With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
 
-The storage mode is one setting, `[filesystem_storage.mode]`. `Temporary` is the standalone executor default and makes a temporary directory for each agent. `Directory` makes plain directories under a root. These two modes make byte copies, so they cannot enable filesystem snapshots. `Apfs` is the local development mode on macOS that adds copy-on-write copies and volume free-space checks.
+Choose the backend with `[filesystem_storage.mode]`:
+
+| Backend | Use | Filesystem snapshots |
+| --- | --- | --- |
+| `ManagedXfs` | Production on Linux, with XFS reflink and project quotas | Supported, with per-agent disk limits and filesystem metering |
+| `ReflinkXfs` | Production on Linux, with XFS reflink and no project quotas | Supported, without per-agent disk limits or filesystem metering |
+| `Apfs` | Local development and tests on macOS | Supported, without per-agent disk limits or filesystem metering |
+| `Directory` | Plain agent directories under a configured root | Not supported |
+| `Temporary` | A temporary directory for each agent, the standalone executor default | Not supported |
 
 ## Local development on macOS
 
@@ -30,7 +38,7 @@ The `--agent-filesystem-root` option changes the default root. Explicit filesyst
 
 Use `Apfs` for local development and tests only. It works on the Mac's existing APFS volume, whether the volume is case-sensitive or case-insensitive. It needs no special volume, disk image or privilege. Production still needs Linux 5.8 or later with XFS and reflink.
 
-The executor makes the root directory if it does not exist, as `Directory` does. It then makes a file clone under the root with `fclonefileat`, reads the clone and removes the probe directory. If the clone fails, the executor does not start. It does not check the filesystem type, take an exclusive lock on the root or check the volume identity. Do not run two executors with the same root. At startup, the executor logs `APFS storage is for local development and tests only`.
+The executor creates the root directory if it does not exist and refuses startup when native file cloning is unavailable. Do not run two executors with the same root.
 
 To override the local defaults, set the normal executor configuration in `config/worker-executor.toml`:
 
@@ -56,28 +64,13 @@ golem server run --data-dir .golem/data
 
 There is no second switch for local filesystem snapshots. The macOS local server enables `Managed` by default. A standalone executor must configure it. Setting `Managed` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
 
-When no `repository_key` is configured, the local server generates a 64-byte key and keeps its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`. On Unix, it creates the file with permissions `0600`. It uses the same key on later starts. A configured `repository_key` takes precedence over this file. Without a configured key, a corrupt file makes startup fail; the server does not replace it. Keep the key with the local data. Replacing or deleting it prevents the server from reading snapshots made with it.
+When no `repository_key` is configured, the local server generates a 64-byte repository key and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`. On Unix, it creates the file with permissions `0600`. It uses the retained repository key on later starts. A configured `repository_key` takes precedence over this file. Without a configured key, a corrupt file makes startup fail; the server does not replace it. Keep the retained repository key with the local data. Replacing or deleting it prevents the server from reading snapshots made with it.
 
 The snapshots use the executor's blob storage. On the local server, this is file system blob storage at `<data_dir>/blobs`. There is no separate destination for filesystem snapshots.
 
-`Apfs` gives the following storage behavior:
+APFS does not enforce per-agent disk limits or provide filesystem usage metering. Keep `[resource_usage_metering] filesystem = false`. Agents share the volume's free space, and an agent can fill the volume.
 
-- `seed` and `copy_contents` make a copy-on-write clone of each file. Captures and restored trees use the same operations as XFS. The executor makes `.scratch` and `.initial-files` under the root and removes what an earlier process left there at startup.
-- There are no project quotas, per-agent disk limits or per-agent usage reports. The storage has `AgentAccounting::Unaccounted`, so every disk limit resolves to `Unlimited`. An agent can fill the volume. An executor with `[resource_usage_metering] filesystem = true` does not start.
-- The executor reads volume free space with `fstatvfs`. Startup capacity checks, capture admission and write pressure recovery use these values. APFS volumes in one container share free bytes, so byte targets are approximate. The filesystem object counts are synthetic and very large, so the object targets always pass.
-- The executor uses `Conservative` filename coordination on both case-sensitive and case-insensitive APFS volumes. A directory entry edit waits for conflicting operations in the same parent directory. Two observations can run together. macOS keeps its native filename spelling, case sensitivity and lookup behavior. Users do not need to normalize names. The executor does not read the root's case sensitivity to select coordination.
-
-### APFS performance limits
-
-<Callout type="warning">
-  The current development `Apfs` mode is not suitable for trees with thousands of small files, such as repository or `node_modules` trees. It retains native file cloning and the existing durability policy. Linux XFS remains the supported production path. The shared native seed code was fast on XFS for the same measured tree, so the APFS result does not show a general filesystem snapshot performance limit.
-</Callout>
-
-A native seed measurement for a tree of 10,000 regular files, 503 subdirectories and 200 symlinks took a median of 51.84 s across three APFS runs. One XFS run in the existing managed Linux VM took 1.16 s for the same tree shape. The environments and sample counts differ. These values apply to that workload shape, not every host or tree. They are neither a universal speedup nor a service-level guarantee. They do not measure complete snapshot capture, blob upload, SQL queries, git or npm execution, or worker recovery.
-
-File `sync_all` dominated the APFS diagnostic seed time. The installed Rust 1.99 standard library uses `F_FULLFSYNC` for it on Apple platforms and native `fsync` on Linux. Golem does not explicitly request `F_FULLFSYNC`. Its `rustix` directory `fsync` is ordinary directory synchronization, not that full file flush.
-
-APFS keeps per-file `sync_all` and immediate directory synchronization. The completed 10,000-file directory-batching comparison showed no consistent benefit. The 50,000-file comparison was incomplete, and the large SQLite cases were not measured.
+APFS keeps the volume's native filename spelling and case-sensitive or case-insensitive lookup behavior.
 
 ## Enable filesystem snapshots
 
@@ -89,7 +82,7 @@ The steps below describe production on XFS. The key and snapshot settings also a
 
 #### Choose the XFS storage mode
 
-Filesystem snapshots need storage that makes copy-on-write copies. In production, a capture and a restore copy each file by reflink, so they take time for the number of files and not for their bytes. Both production storage modes use a dedicated XFS filesystem with reflink.
+Filesystem snapshots need storage that makes copy-on-write copies. Both production storage modes use a dedicated XFS filesystem with reflink.
 
 | | `ManagedXfs` | `ReflinkXfs` |
 | --- | --- | --- |
@@ -359,7 +352,7 @@ multiplier = 4.0
 
 Write each duration in the [humantime](https://docs.rs/humantime) format, for example `"500ms"`, `"60s"` or `"2m"`. Each count and each wait must be greater than zero. The executor refuses to start with an invalid value and names the setting in the error, for example `max_concurrent_restores must be greater than zero` or `repository_key must be 128 hex characters`.
 
-The default values of `max_concurrent_restores` and `restore_reader_threads` come from a benchmark on the AWS node type c8gd.4xlarge (16 vCPU, 32 GiB of memory). Another node type needs its own values. For example, on i8g.2xlarge (8 vCPU), the benchmark gave 4 restores with 4 reader threads each, because the CPU limited the restores before the disk did.
+Choose `max_concurrent_restores` and `restore_reader_threads` for the CPU and memory available to your executor. More parallel restore work requires more resources.
 
 ### Retries
 
@@ -463,14 +456,7 @@ To find what stays, list the locations in [Where the snapshots are](#where-the-s
 
 Each restore holds memory for each of its reader threads, and each upload holds memory while it saves. This memory is outside the memory that the executor gives to agents. `worker_memory_ratio` sets the share for agents, and its default is `0.8`. The rest must hold the executor itself and the uploads and restores.
 
-The benchmark setup on the node type c8gd.4xlarge (16 vCPU, 32 GiB of memory) used a pod limit of about 28 GiB and this share for agents:
-
-```toml
-[memory]
-worker_memory_ratio = 0.78
-```
-
-In that setup, 4 uploads and 8 restores with the default thread counts needed about 6 GiB outside the memory of the agents. Measure again for another node type or for other values of the settings.
+Reserve memory for the configured number of concurrent uploads and restores. Monitor executor memory use in your deployment and adjust `worker_memory_ratio` and concurrency settings as needed.
 
 ## Metrics
 

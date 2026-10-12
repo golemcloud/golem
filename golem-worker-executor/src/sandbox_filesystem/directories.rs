@@ -84,6 +84,22 @@ impl DirectoryProvisioning {
             .try_lock_owned()
             .expect("new temporary sandbox filesystem lease must be available");
         let root = directory.keep();
+        #[cfg(target_os = "macos")]
+        {
+            // The task owns the kept directory through construction and caller cancellation.
+            let provisioning = self.clone();
+            let error_path = root.clone().into_boxed_path();
+            tokio::spawn(async move { provisioning.finish_creation(volume, root, lifecycle).await })
+                .await
+                .map_err(|error| {
+                    FilesystemStorageError::io(
+                        "provision temporary sandbox filesystem",
+                        &error_path,
+                        std::io::Error::other(error),
+                    )
+                })?
+        }
+        #[cfg(not(target_os = "macos"))]
         self.finish_creation(volume, root, lifecycle).await
     }
 
@@ -133,8 +149,40 @@ impl DirectoryProvisioning {
                 .await);
             }
         };
+        #[cfg(target_os = "macos")]
+        let native_root = {
+            let native_path = root.clone();
+            execute_native(
+                storage_profile(&volume),
+                NativeOperation::Flush,
+                move || NativeRoot::new(native_path, directory),
+            )
+            .await
+            .map_err(|error| {
+                FilesystemStorageError::task_failure(
+                    "initialize fresh runtime directory",
+                    &root,
+                    error,
+                )
+            })
+            .and_then(|result| {
+                result.map_err(|error| {
+                    FilesystemStorageError::io("initialize fresh runtime directory", &root, error)
+                })
+            })
+        };
+        #[cfg(not(target_os = "macos"))]
+        let native_root = NativeRoot::new(root.clone(), directory).map_err(|error| {
+            FilesystemStorageError::io("initialize fresh runtime directory", &root, error)
+        });
+        let native_root = match native_root {
+            Ok(native_root) => native_root,
+            Err(error) => {
+                return Err(rollback_creation(&root, error, &self.cleanup_retry).await);
+            }
+        };
         let filesystem = SandboxFilesystem::new(
-            NativeRoot::new(root.clone(), directory),
+            native_root,
             LeaseState {
                 lifecycle,
                 cleanup: NativeCleanup::Directory {

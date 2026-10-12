@@ -1722,6 +1722,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
 }
 
 #[test]
+#[test_r::tag(local_filesystem)]
 #[timeout("2m")]
 async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
     last_unique_id: &LastUniqueId,
@@ -2391,6 +2392,7 @@ async fn reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
 
 #[cfg(target_os = "macos")]
 #[test]
+#[test_r::tag(local_filesystem)]
 #[timeout("4m")]
 async fn apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
     last_unique_id: &LastUniqueId,

@@ -63,7 +63,7 @@ fn local_defaults(
     }
 }
 
-/// Reads local filesystem settings and supplies the retained key only when none is configured.
+/// Reads local filesystem settings and supplies the retained repository key only when none is configured.
 pub(crate) fn prepare(
     data_dir: &Path,
     config_file: &Path,
@@ -131,10 +131,10 @@ fn prepare_with_defaults(
         {
             anyhow::bail!("filesystem_snapshots.config must be a table");
         }
-        // Validate Managed settings on a disposable clone before retained-key I/O.
+        // Validate Managed settings on a disposable clone before retained repository key I/O.
         with_key(figment.clone(), VALIDATION_ONLY_REPOSITORY_KEY)
             .extract_inner::<FilesystemSnapshotsConfig>("filesystem_snapshots")?;
-        figment = with_key(figment, &local_key(data_dir)?);
+        figment = with_key(figment, &retained_repository_key(data_dir)?);
     }
     let snapshots = figment.extract_inner("filesystem_snapshots")?;
     Ok((storage, snapshots))
@@ -146,11 +146,11 @@ fn with_key(figment: Figment, key: &str) -> Figment {
     })))
 }
 
-fn read_key(path: &Path) -> anyhow::Result<Box<str>> {
+fn read_retained_repository_key(path: &Path) -> anyhow::Result<Box<str>> {
     let key = std::fs::read_to_string(path)
         .with_context(|| {
             format!(
-                "Failed to read the filesystem snapshot key at {}",
+                "Failed to read the retained repository key at {}",
                 path.display()
             )
         })?
@@ -159,9 +159,9 @@ fn read_key(path: &Path) -> anyhow::Result<Box<str>> {
     Ok(key)
 }
 
-fn local_key(data_dir: &Path) -> anyhow::Result<Box<str>> {
+fn retained_repository_key(data_dir: &Path) -> anyhow::Result<Box<str>> {
     let path = data_dir.join(KEY_FILE).into_boxed_path();
-    match read_key(&path) {
+    match read_retained_repository_key(&path) {
         Ok(key) => return Ok(key),
         Err(error)
             if error
@@ -173,7 +173,7 @@ fn local_key(data_dir: &Path) -> anyhow::Result<Box<str>> {
     let mut bytes = [0; 64];
     rand::rngs::OsRng
         .try_fill_bytes(&mut bytes)
-        .context("Failed to generate the local filesystem snapshot key")?;
+        .context("Failed to generate the retained repository key")?;
     let key = hex::encode(bytes).into_boxed_str();
     let mut temporary = tempfile::NamedTempFile::new_in(data_dir)?;
     #[cfg(unix)]
@@ -191,8 +191,10 @@ fn local_key(data_dir: &Path) -> anyhow::Result<Box<str>> {
             rustix::fs::fsync(std::fs::File::open(data_dir)?)?;
             Ok(key)
         }
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => read_key(&path),
-        Err(error) => Err(error.error).context("Failed to keep the local filesystem snapshot key"),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_retained_repository_key(&path)
+        }
+        Err(error) => Err(error.error).context("Failed to persist the retained repository key"),
     }
 }
 
@@ -363,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn local_server_mac_defaults_enable_apfs_and_keep_the_key() {
+    fn local_server_mac_defaults_enable_apfs_and_reuse_the_retained_repository_key() {
         let data = tempfile::tempdir().unwrap();
         let config = data
             .path()
@@ -498,31 +500,33 @@ mod tests {
              [filesystem_snapshots]\ntype = \"Managed\"\n\
              [filesystem_snapshots.config]\nsave_threads = 0",
         );
-        [false, true].into_iter().for_each(|has_kept_key| {
-            let root = tempfile::tempdir().unwrap();
-            let data = root.path().join("data").into_boxed_path();
-            let key = data.join(super::KEY_FILE).into_boxed_path();
-            if has_kept_key {
-                std::fs::create_dir(&data).unwrap();
-                std::fs::write(&key, b"corrupt retained key").unwrap();
-            }
-            let error = super::prepare_with_defaults(
-                &data,
-                config.path(),
-                super::local_defaults(LocalPlatform::Other, None, &data),
-                no_environment(),
-            )
-            .unwrap_err();
-            let message = error.to_string().into_boxed_str();
-            assert!(message.contains("filesystem_storage"));
-            assert!(message.contains("root"));
-            assert!(!message.contains("save_threads"));
-            if has_kept_key {
-                assert!(std::fs::read(&key).unwrap() == b"corrupt retained key");
-            } else {
-                assert!(!data.exists());
-            }
-        });
+        [false, true]
+            .into_iter()
+            .for_each(|has_retained_repository_key| {
+                let root = tempfile::tempdir().unwrap();
+                let data = root.path().join("data").into_boxed_path();
+                let key = data.join(super::KEY_FILE).into_boxed_path();
+                if has_retained_repository_key {
+                    std::fs::create_dir(&data).unwrap();
+                    std::fs::write(&key, b"corrupt retained key").unwrap();
+                }
+                let error = super::prepare_with_defaults(
+                    &data,
+                    config.path(),
+                    super::local_defaults(LocalPlatform::Other, None, &data),
+                    no_environment(),
+                )
+                .unwrap_err();
+                let message = error.to_string().into_boxed_str();
+                assert!(message.contains("filesystem_storage"));
+                assert!(message.contains("root"));
+                assert!(!message.contains("save_threads"));
+                if has_retained_repository_key {
+                    assert!(std::fs::read(&key).unwrap() == b"corrupt retained key");
+                } else {
+                    assert!(!data.exists());
+                }
+            });
     }
 
     #[test]
@@ -608,41 +612,44 @@ mod tests {
     }
 
     #[test]
-    fn local_server_environment_key_overrides_toml_without_reading_or_creating_a_kept_key() {
+    fn local_server_environment_key_overrides_toml_without_reading_or_creating_a_retained_repository_key()
+     {
         let config = config_file(&format!(
             "[filesystem_snapshots]\ntype = \"Managed\"\n\
              [filesystem_snapshots.config]\nrepository_key = \"{}\"\nsave_threads = 2",
             "2a".repeat(64)
         ));
-        [false, true].into_iter().for_each(|has_kept_key| {
-            let data = tempfile::tempdir().unwrap();
-            let key_path = data.path().join(super::KEY_FILE).into_boxed_path();
-            if has_kept_key {
-                std::fs::write(&key_path, b"corrupt").unwrap();
-            }
-            let environment = figment::providers::Serialized::defaults(serde_json::json!({
-                "filesystem_snapshots": { "config": {
-                    "repository_key": "3b".repeat(64),
-                    "save_threads": 3,
-                } }
-            }));
-            let (_, snapshots) =
-                super::prepare(data.path(), config.path(), None, environment).unwrap();
-            let FilesystemSnapshotsConfig::Managed(store) = snapshots else {
-                panic!("configured snapshots must be enabled")
-            };
-            assert!(store.repository_key().bytes() == &[0x3b; 64]);
-            assert_eq!(store.save_threads().get(), 3);
-            if has_kept_key {
-                assert!(std::fs::read(&key_path).unwrap() == b"corrupt");
-            } else {
-                assert!(!key_path.exists());
-            }
-        });
+        [false, true]
+            .into_iter()
+            .for_each(|has_retained_repository_key| {
+                let data = tempfile::tempdir().unwrap();
+                let key_path = data.path().join(super::KEY_FILE).into_boxed_path();
+                if has_retained_repository_key {
+                    std::fs::write(&key_path, b"corrupt").unwrap();
+                }
+                let environment = figment::providers::Serialized::defaults(serde_json::json!({
+                    "filesystem_snapshots": { "config": {
+                        "repository_key": "3b".repeat(64),
+                        "save_threads": 3,
+                    } }
+                }));
+                let (_, snapshots) =
+                    super::prepare(data.path(), config.path(), None, environment).unwrap();
+                let FilesystemSnapshotsConfig::Managed(store) = snapshots else {
+                    panic!("configured snapshots must be enabled")
+                };
+                assert!(store.repository_key().bytes() == &[0x3b; 64]);
+                assert_eq!(store.save_threads().get(), 3);
+                if has_retained_repository_key {
+                    assert!(std::fs::read(&key_path).unwrap() == b"corrupt");
+                } else {
+                    assert!(!key_path.exists());
+                }
+            });
     }
 
     #[test]
-    fn local_server_uses_a_configured_key_instead_of_the_kept_key() {
+    fn local_server_uses_a_configured_key_instead_of_the_retained_repository_key() {
         let data = tempfile::tempdir().unwrap();
         std::fs::write(data.path().join(super::KEY_FILE), b"corrupt").unwrap();
         let config = config_file(&format!(
@@ -660,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn local_server_kept_key_read_failures_do_not_replace_the_entry() {
+    fn local_server_retained_repository_key_read_failures_do_not_replace_the_entry() {
         let config = config_file("[filesystem_snapshots]\ntype = \"Managed\"");
         [false, true].into_iter().for_each(|is_directory| {
             let data = tempfile::tempdir().unwrap();
@@ -684,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn local_server_kept_key_is_the_same_for_concurrent_starts() {
+    fn local_server_retained_repository_key_is_the_same_for_concurrent_starts() {
         let data = tempfile::tempdir().unwrap();
         let config = config_file("[filesystem_snapshots]\ntype = \"Managed\"");
         let barrier = std::sync::Barrier::new(4);
@@ -709,22 +716,25 @@ mod tests {
                 .collect::<Box<[_]>>()
         });
         let key_path = data.path().join(super::KEY_FILE).into_boxed_path();
-        let retained =
+        let retained_repository_key =
             golem_worker_executor::services::golem_config::FilesystemSnapshotRepositoryKey::parse(
                 &std::fs::read_to_string(&key_path).unwrap(),
             )
             .unwrap();
-        assert!(keys.iter().all(|key| key == retained.bytes()));
+        assert!(
+            keys.iter()
+                .all(|key| key == retained_repository_key.bytes())
+        );
         let (_, later) =
             super::prepare(data.path(), config.path(), None, no_environment()).unwrap();
         let FilesystemSnapshotsConfig::Managed(later) = later else {
             panic!("later starts must keep snapshots enabled")
         };
-        assert!(later.repository_key().bytes() == retained.bytes());
+        assert!(later.repository_key().bytes() == retained_repository_key.bytes());
     }
 
     #[test]
-    fn local_server_refuses_a_corrupt_kept_key_and_does_not_replace_it() {
+    fn local_server_refuses_a_corrupt_retained_repository_key_and_does_not_replace_it() {
         let data = tempfile::tempdir().unwrap();
         std::fs::write(data.path().join(super::KEY_FILE), b"corrupt").unwrap();
         let config = config_file("[filesystem_snapshots]\ntype = \"Managed\"");
@@ -754,11 +764,11 @@ mod tests {
         ]
         .into_iter()
         .for_each(|(settings, expected_field)| {
-            [false, true].into_iter().for_each(|has_kept_key| {
+            [false, true].into_iter().for_each(|has_retained_repository_key| {
                 let root = tempfile::tempdir().unwrap();
                 let data = root.path().join("data").into_boxed_path();
                 let key = data.join(super::KEY_FILE).into_boxed_path();
-                if has_kept_key {
+                if has_retained_repository_key {
                     std::fs::create_dir(&data).unwrap();
                     std::fs::write(&key, b"corrupt retained key").unwrap();
                 }
@@ -773,7 +783,7 @@ mod tests {
                     error.to_string().contains(expected_field),
                     "the override error must identify {expected_field}: {error}"
                 );
-                if has_kept_key {
+                if has_retained_repository_key {
                     assert!(std::fs::read(&key).unwrap() == b"corrupt retained key");
                 } else {
                     assert!(!data.exists(), "invalid overrides must not create the data directory");
@@ -794,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn local_server_uses_normal_filesystem_settings_and_keeps_the_key() {
+    fn local_server_uses_normal_filesystem_settings_and_reuses_the_retained_repository_key() {
         let data = tempfile::tempdir().unwrap();
         let config = config_file(
             "[filesystem_storage.mode]\ntype = \"Apfs\"\n\
@@ -820,7 +830,7 @@ mod tests {
         };
         assert!(
             first.repository_key().bytes() == second.repository_key().bytes(),
-            "later starts must keep the key"
+            "later starts must use the retained repository key"
         );
         let key = data
             .path()

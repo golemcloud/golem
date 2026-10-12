@@ -775,7 +775,7 @@ fn matches_stored_spelling(observed: &DirectorySpellings, name: &OsStr) -> bool 
     }
 }
 
-/// Retains one spelling observation per parent in one stopped-call operation.
+/// Retains one spelling observation per parent in one fenced operation.
 /// PathReader first checks existence and kinds without following symlink ancestors.
 /// This reader keeps only names and lookup facts, never directory capabilities.
 #[derive(Default)]

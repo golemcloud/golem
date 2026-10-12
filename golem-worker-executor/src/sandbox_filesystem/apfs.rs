@@ -20,11 +20,25 @@ pub(super) fn bind(
     root: &Path,
     cleanup_retry: RetryConfig,
 ) -> Result<(FilesystemVolume, directories::DirectoryProvisioning), FilesystemStorageError> {
+    bind_with_probe(
+        root,
+        cleanup_retry,
+        |source, parent, name| clone_file(source, parent, name),
+        tempfile::TempDir::close,
+    )
+}
+
+fn bind_with_probe(
+    root: &Path,
+    cleanup_retry: RetryConfig,
+    clone: impl FnOnce(&File, &File, &Path) -> std::io::Result<()>,
+    close: impl FnOnce(tempfile::TempDir) -> std::io::Result<()>,
+) -> Result<(FilesystemVolume, directories::DirectoryProvisioning), FilesystemStorageError> {
     std::fs::create_dir_all(root)
         .map_err(|error| FilesystemStorageError::io("create APFS development root", root, error))?;
     let directory = File::open(root)
         .map_err(|error| FilesystemStorageError::io("open APFS development root", root, error))?;
-    probe_clone(root, probe_contents)?;
+    probe_clone(root, clone, close)?;
     tracing::info!(root = %root.display(), "APFS storage is for local development and tests only");
     Ok((
         FilesystemVolume::copy_on_write(Arc::new(directory)),
@@ -38,22 +52,31 @@ pub(super) fn bind(
 
 fn probe_clone(
     root: &Path,
-    contents: impl FnOnce(&Path) -> std::io::Result<()>,
+    clone: impl FnOnce(&File, &File, &Path) -> std::io::Result<()>,
+    close: impl FnOnce(tempfile::TempDir) -> std::io::Result<()>,
 ) -> Result<(), FilesystemStorageError> {
     let probe = tempfile::Builder::new()
         .prefix(".golem-apfs-clone-probe-")
         .tempdir_in(root)
         .map_err(|error| FilesystemStorageError::io("create APFS clone probe", root, error))?;
-    let result = contents(probe.path());
-    probe.close().map_err(|error| {
-        FilesystemStorageError::cleanup_io("remove APFS clone probe", root, error)
-    })?;
+    let result = probe_contents(probe.path(), clone);
+    let cleanup = close(probe);
     result.map_err(|error| {
-        FilesystemStorageError::io("probe APFS clone for local development", root, error)
-    })
+        let operation = "probe APFS clone for local development";
+        if cleanup.is_err() {
+            FilesystemStorageError::cleanup_io(operation, root, error)
+        } else {
+            FilesystemStorageError::io(operation, root, error)
+        }
+    })?;
+    cleanup
+        .map_err(|error| FilesystemStorageError::cleanup_io("remove APFS clone probe", root, error))
 }
 
-fn probe_contents(path: &Path) -> std::io::Result<()> {
+fn probe_contents(
+    path: &Path,
+    clone: impl FnOnce(&File, &File, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut source = File::options()
         .read(true)
         .write(true)
@@ -62,7 +85,7 @@ fn probe_contents(path: &Path) -> std::io::Result<()> {
     let contents = [0x5a; 4096];
     source.write_all(&contents)?;
     let parent = File::open(path)?;
-    clone_file(&source, &parent, Path::new("clone"))?;
+    clone(&source, &parent, Path::new("clone"))?;
     if std::fs::read(path.join("clone"))? != contents {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -112,10 +135,11 @@ mod tests {
     #[test]
     fn apfs_failed_clone_probe_reports_the_root_and_removes_its_files() {
         let root = tempfile::tempdir().unwrap();
-        let error = probe_clone(root.path(), |probe| {
-            std::fs::write(probe.join("source"), b"probe")?;
-            Err(std::io::Error::from_raw_os_error(libc::ENOTSUP))
-        })
+        let error = probe_clone(
+            root.path(),
+            |_, _, _| Err(std::io::Error::from_raw_os_error(libc::ENOTSUP)),
+            tempfile::TempDir::close,
+        )
         .unwrap_err();
         assert!(
             error
@@ -128,6 +152,72 @@ mod tests {
             Some(std::io::Error::from_raw_os_error(libc::ENOTSUP).kind())
         );
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn apfs_bind_enotsup_clone_failure_precedes_cleanup_failure() {
+        assert_bind_clone_failure_precedes_cleanup_failure(libc::ENOTSUP);
+    }
+
+    #[test]
+    fn apfs_bind_exdev_clone_failure_precedes_cleanup_failure() {
+        assert_bind_clone_failure_precedes_cleanup_failure(libc::EXDEV);
+    }
+
+    fn assert_bind_clone_failure_precedes_cleanup_failure(errno: i32) {
+        use std::cell::Cell;
+        use std::os::unix::fs::FileExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("development/root").into_boxed_path();
+        assert!(!root.exists());
+        let clone_attempts = Cell::new(0);
+        let close_attempts = Cell::new(0);
+        let result = bind_with_probe(
+            &root,
+            RetryConfig {
+                max_attempts: 3,
+                ..RetryConfig::default()
+            },
+            |source, directory, name| {
+                clone_attempts.set(clone_attempts.get() + 1);
+                assert!(root.is_dir());
+                assert!(directory.metadata().unwrap().is_dir());
+                assert_eq!(name, Path::new("clone"));
+                let mut contents = [0; 4096];
+                source.read_exact_at(&mut contents, 0).unwrap();
+                assert_eq!(contents, [0x5a; 4096]);
+                Err(std::io::Error::from_raw_os_error(errno))
+            },
+            |probe| {
+                close_attempts.set(close_attempts.get() + 1);
+                assert_eq!(probe.path().parent(), Some(root.as_ref()));
+                assert!(probe.path().join("source").is_file());
+                assert!(!probe.path().join("clone").exists());
+                probe.close()?;
+                Err(std::io::Error::from_raw_os_error(libc::EIO))
+            },
+        );
+        let Err(error) = result else {
+            panic!("bind must not return a volume after the clone probe fails");
+        };
+        assert_eq!(clone_attempts.get(), 1);
+        assert_eq!(close_attempts.get(), 1);
+        assert!(root.is_dir());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        assert_eq!(error.io_error().unwrap().raw_os_error(), Some(errno));
+        let original = std::io::Error::from_raw_os_error(errno);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "failed to probe APFS clone for local development filesystem {}: {original}",
+                root.display()
+            )
+        );
+        assert_eq!(error.io_kind(), Some(original.kind()));
+        assert!(error.cleanup_failed());
+        assert!(!error.is_terminal_failure());
+        assert!(!error.is_storage_exhaustion());
     }
 
     #[test]

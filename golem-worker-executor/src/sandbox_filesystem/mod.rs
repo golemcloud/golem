@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cap_fs_ext::DirExt as _;
+use cap_fs_ext::{DirExt as _, OpenOptionsFollowExt as _};
 use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
 use std::collections::{HashMap, HashSet};
@@ -647,17 +647,36 @@ pub(crate) struct AppendCoordinationCounts {
 
 struct NativeRoot {
     path: PathBuf,
-    directory: Arc<Mutex<Option<Arc<cap_std::fs::Dir>>>>,
+    directory: Arc<Mutex<Option<Arc<NativeRootHandles>>>>,
 }
 
+/// One admission keeps the directory and its unlinked regular flush descriptor alive together.
+#[cfg(target_os = "macos")]
+struct NativeRootHandles {
+    directory: Arc<cap_std::fs::Dir>,
+    seed_flusher: cap_std::fs::File,
+}
+
+#[cfg(not(target_os = "macos"))]
+type NativeRootHandles = cap_std::fs::Dir;
+
 impl NativeRoot {
-    fn new(path: PathBuf, directory: File) -> Self {
-        Self {
+    fn new(path: PathBuf, directory: File) -> std::io::Result<Self> {
+        let directory = Arc::new(cap_std::fs::Dir::from_std_file(directory));
+        #[cfg(target_os = "macos")]
+        let seed_flusher = tree_copy::finalize_operation(
+            || CapabilityTempFile::new(&directory)?.into_unlinked(),
+            || rustix::fs::fsync(directory.as_ref()).map_err(std::io::Error::from),
+        )?;
+        #[cfg(target_os = "macos")]
+        let directory = Arc::new(NativeRootHandles {
+            directory,
+            seed_flusher,
+        });
+        Ok(Self {
             path,
-            directory: Arc::new(Mutex::new(Some(Arc::new(cap_std::fs::Dir::from_std_file(
-                directory,
-            ))))),
-        }
+            directory: Arc::new(Mutex::new(Some(directory))),
+        })
     }
 
     fn close(&self) {
@@ -1460,7 +1479,7 @@ impl CapabilityCopyParent<'_> {
 fn create_capability_copy_parent<'a>(
     base: &'a cap_std::fs::Dir,
     target: &Path,
-    transfer: SeedTransfer,
+    policy: tree_copy::SeedSyncPolicy,
 ) -> std::io::Result<(CapabilityCopyParent<'a>, Box<Path>)> {
     let mut components = target.components().peekable();
     let mut parent = CapabilityCopyParent::Borrowed(base);
@@ -1487,12 +1506,14 @@ fn create_capability_copy_parent<'a>(
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let child = parent
-                    .as_dir()
-                    .create_dir(component)
-                    .and_then(|()| parent.as_dir().open_dir_nofollow(component));
+                let child = || {
+                    parent
+                        .as_dir()
+                        .create_dir(component)
+                        .and_then(|()| parent.as_dir().open_dir_nofollow(component))
+                };
                 parent = CapabilityCopyParent::Owned(tree_copy::finish_seed_ancestor(
-                    transfer,
+                    policy,
                     child,
                     parent.as_dir(),
                 )?);
@@ -1580,7 +1601,11 @@ impl<'a> CapabilityTempFile<'a> {
             let name =
                 PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4())).into_boxed_path();
             let mut options = cap_std::fs::OpenOptions::new();
-            options.read(true).write(true).create_new(true);
+            options
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .follow(cap_fs_ext::FollowSymlinks::No);
             match directory.open_with(&name, &options) {
                 Ok(file) => {
                     return Ok(Self {
@@ -1606,7 +1631,12 @@ impl<'a> CapabilityTempFile<'a> {
             Err(error) => Some(Err(error)),
         })
         .expect("an unbounded clone-name iterator must return a result")?;
-        let file = open_cloned_file(|| directory.open(&name), || directory.remove_file(&name))?;
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).follow(cap_fs_ext::FollowSymlinks::No);
+        let file = open_cloned_file(
+            || directory.open_with(&name, &options),
+            || directory.remove_file(&name),
+        )?;
         Ok(Self {
             directory,
             name: Some(name),
@@ -1623,9 +1653,35 @@ impl<'a> CapabilityTempFile<'a> {
     }
 
     fn cleanup(&mut self) -> std::io::Result<()> {
-        self.name
-            .take()
-            .map_or(Ok(()), |name| self.directory.remove_file(name))
+        if let Some(name) = &self.name {
+            self.directory.remove_file(name)?;
+            self.name = None;
+        }
+        Ok(())
+    }
+
+    fn finish<T>(
+        mut self,
+        operation: impl FnOnce(&mut Self) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut self)));
+        tree_copy::finish_unwinding(result, || self.cleanup())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn into_unlinked(mut self) -> std::io::Result<cap_std::fs::File> {
+        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if !self.file.metadata()?.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "seed flush descriptor is not a regular file",
+                ));
+            }
+            rustix::fs::fsync(&self.file).map_err(std::io::Error::from)
+        }));
+        tree_copy::finish_unwinding(prepared, || self.cleanup())?;
+        Ok(self.file)
     }
 
     fn persist_noclobber(&mut self, destination: &Path) -> std::io::Result<()> {
@@ -1659,9 +1715,9 @@ fn open_cloned_file(
     open: impl FnOnce() -> std::io::Result<cap_std::fs::File>,
     remove: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<cap_std::fs::File> {
-    match open() {
-        Ok(file) => Ok(file),
-        Err(error) => tree_copy::finish_seed(Err(error), remove),
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(open)) {
+        Ok(Ok(file)) => Ok(file),
+        failed => tree_copy::finish_unwinding(failed, remove),
     }
 }
 
@@ -1731,15 +1787,23 @@ async fn rollback_created_filesystem(
     }
 }
 
+fn creation_error_after_cleanup(
+    creation_error: FilesystemStorageError,
+    cleanup: Result<(), FilesystemStorageError>,
+) -> FilesystemStorageError {
+    match cleanup {
+        Ok(()) => creation_error,
+        Err(cleanup_error) => cleanup_error,
+    }
+}
+
 async fn rollback_creation(
     path: &Path,
     creation_error: FilesystemStorageError,
     cleanup_retry: &RetryConfig,
 ) -> FilesystemStorageError {
-    match remove_and_verify(path, "roll back runtime directory", cleanup_retry).await {
-        Ok(()) => creation_error,
-        Err(cleanup_error) => cleanup_error,
-    }
+    let cleanup = remove_and_verify(path, "roll back runtime directory", cleanup_retry).await;
+    creation_error_after_cleanup(creation_error, cleanup)
 }
 
 async fn remove_and_verify(
@@ -1822,6 +1886,88 @@ fn running_as_root() -> bool {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn a_panicking_temporary_write_removes_its_name_before_resuming_unwind() {
+        let root = tempfile::tempdir().unwrap();
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+        let temporary = CapabilityTempFile::new(&directory).unwrap();
+        let name = temporary.name.as_ref().unwrap().clone();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            temporary.finish::<()>(|_| panic!("seed write panic"))
+        }))
+        .unwrap_err();
+        assert_eq!(panicked.downcast_ref::<&str>(), Some(&"seed write panic"));
+        assert!(!directory.try_exists(name).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_temporary_unlink_retains_its_name_for_explicit_cleanup() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if running_as_root() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+        let mut temporary = CapabilityTempFile::new(&directory).unwrap();
+        let name = temporary.name.as_ref().unwrap().clone();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = temporary.cleanup();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            failed.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(temporary.name.as_deref(), Some(name.as_ref()));
+        assert!(directory.try_exists(&name).unwrap());
+        temporary.cleanup().unwrap();
+        assert!(temporary.name.is_none());
+        assert!(!directory.try_exists(&name).unwrap());
+    }
+
+    #[test]
+    fn a_panicking_clone_open_attempts_removal_before_resuming_unwind() {
+        let removed = std::cell::Cell::new(false);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            open_cloned_file(
+                || panic!("clone open panic"),
+                || {
+                    removed.set(true);
+                    Err(std::io::Error::other("clone cleanup"))
+                },
+            )
+        }))
+        .unwrap_err();
+        assert!(removed.get());
+        assert_eq!(panicked.downcast_ref::<&str>(), Some(&"clone open panic"));
+    }
+
+    #[test]
+    fn creation_failure_selection_keeps_cleanup_failure_priority() {
+        let creation = || {
+            FilesystemStorageError::io(
+                "create test filesystem",
+                Path::new("<creation>"),
+                std::io::Error::other("creation failure"),
+            )
+        };
+        let selected = creation_error_after_cleanup(creation(), Ok(()));
+        assert_eq!(selected.io_error().unwrap().to_string(), "creation failure");
+        assert!(!selected.cleanup_failed());
+        let selected = creation_error_after_cleanup(
+            creation(),
+            Err(FilesystemStorageError::cleanup_io(
+                "remove test filesystem",
+                Path::new("<cleanup>"),
+                std::io::Error::other("cleanup failure"),
+            )),
+        );
+        assert_eq!(selected.io_error().unwrap().to_string(), "cleanup failure");
+        assert!(selected.cleanup_failed());
+    }
 
     #[test]
     fn a_clone_open_error_precedes_a_temporary_removal_error() {
