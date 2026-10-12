@@ -53,10 +53,13 @@ entity `Start`.
   with the card service. Until they are `Live`, and after any root is revoked or expires, the entity
   surface is empty: an invalid scope fails closed and never falls back to the bare wallet.
 - `rederive_agent_effective_surface_from_wallet` re-derives entity surfaces too. Card events are
-  consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary an
-  entity Store excludes every card the worker status lists as revoked or pending revocation and
-  re-checks its inherited roots against that set.
-- Known gap: entity Stores reconcile revocations recorded or pending in the owner status, but
+  consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary
+  every Store, primary or entity, runs `synchronize_owner_authority`: it excludes every card the
+  worker status lists as revoked or pending revocation from its effective and delegation surfaces
+  (`authority_wallet_cards`), and drops (primary) or invalidates (entity) a scope with a revoked
+  root. Without it, a revocation drained by a middleware Store left the card authorizing the
+  primary's own calls.
+- Known gap: Stores reconcile revocations recorded or pending in the owner status, but
   cross-Store wallet updates and owner-wide card-interest registration remain incomplete. Card
   installs and transfers drained by another Store do not reach an existing entity Store's wallet
   copy, and a Store that refreshes card interest from a stale wallet can unregister a card that
