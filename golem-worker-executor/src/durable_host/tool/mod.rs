@@ -4507,6 +4507,20 @@ where
     .await
 }
 
+/// Counts an asynchronous tool admission as tail work. The guest task may return while an
+/// asynchronously lowered call is still being admitted; until its rejection is recorded or its
+/// accepted execution is spawned, nothing else keeps the Store from settling. Hold the returned
+/// activity until that handoff.
+fn tool_admission_activity<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> crate::durable_host::tail_work::TailActivity
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    accessor.with(|mut access| access.get().tail_work_tracker().activity())
+}
+
 async fn release_capable_tool_cohort<U, D, Ctx>(
     accessor: &Accessor<U, D>,
     get_ctx: fn(&mut U) -> &mut DurableWorkerCtx<Ctx>,
@@ -6216,11 +6230,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             (None, None)
         };
         let stderr_rep = stderr.as_ref().map(Resource::rep);
-        // The middleware may exit while this asynchronous call is still being admitted. Until the
-        // rejection is recorded or the accepted child execution is spawned, nothing else keeps the
-        // entity Store from settling, so the admission itself counts as tail work.
-        let admission_activity =
-            accessor.with(|mut access| access.get().tail_work_tracker().activity());
+        let admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_attempt(
             accessor,
             attempt,
@@ -6387,6 +6397,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let rpc = tool_rpc_resource(accessor, &self_)?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
@@ -6457,6 +6468,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         let stdin_rep = stdin.as_ref().map(Resource::rep);
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
