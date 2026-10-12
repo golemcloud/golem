@@ -41,9 +41,9 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Check | Result |
 |---|---|
 | Shared argv/help parser's moved tests | 15 passed; parser also checks on `wasm32-wasip2` without host features |
-| Standalone workspace library tests | 365 passed: shell 209, component 6, wget 37, curl 87, HTTP transport 26 |
-| Unit tests run as WASM | 138 passed under Wasmtime: shell 130, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
-| Shell integration tests | 20 passed |
+| Standalone workspace library tests | 367 passed: shell 209, component 8, wget 37, curl 87, HTTP transport 26 |
+| Unit tests run as WASM | 171 passed under Wasmtime: shell 163, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
+| Shell integration tests | 21 passed |
 | Exact pinned Brush library tests | Core 141, builtins 28 and parser 276 passed (parser's YAML snapshot test is ignored upstream) |
 | Conformance matrix | 2,253 per-PR cases passed on arm64 and on x86-64; exact shell exit code, stdout and stderr, against goldens recorded from Bash 5 and the GNU tools. Of the 18,008 cases including the sweep tier, the 238 that fail on each architecture are exactly those listed in `conformance/sweep-known-failures.json` |
 | Oracle goldens | The goldens `stale` checked on 2026-09-30 matched a fresh run of the oracle image; the 51 cases added since, and one whose script changed, were each recorded from two fresh oracle containers that agreed |
