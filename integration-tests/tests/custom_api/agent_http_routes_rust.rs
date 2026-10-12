@@ -695,6 +695,39 @@ async fn response_guarded_binary_missing(
 
 #[test]
 #[tracing::instrument]
+async fn response_guarded_text_ready(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-text/ready").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let content_language = response
+        .headers()
+        .get(reqwest::header::CONTENT_LANGUAGE)
+        .unwrap()
+        .to_str()?;
+    assert_eq!(content_language, "en");
+    assert_eq!(response.text().await?, "hello");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn response_guarded_text_missing(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = get_test_agent(agent, "/resp/guarded-text/missing").await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_LANGUAGE)
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn response_guarded_binary_pending(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {

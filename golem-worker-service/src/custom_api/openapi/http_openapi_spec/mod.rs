@@ -403,23 +403,21 @@ fn request_body_value(description: &str, content: Vec<(String, Value)>) -> Value
 }
 
 fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
-    let headers_value = build_response_headers(&model);
-
     let mut responses = Map::new();
-    for (status_code, body) in model.body_and_status_codes {
+    for (status_code, response_model) in model.responses {
         let mut response = Map::new();
         response.insert(
             "description".to_string(),
             json!(format!("Response {status_code}")),
         );
 
-        match &body {
+        match response_model.body {
             ResponseBodyOpenApiSchema::Known {
                 schema,
                 content_type,
             } => {
                 let mut content = Map::new();
-                content.insert(content_type.clone(), json!({ "schema": schema }));
+                content.insert(content_type, json!({ "schema": schema }));
                 response.insert("content".to_string(), Value::Object(content));
             }
             ResponseBodyOpenApiSchema::Unknown => {
@@ -430,22 +428,22 @@ fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
                 );
                 response.insert("content".to_string(), Value::Object(content));
             }
-            ResponseBodyOpenApiSchema::NoBody | ResponseBodyOpenApiSchema::Redirect => {}
+            ResponseBodyOpenApiSchema::NoBody => {}
         }
 
-        let mut headers = headers_value.clone().unwrap_or_default();
-        if matches!(body, ResponseBodyOpenApiSchema::Redirect) {
-            headers.insert(
-                "Location".to_string(),
-                json!({
-                    "description": "Response header: Location",
-                    "style": "simple",
-                    "required": true,
-                    "schema": { "type": "string" },
-                }),
-            );
-        }
-        if !headers.is_empty() {
+        if !response_model.headers.is_empty() {
+            let mut headers = Map::new();
+            for (name, header) in response_model.headers {
+                headers.insert(
+                    name.clone(),
+                    json!({
+                        "description": format!("Response header: {name}"),
+                        "style": "simple",
+                        "required": header.required,
+                        "schema": header.schema,
+                    }),
+                );
+            }
             response.insert("headers".to_string(), Value::Object(headers));
         }
 
@@ -453,25 +451,6 @@ fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
     }
 
     Value::Object(responses)
-}
-
-fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Map<String, Value>> {
-    if model.headers.is_empty() {
-        return None;
-    }
-    let mut headers = Map::new();
-    for (name, header) in &model.headers {
-        headers.insert(
-            name.clone(),
-            json!({
-                "description": format!("Response header: {name}"),
-                "style": "simple",
-                "required": header.required,
-                "schema": header.schema.clone(),
-            }),
-        );
-    }
-    Some(headers)
 }
 
 pub(super) fn build_security(

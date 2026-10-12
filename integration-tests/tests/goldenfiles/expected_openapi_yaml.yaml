@@ -837,6 +837,61 @@ paths:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
       security: []
+  /http-agents/{agent-name}/resp/guarded-text/{state}:
+    get:
+      description: Returns English text when ready, no content when missing, or a JSON error
+      operationId: HttpAgent-guarded_text_response
+      parameters:
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
+        name: agent-name
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: 'Path parameter: state'
+        explode: false
+        in: path
+        name: state
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        '200':
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Response 200
+          headers:
+            Content-Language:
+              description: 'Response header: Content-Language'
+              required: false
+              schema:
+                enum:
+                - en
+                type: string
+              style: simple
+        '307':
+          description: Response 307
+          headers:
+            Location:
+              description: 'Response header: Location'
+              required: true
+              schema:
+                type: string
+              style: simple
+        '404':
+          description: Response 404
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
+          description: Response 500
+      security: []
   /http-agents/{agent-name}/resp/json:
     get:
       description: Returns a JSON response with a value field

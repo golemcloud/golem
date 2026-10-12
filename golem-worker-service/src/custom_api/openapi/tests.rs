@@ -2394,6 +2394,78 @@ fn assert_redirect_response(op: &Value) {
         json!({ "type": "string" })
     );
     assert!(op["responses"]["200"]["headers"].get("Location").is_none());
+    for status in ["200", "404", "500"] {
+        assert!(op["responses"][status]["headers"].get("Location").is_none());
+    }
+}
+
+/// `Content-Language` describes the inline text body only, so it is on the
+/// 200 response and on no other status.
+fn assert_content_language_only_on_200(op: &Value) {
+    assert_eq!(
+        op["responses"]["200"]["headers"]["Content-Language"]["schema"]["enum"],
+        json!(["en"])
+    );
+    for (status, response) in op["responses"].as_object().unwrap() {
+        if status != "200" {
+            assert!(
+                response["headers"].get("Content-Language").is_none(),
+                "Content-Language on {status}"
+            );
+        }
+    }
+}
+
+fn en_text_wrapper() -> SchemaType {
+    unstructured_text_schema_type(TextRestrictions {
+        languages: Some(vec!["en".to_string()]),
+        ..Default::default()
+    })
+}
+
+#[test]
+fn result_of_unstructured_text_has_content_language_only_on_200() {
+    let op = get_operation(cm_response(result(
+        en_text_wrapper(),
+        record(vec![field("error", str())]),
+    )));
+    assert!(op["responses"]["307"].is_object());
+    assert!(op["responses"]["500"].is_object());
+    assert_content_language_only_on_200(&op);
+}
+
+#[test]
+fn option_of_unstructured_text_has_content_language_only_on_200() {
+    let op = get_operation(cm_response(option(en_text_wrapper())));
+    assert!(op["responses"]["307"].is_object());
+    assert!(op["responses"]["404"].is_object());
+    assert_content_language_only_on_200(&op);
+}
+
+#[test]
+fn result_of_option_of_unstructured_text_has_content_language_only_on_200() {
+    let op = get_operation(cm_response(result(
+        option(en_text_wrapper()),
+        record(vec![field("error", str())]),
+    )));
+    for status in ["307", "404", "500"] {
+        assert!(op["responses"][status].is_object(), "missing {status}");
+    }
+    assert_content_language_only_on_200(&op);
+    assert_redirect_response(&op);
+}
+
+#[test]
+fn result_of_bare_text_has_content_language_only_on_200() {
+    let op = get_operation(cm_response(result(
+        SchemaType::text(TextRestrictions {
+            languages: Some(vec!["en".to_string()]),
+            ..Default::default()
+        }),
+        record(vec![field("error", str())]),
+    )));
+    assert!(op["responses"].get("307").is_none());
+    assert_content_language_only_on_200(&op);
 }
 
 #[test]

@@ -43,8 +43,6 @@ pub enum ResponseBodyOpenApiSchema {
         content_type: String,
     },
     NoBody,
-    /// Bodyless redirect carrying a required `Location` header.
-    Redirect,
 }
 
 pub struct ResponseHeaderSchema {
@@ -52,9 +50,43 @@ pub struct ResponseHeaderSchema {
     pub required: bool,
 }
 
-pub struct RouteResponseOpenApiSchema {
-    pub body_and_status_codes: IndexMap<u16, ResponseBodyOpenApiSchema>,
+/// One status code's response: its body and the headers sent with it.
+pub struct ResponseOpenApiSchema {
+    pub body: ResponseBodyOpenApiSchema,
     pub headers: IndexMap<String, ResponseHeaderSchema>,
+}
+
+impl ResponseOpenApiSchema {
+    fn header(&mut self, name: &str, schema: Value, required: bool) -> &mut Self {
+        self.headers
+            .insert(name.to_string(), ResponseHeaderSchema { schema, required });
+        self
+    }
+}
+
+pub struct RouteResponseOpenApiSchema {
+    pub responses: IndexMap<u16, ResponseOpenApiSchema>,
+}
+
+#[derive(Default)]
+struct Responses(IndexMap<u16, ResponseOpenApiSchema>);
+
+impl Responses {
+    /// Describe the response for `status`, replacing any earlier description.
+    fn insert(
+        &mut self,
+        status: u16,
+        body: ResponseBodyOpenApiSchema,
+    ) -> &mut ResponseOpenApiSchema {
+        self.0.insert(
+            status,
+            ResponseOpenApiSchema {
+                body,
+                headers: IndexMap::new(),
+            },
+        );
+        self.0.get_mut(&status).expect("response was just inserted")
+    }
 }
 
 /// Compute the OpenAPI responses (and response headers) for a route.
@@ -69,8 +101,7 @@ pub fn get_route_response_schema(
     graph: &SchemaGraph,
     components: &mut Map<String, Value>,
 ) -> Result<RouteResponseOpenApiSchema, String> {
-    let mut responses = IndexMap::new();
-    let mut headers = IndexMap::new();
+    let mut responses = Responses::default();
 
     match &route.behavior {
         RichRouteBehaviour::CallAgent(_) => {
@@ -80,7 +111,7 @@ pub fn get_route_response_schema(
                     responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
                 }
                 Some(ResponseModel::Single(ty)) => {
-                    classify_single_response(ty, graph, components, &mut responses, &mut headers)?;
+                    classify_single_response(ty, graph, components, &mut responses)?;
                 }
                 // `Unknown` (multimodal / unexpected multi-element tuple) or a
                 // missing CallAgent model both map to an opaque 200 body, as in
@@ -91,20 +122,14 @@ pub fn get_route_response_schema(
             }
         }
         RichRouteBehaviour::CorsPreflight(cors_preflight_behaviour) => {
-            responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
+            let preflight = responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
 
             for name in [
                 "Access-Control-Allow-Origin",
                 "Access-Control-Allow-Headers",
                 "Access-Control-Allow-Credentials",
             ] {
-                headers.insert(
-                    name.to_string(),
-                    ResponseHeaderSchema {
-                        schema: string_schema(),
-                        required: true,
-                    },
-                );
+                preflight.header(name, string_schema(), true);
             }
 
             let allowed_methods: Vec<String> = cors_preflight_behaviour
@@ -113,12 +138,10 @@ pub fn get_route_response_schema(
                 .map(|policy| http_method_name(&policy.method))
                 .collect();
 
-            headers.insert(
-                "Access-Control-Allow-Methods".to_string(),
-                ResponseHeaderSchema {
-                    schema: string_enum_schema(&allowed_methods),
-                    required: true,
-                },
+            preflight.header(
+                "Access-Control-Allow-Methods",
+                string_enum_schema(&allowed_methods),
+                true,
             );
         }
         RichRouteBehaviour::WebhookCallback(_) => {
@@ -142,25 +165,8 @@ pub fn get_route_response_schema(
             );
         }
         RichRouteBehaviour::OidcCallback(_) => {
-            // Preserves the legacy emitter behaviour: only response headers are
-            // described and no status code is registered, so the rendered
-            // operation ends up with an empty `responses` object (the headers
-            // are attached per status code and there are none). This is an
-            // existing quirk kept intact by the schema-model migration.
-            headers.insert(
-                "Set-Cookie".to_string(),
-                ResponseHeaderSchema {
-                    schema: string_schema(),
-                    required: true,
-                },
-            );
-            headers.insert(
-                "Location".to_string(),
-                ResponseHeaderSchema {
-                    schema: string_schema(),
-                    required: true,
-                },
-            );
+            // No status code is described, so the rendered operation has an
+            // empty `responses` object.
         }
         RichRouteBehaviour::OidcPkceAuthorize(_) | RichRouteBehaviour::OidcPkceToken(_) => {
             responses.insert(501, ResponseBodyOpenApiSchema::NoBody);
@@ -171,8 +177,7 @@ pub fn get_route_response_schema(
     }
 
     Ok(RouteResponseOpenApiSchema {
-        body_and_status_codes: responses,
-        headers,
+        responses: responses.0,
     })
 }
 
@@ -182,19 +187,18 @@ fn classify_single_response(
     ty: &SchemaType,
     graph: &SchemaGraph,
     components: &mut Map<String, Value>,
-    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
-    headers: &mut IndexMap<String, ResponseHeaderSchema>,
+    responses: &mut Responses,
 ) -> Result<(), String> {
     if unstructured_kind(graph, ty)
         .map_err(|err| err.to_string())?
         .is_some()
     {
-        return insert_payload_response(ty, graph, components, responses, headers);
+        return insert_payload_response(ty, graph, components, responses);
     }
 
     match resolve_top_ref(graph, ty) {
         SchemaType::Option { inner, .. } => {
-            insert_payload_response(inner, graph, components, responses, headers)?;
+            insert_payload_response(inner, graph, components, responses)?;
             responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
         }
         SchemaType::Result { spec, .. } => {
@@ -202,10 +206,10 @@ fn classify_single_response(
                 Some(ok) => match resolve_top_ref(graph, ok) {
                     // `result<option<T>, E>`: `ok(none)` is a 404.
                     SchemaType::Option { inner, .. } => {
-                        insert_payload_response(inner, graph, components, responses, headers)?;
+                        insert_payload_response(inner, graph, components, responses)?;
                         responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
                     }
-                    _ => insert_payload_response(ok, graph, components, responses, headers)?,
+                    _ => insert_payload_response(ok, graph, components, responses)?,
                 },
                 None => {
                     // `result<(), E>` with a unit ok: success carries no
@@ -231,7 +235,7 @@ fn classify_single_response(
                 }
             }
         }
-        _ => insert_payload_response(ty, graph, components, responses, headers)?,
+        _ => insert_payload_response(ty, graph, components, responses)?,
     }
     Ok(())
 }
@@ -244,18 +248,17 @@ fn insert_payload_response(
     ty: &SchemaType,
     graph: &SchemaGraph,
     components: &mut Map<String, Value>,
-    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
-    headers: &mut IndexMap<String, ResponseHeaderSchema>,
+    responses: &mut Responses,
 ) -> Result<(), String> {
     match unstructured_kind(graph, ty).map_err(|err| err.to_string())? {
         Some(UnstructuredKind::Binary(restrictions)) => {
             insert_binary_response(restrictions, responses);
-            responses.insert(307, ResponseBodyOpenApiSchema::Redirect);
+            insert_redirect_response(responses);
             return Ok(());
         }
         Some(UnstructuredKind::Text(restrictions)) => {
-            insert_text_response(restrictions, responses, headers);
-            responses.insert(307, ResponseBodyOpenApiSchema::Redirect);
+            insert_text_response(restrictions, responses);
+            insert_redirect_response(responses);
             return Ok(());
         }
         None => {}
@@ -266,7 +269,7 @@ fn insert_payload_response(
             insert_binary_response(restrictions, responses);
         }
         SchemaType::Text { restrictions, .. } => {
-            insert_text_response(restrictions, responses, headers);
+            insert_text_response(restrictions, responses);
         }
         _ => {
             // Render the original `ty` (not the ref-resolved body) so a named
@@ -288,10 +291,7 @@ fn insert_payload_response(
 /// `application/octet-stream` when unrestricted) carrying an arbitrary binary
 /// body. Shared by bare `Binary` outputs and the inline case of the canonical
 /// unstructured-binary wrapper.
-fn insert_binary_response(
-    restrictions: &BinaryRestrictions,
-    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
-) {
+fn insert_binary_response(restrictions: &BinaryRestrictions, responses: &mut Responses) {
     let content_type = restrictions
         .mime_types
         .as_ref()
@@ -308,29 +308,28 @@ fn insert_binary_response(
 }
 
 /// Describe a `text` 200 response: a `text/plain` body plus an optional
-/// `Content-Language` header enumerating the allowed languages. Shared by bare
+/// `Content-Language` header, on the 200 only, enumerating the allowed languages. Shared by bare
 /// `Text` outputs and the inline case of the canonical unstructured-text
 /// wrapper.
-fn insert_text_response(
-    restrictions: &TextRestrictions,
-    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
-    headers: &mut IndexMap<String, ResponseHeaderSchema>,
-) {
-    responses.insert(
-        200,
-        ResponseBodyOpenApiSchema::Known {
-            schema: string_schema(),
-            content_type: "text/plain".to_string(),
-        },
-    );
+fn insert_text_response(restrictions: &TextRestrictions, responses: &mut Responses) {
     let languages = restrictions.languages.clone().unwrap_or_default();
-    headers.insert(
-        "Content-Language".to_string(),
-        ResponseHeaderSchema {
-            schema: string_enum_schema(&languages),
-            required: false,
-        },
-    );
+    responses
+        .insert(
+            200,
+            ResponseBodyOpenApiSchema::Known {
+                schema: string_schema(),
+                content_type: "text/plain".to_string(),
+            },
+        )
+        .header("Content-Language", string_enum_schema(&languages), false);
+}
+
+/// Describe the `307 Temporary Redirect` of a url-referenced unstructured
+/// value: no body and a required `Location` header.
+fn insert_redirect_response(responses: &mut Responses) {
+    responses
+        .insert(307, ResponseBodyOpenApiSchema::NoBody)
+        .header("Location", string_schema(), true);
 }
 
 /// Follow a chain of `Ref`s against `graph` and return the first non-`Ref`

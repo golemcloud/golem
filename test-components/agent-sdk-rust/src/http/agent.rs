@@ -1,10 +1,13 @@
 use super::model::*;
-use golem_rust::agentic::{UnstructuredBinary, create_webhook};
+use golem_rust::agentic::{UnstructuredBinary, UnstructuredText, create_webhook};
 use golem_rust::wasip3::{
     http::{client, types},
     wit_future, wit_stream,
 };
-use golem_rust::{AllowedMimeTypes, agent_definition, agent_implementation, description, endpoint};
+use golem_rust::{
+    AllowedLanguages, AllowedMimeTypes, agent_definition, agent_implementation, description,
+    endpoint,
+};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -95,6 +98,13 @@ pub trait HttpAgent {
         state: String,
     ) -> Result<Option<UnstructuredBinary<String>>, ResultErrResponse>;
 
+    #[endpoint(get = "/resp/guarded-text/{state}")]
+    #[description("Returns English text when ready, no content when missing, or a JSON error")]
+    fn guarded_text_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredText<EnglishOnly>>, ResultErrResponse>;
+
     // PATCH method endpoints
     #[endpoint(patch = "/resource/{id}")]
     #[description("Updates a resource using PATCH method with provided update data")]
@@ -103,6 +113,11 @@ pub trait HttpAgent {
     #[endpoint(patch = "/resource/{id}/partial")]
     #[description("Performs a partial update on a resource using PATCH method")]
     fn patch_partial(&self, id: String) -> ResourceResponse;
+}
+
+#[derive(AllowedLanguages, Clone, Debug)]
+pub enum EnglishOnly {
+    En,
 }
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
@@ -237,6 +252,22 @@ impl HttpAgent for HttpAgentImpl {
                 data: vec![8, 9],
                 mime_type: "image/png".to_string(),
             })),
+            "missing" => Ok(None),
+            _ => Err(ResultErrResponse {
+                error: "pending".to_string(),
+            }),
+        }
+    }
+
+    fn guarded_text_response(
+        &self,
+        state: String,
+    ) -> Result<Option<UnstructuredText<EnglishOnly>>, ResultErrResponse> {
+        match state.as_str() {
+            "ready" => Ok(Some(UnstructuredText::from_inline(
+                "hello",
+                EnglishOnly::En,
+            ))),
             "missing" => Ok(None),
             _ => Err(ResultErrResponse {
                 error: "pending".to_string(),
