@@ -313,6 +313,12 @@ func implementInto[Id any, S any, Cfg any](
 	}
 	e.newState = newState
 	e.zeroState = func() any { return new(S) }
+	var zero any = new(S)
+	_, multipart := zero.(MultipartSnapshotter)
+	_, plain := zero.(Snapshotter)
+	if multipart && plain {
+		d.RecordErr(def.name, "", "the state implements both Snapshotter and MultipartSnapshotter; implement one")
+	}
 	return &AgentImpl[Id, S, Cfg]{d: d, e: e}
 }
 

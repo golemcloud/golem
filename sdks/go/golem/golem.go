@@ -101,8 +101,8 @@ func (m Mode) toWit() common.AgentMode {
 // [SnapshotDefault], [SnapshotPeriodic], or [SnapshotEveryN].
 //
 // A snapshot serializes the agent's state: if the state implements
-// [Snapshotter], that is used; otherwise the exported fields are JSON-encoded
-// (see [Snapshotter] for the caveat).
+// [MultipartSnapshotter] or [Snapshotter], that is used; otherwise the exported
+// fields are JSON-encoded (see [Snapshotter] for the caveat).
 type SnapshotPolicy struct {
 	kind   snapshotKind
 	amount uint64 // periodic: nanoseconds; every-n: count
@@ -151,7 +151,8 @@ func (p SnapshotPolicy) toWit() common.Snapshotting {
 // default reflective snapshot is not enough — in particular, Go reflection
 // cannot see unexported fields, so the idiomatic private state (e.g. an
 // unexported `count`) is only captured through a Snapshotter. Without one, the
-// snapshot is the JSON of the state's exported fields.
+// snapshot is the JSON of the state's exported fields. For JSON state with
+// named binary parts, implement [MultipartSnapshotter] instead.
 type Snapshotter interface {
 	Save() ([]byte, error)
 	Load([]byte) error

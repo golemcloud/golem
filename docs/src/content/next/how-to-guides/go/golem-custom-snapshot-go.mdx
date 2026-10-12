@@ -58,6 +58,37 @@ type Snapshotter interface {
 
 When the state implements `Snapshotter`, its bytes are stored **verbatim** by the host (opaque payload) and handed back on restore — bypassing the reflective JSON path entirely.
 
+## Step 2c: JSON state and named bytes (`golem.MultipartSnapshotter`)
+
+When the state holds binary data that should not go through JSON (an index, an image), implement `SaveParts`/`LoadParts` instead of `Snapshotter`. The snapshot is a small JSON projection plus named parts of opaque bytes with a bare MIME type:
+
+```go
+type savedState struct {
+    Revision uint32 `json:"revision"`
+}
+
+func (s *state) SaveParts() (golem.MultipartSnapshot, error) {
+    return golem.NewMultipartSnapshot(savedState{Revision: s.revision}, map[string]golem.SnapshotPart{
+        "index": {Bytes: s.index, ContentType: "application/octet-stream"},
+    })
+}
+
+func (s *state) LoadParts(snapshot golem.MultipartSnapshot) error {
+    var saved savedState
+    if err := snapshot.DecodeState(&saved); err != nil {
+        return err
+    }
+    index, err := snapshot.RequirePart("index", "application/octet-stream")
+    if err != nil {
+        return err
+    }
+    *s = state{revision: saved.Revision, index: index}
+    return nil
+}
+```
+
+Part names start with a letter, a digit or `_`, and continue with those, `.` or `-`. A state that implements both `Snapshotter` and `MultipartSnapshotter` is a definition error.
+
 ## Step 3 (optional): rebuild runtime-only state (`OnRestore`)
 
 A restore does **not** run the constructor passed to `Implement`: whatever it did (an RPC, an HTTP request) is already in the history the snapshot replaces, and the restore runs read-only. The state starts from its zero value, the snapshot is loaded into it, and then the `OnRestore` hook runs, if registered. Use it to rebuild what the snapshot does not carry (clients, caches, derived fields):
@@ -158,7 +189,7 @@ func init() {
 ## Key Constraints
 
 - A policy is required for snapshots to happen — `Spec.Snapshot` defaults to `SnapshotDisabled`, and `SnapshotDefault` may resolve to the server's default (possibly disabled). Use `SnapshotEveryN` / `SnapshotPeriodic` to guarantee it.
-- `Snapshotter` is the **only** way to capture unexported state — the default reflective path sees exported fields only.
+- `Snapshotter` and `MultipartSnapshotter` are the **only** ways to capture unexported state — the default reflective path sees exported fields only.
 - Implement `Save` and `Load` as a pair on the state (usually pointer receiver); the host calls `Save` to capture and `Load` to restore.
 - `Save`/`Load` return an `error`; a non-nil `Load` error fails the snapshot-based update.
 - A restore never runs the constructor: the state starts from its zero value, `Load` (or the JSON default) fills it, and `OnRestore` rebuilds the rest. Do not rely on fields the constructor sets unless they are in the snapshot or rebuilt in `OnRestore`.

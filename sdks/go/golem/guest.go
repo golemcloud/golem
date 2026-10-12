@@ -121,7 +121,7 @@ func initializeAgent(agentType string, input types.SchemaValueTree, principal Pr
 
 // restoreAgent brings the agent back on a fresh instance from a snapshot. It
 // does not run the constructor: see [restoreState].
-func restoreAgent(agentType string, input types.SchemaValueTree, principal Principal, snap apihost.Snapshot) error {
+func restoreAgent(agentType string, input types.SchemaValueTree, principal Principal, snap savedState) error {
 	inst, idVal, res := beginAgent(agentType, input, principal)
 	if inst == nil {
 		return agentErrorToGo(res.Err())

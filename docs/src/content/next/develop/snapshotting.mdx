@@ -314,7 +314,7 @@ Use explicit multipart snapshots when the live instance contains binary resource
 
 These examples save a revision counter and an in-memory binary index. The loaders construct fresh live state; ordinary initialization is skipped.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Select `multipart.state` in the definition. Both `save` and `load` are required, and may be async. The live state returned by `init` is independent of the saved schema.
 
@@ -467,6 +467,36 @@ These examples save a revision counter and an in-memory binary index. The loader
         ```
 
         Keep `#derive.agent` and the normal snapshot policy. Merely deriving JSON traits on the live instance does not conflict with the explicit multipart pair.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Implement `golem.MultipartSnapshotter` on the state type. `LoadParts` runs on the zero state, as `Load` does, and the `OnRestore` hook runs after it. Only the saved projection goes through JSON.
+
+        ```go
+        type savedState struct {
+        	Revision uint32 `json:"revision"`
+        }
+
+        func (s *state) SaveParts() (golem.MultipartSnapshot, error) {
+        	return golem.NewMultipartSnapshot(savedState{Revision: s.revision}, map[string]golem.SnapshotPart{
+        		"index": {Bytes: s.index, ContentType: "application/octet-stream"},
+        	})
+        }
+
+        func (s *state) LoadParts(snapshot golem.MultipartSnapshot) error {
+        	var saved savedState
+        	if err := snapshot.DecodeState(&saved); err != nil {
+        		return err
+        	}
+        	index, err := snapshot.RequirePart("index", "application/octet-stream")
+        	if err != nil {
+        		return err
+        	}
+        	*s = state{revision: saved.Revision, index: index}
+        	return nil
+        }
+        ```
+
+        Keep the snapshot policy in `golem.Spec`. A state that implements both `golem.Snapshotter` and `golem.MultipartSnapshotter` is a definition error, and a multipart snapshot does not load into a state that does not implement `MultipartSnapshotter`.
     </Tabs.Tab>
 </Tabs>
 

@@ -28,7 +28,9 @@ import (
 // state (save-snapshot) and later restore it (load-snapshot) — both are guest
 // exports, wired in guest.go.
 //
-// Two modes, chosen per instance:
+// Three modes, chosen per instance:
+//   - if the state implements [MultipartSnapshotter], its JSON state and named
+//     parts are framed as multipart/mixed;
 //   - if the state implements [Snapshotter], its Save/Load bytes are used verbatim
 //     (opaque payload);
 //   - otherwise the state's exported fields are JSON-encoded. Unexported fields
@@ -62,6 +64,17 @@ func saveState(state any, principal Principal) (host.Snapshot, error) {
 	if err != nil {
 		return host.Snapshot{}, err
 	}
+	if mp, ok := state.(MultipartSnapshotter); ok {
+		parts, err := mp.SaveParts()
+		if err != nil {
+			return host.Snapshot{}, err
+		}
+		payload, mime, err := encodeMultipart(parts, p)
+		if err != nil {
+			return host.Snapshot{}, err
+		}
+		return host.Snapshot{Payload: payload, MimeType: mime}, nil
+	}
 	if sn, ok := state.(Snapshotter); ok {
 		payload, err := sn.Save()
 		if err != nil {
@@ -85,30 +98,45 @@ func saveState(state any, principal Principal) (host.Snapshot, error) {
 	return host.Snapshot{Payload: payload, MimeType: snapshotJSONMIME}, nil
 }
 
+// savedState is a snapshot without its principal: the payload [loadState]
+// reads, or the decoded parts of a multipart snapshot.
+type savedState struct {
+	Payload   []byte
+	multipart *MultipartSnapshot
+}
+
 // splitSnapshot separates a snapshot into the agent's principal and the state
-// payload [loadState] reads.
-func splitSnapshot(snap host.Snapshot) (Principal, host.Snapshot, error) {
+// [loadState] reads.
+func splitSnapshot(snap host.Snapshot) (Principal, savedState, error) {
+	if _, ok := extractBoundary(snap.MimeType); ok {
+		principal, parts, err := decodeMultipart(snap.Payload, snap.MimeType)
+		if err != nil {
+			return nil, savedState{}, err
+		}
+		p, err := unmarshalPrincipal(principal)
+		return p, savedState{multipart: &parts}, err
+	}
 	if snap.MimeType == snapshotJSONMIME {
 		var js jsonSnapshot
 		if err := json.Unmarshal(snap.Payload, &js); err != nil {
-			return nil, snap, fmt.Errorf("golem: decoding the snapshot: %w", err)
+			return nil, savedState{}, fmt.Errorf("golem: decoding the snapshot: %w", err)
 		}
 		if js.Version != snapshotJSONVersion {
-			return nil, snap, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
+			return nil, savedState{}, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
 		}
 		p, err := unmarshalPrincipal(js.Principal)
-		return p, host.Snapshot{Payload: js.State, MimeType: snap.MimeType}, err
+		return p, savedState{Payload: js.State}, err
 	}
 	b := snap.Payload
 	if len(b) < 5 || b[0] != snapshotRawVersion {
-		return nil, snap, errors.New("golem: not a snapshot this SDK wrote")
+		return nil, savedState{}, errors.New("golem: not a snapshot this SDK wrote")
 	}
 	n := binary.BigEndian.Uint32(b[1:5])
 	if uint64(len(b)-5) < uint64(n) {
-		return nil, snap, errors.New("golem: snapshot too short for its principal")
+		return nil, savedState{}, errors.New("golem: snapshot too short for its principal")
 	}
 	p, err := unmarshalPrincipal(b[5 : 5+n])
-	return p, host.Snapshot{Payload: b[5+n:], MimeType: snap.MimeType}, err
+	return p, savedState{Payload: b[5+n:]}, err
 }
 
 // restoreState rebuilds an agent's state from a snapshot without running its
@@ -117,7 +145,7 @@ func splitSnapshot(snap host.Snapshot) (Principal, host.Snapshot, error) {
 // replaces, and must not happen again. The state starts from its zero value,
 // the snapshot is loaded into it, and the [AgentImpl.OnRestore] hook, if any,
 // rebuilds what the snapshot does not carry.
-func restoreState(e *agentEntry, idVal reflect.Value, principal Principal, snap host.Snapshot) (any, error) {
+func restoreState(e *agentEntry, idVal reflect.Value, principal Principal, snap savedState) (any, error) {
 	state := e.zeroState()
 	if err := loadState(state, snap); err != nil {
 		return nil, err
@@ -133,7 +161,16 @@ func restoreState(e *agentEntry, idVal reflect.Value, principal Principal, snap 
 // loadState restores an agent instance's state from a host snapshot. state must
 // be the same shape saveState produced the snapshot from (a pointer to the state
 // struct), so the decode writes back through it.
-func loadState(state any, snap host.Snapshot) error {
+func loadState(state any, snap savedState) error {
+	mp, isMultipart := state.(MultipartSnapshotter)
+	switch {
+	case isMultipart && snap.multipart != nil:
+		return mp.LoadParts(*snap.multipart)
+	case isMultipart:
+		return errors.New("golem: the state loads a multipart snapshot, and this one is not")
+	case snap.multipart != nil:
+		return errors.New("golem: a multipart snapshot needs a state that implements MultipartSnapshotter")
+	}
 	if sn, ok := state.(Snapshotter); ok {
 		return sn.Load(snap.Payload)
 	}
