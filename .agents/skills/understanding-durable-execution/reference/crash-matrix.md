@@ -20,11 +20,30 @@ below for what that leaves behind.
 | Before `Start` is appended | nothing | Guest replays to this point and issues the call live for the first time | Guest determinism reaches the same call |
 | After `Start`, before the live effect | `Start` only | `Incomplete`: re-executable types (`ReadLocal`/`ReadRemote`/`WriteLocal`, `WriteRemote` while idempotence mode is on) run the action under the existing `Start`; non-idempotent / batched / transactional writes hard-error into durable-scope recovery (`ScopeReplayRecovery`) | `DurableFunctionType` chosen at the call site |
 | After the effect, before `End` | `Start` only | Same as above. For external peers this is the ambiguous window: the effect may have happened; the peer must be idempotent | Peer-side idempotency, not Golem |
-| After `End`, before guest observation | `Start`, `End` | `Delivered`/`AtReplayTail`: result withheld until the cursor drains, then delivered live-armed; no re-execution | `End` payload |
+| After `End`, before guest observation (including a Store unload or executor shutdown that tears the armed delivery token or terminal guard) | `Start`, `End` | `Delivered`/`AtReplayTail`: result withheld until the cursor drains, then delivered live-armed; no re-execution. The tear must not record `CompletionDiscarded` (`TeardownProbe`) | `End` payload |
 | After `CompletionDelivered` | `Start`, `End`, marker | `Delivered`: result released at the recorded boundary | Marker position |
 | Guest dropped the future before completion | `Start`, `Cancelled { partial }` | `partial: Some` → `Delivered`/`Immediate`; `partial: None` → `Undelivered` (parked for the guest's deterministic drop) | `Cancelled` entry |
 | Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: parked, the guest drops at the same point | Marker |
 | Guest trapped mid-call | `Start` only | Same as "after Start" — trap is never `Cancelled` | `abandon_for_trap` |
+
+Native guest stream reads append one existing `ConsumerItemValue` or `ConsumerTerminal` record
+when Wasmtime's per-read observer confirms consumption. The observer reserves its oplog position
+synchronously. No extra Start/End or delivery marker is recorded. Guest records remain hints and
+satisfy no claim, but reserve their replay position until the observer acknowledges consumption.
+Host projections keep take-time journaling and ordinary hint skipping; the consumer discriminant
+distinguishes the two uses because source bindings alone do not identify the consuming operation.
+
+| Native read replay window | Oplog shape | Reconstruction behaviour | Durable fact |
+|---|---|---|---|
+| Host takes an item before guest consumption | No consumer journal record for that read | Re-read the durable source at the offset after the last observed item | The producer journal retains the unobserved item |
+| Guest consumes an item or terminal | One guest `ConsumerItemValue` or `ConsumerTerminal` | Retain the reconstructed value until its journal position; only the per-read observer releases the cursor | The journal position is the guest boundary |
+| Guest consumes part of a packed byte batch | One guest `ConsumerItemValue` covering only the delivered bytes | Recover the unconsumed remainder by source offset; later reads record their own portions | No take-time batch plus separate marker |
+| Guest cancels a read whose recorded delivery replay cannot retain | Guest consumer observation | Fail with `UnexpectedOplogEntry` and poison the shared cursor; do not discard the recorded value or remain parked | A recorded guest delivery cannot become an unread cancellation |
+| Atomic rollback deletes the physical guest-read boundary, then the region reads again | Original consumer record, `Jump`, one consumer record with `reobserves` pointing to the original | Validate identical logical content, replay the replacement boundary; do not advance progress twice or introduce nested readers again | Ordinal, source offset and nested identities retain the original logical input |
+
+Native read cancellation does not reconstruct whether the canonical cancellation returned
+inline or blocked. Successful cancellation replay across those different return dispositions
+is not supported. Cancellation keeps the canonical policy; it is not forced to return blocked.
 
 ## Owner lifecycle handoff (`worker/mod.rs`, `worker/invocation_loop.rs`, `services/active_agents/mod.rs`)
 
@@ -125,7 +144,7 @@ stop progress outside acceptance locks and rechecks readiness before replacing t
 |---|---|---|---|
 | Producer after committing `StreamItems`, before bus publication | producer: `StreamItems` | Items are already durable; consumers catch up by offset from producer segments | Commit precedes `publish_committed` |
 | Producer between guest write and `StreamItems` commit | producer: previous items only | Producer replays and the guest re-drives the write; sequence continues from the last committed `first_sequence` | Guest determinism + committed sequence |
-| Consumer after `ConsumerItemValue`, before the guest observed it | consumer: journal record | Journal replays by `consumer_read_ordinal`; the item is delivered once from the journal, not refetched | `consumer_read_ordinal` / `source_offset` |
+| Host projection after `ConsumerItemValue`, before downstream observation | consumer: host journal record | Journal replays by `consumer_read_ordinal`; the item is delivered once from the journal, not refetched | `consumer_read_ordinal` / `source_offset` |
 | Consumer bus reader closed (socket, executor loss) | consumer journal up to last offset | Resubscribe samples high-water under the publication lock; overlap discarded by offset; gap filled from producer segments | Offsets, not connection state |
 | Producer deleted and recreated with same `AgentId` | new producer has a new `AgentFingerprint` | Fingerprint checks (`validate_forwarded_mapping`, producer-side `CorruptHistory`) reject the session; the consumer never sees a spliced stream | Fingerprint pinned at registration |
 | Caller RPC `End` recorded, stream still draining | caller: `Start`, `End`; journals partial | Recorded RPC result returned; stream resumes by offset from the journals | Result completed stripped of streams |
@@ -143,7 +162,7 @@ stop progress outside acceptance locks and rechecks readiness before replacing t
 | MCP returns `-32602`, presence read incomplete or quota-suspended | committed MCP call + incomplete `ReadRemote` presence `Start` | Repair the forced exact-source presence read without resending `tools/call`; ordinary atomic rollback remains able to roll both calls back | Separate durable presence observation |
 | Live attachment memory exhausted during incomplete replay | rejection persisted | The rejection is durable; later replays do not retry admission | `incomplete_tool_replay_persists_attachment_upgrade_rejection` |
 | Body traps | no entity terminal | Owner invocation fails; owner group drains; siblings blocked on the lane are fenced | `guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group` |
-| Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `completed_reconstruction_claim_blocks_concurrent_replay_to_live` |
+| Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `primary_publication_requires_completed_reconstruction_validation`, `incomplete_custom_durability_waits_for_completed_reconstruction` |
 
 ## Resharding and the oplog epoch fence (`worker/mod.rs::interrupt_and_retire`, `services/oplog/primary.rs`)
 

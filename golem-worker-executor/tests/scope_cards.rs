@@ -17,6 +17,7 @@ use crate::durability::assert_snapshot_recovery_loaded;
 use crate::tool_discovery::deployment_state;
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -32,7 +33,7 @@ use golem_common::model::oplog::{
     HostResponseP3SocketsConnect, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
+use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
 use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_schema::model::CardId as SchemaCardId;
@@ -147,6 +148,62 @@ struct ScopeCardAuthority {
     revoke_card_count: AtomicUsize,
     root_card: RwLock<Option<StoredCard>>,
     additional_cards: RwLock<HashMap<CardId, StoredCard>>,
+    revoke_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
+    record_revoked_cards_gate: std::sync::Mutex<Option<CardServiceGate>>,
+}
+
+/// Pauses one card service call until the test releases it.
+struct CardServiceGate {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl CardServiceGate {
+    fn install(slot: &std::sync::Mutex<Option<CardServiceGate>>) -> CardServiceGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *slot.lock().expect("card service gate lock poisoned") = Some(CardServiceGate {
+            entered: entered_tx,
+            release: release_rx,
+        });
+        CardServiceGateHandle {
+            entered: Some(entered_rx),
+            release: Some(release_tx),
+        }
+    }
+
+    async fn pass(slot: &std::sync::Mutex<Option<CardServiceGate>>) {
+        let gate = slot.lock().expect("card service gate lock poisoned").take();
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.await;
+        }
+    }
+}
+
+/// Dropping the handle releases the paused call.
+struct CardServiceGateHandle {
+    entered: Option<tokio::sync::oneshot::Receiver<()>>,
+    release: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl CardServiceGateHandle {
+    async fn entered(&mut self) -> anyhow::Result<()> {
+        let entered = self
+            .entered
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("card service gate was already entered"))?;
+        tokio::time::timeout(Duration::from_secs(30), entered)
+            .await
+            .map_err(|_| anyhow::anyhow!("card service call did not reach its gate"))?
+            .map_err(|_| anyhow::anyhow!("card service gate was dropped before it was entered"))
+    }
+
+    fn release(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
 }
 
 impl ScopeCardAuthority {
@@ -195,6 +252,14 @@ impl ScopeCardAuthority {
     fn revoke_card_count(&self) -> usize {
         self.revoke_card_count.load(Ordering::SeqCst)
     }
+
+    fn gate_revoke_card(&self) -> CardServiceGateHandle {
+        CardServiceGate::install(&self.revoke_card_gate)
+    }
+
+    fn gate_record_revoked_cards(&self) -> CardServiceGateHandle {
+        CardServiceGate::install(&self.record_revoked_cards_gate)
+    }
 }
 
 struct ScopeCardService {
@@ -204,6 +269,7 @@ struct ScopeCardService {
 #[async_trait]
 impl CardService for ScopeCardService {
     async fn record_revoked_cards(&self, card_ids: &[CardId]) {
+        CardServiceGate::pass(&self.authority.record_revoked_cards_gate).await;
         if self
             .authority
             .root_card_id()
@@ -226,6 +292,7 @@ impl CardService for ScopeCardService {
         self.authority
             .revoke_card_count
             .fetch_add(1, Ordering::SeqCst);
+        CardServiceGate::pass(&self.authority.revoke_card_gate).await;
         Ok(CardRevokeResult::Revoked(vec![card_id]))
     }
 
@@ -875,7 +942,7 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
 
     authority.revoke();
     executor
-        .queue_uncommitted_card_revocation(&caller_worker, root_card_id)
+        .queue_card_revocation(&caller_worker, root_card_id)
         .await?;
 
     let error = executor
@@ -967,7 +1034,7 @@ async fn revoke_does_not_use_authority_revoked_before_its_boundary(
     authority.reset_check_cards_count();
     authority.revoke();
     executor
-        .queue_uncommitted_card_revocation(&caller_worker, authority_card_id)
+        .queue_card_revocation(&caller_worker, authority_card_id)
         .await?;
     executor.complete_promise(&release, vec![1]).await?;
 
@@ -1023,6 +1090,94 @@ async fn revoke_does_not_use_authority_revoked_before_its_boundary(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn ephemeral_guest_revoke_publishes_its_cascade_before_the_revoke_completes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("EphemeralScopeCardAgent", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive.extend(scope_card_initial_permissions());
+            positive.push(parse_polymorphic_permission("card(*) @ * : revoke : *").unwrap());
+        })
+        .store()
+        .await?;
+    let logical_agent = agent_id!("EphemeralScopeCardAgent", "guest-revoke-publication");
+    let root_card_id = configure_scope_card_root(&authority, &component, &logical_agent)?;
+    let key = IdempotencyKey::fresh();
+    let agent = logical_agent
+        .with_ephemeral_invocation_phantom(&key)
+        .map_err(anyhow::Error::msg)?;
+    let worker = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+
+    let is_pending_root_revocation = |pending: &PendingCardEventRef| {
+        matches!(
+            &pending.event,
+            QueuedCardEvent::Revoke(event) if event.card_id == root_card_id
+        )
+    };
+    let mut revoke_card_gate = authority.gate_revoke_card();
+    let mut record_revoked_cards_gate = authority.gate_record_revoked_cards();
+    let invocation = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent,
+        &key,
+        "revoke_card_by_id",
+        data_value!(SchemaCardId::from(root_card_id.0)),
+    );
+    let executor = &executor;
+    let worker = &worker;
+    // Owning the gate handles releases both paused calls when the observation ends early.
+    let observation = async move {
+        // The registry revocation of the root card reaches the agent while its own revoke of the
+        // same card is in flight, so the cascade of the guest revoke has a pending event to clear.
+        revoke_card_gate.entered().await?;
+        executor.queue_card_revocation(worker, root_card_id).await?;
+        let status = executor.attached_agent_status(worker).await?;
+        anyhow::ensure!(
+            status
+                .pending_card_events
+                .iter()
+                .any(is_pending_root_revocation),
+            "the registry revocation must be pending before the guest revoke completes"
+        );
+        revoke_card_gate.release();
+
+        // The finish commit of an ephemeral durable call does not fold the status, so only the
+        // cascade itself can publish the revocation before the guest revoke returns.
+        record_revoked_cards_gate.entered().await?;
+        let status = executor.attached_agent_status(worker).await?;
+        record_revoked_cards_gate.release();
+        anyhow::ensure!(
+            !status
+                .pending_card_events
+                .iter()
+                .any(is_pending_root_revocation),
+            "the guest revoke cascade must clear the pending registry revocation before the \
+             revoke completes"
+        );
+        anyhow::ensure!(
+            status.revoked_cards.contains(&root_card_id),
+            "the guest revoke cascade must be folded into the agent status before the revoke \
+             completes"
+        );
+        Ok(())
+    };
+    let (result, observed) = tokio::join!(invocation, observation);
+    observed?;
+    assert_eq!(result?.into_typed::<u32>()?, 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn queued_wallet_revocation_precedes_the_next_accessor_start(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1054,7 +1209,7 @@ async fn queued_wallet_revocation_precedes_the_next_accessor_start(
 
     authority.revoke();
     executor
-        .queue_uncommitted_card_revocation(&caller_worker, root_card_id)
+        .queue_card_revocation(&caller_worker, root_card_id)
         .await?;
     assert!(
         executor

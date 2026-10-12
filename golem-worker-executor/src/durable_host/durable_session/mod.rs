@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{
-    DropEvent, LiveCallPermit, cancel_dropped_durable_input_access, finish_prepared_access_to_live,
+    DropEvent, LiveCallPermit, MarkerReceipt, cancel_dropped_durable_input_access,
+    finish_prepared_access_to_live,
 };
-use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost, HostFailureKind};
+use crate::durable_host::durability::{
+    ClassifiedHostError, DurabilityHost, DurableCallTrapContext, HostFailureKind,
+    InFunctionRetryHost,
+};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
     ConsumerAttachmentStatus, DurableCatchUpReader, DurableStreamStore, NestedStreamWrite,
@@ -40,7 +44,8 @@ use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::worker::suspension::{ExternalActivity, RuntimeSource, RuntimeStore};
 use crate::workerctx::WorkerCtx;
-use futures::future::{BoxFuture, try_join_all};
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared, try_join_all};
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamHandle as ProtoDurableStreamHandle, DurableStreamMapping,
     InputStreamHighWater as ProtoInputStreamHighWater, InvocationResponse, OutputStreamEnd,
@@ -50,12 +55,12 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle,
     InputStreamHighWater, LocalStreamReaderId, MAX_NEW_STREAM_HANDLES_PER_VALUE,
-    MAX_PACKED_U8_STREAM_ITEM_SIZE, SessionStreamRole, StreamAttachmentKey, StreamBindingRecord,
-    StreamCallerAttemptRecord, StreamCancelReason, StreamCancelRole,
-    StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
-    StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-    StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamOffset,
-    StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+    MAX_PACKED_U8_STREAM_ITEM_SIZE, STREAM_CONSUMER_RECORD_FORMAT_VERSION, SessionStreamRole,
+    StreamAttachmentKey, StreamBindingRecord, StreamCallerAttemptRecord, StreamCancelReason,
+    StreamCancelRole, StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
+    StreamConsumerItemValueRecord, StreamConsumerObservation, StreamConsumerTerminal,
+    StreamConsumerTerminalRecord, StreamEndResult, StreamInvocationId, StreamItemsPayload,
+    StreamOffset, StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
     StreamReaderForwardPublication, StreamRecordReference, StreamRegistrationCoordinate,
     StreamRegistrationInvocation, StreamResumeOperation, StreamRootKind,
     StreamSessionDetachedRecord, StreamSessionInvocationResultRecord, StreamSessionKey,
@@ -67,8 +72,8 @@ use golem_common::base_model::durable_stream::{
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
 use golem_common::model::entity::OwnerRuntime;
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
+use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
@@ -87,6 +92,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use wasmtime::component::{
     Accessor, AccessorTask, Destination, HasSelf, RuntimeActivityId, StreamProducer, StreamResult,
+    TerminalConsumption,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 
@@ -5291,6 +5297,7 @@ impl StreamSession {
             reader: None,
             journal: history.events,
             nested_mappings: history.nested_mappings,
+            observations: history.observations,
             source_after: history.after,
             source_terminal: history.terminal,
             streams: self.clone(),
@@ -5298,7 +5305,7 @@ impl StreamSession {
             handle: mapping.handle,
             consumer_read_ordinal,
             role: mapping.role,
-            reader_id,
+            reader_id: futures::future::ready(Ok(reader_id)).boxed().shared(),
         })
     }
 
@@ -5434,8 +5441,52 @@ impl StreamSession {
             .stream_id;
         let mut events = Vec::new();
         let mut nested_mappings = HashMap::new();
+        let mut observations = HashMap::new();
         for index in self.consumer_history_positions(reader_id).await? {
             let record = self.session_record_at(index).await?;
+            if let Some(original_index) = record.reobserves() {
+                let original = self.session_record_at(original_index).await?;
+                if original_index >= index || !record.matches_reobserved(&original) {
+                    return Err(SessionError::from(
+                        WorkerExecutorError::unexpected_oplog_entry(
+                            "unchanged logical consumer input",
+                            format!("invalid re-observation at {index} of {original_index}"),
+                        ),
+                    ));
+                }
+            }
+            match &record {
+                StreamSessionRecord::ConsumerItemValue(record) => {
+                    for offset in 0..record.logical_item_count() {
+                        let ordinal = record.consumer_read_ordinal + offset as u64;
+                        let observed =
+                            observations
+                                .entry(ordinal)
+                                .or_insert_with(|| ConsumerObservations {
+                                    original_index: record.reobserves.unwrap_or(index),
+                                    boundaries: Vec::new(),
+                                });
+                        observed
+                            .boundaries
+                            .push((index, record.observation.clone()));
+                    }
+                }
+                StreamSessionRecord::ConsumerTerminal(record) => {
+                    let observed = observations
+                        .entry(record.consumer_read_ordinal)
+                        .or_insert_with(|| ConsumerObservations {
+                            original_index: record.reobserves.unwrap_or(index),
+                            boundaries: Vec::new(),
+                        });
+                    observed
+                        .boundaries
+                        .push((index, record.observation.clone()));
+                }
+                _ => {}
+            }
+            if record.reobserves().is_some() {
+                continue;
+            }
             match record {
                 StreamSessionRecord::ConsumerItemValue(record)
                     if record.session_key == self.session_reference
@@ -5586,6 +5637,7 @@ impl StreamSession {
         Ok(ConsumerHistory {
             events: events.into_iter().map(|(_, event)| event).collect(),
             nested_mappings,
+            observations,
             after,
             terminal,
         })
@@ -5595,8 +5647,14 @@ impl StreamSession {
 struct ConsumerHistory {
     events: VecDeque<CommittedProducerStreamEvent>,
     nested_mappings: HashMap<StreamOffset, Vec<StreamSessionMappingRecord>>,
+    observations: HashMap<u64, ConsumerObservations>,
     after: Option<golem_common::model::durable_stream::StreamOffset>,
     terminal: bool,
+}
+
+struct ConsumerObservations {
+    original_index: OplogIndex,
+    boundaries: Vec<(OplogIndex, StreamConsumerObservation)>,
 }
 
 #[async_trait::async_trait]
@@ -5617,6 +5675,7 @@ pub struct DurableInputEndpoint {
     reader: Option<DurableStreamReader>,
     journal: VecDeque<CommittedProducerStreamEvent>,
     nested_mappings: HashMap<StreamOffset, Vec<StreamSessionMappingRecord>>,
+    observations: HashMap<u64, ConsumerObservations>,
     source_after: Option<golem_common::model::durable_stream::StreamOffset>,
     source_terminal: bool,
     streams: StreamSession,
@@ -5624,14 +5683,16 @@ pub struct DurableInputEndpoint {
     handle: DurableStreamHandle,
     consumer_read_ordinal: u64,
     role: SessionStreamRole,
-    reader_id: LocalStreamReaderId,
+    reader_id: DurableReaderIdentity,
 }
+
+type DurableReaderIdentity = Shared<BoxFuture<'static, Result<LocalStreamReaderId, String>>>;
 
 /// Foreign source and attachment state for a forwarded durable input.
 pub struct ForwardedDurableInput {
     pub handle: DurableStreamHandle,
     origin: StreamSession,
-    reader_id: LocalStreamReaderId,
+    reader_id: DurableReaderIdentity,
 }
 
 impl ForwardedDurableInput {
@@ -5644,8 +5705,9 @@ impl ForwardedDurableInput {
         publication: StreamReaderForwardPublication,
     ) -> Result<StreamSessionMappingRecord, SessionError> {
         destination.recover_session_mappings().await?;
+        let reader_id = self.reader_id.clone().await?;
         let metadata = self.origin.current_control_metadata().await?;
-        let existing = metadata.reader_forward_intent(self.reader_id)?.cloned();
+        let existing = metadata.reader_forward_intent(reader_id)?.cloned();
         drop(metadata);
         let transport_stream_id = if let Some((_, intent)) = existing {
             match intent.destination {
@@ -5706,10 +5768,11 @@ impl ForwardedDurableInput {
             return Err("forwarded reader belongs to a different stream store".into());
         }
         context.assert_owner(&self.origin.producer);
+        let reader_id = self.reader_id.clone().await?;
         let metadata = self.origin.current_control_metadata().await?;
-        let source = metadata.reader_binding(self.reader_id)?.clone();
-        let existing = metadata.reader_forward_intent(self.reader_id)?.cloned();
-        if metadata.consumer_record_count(self.reader_id) != 0 {
+        let source = metadata.reader_binding(reader_id)?.clone();
+        let existing = metadata.reader_forward_intent(reader_id)?.cloned();
+        if metadata.consumer_record_count(reader_id) != 0 {
             return Err("cannot forward a durable input stream after reading from it".into());
         }
         drop(metadata);
@@ -5782,7 +5845,7 @@ impl ForwardedDurableInput {
         let intent = StreamReaderForwardIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: self.origin.session_reference.clone(),
-            reader_id: self.reader_id,
+            reader_id,
             destination,
         };
         let indices = self
@@ -6080,9 +6143,17 @@ struct DurableInputRead {
     reader: Option<DurableStreamReader>,
     event: Option<CommittedProducerStreamEvent>,
     endpoints: HashMap<u64, DurableInputEndpoint>,
+    guest_bytes: Option<bytes::Bytes>,
     #[cfg(test)]
     journaled: bool,
     queued_events: VecDeque<CommittedProducerStreamEvent>,
+    observation: Option<PendingConsumerObservation>,
+}
+
+struct PendingConsumerObservation {
+    record: StreamSessionRecord,
+    recorded: Option<ConsumerObservations>,
+    introduced: Option<oneshot::Sender<Result<OplogIndex, String>>>,
 }
 
 #[derive(Debug)]
@@ -6260,10 +6331,167 @@ pub struct DurableInputProducer {
     pending_activity: Option<Arc<OnceLock<RuntimeActivityId>>>,
     live_admission: Option<oneshot::Receiver<Result<(), WorkerExecutorError>>>,
     pending_drop: Option<BoxFuture<'static, Result<(), SessionError>>>,
+    pending_guest_value: Option<DurableInputItem>,
+    guest_delivery: Option<oneshot::Receiver<Result<StreamReadObserver, WorkerExecutorError>>>,
+    pending_observation: Option<PendingConsumerObservation>,
+    pending_recorded_observation: Option<OplogIndex>,
     finished: bool,
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+type StreamReadObserver =
+    Box<dyn FnOnce(TerminalConsumption) -> Result<(), WorkerExecutorError> + Send>;
+
+struct PrepareInputObservation {
+    observation: PendingConsumerObservation,
+    streams: StreamSession,
+    replay: ReplayState,
+    activity: TailActivity,
+    result: oneshot::Sender<Result<StreamReadObserver, WorkerExecutorError>>,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    cleanup_sink: mpsc::UnboundedSender<DropEvent>,
+    trap_context: DurableCallTrapContext,
+    live_call_permit: LiveCallPermit,
+}
+
+impl<Ctx: WorkerCtx> AccessorTask<Ctx> for PrepareInputObservation {
+    async fn run(self, _accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+        let settled = self.prepare().await?;
+        // The event loop must still see host work while the journal receipt settles.
+        let _ = settled.await;
+        Ok(())
+    }
+}
+
+impl PrepareInputObservation {
+    async fn prepare(self) -> wasmtime::Result<oneshot::Receiver<()>> {
+        let (settled, observation_settled) = oneshot::channel();
+        let mut result = self.result;
+        let mut record = self.observation.record;
+        let mut recorded_index = None;
+        if let Some(recorded) = &self.observation.recorded {
+            let original = self
+                .streams
+                .session_record_at(recorded.original_index)
+                .await?;
+            if !record.matches_reobserved(&original) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "unchanged logical consumer input",
+                    format!(
+                        "read differs from original observation at {}",
+                        recorded.original_index
+                    ),
+                )
+                .into());
+            }
+            for (index, observation) in &recorded.boundaries {
+                if self.replay.is_in_skipped_region(*index).await? {
+                    continue;
+                }
+                let expected = match &record {
+                    StreamSessionRecord::ConsumerItemValue(record) => &record.observation,
+                    StreamSessionRecord::ConsumerTerminal(record) => &record.observation,
+                    _ => unreachable!(),
+                };
+                if recorded_index.replace(*index).is_some() || expected != observation {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "one matching consumer observation boundary",
+                        format!("conflicting consumer observation at {index}"),
+                    )
+                    .into());
+                }
+            }
+            if recorded_index.is_none() {
+                match &mut record {
+                    StreamSessionRecord::ConsumerItemValue(record) => {
+                        record.reobserves = Some(recorded.original_index);
+                    }
+                    StreamSessionRecord::ConsumerTerminal(record) => {
+                        record.reobserves = Some(recorded.original_index);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+        let prepare = async {
+            if let Some(index) = recorded_index {
+                let barrier = self.replay.await_stream_observation(index).await?;
+                Ok((Some(barrier), None))
+            } else {
+                self.replay
+                    .await_natural_tail_end(Some(&self.activity))
+                    .await?;
+                let record = self
+                    .streams
+                    .producer
+                    .prepare_consumer_observation(self.streams.entity_parent_start_index, record)
+                    .await
+                    .map_err(|error| {
+                        SessionError::from(error)
+                            .into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?;
+                Ok::<_, WorkerExecutorError>((None, Some(record)))
+            }
+        };
+        let (barrier, prepared) = tokio::select! {
+            biased;
+            _ = result.closed() => {
+                if let Some(index) = recorded_index
+                    && !(self.runtime_teardown)()
+                {
+                    return Err(self.replay.fail_stream_observation(index).into());
+                }
+                return Ok(observation_settled);
+            },
+            outcome = prepare => outcome?,
+        };
+        let observer: StreamReadObserver = Box::new(move |consumption| {
+            if consumption == TerminalConsumption::NotDelivered {
+                if let Some(barrier) = barrier {
+                    barrier.fail(
+                        "cancelled native stream read cannot retain its recorded guest delivery",
+                    );
+                    return Err(self.replay.fail_stream_observation(recorded_index.unwrap()));
+                }
+                return Ok(());
+            }
+            if let Some(barrier) = barrier {
+                barrier.acknowledge();
+                return Ok(());
+            }
+            let receipt = prepared.unwrap().enqueue(self.observation.introduced);
+            let (done, receiver) = oneshot::channel();
+            tokio::spawn(async move {
+                let outcome = match receipt {
+                    Ok(receipt) => receipt.await.map(|_| ()),
+                    Err(error) => Err(error),
+                };
+                let outcome = outcome.map_err(|error| {
+                    SessionError::from(error)
+                        .into_worker_executor_error(WorkerExecutorError::runtime)
+                });
+                drop(self.activity);
+                let _ = done.send(outcome);
+                let _ = settled.send(());
+            });
+            let _ = self.cleanup_sink.send(DropEvent::AwaitCompletionMarker {
+                receipt: Some(MarkerReceipt::pending(receiver)),
+                trap_context: self.trap_context,
+                live_call_permit: Some(self.live_call_permit),
+            });
+            Ok(())
+        });
+        match result.send(Ok(observer)) {
+            Err(Ok(observer)) if !(self.runtime_teardown)() => {
+                observer(TerminalConsumption::NotDelivered)?;
+            }
+            Err(Err(error)) => return Err(error.into()),
+            _ => {}
+        }
+        Ok(observation_settled)
+    }
 }
 
 struct DurableInputLiveAdmission<Ctx> {
@@ -6526,6 +6754,10 @@ impl DurableInputProducer {
             pending_activity: None,
             live_admission: None,
             pending_drop: None,
+            pending_guest_value: None,
+            guest_delivery: None,
+            pending_observation: None,
+            pending_recorded_observation: None,
             finished: false,
             dropping: false,
             drop_event_sink: None,
@@ -6560,6 +6792,7 @@ impl DurableInputProducer {
             DurableReceiveError::Interrupt(kind) => anyhow::Error::new(kind),
         })?;
         self.input.complete_receive(&mut read);
+        self.pending_observation = read.observation;
         let event = read.event.ok_or_else(|| {
             anyhow::anyhow!("durable input stream source closed without a terminal event")
         })?;
@@ -6674,9 +6907,25 @@ impl DurableInputEndpoint {
         guard: Option<ReceiveGuard>,
         suspension: Option<DurableReadWait>,
     ) -> DurableReceiveFuture {
+        self.receive_observed(guard, suspension, StreamConsumerObservation::Host, 1)
+    }
+
+    fn receive_observed(
+        &mut self,
+        guard: Option<ReceiveGuard>,
+        suspension: Option<DurableReadWait>,
+        observation: StreamConsumerObservation,
+        capacity: usize,
+    ) -> DurableReceiveFuture {
         let opens_source = self.opens_source();
         let mut reader = self.reader.take();
         let queued_event = self.journal.pop_front();
+        let mut resident_journal =
+            if capacity > 1 && matches!(observation, StreamConsumerObservation::Guest { .. }) {
+                std::mem::take(&mut self.journal)
+            } else {
+                VecDeque::new()
+            };
         let recorded_mappings = queued_event
             .as_ref()
             .and_then(|event| self.nested_mappings.remove(&event.offset))
@@ -6684,11 +6933,29 @@ impl DurableInputEndpoint {
         let source_after = self.source_after;
         let streams = self.streams.clone();
         let stream_id = self.handle.stream_id;
-        let reader_id = self.reader_id;
+        let reader_id = self.reader_id.clone();
         let ordinal = self.consumer_read_ordinal;
+        let recorded_observation = self.observations.remove(&ordinal);
         let role = self.role;
         Box::pin(async move {
             let mut guard = guard;
+            let reader_id = reader_id.await?;
+            let guest = matches!(observation, StreamConsumerObservation::Guest { .. });
+            if !guest
+                && let Some(recorded) = &recorded_observation
+                && recorded
+                    .boundaries
+                    .iter()
+                    .any(|(_, recorded)| *recorded != observation)
+            {
+                return Err(
+                    SessionError::from(WorkerExecutorError::unexpected_oplog_entry(
+                        "host projection observation",
+                        format!("consumer observation {observation:?}"),
+                    ))
+                    .into(),
+                );
+            }
             let mut journaled = queued_event.is_some();
             let event = match queued_event {
                 Some(event) => Some(event),
@@ -6758,6 +7025,16 @@ impl DurableInputEndpoint {
             let mut endpoints = HashMap::new();
             let mut queued_events = VecDeque::<CommittedProducerStreamEvent>::new();
             let mut nested_mappings = Vec::new();
+            let mut pending_observation = None;
+            let mut guest_bytes = None;
+            let (introduced, introducing_index) = oneshot::channel::<Result<OplogIndex, String>>();
+            let introducing_index = async move {
+                introducing_index
+                    .await
+                    .map_err(|_| "parent stream item was not observed".to_string())?
+            }
+            .boxed()
+            .shared();
             if let Some(event) = &event {
                 let record = match &event.payload {
                     CommittedProducerStreamEventPayload::Value(bytes) => {
@@ -6803,7 +7080,9 @@ impl DurableInputEndpoint {
                             nested_mappings.push(mapping);
                         }
                         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                            format_version: 1,
+                            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                            observation: observation.clone(),
+                            reobserves: None,
                             session_key: streams.session_reference.clone(),
                             reader_id,
                             source_offset: event.offset,
@@ -6818,7 +7097,7 @@ impl DurableInputEndpoint {
                     }
                     CommittedProducerStreamEventPayload::PackedU8(byte) => {
                         let mut bytes = vec![*byte];
-                        if !journaled {
+                        if (!journaled && !guest) || (guest && capacity > 1) {
                             let batch_end = event.packed_u8_batch_end.ok_or_else(|| {
                                 "packed-u8 durable input event is missing its batch boundary"
                                     .to_string()
@@ -6837,6 +7116,9 @@ impl DurableInputEndpoint {
                                 .unwrap_or(event.offset)
                                 != batch_end
                             {
+                                if guest && bytes.len() >= capacity {
+                                    break;
+                                }
                                 if bytes.len() >= MAX_PACKED_U8_STREAM_ITEM_SIZE {
                                     return Err(
                                         "packed-u8 durable input batch exceeds its size limit"
@@ -6844,16 +7126,27 @@ impl DurableInputEndpoint {
                                             .into(),
                                     );
                                 }
-                                let next = reader
-                                    .as_mut()
-                                    .expect("durable input reader is missing")
-                                    .next()
-                                    .await
-                                    .map_err(SessionError::from)?
-                                    .ok_or_else(|| {
-                                        "packed-u8 durable input batch ended before its boundary"
-                                            .to_string()
-                                    })?;
+                                let next = if guest && journaled {
+                                    resident_journal.pop_front()
+                                } else {
+                                    let next = reader
+                                        .as_mut()
+                                        .expect("durable input reader is missing")
+                                        .next();
+                                    let next = if guest {
+                                        let Some(next) = next.now_or_never() else {
+                                            break;
+                                        };
+                                        next
+                                    } else {
+                                        next.await
+                                    };
+                                    next.map_err(SessionError::from)?
+                                }
+                                .ok_or_else(|| {
+                                    "packed-u8 durable input batch ended before its boundary"
+                                        .to_string()
+                                })?;
                                 let expected_sub_index = event
                                     .offset
                                     .sub_index()
@@ -6883,8 +7176,14 @@ impl DurableInputEndpoint {
                                 }
                             }
                         }
+                        if guest && capacity > 1 {
+                            guest_bytes = Some(bytes::Bytes::copy_from_slice(&bytes));
+                            queued_events.clear();
+                        }
                         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                            format_version: 1,
+                            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                            observation: observation.clone(),
+                            reobserves: None,
                             session_key: streams.session_reference.clone(),
                             reader_id,
                             source_offset: event.offset,
@@ -6896,7 +7195,9 @@ impl DurableInputEndpoint {
                     }
                     CommittedProducerStreamEventPayload::End(result) => {
                         StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
-                            format_version: 1,
+                            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                            observation: observation.clone(),
+                            reobserves: None,
                             session_key: streams.session_reference.clone(),
                             reader_id,
                             source_offset: event.offset,
@@ -6909,7 +7210,9 @@ impl DurableInputEndpoint {
                         reason,
                         details,
                     } => StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
-                        format_version: 1,
+                        format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                        observation: observation.clone(),
+                        reobserves: None,
                         session_key: streams.session_reference.clone(),
                         reader_id,
                         source_offset: event.offset,
@@ -6921,7 +7224,13 @@ impl DurableInputEndpoint {
                         },
                     }),
                 };
-                if !journaled {
+                if guest {
+                    pending_observation = Some(PendingConsumerObservation {
+                        record,
+                        recorded: recorded_observation,
+                        introduced: Some(introduced),
+                    });
+                } else if !journaled {
                     streams.append_record(None, record).await?;
                     streams.commit_consumer_journal().await?;
                     let committed_through = queued_events
@@ -6954,18 +7263,44 @@ impl DurableInputEndpoint {
             }
             for (position, mapping) in nested_mappings.into_iter().enumerate() {
                 streams.insert_mapping(mapping.clone())?;
-                endpoints.insert(
-                    position as u64,
-                    streams.endpoint_for_mapping(mapping, 0).await?,
-                );
+                let endpoint = if guest && !journaled {
+                    let introducing_index = introducing_index.clone();
+                    DurableInputEndpoint {
+                        reader: None,
+                        journal: VecDeque::new(),
+                        nested_mappings: HashMap::new(),
+                        observations: HashMap::new(),
+                        source_after: None,
+                        source_terminal: false,
+                        streams: streams.clone(),
+                        transport_stream_id: mapping.transport_stream_id,
+                        handle: mapping.handle,
+                        consumer_read_ordinal: 0,
+                        role: mapping.role,
+                        reader_id: async move {
+                            Ok(LocalStreamReaderId {
+                                introducing_oplog_index: introducing_index.await?,
+                                binding_slot: position as u32,
+                            })
+                        }
+                        .boxed()
+                        .shared(),
+                    }
+                } else {
+                    streams.endpoint_for_mapping(mapping, 0).await?
+                };
+                endpoints.insert(position as u64, endpoint);
             }
+            queued_events.append(&mut resident_journal);
             Ok(DurableInputRead {
                 reader,
                 event,
                 endpoints,
+                guest_bytes,
                 #[cfg(test)]
                 journaled,
                 queued_events,
+                observation: pending_observation,
             })
         })
     }
@@ -6974,7 +7309,8 @@ impl DurableInputEndpoint {
         self.reader = read.reader.take();
         self.journal.append(&mut read.queued_events);
         if read.event.is_some() {
-            self.consumer_read_ordinal += 1;
+            self.consumer_read_ordinal +=
+                read.guest_bytes.as_ref().map_or(1, |bytes| bytes.len()) as u64;
         }
     }
 }
@@ -7006,16 +7342,96 @@ impl Drop for DurableInputProducer {
 
 enum DurableInputItem {
     Value(SchemaValue),
+    Bytes(bytes::Bytes),
     Terminal(StreamResult),
 }
 
 impl DurableInputProducer {
+    fn poll_guest_value<Ctx: WorkerCtx>(
+        &mut self,
+        cx: &mut Context<'_>,
+        store: &mut StoreContextMut<'_, Ctx>,
+        capacity: usize,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<(DurableInputItem, Option<StreamReadObserver>)>> {
+        if finish {
+            if !(self.runtime_teardown)()
+                && let Some(index) = self.pending_recorded_observation
+            {
+                return Poll::Ready(Err(store
+                    .data()
+                    .durable_ctx()
+                    .state
+                    .replay_state
+                    .fail_stream_observation(index)
+                    .into()));
+            }
+            if let Some(receiver) = &mut self.guest_delivery
+                && let Ok(Ok(observer)) = receiver.try_recv()
+                && !(self.runtime_teardown)()
+            {
+                observer(TerminalConsumption::NotDelivered)?;
+            }
+            self.guest_delivery = None;
+            self.pending_guest_value = None;
+            return self
+                .poll_value(cx, store, true, Some(capacity))
+                .map(|result| result.map(|item| (item, None)));
+        }
+        if self.guest_delivery.is_none() {
+            if capacity == 0 {
+                return Poll::Ready(Ok((
+                    DurableInputItem::Terminal(StreamResult::Completed),
+                    None,
+                )));
+            }
+            let item = std::task::ready!(self.poll_value(cx, store, false, Some(capacity)))?;
+            let Some(observation) = self.pending_observation.take() else {
+                return Poll::Ready(Ok((item, None)));
+            };
+            let ctx = store.data().durable_ctx();
+            let (result, receiver) = oneshot::channel();
+            let task = PrepareInputObservation {
+                observation,
+                streams: self.input.streams.clone(),
+                replay: ctx.state.replay_state.clone(),
+                activity: ctx.tail_work_tracker().activity(),
+                result,
+                runtime_teardown: self.runtime_teardown.clone(),
+                cleanup_sink: ctx
+                    .state
+                    .dropped_call_event_sender()
+                    .expect("worker cleanup queue"),
+                trap_context: DurableCallTrapContext {
+                    retry_from: InFunctionRetryHost::current_retry_point(ctx),
+                    in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
+                },
+                live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
+            };
+            self.pending_guest_value = Some(item);
+            store.as_context_mut().spawn(task);
+            self.guest_delivery = Some(receiver);
+        }
+        let result = std::task::ready!(Pin::new(self.guest_delivery.as_mut().unwrap()).poll(cx));
+        self.guest_delivery = None;
+        let observer = result.map_err(|_| {
+            WorkerExecutorError::runtime("durable stream read delivery task ended without a result")
+        })??;
+        self.pending_recorded_observation = None;
+        Poll::Ready(Ok((
+            self.pending_guest_value.take().unwrap(),
+            Some(observer),
+        )))
+    }
+
     fn poll_value<Ctx: WorkerCtx>(
         &mut self,
         cx: &mut Context<'_>,
         store: &mut StoreContextMut<'_, Ctx>,
         finish: bool,
+        guest_capacity: Option<usize>,
     ) -> Poll<wasmtime::Result<DurableInputItem>> {
+        let guest = guest_capacity.is_some();
         if self.finished {
             return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
         }
@@ -7127,7 +7543,21 @@ impl DurableInputProducer {
                     interrupt: ctx.create_interrupt_signal(),
                 }
             });
-            self.pending = Some(self.input.receive(
+            if guest {
+                self.pending_recorded_observation = self
+                    .input
+                    .observations
+                    .get(&self.input.consumer_read_ordinal)
+                    .and_then(|observed| {
+                        observed.boundaries.iter().find_map(|(index, _)| {
+                            ctx.state
+                                .replay_state
+                                .has_stream_observation(*index)
+                                .then_some(*index)
+                        })
+                    });
+            }
+            self.pending = Some(self.input.receive_observed(
                 Some(ReceiveGuard {
                     _live_call: live_call,
                     interrupt: Some(ctx.create_interrupt_signal()),
@@ -7135,6 +7565,17 @@ impl DurableInputProducer {
                     observer: DurableSourceObserverForTest::for_context(ctx),
                 }),
                 suspension,
+                if guest {
+                    StreamConsumerObservation::Guest {
+                        parent_start_index: ctx.child_parent_start_index(
+                            &DurableFunctionType::ReadLocal,
+                            OplogIndex::INITIAL,
+                        ),
+                    }
+                } else {
+                    StreamConsumerObservation::Host
+                },
+                guest_capacity.unwrap_or(1),
             ));
         }
         if let Some(binding) = &self.pending_activity
@@ -7147,6 +7588,10 @@ impl DurableInputProducer {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(result) => result,
         };
+        let guest_bytes = receive_result
+            .as_ref()
+            .ok()
+            .and_then(|read| read.guest_bytes.clone());
         let value = match self.finish_receive(receive_result) {
             Ok(DurableInputEvent::Item(value)) => value,
             Ok(DurableInputEvent::End) => {
@@ -7160,7 +7605,10 @@ impl DurableInputProducer {
                 return Poll::Ready(Err(wasmtime::Error::from_anyhow(error)));
             }
         };
-        Poll::Ready(Ok(DurableInputItem::Value(value)))
+        Poll::Ready(Ok(match guest_bytes {
+            Some(bytes) => DurableInputItem::Bytes(bytes),
+            None => DurableInputItem::Value(value),
+        }))
     }
 }
 
@@ -7175,8 +7623,23 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
         mut destination: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
-        let value = match std::task::ready!(self.poll_value(cx, &mut store, finish))? {
+        let (item, observer) = if let Some(capacity) = destination.remaining(&mut store) {
+            std::task::ready!(self.poll_guest_value(cx, &mut store, capacity.min(1), finish))?
+        } else {
+            (
+                std::task::ready!(self.poll_value(cx, &mut store, finish, None))?,
+                None,
+            )
+        };
+        if let Some(observer) = observer {
+            destination.register_read_observer(&mut store, move |consumption| {
+                // A mismatched replay consumption already poisons the shared cursor.
+                let _ = observer(consumption);
+            })?;
+        }
+        let value = match item {
             DurableInputItem::Value(value) => value,
+            DurableInputItem::Bytes(_) => unreachable!("item streams consume one value per read"),
             DurableInputItem::Terminal(result) => return Poll::Ready(Ok(result)),
         };
         let encoded = {
@@ -7200,11 +7663,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             && producer.pending.is_none()
             && producer.live_admission.is_none()
             && producer.pending_drop.is_none()
+            && producer.guest_delivery.is_none()
+            && producer.pending_guest_value.is_none()
             && !producer.finished
         {
             let handle = producer.input.handle.clone();
             let origin = producer.input.streams.clone();
-            let reader_id = producer.input.reader_id;
+            let reader_id = producer.input.reader_id.clone();
             me.as_mut().get_mut().finished = true;
             Ok(Box::new(ForwardedDurableInput {
                 handle,
@@ -7231,7 +7696,25 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableByteInputProducer {
         mut destination: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
-        match std::task::ready!(self.0.poll_value(cx, &mut store, finish))? {
+        let (item, observer) = if let Some(capacity) = destination.remaining(&mut store) {
+            std::task::ready!(self.0.poll_guest_value(cx, &mut store, capacity, finish))?
+        } else {
+            (
+                std::task::ready!(self.0.poll_value(cx, &mut store, finish, None))?,
+                None,
+            )
+        };
+        if let Some(observer) = observer {
+            destination.register_read_observer(&mut store, move |consumption| {
+                // A mismatched replay consumption already poisons the shared cursor.
+                let _ = observer(consumption);
+            })?;
+        }
+        match item {
+            DurableInputItem::Bytes(bytes) => {
+                destination.set_buffer(bytes);
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
             DurableInputItem::Value(SchemaValue::U8(byte)) => {
                 destination.set_buffer(bytes::Bytes::copy_from_slice(&[byte]));
                 Poll::Ready(Ok(StreamResult::Completed))

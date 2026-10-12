@@ -474,3 +474,29 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             .any(|card| card_has_id(&card, &card_id))
     }
 }
+
+#[agent_definition(ephemeral)]
+pub trait EphemeralScopeCardAgent {
+    fn new(name: String) -> Self;
+
+    fn revoke_card_by_id(&self, card_id: CardId) -> u32;
+}
+
+pub struct EphemeralScopeCardAgentImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl EphemeralScopeCardAgent for EphemeralScopeCardAgentImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn revoke_card_by_id(&self, card_id: CardId) -> u32 {
+        let card = wallet::self_wallet()
+            .into_iter()
+            .find(|card| card_has_id(card, &card_id))
+            .expect("card to revoke is not installed");
+        revoke::revoke_card(card).expect("card revocation failed")
+    }
+}

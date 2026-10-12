@@ -37,8 +37,8 @@ jobs:
       - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          # The Golem release that published golem-schema, golem-schema-derive and golem-tool-metadata to crates.io.
-          GOLEM_VERSION: 1.6.0-dev.2
+          # The published version of golem-schema, golem-schema-derive and golem-tool-metadata on crates.io.
+          GOLEM_VERSION: 1.6.0-rc1.1
         run: |
           export VERSION_FULL="${{ steps.get_version.outputs.version }}"
           export VERSION="${VERSION_FULL#golem-rust-v}"

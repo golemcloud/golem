@@ -2,6 +2,15 @@ use super::*;
 use crate::durable_host::tail_work::TailActivity;
 
 impl ReplayState {
+    pub(crate) fn fail_stream_observation(&self, index: OplogIndex) -> WorkerExecutorError {
+        let reason = format!(
+            "cancelled native stream read cannot retain its recorded guest delivery at {index}"
+        );
+        self.record_delivery_failure(reason.clone());
+        self.cursor.progress.notify_waiters();
+        WorkerExecutorError::unexpected_oplog_entry("recorded consumer stream observation", reason)
+    }
+
     /// Drops a resolver awaiter from outside a cursor transaction. Acquires the cursor lock briefly
     /// (on an owned task; callers are accessor futures); callers must not hold it (the await loop
     /// releases it before parking).
@@ -89,6 +98,22 @@ impl ReplayState {
         start_index: OplogIndex,
         marker_index: OplogIndex,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
+        self.await_delivery_boundary(Some(start_index), marker_index)
+            .await
+    }
+
+    pub(in crate::durable_host) async fn await_stream_observation(
+        &self,
+        index: OplogIndex,
+    ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
+        self.await_delivery_boundary(None, index).await
+    }
+
+    async fn await_delivery_boundary(
+        &self,
+        start_index: Option<OplogIndex>,
+        marker_index: OplogIndex,
+    ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
@@ -98,26 +123,29 @@ impl ReplayState {
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
-                            tx.consume_completion_delivered(start_index, marker_index)
+                            tx.consume_delivery_boundary(start_index, marker_index)
                                 .await
                         })
                         .await
                 })
                 .await?;
             if let Some(gate) = gate {
-                return Ok(ReplayDeliveryBarrier::new(
-                    self.clone(),
-                    start_index,
-                    marker_index,
-                    gate,
-                ));
+                return Ok(match start_index {
+                    Some(start_index) => {
+                        ReplayDeliveryBarrier::new(self.clone(), start_index, marker_index, gate)
+                    }
+                    None => ReplayDeliveryBarrier::for_stream(self.clone(), marker_index, gate),
+                });
             }
 
             if self.is_live() {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!(
-                        "CompletionDelivered {{ start_index: {start_index} }} at {marker_index}"
-                    ),
+                    match start_index {
+                        Some(start_index) => format!(
+                            "CompletionDelivered {{ start_index: {start_index} }} at {marker_index}"
+                        ),
+                        None => format!("consumer stream observation at {marker_index}"),
+                    },
                     format!(
                         "end of replay at {}; the recorded delivery marker was not consumed",
                         self.last_replayed_index()
