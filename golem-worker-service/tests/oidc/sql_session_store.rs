@@ -54,7 +54,7 @@ const TABLES: [&str; 7] = [
 /// Stores one record in every table that expires almost immediately, and one authenticated session
 /// that stays valid. The store must have a zero `pending_login_expiration`.
 async fn store_expiring_and_live_records(store: &dyn SessionStore) -> anyhow::Result<SessionId> {
-    let soon = Utc::now() + TimeDelta::milliseconds(20);
+    let soon = Utc::now() + TimeDelta::seconds(1);
     let binding = sample_binding();
 
     store
@@ -188,6 +188,7 @@ async fn sqlite_cleanup_deletes_only_expired_records(_tracing: &Tracing) -> anyh
     let live = store_expiring_and_live_records(&writer).await?;
     assert_eq!(sqlite_row_count(&pool).await?, 8);
 
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let _cleaner =
         SqliteSessionStore::configured(&sqlite_store_config(&config, Duration::from_millis(50)))
             .await?;
@@ -213,6 +214,7 @@ async fn postgres_cleanup_deletes_only_expired_records(
     let live = store_expiring_and_live_records(&writer).await?;
     assert_eq!(postgres_row_count(&pool).await?, 8);
 
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let _cleaner = PostgresSessionStore::configured(&postgres_store_config(
         &config,
         Duration::from_millis(50),
