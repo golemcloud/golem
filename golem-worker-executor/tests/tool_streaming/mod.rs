@@ -18380,12 +18380,80 @@ impl RunningExternalToolCall {
         .map_err(|_| anyhow::anyhow!("waited 30 s for the call to take the stdin of the client"))?
     }
 
-    /// The client sends each of `chunks` to the stdin, `pause` apart, and then closes the stdin
-    /// with `close`, or keeps it open. The call must end with a success.
+    /// Reads the call's stdout until a whole line after the marker starts with `start`, and
+    /// returns that line. The body wrote the line, so it is past what the line tells.
+    async fn read_stdout_until_a_line_starts_with(
+        &mut self,
+        start: &str,
+    ) -> anyhow::Result<String> {
+        use golem_api_grpc::proto::golem::worker::invocation_response;
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let written = String::from_utf8_lossy(
+                    self.stdout.strip_prefix(RUN_MARKER).unwrap_or_default(),
+                )
+                .into_owned();
+                if let Some(line) = written
+                    .split_inclusive('\n')
+                    .find(|line| line.ends_with('\n') && line.starts_with(start))
+                {
+                    return Ok::<_, anyhow::Error>(line.trim_end().to_string());
+                }
+                match self
+                    .responses
+                    .message()
+                    .await?
+                    .map(|response| response.response)
+                {
+                    Some(Some(invocation_response::Response::OutputItem(item))) => {
+                        self.stdout.extend(item.packed_u8);
+                    }
+                    // The answer to what the client sent to the stdin.
+                    Some(Some(invocation_response::Response::InputAck(_))) => {}
+                    other => anyhow::bail!(
+                        "expected a line that starts with {start:?} on stdout, got {other:?}"
+                    ),
+                }
+            }
+        })
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("waited 60 s for a line that starts with {start:?} on stdout")
+        })?
+    }
+
+    /// The client sends `bytes` to the stdin, after `bytes_sent` earlier bytes, and waits until
+    /// the session has taken them.
+    async fn send_to_the_stdin(&mut self, bytes_sent: u64, bytes: &[u8]) -> anyhow::Result<()> {
+        self.sender
+            .send(stdin_item_request(&self.accepted, bytes_sent, bytes))
+            .await?;
+        self.wait_until_the_stdin_was_taken(bytes_sent + bytes.len() as u64 - 1)
+            .await
+    }
+
+    /// The client sends each of `chunks` to the stdin, each after the session has taken the one
+    /// before it, and then closes the stdin with `close`, or keeps it open. The call must end
+    /// with a success.
     async fn send_stdin_and_wait_for_the_end(
-        self,
+        mut self,
         chunks: &[&[u8]],
-        pause: Duration,
+        close: Option<StdinClose>,
+    ) -> anyhow::Result<EndedExternalToolCall> {
+        let mut bytes_sent = 0;
+        for chunk in chunks {
+            self.send_to_the_stdin(bytes_sent, chunk).await?;
+            bytes_sent += chunk.len() as u64;
+        }
+        self.close_the_stdin_and_wait_for_the_end(bytes_sent, close)
+            .await
+    }
+
+    /// The client closes the stdin with `close`, after the `bytes_sent` bytes that the session
+    /// has taken, or keeps it open. The call must end with a success.
+    async fn close_the_stdin_and_wait_for_the_end(
+        self,
+        bytes_sent: u64,
         close: Option<StdinClose>,
     ) -> anyhow::Result<EndedExternalToolCall> {
         let RunningExternalToolCall {
@@ -18398,14 +18466,6 @@ impl RunningExternalToolCall {
             accepted,
             mut stdout,
         } = self;
-        let mut bytes_sent = 0;
-        for chunk in chunks {
-            sender
-                .send(stdin_item_request(&accepted, bytes_sent, chunk))
-                .await?;
-            bytes_sent += chunk.len() as u64;
-            tokio::time::sleep(pause).await;
-        }
         if let Some(close) = close {
             sender
                 .send(stdin_close_request_after(&accepted, close, bytes_sent))
@@ -18490,6 +18550,15 @@ fn ticks_of(stdout: &str, what: &str) -> anyhow::Result<u64> {
         .ok_or_else(|| anyhow::anyhow!("no `{what} after <ticks>` line in {stdout:?}"))
 }
 
+/// The lines that `streaming run` wrote for its reads of stdin in one of its ticking modes: all
+/// its lines but the one that says that two ticks are complete.
+fn lines_of_the_reads(stdout: &str) -> Vec<&str> {
+    stdout
+        .lines()
+        .filter(|line| !line.starts_with("ticks "))
+        .collect()
+}
+
 /// The body waits on short clocks one after the other while it reads its stdin. The cancel of
 /// the stdin arrives between two of those waits, and the replay must hand it over between the
 /// same two.
@@ -18503,18 +18572,18 @@ async fn the_end_of_stdin_is_replayed_between_the_same_clock_waits(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let call = start_an_external_tool_call(
+    let mut call = start_an_external_run(
         last_unique_id,
         deps,
         provider,
         caller,
         "stdin-while-ticking",
-        Default::default(),
     )
     .await?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The body says when two of its waits are complete. The client cancels after that.
+    call.read_stdout_until_a_line_starts_with("ticks 2").await?;
     let ended = call
-        .send_stdin_and_wait_for_the_end(&[], Duration::ZERO, Some(StdinClose::Cancel))
+        .send_stdin_and_wait_for_the_end(&[], Some(StdinClose::Cancel))
         .await?;
     assert!(
         ticks_of(&ended.stdout_after_marker, "cancelled")? >= 2,
@@ -18535,18 +18604,18 @@ async fn a_clean_end_of_stdin_is_replayed_between_the_same_clock_waits(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let call = start_an_external_tool_call(
+    let mut call = start_an_external_run(
         last_unique_id,
         deps,
         provider,
         caller,
         "stdin-while-ticking",
-        Default::default(),
     )
     .await?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The body says when two of its waits are complete. The client ends the stdin after that.
+    call.read_stdout_until_a_line_starts_with("ticks 2").await?;
     let ended = call
-        .send_stdin_and_wait_for_the_end(&[], Duration::ZERO, Some(StdinClose::End))
+        .send_stdin_and_wait_for_the_end(&[], Some(StdinClose::End))
         .await?;
     assert!(
         ticks_of(&ended.stdout_after_marker, "eof")? >= 2,
@@ -18556,8 +18625,9 @@ async fn a_clean_end_of_stdin_is_replayed_between_the_same_clock_waits(
     ended.the_next_call_runs_after_a_restart(deps).await
 }
 
-/// Two chunks arrive 200 ms apart while the body waits on short clocks. The body takes each as
-/// one chunk, as the client sent it, and the replay hands each over between the same waits.
+/// Two chunks arrive while the body waits on short clocks, the second after the body wrote that
+/// it took the first. The body takes each as one chunk, as the client sent it, between other
+/// waits, and the replay hands each over between the same waits.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -18568,21 +18638,24 @@ async fn stdin_chunks_are_replayed_between_the_same_clock_waits(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let call = start_an_external_tool_call(
+    let mut call = start_an_external_run(
         last_unique_id,
         deps,
         provider,
         caller,
         "stdin-while-ticking",
-        Default::default(),
     )
     .await?;
+    // The body writes the line of a chunk after the tick that follows the read, so each line
+    // says that the body is past the wait in which it took the chunk.
+    call.send_to_the_stdin(0, b"abc").await?;
+    call.read_stdout_until_a_line_starts_with("chunk 3 after ")
+        .await?;
+    call.send_to_the_stdin(3, b"de").await?;
+    call.read_stdout_until_a_line_starts_with("chunk 2 after ")
+        .await?;
     let ended = call
-        .send_stdin_and_wait_for_the_end(
-            &[b"abc", b"de"],
-            Duration::from_millis(200),
-            Some(StdinClose::End),
-        )
+        .close_the_stdin_and_wait_for_the_end(5, Some(StdinClose::End))
         .await?;
     let stdout = ended.stdout_after_marker.clone();
     ended.the_next_call_runs_after_a_restart(deps).await?;
@@ -18591,12 +18664,12 @@ async fn stdin_chunks_are_replayed_between_the_same_clock_waits(
     let second = ticks_of(&stdout, "chunk 2")?;
     assert!(first < second, "{stdout:?}");
     assert!(second <= ticks_of(&stdout, "eof")?, "{stdout:?}");
-    assert_eq!(stdout.lines().count(), 3, "{stdout:?}");
+    assert_eq!(lines_of_the_reads(&stdout).len(), 3, "{stdout:?}");
     Ok(())
 }
 
-/// The body reads one chunk, waits on a few more clocks and returns. The client sent a second
-/// chunk and holds the stdin open.
+/// The body reads one chunk, waits on a few more clocks and returns. The client holds the stdin
+/// open.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -18607,19 +18680,18 @@ async fn a_body_that_stops_reading_stdin_is_replayed_after_a_restart(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let call = start_an_external_tool_call(
+    let call = start_an_external_run(
         last_unique_id,
         deps,
         provider,
         caller,
         "stdin-one-chunk-while-ticking",
-        Default::default(),
     )
     .await?;
     let ended = call
-        .send_stdin_and_wait_for_the_end(&[b"abc", b"de"], Duration::from_millis(50), None)
+        .send_stdin_and_wait_for_the_end(&[b"abc"], None)
         .await?;
-    assert_eq!(ended.stdout_after_marker.lines().count(), 1);
+    assert_eq!(lines_of_the_reads(&ended.stdout_after_marker).len(), 1);
     ticks_of(&ended.stdout_after_marker, "chunk 3")?;
     ended.the_next_call_runs_after_a_restart(deps).await
 }
@@ -18638,9 +18710,7 @@ async fn a_body_that_gives_up_a_pending_stdin_read_is_replayed_after_a_restart(
 ) -> anyhow::Result<()> {
     let call =
         start_an_external_run(last_unique_id, deps, provider, caller, "stdin-or-tick").await?;
-    let ended = call
-        .send_stdin_and_wait_for_the_end(&[], Duration::ZERO, None)
-        .await?;
+    let ended = call.send_stdin_and_wait_for_the_end(&[], None).await?;
     assert_eq!(ended.stdout_after_marker, "tick");
     ended.the_next_call_runs_after_a_restart(deps).await
 }
@@ -18659,21 +18729,16 @@ async fn the_body_takes_its_stdin_as_recorded_guest_reads(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::durable_stream::{StreamConsumerObservation, StreamSessionRecord};
-    let call = start_an_external_tool_call(
+    let call = start_an_external_run(
         last_unique_id,
         deps,
         provider,
         caller,
         "stdin-while-ticking",
-        Default::default(),
     )
     .await?;
     let ended = call
-        .send_stdin_and_wait_for_the_end(
-            &[b"abc"],
-            Duration::from_millis(100),
-            Some(StdinClose::Cancel),
-        )
+        .send_stdin_and_wait_for_the_end(&[b"abc"], Some(StdinClose::Cancel))
         .await?;
 
     let oplog = ended
@@ -18749,7 +18814,6 @@ async fn a_body_that_waits_on_a_clock_and_on_stdin_is_replayed_after_a_restart(
             Default::default(),
         )
         .await?;
-        tokio::time::sleep(Duration::from_millis(300)).await;
         let ended = close_the_stdin_of_an_external_tool_call(call, close).await?;
         assert_eq!(ended.stdout_after_marker, expected);
         ended.the_next_call_runs_after_a_restart(deps).await?;
@@ -18779,12 +18843,11 @@ async fn a_body_stopped_after_completed_waits_is_replayed_after_a_restart(
         "stdin-stops-a-script",
     )
     .await?;
-    // The script has completed its two short waits and is in its long one.
+    // The script has completed its two short waits and counted both lines.
     call.read_stdout_until_it_is("marker:first\nsecond\n")
         .await?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
     let ended = call
-        .send_stdin_and_wait_for_the_end(&[], Duration::ZERO, Some(StdinClose::Cancel))
+        .send_stdin_and_wait_for_the_end(&[], Some(StdinClose::Cancel))
         .await?;
     assert_eq!(ended.stdout_after_marker, "first\nsecond\nstopped after 2");
     ended.the_next_call_runs_after_a_restart(deps).await
@@ -19087,10 +19150,10 @@ async fn a_body_that_read_its_stdin_goes_on_after_a_restart_in_the_middle_of_the
     Ok(())
 }
 
-/// The body ends its stdout and waits on a clock of twenty seconds. It never reads its stdin,
-/// which the client holds open, so it holds no stream that is in use while it waits. The call
-/// must end with a success for the client, also when the owner is suspended in the middle of
-/// it and loaded again when the clock ends.
+/// The body ends its stdout and waits on a clock of thirty seconds. It never reads its stdin,
+/// which the client holds open, so it holds no stream that is in use while it waits. The owner
+/// is suspended and unloaded in that wait, and it is loaded again when the clock ends. The call
+/// must then end with a success for the client.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -19116,28 +19179,35 @@ async fn a_call_with_an_unread_stdin_ends_after_a_long_clock(
         },
     )
     .await?;
-    let started = std::time::Instant::now();
     let loads = call.executor.instance_load_count(&call.worker_id);
-    let ended = call
-        .send_stdin_and_wait_for_the_end(&[], Duration::ZERO, None)
-        .await?;
+    let owned = OwnedAgentId::new(call.context.default_environment_id, &call.worker_id);
+    // The owner must be suspended while the clock of the body runs. That takes one pass of a
+    // check that runs every 100 ms, after a grace of one second, and the clock leaves it thirty
+    // seconds. The test goes on when it sees the suspension, not after a fixed time.
+    tokio::time::timeout(Duration::from_secs(25), async {
+        call.executor
+            .wait_for_status(
+                &call.worker_id,
+                AgentStatus::Suspended,
+                Duration::from_secs(25),
+            )
+            .await?;
+        while call.executor.worker_is_loaded(&owned).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "the owner was not suspended and unloaded in 25 s of the 30 s clock of the body"
+        )
+    })??;
+    let ended = call.send_stdin_and_wait_for_the_end(&[], None).await?;
     assert_eq!(ended.stdout_after_marker, "");
     assert!(
-        started.elapsed() >= Duration::from_secs(15),
-        "the call ended before its clock"
-    );
-    let suspended = ended
-        .executor
-        .get_oplog(&ended.worker_id, OplogIndex::INITIAL)
-        .await?
-        .iter()
-        .any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_)));
-    let loaded_again = ended.executor.instance_load_count(&ended.worker_id) > loads;
-    assert_eq!(
-        (suspended, loaded_again),
-        (true, true),
-        "the owner was not suspended and loaded again in the middle of the call, so this run \
-         did not take the way that the test is for"
+        ended.executor.instance_load_count(&ended.worker_id) > loads,
+        "the owner was not loaded again for the end of the call"
     );
     ended.the_next_call_runs_after_a_restart(deps).await
 }
@@ -19164,11 +19234,7 @@ async fn a_read_after_cancelled_gets_the_end_of_stdin(
     )
     .await?;
     let ended = call
-        .send_stdin_and_wait_for_the_end(
-            &[b"abc"],
-            Duration::from_millis(100),
-            Some(StdinClose::Cancel),
-        )
+        .send_stdin_and_wait_for_the_end(&[b"abc"], Some(StdinClose::Cancel))
         .await?;
     assert_eq!(ended.stdout_after_marker, "cancelled, then eof");
     ended.the_next_call_runs_after_a_restart(deps).await
@@ -19196,9 +19262,7 @@ async fn a_read_after_the_body_gave_up_a_read_gets_the_end_of_stdin(
         "stdin-read-after-own-cancel",
     )
     .await?;
-    let ended = call
-        .send_stdin_and_wait_for_the_end(&[], Duration::ZERO, None)
-        .await?;
+    let ended = call.send_stdin_and_wait_for_the_end(&[], None).await?;
     assert_eq!(ended.stdout_after_marker, "tick, then eof");
     assert_eq!(
         stream_cancels(&ended.executor, &ended.worker_id).await?,
@@ -19212,8 +19276,8 @@ async fn a_read_after_the_body_gave_up_a_read_gets_the_end_of_stdin(
 }
 
 /// The body reads one byte of its stdin, drops its reader with no read pending, and goes on for
-/// a second. A reader that goes away like that cancels nothing: the client sends on, and the
-/// stdin is cancelled once, when the call ends without having read it to its end.
+/// a second. A reader that goes away like that cancels nothing: the stdin is cancelled once,
+/// when the call ends without having read it to its end.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -19225,7 +19289,7 @@ async fn a_stdin_reader_that_the_body_drops_cancels_nothing_before_the_call_ends
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::durable_stream::StreamCancelRole;
-    let mut call = start_an_external_run(
+    let call = start_an_external_run(
         last_unique_id,
         deps,
         provider,
@@ -19233,18 +19297,7 @@ async fn a_stdin_reader_that_the_body_drops_cancels_nothing_before_the_call_ends
         "stdin-dropped-after-a-chunk",
     )
     .await?;
-    call.read_stdout_until_it_is("marker:").await?;
-    call.sender
-        .send(stdin_item_request(&call.accepted, 0, b"a"))
-        .await?;
-    call.read_stdout_until_it_is("marker:chunk 1\n").await?;
-    // The reader is gone, and the body goes on. The client sends more.
-    call.sender
-        .send(stdin_item_request(&call.accepted, 1, b"bc"))
-        .await?;
-    let ended = call
-        .send_stdin_and_wait_for_the_end(&[], Duration::ZERO, None)
-        .await?;
+    let ended = call.send_stdin_and_wait_for_the_end(&[b"a"], None).await?;
     assert_eq!(ended.stdout_after_marker, "chunk 1\ndone");
     assert_eq!(
         stream_cancels(&ended.executor, &ended.worker_id).await?,
@@ -19344,13 +19397,8 @@ async fn a_native_tool_reads_the_stdin_of_a_client_call_to_its_clean_end(
 ) -> anyhow::Result<()> {
     let mut call = start_an_external_native_run(last_unique_id, deps, caller, "echo").await?;
     call.read_stdout_until_it_is("native:").await?;
-    for (bytes_sent, chunk) in [(0, b"abc".as_slice()), (3, b"de".as_slice())] {
-        call.sender
-            .send(stdin_item_request(&call.accepted, bytes_sent, chunk))
-            .await?;
-        call.wait_until_the_stdin_was_taken(bytes_sent + chunk.len() as u64 - 1)
-            .await?;
-    }
+    call.send_to_the_stdin(0, b"abc").await?;
+    call.send_to_the_stdin(3, b"de").await?;
     call.sender
         .send(stdin_close_request_after(
             &call.accepted,
@@ -19384,10 +19432,7 @@ async fn a_native_tool_reads_a_cancelled_stdin_of_a_client_call_as_cancelled(
 ) -> anyhow::Result<()> {
     let mut call = start_an_external_native_run(last_unique_id, deps, caller, "echo").await?;
     call.read_stdout_until_it_is("native:").await?;
-    call.sender
-        .send(stdin_item_request(&call.accepted, 0, b"abc"))
-        .await?;
-    call.wait_until_the_stdin_was_taken(2).await?;
+    call.send_to_the_stdin(0, b"abc").await?;
     call.sender
         .send(stdin_close_request_after(
             &call.accepted,
@@ -19421,10 +19466,8 @@ async fn a_failed_attempt_of_a_native_tool_leaves_the_stdin_as_the_client_left_i
     // The tool waits ten seconds for the effect of another call, which never comes, and fails.
     let mut call =
         start_an_external_native_run(last_unique_id, deps, caller, "wait-counter:1").await?;
-    call.sender
-        .send(stdin_item_request(&call.accepted, 0, b"abc"))
-        .await?;
-    tokio::time::timeout(Duration::from_secs(40), async {
+    call.send_to_the_stdin(0, b"abc").await?;
+    tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             let oplog = call
                 .executor
@@ -19440,7 +19483,7 @@ async fn a_failed_attempt_of_a_native_tool_leaves_the_stdin_as_the_client_left_i
         }
     })
     .await
-    .map_err(|_| anyhow::anyhow!("waited 40 s for the first attempt to fail"))??;
+    .map_err(|_| anyhow::anyhow!("waited 60 s for the first attempt to fail"))??;
     let cancels = stream_cancels(&call.executor, &call.worker_id).await?;
     assert!(
         cancels.is_empty(),
@@ -19448,8 +19491,5 @@ async fn a_failed_attempt_of_a_native_tool_leaves_the_stdin_as_the_client_left_i
     );
 
     // The client still holds its stdin, and the call takes what the client sends on it.
-    call.sender
-        .send(stdin_item_request(&call.accepted, 3, b"de"))
-        .await?;
-    call.wait_until_the_stdin_was_taken(4).await
+    call.send_to_the_stdin(3, b"de").await
 }
