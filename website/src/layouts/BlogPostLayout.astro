@@ -221,6 +221,13 @@ const formattedDate = date
     color: var(--text);
     font-weight: 600;
   }
+  @media (max-width: 640px) {
+    .post-body :global(table) {
+      display: block;
+      overflow-x: auto;
+      font-size: 0.85rem;
+    }
+  }
   .post-footer {
     margin-top: 3rem;
     padding-top: 1.5rem;

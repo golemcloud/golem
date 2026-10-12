@@ -20,7 +20,7 @@
 //! over RPC.
 
 use crate::Tracing;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_type::SchemaType;
@@ -1851,9 +1851,11 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     let control_entries = executor
         .get_oplog(&control_worker_id, OplogIndex::INITIAL)
         .await?;
+    // Initialization memory-growth hints are persisted asynchronously and can land after the baseline.
     let single_invocation_entries = control_entries
         .iter()
         .filter(|entry| entry.oplog_index > control_before)
+        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
         .count();
 
     let agent_id = agent_id!(
@@ -1886,12 +1888,15 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     let appended = entries
         .iter()
         .filter(|entry| entry.oplog_index > before)
+        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
         .count();
     let (started, finished) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!((started, finished), (1, 1));
     assert_eq!(
         appended, single_invocation_entries,
-        "coalesced followers must not persist durable aliases, keys, or queue entries"
+        "coalesced followers must not persist durable aliases, keys, or queue entries; \
+         control_before={control_before}, before={before}, \
+         control_entries={control_entries:#?}, entries={entries:#?}"
     );
 
     Ok(())

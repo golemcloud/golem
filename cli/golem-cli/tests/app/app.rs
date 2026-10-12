@@ -8,6 +8,7 @@ use crate::{Tracing, workspace_path};
 
 use golem_cli::fs;
 use golem_cli::model::language::GuestLanguage;
+use golem_cli::sdk_overrides::sdk_overrides;
 use golem_cli::versions;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::schema::SchemaType;
@@ -7881,26 +7882,15 @@ async fn build_check(_tracing: &Tracing) {
         .parse()
         .unwrap();
     cargo_toml["dependencies"] = toml_edit::Item::Table(toml_edit::Table::default());
-    cargo_toml["dependencies"]["golem-rust"] =
-        toml_edit::value(toml_edit::InlineTable::from_iter([
-            (
-                "path",
-                toml_edit::Value::from(
-                    "/Users/noise64/workspace/golem-alt-00/sdks/rust/golem-rust",
-                ),
-            ),
-            (
-                "features",
-                toml_edit::Value::Array({
-                    let mut features = toml_edit::Array::default();
-                    features.push("export_golem_agentic");
-                    features
-                }),
-            ),
-        ]));
+    // The check does not infer a component's export role, so retain the SDK defaults and agent feature.
+    cargo_toml["dependencies"]["golem-rust"] = sdk_overrides()
+        .unwrap()
+        .golem_rust_dependency()
+        .as_toml_item(&["default", "export_golem_agentic"])
+        .unwrap();
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
-    // Phase 3: wipe dependencies completely and verify check restores everything needed.
+    // Phase 3: remove other dependencies and verify check restores everything needed.
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
     assert!(
