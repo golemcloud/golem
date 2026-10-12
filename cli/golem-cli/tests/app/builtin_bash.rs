@@ -96,7 +96,7 @@ pub(super) async fn context() -> TestContext {
                 release:
                   account: builtin-tool-owner@golem.cloud
                   name: git
-                  version: "0.1.10"
+                  version: "0.1.11"
             agents:
               BashOwner:
                 tools:
