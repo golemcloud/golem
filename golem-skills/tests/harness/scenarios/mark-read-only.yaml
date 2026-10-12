@@ -43,6 +43,13 @@ steps:
         value without modifying any state, and mark it as a read-only method using the default
         (until-write) cache policy so its result can be cached. Make sure the project builds and
         deploys successfully.
+      go: >
+        The test-app project already contains a stateful `CounterAgent` whose identity is a
+        counter name and which has an `increment` method that mutates and returns the counter.
+        Add a new method `getCount` to the same `CounterAgent` that returns the current counter
+        value without modifying any state, and mark it as a read-only method using the default
+        (until-write) cache policy so its result can be cached. Make sure the project builds and
+        deploys successfully.
     expectedSkills:
       rust:
         - "golem-mark-read-only-rust"
@@ -54,6 +61,8 @@ steps:
         - "golem-mark-read-only-scala"
       moonbit:
         - "golem-mark-read-only-moonbit"
+      go:
+        - "golem-mark-read-only-go"
     verify:
       build: true
       deploy: true
@@ -93,6 +102,7 @@ steps:
         effect: "getCount"
         scala: "getCount"
         moonbit: "get_count"
+        go: "getCount"
     expect:
       result_json:
         - path: "$"
