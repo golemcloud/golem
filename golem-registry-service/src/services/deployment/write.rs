@@ -50,7 +50,7 @@ use golem_common::model::diff;
 use golem_common::model::environment::Environment;
 use golem_common::model::mcp_import::{McpImport, McpImportCredential};
 use golem_common::model::security_scheme::SecuritySchemeName;
-use golem_common::model::tool::RemoteToolDeployment;
+use golem_common::model::tool::{DEFAULT_TOOLS, RemoteToolDeployment};
 use golem_common::model::tool_middleware::compile::compile_tool_middleware_chains;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::model::{
@@ -753,20 +753,41 @@ impl DeploymentWriteService {
         }
 
         prepare_router_file_indexes(&deployment_context, &mut compiled_routes)?;
-        warnings.extend(
-            self.mcp_import_resolver
-                .deployment_warnings(
-                    environment_id,
-                    data.mcp_imports,
-                    compiled_tools
-                        .registered_tools
-                        .iter()
-                        .filter_map(|tool| tool.definition.name().map(str::to_owned))
-                        .collect(),
-                    auth.clone(),
-                )
-                .await,
-        );
+        let registered_tool_names = compiled_tools
+            .registered_tools
+            .iter()
+            .filter_map(|tool| tool.definition.name().map(str::to_owned))
+            .collect::<Vec<_>>();
+        // The name of a default tool is reserved: an MCP import must not supply a tool with a
+        // name that a default tool has, when the deployment has a tool with that name. The
+        // tools of an import that cannot be read now are not known, so they are not compared.
+        let reserved_tool_names = registered_tool_names
+            .iter()
+            .filter(|name| DEFAULT_TOOLS.iter().any(|tool| tool.name == name.as_str()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mcp_import_discovery = self
+            .mcp_import_resolver
+            .deployment_discovery(
+                environment_id,
+                data.mcp_imports,
+                registered_tool_names,
+                &reserved_tool_names,
+                auth.clone(),
+            )
+            .await;
+        if !mcp_import_discovery.reserved_name_conflicts.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(
+                mcp_import_discovery
+                    .reserved_name_conflicts
+                    .into_iter()
+                    .map(|(index, tool_name)| {
+                        DeployValidationError::McpImportToolHasDefaultToolName { index, tool_name }
+                    })
+                    .collect(),
+            ));
+        }
+        warnings.extend(mcp_import_discovery.warnings);
 
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,

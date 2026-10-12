@@ -223,6 +223,24 @@ fn register_ambient_tool_name(
     Ok(())
 }
 
+/// The names that an MCP import must not supply: the names of the default tools for which the
+/// deployment has a tool, as a default tool or as a tool of the application. The server has
+/// the same rule when it makes the deployment.
+fn reserved_default_tool_names(
+    default_tools: impl IntoIterator<Item = ToolName>,
+    application_tool_names: &BTreeSet<String>,
+) -> BTreeSet<ToolName> {
+    default_tools
+        .into_iter()
+        .chain(
+            golem_common::model::tool::DEFAULT_TOOLS
+                .iter()
+                .filter(|tool| application_tool_names.contains(tool.name))
+                .filter_map(|tool| ToolName::try_from(tool.name).ok()),
+        )
+        .collect()
+}
+
 /// The MCP-imported tools, as `(import index, tool name)`, that have the name of a default tool.
 fn mcp_tools_named_like_default_tools<'a>(
     imported: impl IntoIterator<Item = (u32, &'a str)>,
@@ -2206,30 +2224,44 @@ impl AppCommandHandler {
         Ok(replaced)
     }
 
-    /// Refuses a deployment in which an MCP import supplies a tool with the name of a default
-    /// tool. The default tool would take the name, and the imported tool would be left out.
+    /// Refuses a deployment in which an MCP import supplies a tool with a reserved name: the
+    /// name of a default tool, when the deployment has a tool with that name. That tool would
+    /// take the name, and the imported tool would be left out. This is an early message: the
+    /// server refuses such a deployment by itself when it can read the tools of the import.
     async fn reject_mcp_tools_named_like_default_tools(
         &self,
         environment: &ResolvedEnvironmentIdentity,
         native_default_tools: &BTreeSet<ToolName>,
     ) -> anyhow::Result<()> {
-        let (imports, default_tools, native_tool_names) = {
+        let (imports, reserved_names, native_tool_names) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app = app_ctx.some_or_err()?.application();
+            let application_tool_names = app.known_application_tool_names();
+            let reserved_names = reserved_default_tool_names(
+                app.default_tool_release_references()
+                    .map(|(name, _)| name.clone())
+                    .filter(|name| !native_default_tools.contains(name)),
+                &application_tool_names,
+            );
+            // A reserved name is not given as a native name, so that an imported tool with
+            // that name stays in the answer and can be found there.
+            let native_tool_names = application_tool_names
+                .into_iter()
+                .filter(|name| {
+                    !reserved_names
+                        .iter()
+                        .any(|reserved| reserved.as_str() == name)
+                })
+                .collect::<Vec<_>>();
             (
                 app.mcp_imports(app.environment_name())
                     .cloned()
                     .unwrap_or_default(),
-                app.default_tool_release_references()
-                    .map(|(name, _)| name.clone())
-                    .filter(|name| !native_default_tools.contains(name))
-                    .collect::<BTreeSet<_>>(),
-                app.known_application_tool_names()
-                    .into_iter()
-                    .collect::<Vec<_>>(),
+                reserved_names,
+                native_tool_names,
             )
         };
-        if imports.is_empty() || default_tools.is_empty() {
+        if imports.is_empty() || reserved_names.is_empty() {
             return Ok(());
         }
 
@@ -2256,7 +2288,7 @@ impl AppCommandHandler {
             Ok(resolution) => resolution,
             Err(error) => {
                 log_warn(format!(
-                    "Could not read the tools of the MCP imports, so their names are not compared with the default tools: {error}"
+                    "Could not read the tools of the MCP imports, so the CLI does not compare their names with the default tools: {error}. The server compares them when it makes the deployment, if it can read them then."
                 ));
                 return Ok(());
             }
@@ -2267,13 +2299,13 @@ impl AppCommandHandler {
                 .tools
                 .iter()
                 .filter_map(|tool| tool.definition.name().map(|name| (tool.import_index, name))),
-            &default_tools,
+            &reserved_names,
         );
         if clashes.is_empty() {
             return Ok(());
         }
         bail!(
-            "{}. A default tool keeps its name: give the import a prefix, exclude the tool from the import, or leave the default tool out of tools.defaults for the environment",
+            "{}. The name of a default tool is reserved in a deployment that has a tool with that name: give the import a prefix, exclude the tool from the import, or deploy without that tool (for a default tool, leave it out of tools.defaults for the environment)",
             clashes
                 .iter()
                 .map(|(index, name)| format!(
@@ -4471,9 +4503,9 @@ mod tests {
         GrantExecutionDecision, build_tool_grant_reconciliation_plan,
         canonical_mcp_diagnostic_name, default_tools_to_grant, duplicate_component_matches,
         grant_execution_decision, mcp_tools_named_like_default_tools, register_ambient_tool_name,
-        render_tool_middleware_publication_plan_entry, resolve_agent_secret_defaults_without_value,
-        resolve_mcp_import_env_vars, resolve_secret_defaults, resolved_mcp_diagnostics,
-        should_resolve_mcp_imports,
+        render_tool_middleware_publication_plan_entry, reserved_default_tool_names,
+        resolve_agent_secret_defaults_without_value, resolve_mcp_import_env_vars,
+        resolve_secret_defaults, resolved_mcp_diagnostics, should_resolve_mcp_imports,
     };
     use crate::command_handler::template::EnvVarRenderer;
     use crate::fuzzy::Match;
@@ -4966,6 +4998,30 @@ mod tests {
             decision(&plan, true, false),
             GrantExecutionDecision::RejectStage
         );
+    }
+
+    #[test]
+    fn the_name_of_a_default_tool_is_reserved_when_the_deployment_has_a_tool_with_it() {
+        let bash = ToolName::try_from("bash").unwrap();
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<BTreeSet<_>>()
+        };
+
+        // The default tool of the deployment.
+        assert_eq!(
+            reserved_default_tool_names([bash.clone()], &names(&["search"])),
+            BTreeSet::from([bash.clone()])
+        );
+        // A tool of the application that has the name of a default tool.
+        assert_eq!(
+            reserved_default_tool_names([], &names(&["bash", "search"])),
+            BTreeSet::from([bash])
+        );
+        // No tool with the name of a default tool: an import can supply one.
+        assert!(reserved_default_tool_names([], &names(&["search"])).is_empty());
     }
 
     #[test]
