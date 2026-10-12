@@ -23,7 +23,7 @@ use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
-use crate::log::{LogColorize, log_action};
+use crate::log::{LogColorize, log_action, print_text};
 use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
@@ -386,7 +386,7 @@ impl ToolCommandHandler {
                 .map_err(anyhow::Error::msg)?
             {
                 arguments::ParsedToolArguments::Help(help) => {
-                    print!("{help}");
+                    print_text(help);
                     return Ok(());
                 }
                 arguments::ParsedToolArguments::Invoke {

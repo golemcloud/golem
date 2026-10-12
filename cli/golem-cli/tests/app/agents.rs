@@ -806,6 +806,30 @@ async fn test_streaming_invocation_cli_end_to_end() {
     );
     assert!(!broken_pipe.stderr_text().contains("Broken pipe"));
 
+    for format in ["text", "json"] {
+        let oplog_broken_pipe = ctx
+            .cli_with_broken_stdout([
+                cmd::AGENT,
+                "oplog",
+                &producer_error_agent,
+                flag::FORMAT,
+                format,
+            ])
+            .await;
+        assert!(
+            oplog_broken_pipe.success(),
+            "broken stdout pipe of the {format} oplog was treated as failure (exit {:?}): {}",
+            oplog_broken_pipe.exit_code(),
+            oplog_broken_pipe.stderr_text()
+        );
+        assert!(
+            !oplog_broken_pipe.stderr_text().contains("panicked"),
+            "the {format} oplog panicked on a broken stdout pipe: {}",
+            oplog_broken_pipe.stderr_text()
+        );
+        assert!(!oplog_broken_pipe.stderr_text().contains("Broken pipe"));
+    }
+
     let checkpoint_values = serde_json::to_string(&(0..5_000_u32).collect::<Vec<_>>()).unwrap();
     let resume_agent = streaming_agent(&Uuid::new_v4().to_string());
     let resume_checkpoint = ctx.cwd_path_join("resume-invocation-session.json");

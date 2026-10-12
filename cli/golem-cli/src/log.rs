@@ -18,7 +18,8 @@ use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
-use std::io::Write;
+use std::fmt::Display;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
@@ -123,8 +124,8 @@ impl LogState {
             let mut buffer = LOG_STATE_BUFFER.write().unwrap();
             for line in buffer.iter() {
                 match reservation_aware_output(Output::Stderr) {
-                    Output::Stdout => println!("{}", line),
-                    Output::Stderr => eprintln!("{}", line),
+                    Output::Stdout => print_line(line),
+                    Output::Stderr => eprint_line(line),
                     _ => {}
                 }
             }
@@ -275,6 +276,98 @@ impl Write for TracingWriter {
             Self::Sink(writer) => writer.flush(),
         }
     }
+}
+
+/// What happened to bytes written to a standard stream.
+#[derive(Debug, PartialEq, Eq)]
+enum Delivery {
+    Delivered,
+    ReaderClosed,
+}
+
+/// Writes the bytes and flushes, telling a closed pipe apart from any other write error.
+fn deliver(out: &mut impl Write, bytes: &[u8]) -> std::io::Result<Delivery> {
+    match out.write_all(bytes).and_then(|()| out.flush()) {
+        Ok(()) => Ok(Delivery::Delivered),
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => Ok(Delivery::ReaderClosed),
+        Err(error) => Err(error),
+    }
+}
+
+fn line_bytes(line: impl Display) -> Vec<u8> {
+    format!("{line}\n").into_bytes()
+}
+
+#[derive(Clone, Copy)]
+enum StandardStream {
+    Stdout,
+    Stderr,
+}
+
+impl StandardStream {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+/// Ends the process quietly when the reader of the stream has closed the pipe, as a signal
+/// would end `cat`. Any other write error panics, as `println!` does.
+fn settle(stream: &str, result: std::io::Result<Delivery>) {
+    match result {
+        Ok(Delivery::Delivered) => {}
+        Ok(Delivery::ReaderClosed) => std::process::exit(0),
+        Err(error) => panic!("failed printing to {stream}: {error}"),
+    }
+}
+
+fn write_to(stream: StandardStream, bytes: &[u8]) {
+    let result = match stream {
+        StandardStream::Stdout => deliver(&mut std::io::stdout().lock(), bytes),
+        StandardStream::Stderr => deliver(&mut std::io::stderr().lock(), bytes),
+    };
+    settle(stream.name(), result);
+}
+
+/// Like `println!`, but ends the process with exit code 0 when the reader of stdout has gone.
+pub fn print_line(line: impl Display) {
+    write_to(StandardStream::Stdout, &line_bytes(line));
+}
+
+/// Like `eprintln!`, but ends the process with exit code 0 when the reader of stderr has gone.
+pub fn eprint_line(line: impl Display) {
+    write_to(StandardStream::Stderr, &line_bytes(line));
+}
+
+/// Like `print!`, but ends the process with exit code 0 when the reader of stdout has gone.
+pub fn print_text(text: impl Display) {
+    write_to(StandardStream::Stdout, text.to_string().as_bytes());
+}
+
+/// Like `eprint!`, but ends the process with exit code 0 when the reader of stderr has gone.
+pub fn eprint_text(text: impl Display) {
+    write_to(StandardStream::Stderr, text.to_string().as_bytes());
+}
+
+/// Writes raw bytes to stdout, ending the process with exit code 0 when the reader has gone.
+pub fn print_bytes(bytes: &[u8]) {
+    write_to(StandardStream::Stdout, bytes);
+}
+
+/// Handles the outcome of a library call that printed to a standard stream by itself.
+pub fn settle_print(result: std::io::Result<()>) {
+    settle(
+        "its output",
+        result.map(|()| Delivery::Delivered).or_else(|error| {
+            if error.kind() == ErrorKind::BrokenPipe {
+                Ok(Delivery::ReaderClosed)
+            } else {
+                Err(error)
+            }
+        }),
+    );
 }
 
 pub fn tracing_writer() -> TracingWriter {
@@ -446,8 +539,8 @@ fn log_preformatted_internal(text: &str) {
     let indent = &state.calculated_indent;
     for line in text.lines() {
         match reservation_aware_output(state.output) {
-            Output::Stdout => println!("{indent}{line}"),
-            Output::Stderr => eprintln!("{indent}{line}"),
+            Output::Stdout => print_line(format_args!("{indent}{line}")),
+            Output::Stderr => eprint_line(format_args!("{indent}{line}")),
             Output::None => {}
             Output::TracingDebug => debug!("{indent}{line}"),
             Output::BufferedUntilErr => {
@@ -487,12 +580,8 @@ pub fn logln_internal(message: &str) {
 
     for line in lines {
         match reservation_aware_output(state.output) {
-            Output::Stdout => {
-                println!("{}{}", state.calculated_indent, line)
-            }
-            Output::Stderr => {
-                eprintln!("{}{}", state.calculated_indent, line)
-            }
+            Output::Stdout => print_line(format_args!("{}{}", state.calculated_indent, line)),
+            Output::Stderr => eprint_line(format_args!("{}{}", state.calculated_indent, line)),
             Output::None => {}
             Output::TracingDebug => {
                 debug!("{}{}", state.calculated_indent, line);
@@ -586,9 +675,69 @@ impl LogColorize for Utf8PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_message_for_output, message_for_output};
+    use super::{Delivery, deliver, error_message_for_output, line_bytes, message_for_output};
     use anyhow::anyhow;
+    use std::io::{Error, ErrorKind, Write};
     use test_r::test;
+
+    struct FailingWriter {
+        kind: ErrorKind,
+        fail_on_flush: bool,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.fail_on_flush {
+                Ok(buf.len())
+            } else {
+                Err(Error::from(self.kind))
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_on_flush {
+                Err(Error::from(self.kind))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn a_write_to_a_closed_pipe_reports_the_closed_reader() {
+        for fail_on_flush in [false, true] {
+            let mut out = FailingWriter {
+                kind: ErrorKind::BrokenPipe,
+                fail_on_flush,
+            };
+            assert_eq!(
+                deliver(&mut out, b"line\n").unwrap(),
+                Delivery::ReaderClosed
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_write_error_is_reported_as_an_error() {
+        for fail_on_flush in [false, true] {
+            let mut out = FailingWriter {
+                kind: ErrorKind::PermissionDenied,
+                fail_on_flush,
+            };
+            let error = deliver(&mut out, b"line\n").unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        }
+    }
+
+    #[test]
+    fn a_normal_write_produces_the_exact_line() {
+        let mut out = Vec::new();
+        assert_eq!(
+            deliver(&mut out, &line_bytes("  indented line")).unwrap(),
+            Delivery::Delivered
+        );
+        assert_eq!(out, b"  indented line\n");
+    }
 
     #[test]
     fn messages_for_output_have_no_terminal_styling() {

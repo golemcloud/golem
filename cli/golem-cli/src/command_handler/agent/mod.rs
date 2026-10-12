@@ -29,7 +29,7 @@ use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
     log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
-    message_for_output,
+    message_for_output, print_bytes,
 };
 use crate::model::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
@@ -1678,9 +1678,7 @@ impl AgentCommandHandler {
         };
 
         if stream_to_stdout {
-            let mut stdout = std::io::stdout().lock();
-            stdout.write_all(&file_contents)?;
-            stdout.flush()?;
+            print_bytes(&file_contents);
             return Ok(());
         }
 
