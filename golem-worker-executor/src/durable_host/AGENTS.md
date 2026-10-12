@@ -29,12 +29,20 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
 - **Observe**: the guest's consumption of a completion is recorded by `CompletionDelivered` /
   `CompletionDiscarded` as the tail operation of the host function
   (`supersede_prior_completion_delivery` hard-errors otherwise). This applies to accessor
-  (concurrent) calls: replay releases each completion at its recorded boundary
-  (`CompletionDelivery::AtMarker`); an accessor `End` without a marker is a
+  (concurrent) calls whose results reach the guest: replay releases each completion at its recorded boundary
+  (`CompletionDelivery::AtMarker`); a guest-facing accessor `End` without a marker is a
   crash-after-completion and is withheld until the natural replay tail (`AtReplayTail`), never
-  re-executed and never delivered early. The serialized direct path records no markers
+  re-executed and never delivered early. `CompletionDiscarded` means the *guest* dropped the
+  completion unread; an armed token or terminal guard torn by Store unload or executor shutdown
+  (`TeardownProbe`) must leave the `End` markerless, otherwise replay withholds a completion the
+  guest never saw. The serialized direct path records no markers
   (`DurableCallSession::replay` rejects `CompletionDelivered` for a non-accessor call) and
   delivers at the host return.
+- **Host-internal results** retain durable Start/End and cancellation tracking, but create no
+  guest-terminal observer, delivery token, delivery/discard marker, or replay-tail gate. Use
+  `invoke_host_internal_access` with an outer call that owns cancellation until the host
+  continuation finishes. A completed internal End returns its recorded result to the host.
+  Never make a Store-holding operation wait for progress that requires that Store's event loop.
 
 ## Identity on the replay path
 
@@ -96,9 +104,29 @@ not add a feature-specific recovery path or immediate restart.
 - Reconstruct terminal outputs from committed records without requiring the finished consumer to
   reattach. Open agent-RPC outputs still require an active attachment before production.
 - Stream entries are hints and must stay hints: they take part in no `Start`/terminal pairing and
-  never satisfy a claim.
+  never satisfy a claim. Guest-consumed `ConsumerItemValue` and `ConsumerTerminal` records reserve
+  their replay position until Wasmtime's per-read observer confirms guest consumption. Host
+  projection records remain ordinary skippable hints.
 - The RPC result is completed (stripped of streams) before the stream-bearing value reaches the
   guest; do not assume an open stream implies an incomplete RPC `Start`.
+- Native guest reads append one consumer journal record at Wasmtime's per-read consumption
+  observer, not at host take time. Its oplog position is the guest boundary; there is no extra
+  durable call or delivery marker. Packed bytes record only the consumed portion. A crash before
+  consumption leaves no record and recovery re-reads the source by offset. Host projections keep
+  take-time journaling. A zero-progress native read cancellation retains the producer's receive
+  and prepared observation for the next read; only dropping the readable end cancels the durable
+  source. A retained receive keeps its original runtime activity binding; a later transfer stays
+  unclassified until it completes. Finishing the original activity is not owner suspension and
+  must not prevent the receive from returning. Native read cancellation does not yet reconstruct
+  the inline-versus-blocked return disposition. If cancellation cannot retain a recorded guest
+  delivery, replay fails with `UnexpectedOplogEntry` and poisons the shared cursor instead of
+  discarding the value or waiting forever. The canonical cancellation policy is unchanged; do not
+  force always-blocked returns.
+- Atomic rollback retains logical consumer input, including its ordinal, source offset and nested
+  reader identities. Re-executing a read whose physical boundary a `Jump` deleted appends one
+  consumer record with `reobserves` referencing the original record. Append and replay validate
+  identical logical content. A re-observation reserves its new guest boundary but advances no
+  consumer progress and introduces no nested readers; their identities retain the original index.
 
 ## Entity bodies and tool invocations
 

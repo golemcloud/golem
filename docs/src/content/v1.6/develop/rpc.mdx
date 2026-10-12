@@ -1,0 +1,639 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Agent to Agent communication
+
+See [Agent communication](/v1.6/concepts/communication) for an overview of how agents call, wait for, and stream to each other.
+
+## Code-first approach
+
+When defining an _agent_ in code, this automatically defines a client interface for calling remote agents as well. This way an agent of an agent type can create other agents and invoke methods on them. The target agent can be of any agent type available for the caller agent in code.
+
+The simplest way to achieve this is to keep all the agent types that need to call each other in the same _component_. In languages that separate an agent's definition from its implementation, you can instead extract the definition to a shared library imported by both components.
+
+## Creating a client
+
+The first step of calling a remote agent is creating a _client_ for it by specifying which agent type it is and identifying the agent by providing values for its constructor parameters. If the agent identified by the parameters has not been existing yet, it is going to be created and its constructor is executed remotely. If it has been already created, the client just points to it and no action is taken until an _agent method_ is called using it.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
+
+        ```typescript
+        import { z } from 'zod';
+        import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+        export const WeatherAgent = defineAgent({
+            name: 'WeatherAgent',
+            id: { location: z.string() },
+            methods: {
+                currentWeather: method({
+                    input: {},
+                    returns: z.string(),
+                    description: "Gets the current weather",
+                }),
+            },
+        });
+
+        export const WeatherAgentImpl = WeatherAgent.implement({
+            init: () => ({}),
+            methods: {
+                currentWeather() {
+                    // ...
+                    return "";
+                },
+            },
+        });
+
+        export const ExampleAgent = defineAgent({
+            name: 'ExampleAgent',
+            id: {},
+            methods: {
+                run: method({ input: {}, returns: z.string() }),
+            },
+        });
+
+        export const ExampleAgentImpl = ExampleAgent.implement({
+            init: () => ({}),
+            methods: {
+                async run() {
+                    const weatherInLondon = WeatherAgent.client.get({ location: "London" });
+                    // ...
+                    return "";
+                },
+            },
+        });
+        ```
+
+        Here `weatherInLondon` is the client for calling a remote `WeatherAgent`, obtained from `WeatherAgent.client` with the target agent's id record - it exposes the agent methods, such as `currentWeather` as its own methods.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+In Effect TypeScript, the definition's typed client returns scoped Effects:
+
+```typescript
+const weatherInLondon = yield* WeatherAgent.client.get({ location: "London" })
+```
+
+Use it inside `Effect.scoped(...)` or an existing agent runtime scope. The client exposes each agent method as an Effect-returning function.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
+
+```rust
+use golem_rust::{agent_definition, agent_implementation};
+
+#[agent_definition]
+pub trait WeatherAgent {
+    fn new(location: String) -> Self;
+    async fn current_weather(&self) -> String;
+}
+
+struct WeatherAgentImpl {
+    location: String,
+}
+
+#[agent_implementation]
+impl WeatherAgent for WeatherAgentImpl {
+    fn new(location: String) -> Self {
+        // ...
+    }
+
+    async fn current_weather(&self) -> String {
+        // ...
+    }
+}
+
+#[agent_definition]
+pub trait ExampleAgent {
+    fn new() -> Self;
+    async fn run(&self) -> String;
+}
+
+struct ExampleAgentImpl;
+
+#[agent_implementation]
+impl ExampleAgent for ExampleAgentImpl {
+    fn new() -> Self {
+        ExampleAgentImpl
+    }
+
+    async fn run(&self) -> String {
+        let weather_in_london = WeatherAgentClient::get("London".to_string());
+        // ...
+    }
+}
+```
+
+Given there is a `WeatherAgent` defined, we have an auto generated client with the name `WeatherAgentClient`,
+Here `weather_in_london` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `current_weather` as its own methods.
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
+
+```scala
+import golem.BaseAgent
+import golem.runtime.annotations.{agentDefinition, agentImplementation, description}
+
+import scala.concurrent.Future
+
+@agentDefinition()
+trait WeatherAgent extends BaseAgent {
+  class Id(val location: String)
+
+  @description("Gets the current weather")
+  def currentWeather(): Future[String]
+}
+
+@agentImplementation()
+final class WeatherAgentImpl(private val location: String) extends WeatherAgent {
+  override def currentWeather(): Future[String] = {
+    // ...
+  }
+}
+
+@agentDefinition()
+trait ExampleAgent extends BaseAgent {
+  class Id()
+
+  def run(): Future[String]
+}
+
+@agentImplementation()
+final class ExampleAgentImpl() extends ExampleAgent {
+  override def run(): Future[String] = {
+    val weatherInLondon = WeatherAgentClient.get("London")
+    // ...
+  }
+}
+```
+
+Given there is a `WeatherAgent` defined, we have an auto generated client with the name `WeatherAgentClient`,
+Here `weatherInLondon` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `currentWeather` as its own methods.
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
+
+```moonbit
+#derive.agent
+struct WeatherAgent {
+  location : String
+}
+
+fn WeatherAgent::new(location : String) -> WeatherAgent {
+  { location, }
+}
+
+/// Gets the current weather
+pub fn WeatherAgent::current_weather(self : Self) -> String {
+  // ...
+}
+
+#derive.agent
+struct ExampleAgent {
+  mut last_weather : String
+}
+
+fn ExampleAgent::new() -> ExampleAgent {
+  { last_weather: "" }
+}
+
+pub fn ExampleAgent::run(self : Self) -> String raise @common.AgentError {
+  let weather_in_london = WeatherAgentClient::get("London")
+  defer weather_in_london.drop()
+  // ...
+}
+```
+
+Given there is a `WeatherAgent` defined, we have an auto generated client with the name `WeatherAgentClient`,
+Here `weather_in_london` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `current_weather` as its own methods. When creating a client with `get`, call `drop()` when done.
+
+    </Tabs.Tab>
+</Tabs>
+
+## Calling an agent in another component
+
+When the caller and target agents belong to different components, use the pattern for your language:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+Export a plain shared schema/spec object. The provider calls `defineAgent(weatherSpec).implement(...)`; the caller uses `defineAgentClient(weatherSpec).client.get(...)`. Import `defineAgentClient` from `@golemcloud/golem-ts-sdk`; unlike `defineAgent`, it does not register the type in the caller component.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+Export an unimplemented `defineAgent` definition from a shared package, or declare a caller-owned interface with `defineAgentClient`. The provider implements its definition while the caller uses the definition's client.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+Put the `#[agent_definition]` trait in a shared crate. The provider crate depends on it to implement the agent, and the caller crate depends on it to use the generated client.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+Put the `@agentDefinition` trait in a shared module. The provider depends on it to implement the agent, and the caller depends on it to use the generated client.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+
+MoonBit does not currently support putting an agent definition in a shared package and importing its generated client from separate components. Its `#derive.agent` annotation describes the concrete implementation type, and the MoonBit generator emits registration, dispatch, and client code together in the component package.
+
+Instead, declare an agent dependency and use the generated internal guest bridge. The provider must be independently buildable before the caller's generated client exists. If components use separate MoonBit modules, configure their build commands, working directories, and output paths accordingly; the stock root-directed MoonBit template is not sufficient for that layout.
+
+```yaml filename="golem.yaml"
+components:
+  example:weather:
+    dir: weather
+    templates: moonbit
+
+  example:caller:
+    dir: caller
+    templates: moonbit
+    dependencies:
+      agents:
+        - example:weather/WeatherAgent
+```
+
+Build the provider first so Golem can discover its schema and generate the internal client. Follow [Calling Another Agent (MoonBit)](/v1.6/how-to-guides/moonbit/golem-call-another-agent-moonbit) to integrate it: the generated module itself still uses `moon.mod.json` and must not be edited, while current applications need `moon.mod` and `moon.work` plus workspace-aware debug and release build/embed overrides.
+
+Add the generated client package to the caller's existing `moon.pkg`. Preserve the template's existing SDK imports, link configuration, and WASM exports:
+
+```moonbit filename="caller/moon.pkg"
+import {
+  "weather-agent-guest-client/client" @weather,
+  // ...existing imports
+}
+```
+
+The caller can now use the generated typed client without importing the provider component or duplicating its agent definition:
+
+```moonbit filename="caller/example_agent.mbt"
+#derive.agent
+struct ExampleAgent {}
+
+fn ExampleAgent::new() -> ExampleAgent {
+  {}
+}
+
+pub async fn ExampleAgent::weather_in_london(self : Self) -> String {
+  let _ = self
+  @weather.WeatherAgentClient::scoped(
+    "London",
+    async fn(remote) { remote.current_weather() },
+  )
+}
+```
+
+Rebuild after changing the provider API so Golem can regenerate the guest client from the provider's discovered schema before compiling the caller. The resulting call uses Golem's guest RPC host API directly and does not need REST API server configuration.
+
+<Callout type="info">
+  This generated guest bridge provides the same separation needed for a two-component MoonBit application. No shared `#derive.agent` definition package or additional MoonBit SDK feature is required for cross-component RPC.
+</Callout>
+
+    </Tabs.Tab>
+</Tabs>
+
+### Phantom agents
+Calling `get` **gets or creates** a durable agent identified by its constructor parameters. Durable agent types have a default instance and can have arbitrary **phantom** instances distinguished by an additional **phantom ID** UUID. Ephemeral clients expose only phantom factories.
+
+When using **agent IDs** (for example in APIs or the CLI), phantom IDs are appended to the agent ID in square brackets:
+- Primary instance of `weather-agent` with parameter `London`: 
+  - `weather-agent("London")`
+- A phantom instance of the same agent: 
+  - `weather-agent("London")[43d9d7ab-e1d7-47e2-a213-d635eaa317a2]`
+
+Phantom agents are created through Agent-to-Agent communication or [forking](/v1.6/develop/forking). To create a new phantom agent via RPC, use the alternative client constructor method:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+  ```typescript
+  const { client: phantomAgent, agentId, phantomId } = WeatherAgent.client.newPhantom({ location: "London" });
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```typescript
+  const phantomAgent = yield* WeatherAgent.client.newPhantom({ location: "London" })
+  const phantomId = phantomAgent.phantomId
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```rust
+    let phantom_agent = WeatherAgentClient::new_phantom("London".to_string());
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```scala
+    val phantomAgent = WeatherAgentClient.newPhantom("London")
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```moonbit
+    let phantom_agent = WeatherAgentClient::new_phantom("London")
+    defer phantom_agent.drop()
+    ```
+  </Tabs.Tab>
+</Tabs>
+
+If we know the **phantom ID** of an agent, we can create a client targeting an existing phantom agent:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+  ```typescript
+  const { client: phantomAgent, agentId, phantomId } = WeatherAgent.client.newPhantom({ location: "London" });
+  const samePhantomAgent = WeatherAgent.client.getPhantom({ location: "London" }, phantomId);
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```typescript
+  const { phantomId } = yield* WeatherAgent.client.newPhantom({ location: "London" })
+  const samePhantomAgent = yield* WeatherAgent.client.getPhantom(
+    { location: "London" },
+    phantomId,
+  )
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```rust
+    let phantom_agent = WeatherAgentClient::new_phantom("London".to_string());
+    let phantom_id = phantom_agent.phantom_id().unwrap(); // It's an Option<Uuid>, but always Some for phantom agents
+    let same_phantom_agent = WeatherAgentClient::get_phantom(phantom_id, "London".to_string());
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```scala
+    import golem.Uuid
+
+    val phantomId = Uuid(BigInt(42), BigInt(99))
+    val samePhantomAgent = WeatherAgentClient.getPhantom("London", phantomId)
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```moonbit
+    let phantom_agent = WeatherAgentClient::new_phantom("London")
+    defer phantom_agent.drop()
+    let phantom_id = phantom_agent.phantom_id().unwrap()
+    let same_phantom_agent = WeatherAgentClient::get_phantom("London", phantom_id)
+    defer same_phantom_agent.drop()
+    ```
+  </Tabs.Tab>
+</Tabs>
+
+### Phantom agents through TypeScript reflection
+
+When the target type is selected at runtime, its reflected `client` exposes the
+same phantom operations as a definition client:
+
+```typescript
+import { getReflectedAgentType } from "@golemcloud/golem-ts-sdk";
+
+const weatherType = getReflectedAgentType("WeatherAgent");
+if (!weatherType) throw new Error("WeatherAgent is not registered");
+
+if (weatherType.mode === "durable") {
+  const phantom = weatherType.client.newPhantom({
+    location: "London",
+  });
+  if (!("client" in phantom)) throw new Error("Expected a durable phantom");
+  const { client, agentId, phantomId } = phantom;
+  const samePhantom = weatherType.client.getPhantom(
+    { location: "London" },
+    phantomId,
+  );
+}
+```
+
+For an ephemeral reflected type, `newPhantom` returns the reflected client
+directly rather than a reusable `{ client, agentId, phantomId }` wrapper. The
+final one-shot agent ID and idempotency key are returned by each invocation:
+
+```typescript
+const requestType = getReflectedAgentType("RequestAgent");
+if (!requestType || requestType.mode !== "ephemeral") {
+  throw new Error("RequestAgent must be ephemeral");
+}
+
+const request = requestType.client.newPhantom({ route: "summarize" });
+if ("client" in request) throw new Error("unexpected durable phantom wrapper");
+
+const result = await request.method("run").invoke({ text: "hello" });
+console.log(result.metadata.agentId, result.metadata.idempotencyKey);
+```
+
+Ephemeral reflected types also expose `getPhantom` when the caller already has
+the phantom ID. That explicit handle does not make a final, already-invoked
+ephemeral agent ID reusable.
+
+See [Calling Agents with Runtime Reflection](/v1.6/how-to-guides/ts/golem-agent-reflection-ts)
+for discovery, schema inspection, concrete `AgentId` binding, and error handling.
+
+### Reflection and dynamic clients in Effect TypeScript
+
+Effect TypeScript supports both schema-aware reflection and schema-native dynamic invocation. Reflection discovers a deployed type and validates JSON-shaped inputs:
+
+```typescript
+import { Effect } from "effect"
+import { Reflection } from "@golemcloud/effect-golem"
+
+const reflected = Effect.scoped(
+  Effect.gen(function* () {
+    const type = yield* Reflection.getAgentType("WeatherAgent")
+    if (type === undefined || type.mode !== "durable") return undefined
+    const client = yield* type.client.get({ location: "London" })
+    const method = yield* client.method("currentWeather")
+    return yield* method.invoke({})
+  }),
+)
+```
+
+When you already have an encoded durable agent identity and do not need discovery, parse it and bind a dynamic client. Dynamic methods accept native `SchemaValueTree` inputs, so the caller must supply values matching the deployed method contract:
+
+```typescript
+import { AgentIdentity } from "@golemcloud/effect-golem"
+
+const dynamic = Effect.scoped(
+  Effect.gen(function* () {
+    const identity = yield* AgentIdentity.parse(encodedAgentId)
+    const client = yield* identity.dynamicClient()
+    return yield* client.method("currentWeather").invoke(inputTree)
+  }),
+)
+```
+
+## Calling a remote agent method
+
+Once we have a _client_ for a remote agent, it is possible to call its methods just as if it would be a local instance.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    ```typescript
+    const currentWeather = await weatherInLondon.currentWeather();
+    ```
+    </Tabs.Tab>
+
+     <Tabs.Tab>
+     ```typescript
+      const currentWeather = yield* weatherInLondon.currentWeather({})
+      ```
+     </Tabs.Tab>
+
+     <Tabs.Tab>
+     ```rust
+      let current_weather = weather_in_london.current_weather().await;
+      ```
+     </Tabs.Tab>
+
+     <Tabs.Tab>
+     ```scala
+      val currentWeather = weatherInLondon.currentWeather()
+      ```
+     </Tabs.Tab>
+
+     <Tabs.Tab>
+     Inside an async MoonBit agent method:
+
+     ```moonbit
+      let current_weather = weather_in_london.current_weather()
+      ```
+     </Tabs.Tab>
+</Tabs>
+
+## Triggering execution of an agent method
+It is possible to trigger the remote execution of an agent method without awaiting it. This is useful for spawning background tasks, for example.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the client:
+
+    ```typescript
+    const remoteAgent = BackgroundTaskAgent.client.get({ jobId: backgroundJobId });
+    remoteAgent.runTask.trigger({ message: "hello", count: 1234 });
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Each remote method exposes a typed `trigger` Effect:
+
+    ```typescript
+    const remoteAgent = yield* BackgroundTaskAgent.client.get({ jobId: backgroundJobId })
+    yield* remoteAgent.runTask.trigger({ message: "hello", count: 1234 })
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    To trigger an agent method and return immediately, use the `trigger_` variant exposed on the generated client.
+    Example: If there is a `run_task`, its trigger variant is `trigger_run_task`:
+
+    ```rust
+    let remote_agent = BackgroundTaskAgentClient::get(background_job_id);
+    remote_agent.trigger_run_task("hello", 1234);
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the generated client:
+
+    ```scala
+    val remoteAgent = BackgroundTaskAgentClient.get(backgroundJobId)
+    remoteAgent.runTask.trigger("hello", 1234)
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    To trigger an agent method and return immediately, use the `trigger_` variant exposed on the generated client.
+    Example: If there is a `run_task`, its trigger variant is `trigger_run_task`:
+
+    ```moonbit
+    let remote_agent = BackgroundTaskAgentClient::get(background_job_id)
+    defer remote_agent.drop()
+    remote_agent.trigger_run_task("hello", 1234)
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+### Scheduling an agent method
+An advanced case of triggering the execution of an agent method is to **schedule it** to be executed at a later time.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+    Similar to `.trigger`, there is a `.schedule` method as well on each remote agent method in the client:
+
+    ```typescript
+    const remoteAgent = BackgroundTaskAgent.client.get({ jobId: backgroundJobId });
+    remoteAgent.runTask.schedule({ seconds: 60n, nanoseconds: 0 }, { message: "hello", count: 1234 });
+    ```
+
+    Here the first parameter is a `Datetime` object, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. In TypeScript, `seconds` is a `bigint`. The rest of the parameters are the same as for the original method.
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Pass an absolute time as a `Datetime`, JavaScript `Date`, Effect `DateTime`, or numeric Unix-epoch milliseconds:
+
+    ```typescript
+    const remoteAgent = yield* BackgroundTaskAgent.client.get({ jobId: backgroundJobId })
+    yield* remoteAgent.runTask.schedule(new Date(Date.now() + 10 * 60 * 1000), {
+      message: "hello",
+      count: 1234,
+    })
+    ```
+    </Tabs.Tab>
+
+      <Tabs.Tab>
+        Similar to `trigger`, there is a `schedule` variant for each remote agent method in the client.
+        Example: If `run_task` is a method, its schedule variant is `schedule_run_task`:
+
+        ```rust
+        use golem_rust::ScheduledTime;
+
+        let mut remote_agent = BackgroundTaskAgentClient::get(background_job_id);
+
+        remote_agent.schedule_run_task(
+          "hello".to_string(),
+          1234,
+          ScheduledTime {
+            seconds: 60,
+            nanoseconds: 0,
+          },
+        ).expect("failed to schedule background task");
+        ```
+
+        Here the last parameter is a `ScheduledTime`, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. The rest of the parameters are the same as for the original method.
+
+     </Tabs.Tab>
+
+     <Tabs.Tab>
+        Similar to `trigger`, there is a `scheduleAt` method as well on each remote agent method in the generated client:
+
+        ```scala
+        val remoteAgent = BackgroundTaskAgentClient.get(backgroundJobId)
+        remoteAgent.runTask.scheduleAt("hello", 1234, golem.Datetime.afterSeconds(60))
+        ```
+
+        Here the last parameter is a `Datetime` object representing when the method should be executed. The rest of the parameters are the same as for the original method.
+
+     </Tabs.Tab>
+
+     <Tabs.Tab>
+        Similar to `trigger`, there is a `schedule_` variant for each remote agent method in the generated client.
+        Example: If `run_task` is a method, its schedule variant is `schedule_run_task`:
+
+        ```moonbit
+        // In moon.pkg:
+        // import { "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock }
+
+        let remote_agent = BackgroundTaskAgentClient::get(background_job_id)
+        defer remote_agent.drop()
+        remote_agent.schedule_run_task(
+          @systemClock.Instant::{ seconds: 60, nanoseconds: 0 },
+          "hello",
+          1234,
+        )
+        ```
+
+        Here the first parameter is a system-clock `Instant`, with `seconds` and `nanoseconds` fields representing the UNIX Epoch time when the method should be executed. The rest of the parameters are the same as for the original method.
+
+     </Tabs.Tab>
+
+</Tabs>

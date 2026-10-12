@@ -1,0 +1,241 @@
+import { Tabs } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
+
+# Agent communication
+
+Agents work together by calling each other's methods through typed clients. An agent can also wait for something outside Golem, such as a person's approval or a webhook from a payment provider, and programs outside Golem can call agents directly. Golem delivers these calls reliably, so an application needs no message queue, job scheduler, or callback service between its agents.
+
+## Calling another agent
+
+Every agent type has a generated client. A caller gets a client for a specific agent from its constructor arguments and calls its methods. If the target agent does not exist yet, Golem creates it.
+
+A call can be made in three ways:
+
+| Call | What the caller does |
+|---|---|
+| Await | Waits for the result |
+| Trigger | Sends the call and continues without waiting |
+| Schedule | Sends the call to run at a given time, and gets a token to cancel it |
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+// Excerpt: inside a method of ReportAgent
+const reviewer = ReviewerAgent.client.get({ team: "finance" });
+
+// Await the result
+const review = await reviewer.review({ draft: this.draftText });
+
+// Trigger without waiting
+reviewer.review.trigger({ draft: this.draftText });
+
+// Schedule for one hour from now, then cancel
+const inOneHour = { seconds: BigInt(Math.floor(Date.now() / 1000) + 3600), nanoseconds: 0 };
+const token = reviewer.review.schedule(inOneHour, { draft: this.draftText });
+token.cancel();
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+// Excerpt: inside a method of ReportAgent, within Effect.gen
+const reviewer = yield* ReviewerAgent.client.get({ team: "finance" });
+
+// Await the result
+const review = yield* reviewer.review({ draft: draftText });
+
+// Trigger without waiting
+yield* reviewer.review.trigger({ draft: draftText });
+
+// Schedule for one hour from now, then cancel
+const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
+const scheduled = yield* reviewer.review.schedule(inOneHour, { draft: draftText });
+yield* scheduled.cancel();
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+// Excerpt: inside a method of ReportAgent
+let reviewer = ReviewerAgentClient::get("finance".to_string());
+
+// Await the result
+let review = reviewer.review(self.draft_text.clone()).await;
+
+// Trigger without waiting
+reviewer.trigger_review(self.draft_text.clone());
+
+// Schedule for one hour from now, then cancel
+let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+let in_one_hour = ScheduledTime { seconds: now.as_secs() as i64 + 3600, nanoseconds: 0 };
+let token = reviewer
+    .schedule_cancelable_review(self.draft_text.clone(), in_one_hour)
+    .unwrap();
+token.cancel();
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+// Excerpt: inside a method of ReportAgentImpl
+val reviewer = ReviewerAgentClient.get("finance")
+
+// Await the result
+val review: Future[String] = reviewer.review(draftText)
+
+// Trigger without waiting
+reviewer.review.trigger(draftText)
+
+// Schedule for one hour from now, then cancel
+reviewer.review
+  .scheduleCancelableAt(draftText, Datetime.afterSeconds(3600))
+  .foreach(token => token.cancel())
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+// Excerpt: inside an async method of ReportAgent
+let reviewer = ReviewerAgentClient::get("finance")
+defer reviewer.drop()
+
+// Await the result
+let review = reviewer.review(self.draft_text)
+
+// Trigger without waiting
+reviewer.trigger_review(self.draft_text)
+
+// Schedule for one hour from now, then cancel
+let now = @systemClock.now()
+let in_one_hour = @systemClock.Instant::{ seconds: now.seconds + 3600, nanoseconds: 0 }
+let token = reviewer.schedule_cancelable_review(in_one_hour, self.draft_text)
+token.cancel()
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+// Excerpt: inside a handler of ReportAgent
+r := reviewer.Agent.Get(reviewer.ID{Team: "finance"})
+in := reviewer.ReviewIn{Draft: ctx.State.draftText}
+
+// Await the result
+review := reviewer.Review.MustCall(r, in)
+
+// Trigger without waiting
+reviewer.Review.MustTrigger(r, in)
+
+// Schedule for one hour from now, then cancel
+scheduled := reviewer.Review.MustSchedule(r, time.Now().Add(time.Hour), in)
+scheduled.Cancel()
+```
+  </Tabs.Tab>
+</Tabs>
+
+Agent-to-agent calls execute exactly once. Golem records each call in the caller's oplog and attaches a key derived from it, so retries and recovery after a failure never make the target run the call twice. Scheduled calls are stored durably until they run or are cancelled. A recurring job is a method that schedules its own next run.
+
+Each agent processes one call at a time. A call that arrives while the agent is busy waits in its queue, so a long-running method delays later calls to the same agent; read-only methods can be answered from a cache without waiting. Two agents that await each other at the same moment would wait forever, so use trigger for one direction in such cases.
+
+## Calling across languages
+
+An agent can call agent types from other components, including components written in another language. You declare the dependency in `golem.yaml`, and `golem build` generates a typed client in the caller's language from the target's interface. A TypeScript agent can call a Rust agent with TypeScript types, and the call has the same guarantees as any other agent call.
+
+## Waiting for people and external events
+
+A **promise** is a durable slot that an agent creates (`createPromise`) and waits on (`awaitPromise`). Another agent, or an external system through the REST API, completes it with a value; the [Quickstart](/next/quickstart#recover-a-method-in-the-middle-of-its-work) uses one for an approval. A **webhook** is a promise with a one-time URL: an HTTP `POST` to the URL completes the promise with the request body. Use a webhook when an external service, such as a payment provider, calls back over HTTP.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+// Excerpt: ReportAgent waits for a manager's approval
+const webhook = createWebhook();
+await sendApprovalEmail(webhook.getUrl()); // your own function
+const payload = await webhook; // the agent is suspended here
+const decision = payload.json();
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+// Excerpt: ReportAgent waits for a manager's approval, within Effect.gen
+const webhook = yield* Webhook.create;
+yield* sendApprovalEmail(webhook.url); // your own Effect
+const payload = yield* webhook.await; // the agent is suspended here
+const decision = payload.json();
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+// Excerpt: ReportAgent waits for a manager's approval
+let webhook = create_webhook().unwrap();
+send_approval_email(webhook.url()).await; // your own function
+let payload = webhook.await; // the agent is suspended here
+let decision: serde_json::Value = payload.json().unwrap();
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+// Excerpt: ReportAgent waits for a manager's approval
+final case class Approval(approved: Boolean, comment: String) derives Schema
+
+val webhook = HostApi.createWebhook()
+for {
+  _        <- sendApprovalEmail(webhook.url) // your own function
+  payload  <- webhook.await() // the agent is suspended here
+  decision  = payload.json[Approval]()
+} yield decision
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```moonbit
+// Excerpt: ReportAgent waits for a manager's approval
+let webhook = @webhook.create()
+send_approval_email(webhook.url()) // your own function
+let payload = webhook.wait() // the agent is suspended here
+let decision = @json.parse(payload.text())
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+// Excerpt: ReportAgent waits for a manager's approval
+webhook := golem.NewWebhook[Decision]()
+sendApprovalEmail(webhook.URL()) // your own function
+decision := webhook.MustAwait()  // the agent is suspended here; the JSON body is decoded as Decision
+```
+  </Tabs.Tab>
+</Tabs>
+
+While an agent is only waiting, Golem unloads it from memory, so a wait of minutes or months uses no compute. The wait is recorded in the oplog, so it survives server restarts and redeployments. When the promise completes, Golem loads the agent again and the `await` returns.
+
+<ThemedImage
+  lightSrc="/images/getting-started/calls-and-waits-light.webp"
+  darkSrc="/images/getting-started/calls-and-waits-dark.webp"
+  alt={`Timeline of ReportAgent("acme", "q3"). First, it awaits the review method on ReviewerAgent("finance") and receives the result; the call is recorded in its oplog. Next, ReportAgent creates a promise, sends an approval link to a person, and awaits the promise. While it waits, ReportAgent is suspended and unloaded from memory, and its oplog remains in storage. When the person approves, the promise completes, Golem rebuilds ReportAgent from its oplog, and the method continues.`}
+  caption="An awaited call to another agent, then a wait for a person while the agent is unloaded from memory."
+  width={1536}
+  height={1024}
+/>
+
+Deadlines and reminders are ordinary code built from these pieces. For an approval with a deadline, the waiting agent can schedule a call that completes the same promise with a default answer; whichever completion comes first wins.
+
+## Streaming
+
+Methods can accept and return streams of values or bytes, in both directions at once: for example, a client can stream audio into an agent while the agent streams text back, or an agent can stream model output token by token. The stream belongs to the agent, not to a network connection: if a client disconnects, the agent keeps running, and the client reconnects and continues from the last item it received. Generated client libraries and the CLI stream over a resumable WebSocket session; HTTP endpoints use the Durable Streams protocol, described in [Artifacts](/next/concepts/artifacts#streams-that-survive-reconnects).
+
+## Calling agents from outside Golem
+
+Programs outside Golem can call agents through:
+
+- **Generated client libraries** (also called bridges) in your application's language, for example in a Next.js server or a Rust service.
+- **The REST API**.
+- **HTTP endpoints** and **MCP servers** that you define, described in [Artifacts](/next/concepts/artifacts).
+- **The CLI**, with `golem agent invoke`.
+
+## Discovering agents and tools at runtime
+
+An agent can list the agent types and tools available to it, read their method schemas, and call them without a generated client. AI agent loops use this to offer tools to a model. Golem still applies the caller's permissions to every call.
+
+## Next
+
+[Artifacts](/next/concepts/artifacts): how agents serve APIs, web front-ends, files, and streams.
+
+Related guides:
+
+- [Agent-to-agent communication](/next/develop/rpc)
+- [Promises](/next/develop/promises)
+- [Webhooks](/next/develop/webhooks)
+- [Bridge libraries](/next/invoke/bridge-libraries)

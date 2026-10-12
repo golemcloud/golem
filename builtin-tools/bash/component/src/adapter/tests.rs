@@ -1,6 +1,6 @@
 use super::*;
 use golem_schema::tool::*;
-use golem_schema::{SchemaGraph, SchemaType};
+use golem_schema::{SchemaGraph, SchemaType, SchemaValue};
 
 fn fixture() -> Tool {
     Tool {
@@ -55,11 +55,11 @@ fn projection_uses_the_cli_parser_and_finishes_help_before_input() {
         panic!("expected invocation")
     };
     let prepared = catalog
-        .prepare("renamed", &args)
+        .prepare("renamed", &args, &HashMap::new())
         .unwrap_or_else(|output| panic!("{:?}", output.stderr));
     assert!(!prepared.takes_stdin());
     let projected = catalog
-        .prepare_invocation("renamed", &args)
+        .prepare_invocation("renamed", &args, &HashMap::new())
         .unwrap_or_else(|output| panic!("{:?}", output.stderr));
     assert_eq!(projected.input, *direct);
     assert_eq!(projected.path, command_path);
@@ -77,7 +77,7 @@ fn projection_uses_the_cli_parser_and_finishes_help_before_input() {
         ParsedToolArguments::Help(text) => text,
         _ => panic!("expected help"),
     };
-    let output = match catalog.prepare("renamed", &["--help".into()]) {
+    let output = match catalog.prepare("renamed", &["--help".into()], &HashMap::new()) {
         Err(output) => output,
         Ok(_) => panic!("help must not invoke or consume input"),
     };
@@ -86,7 +86,10 @@ fn projection_uses_the_cli_parser_and_finishes_help_before_input() {
     assert!(output.stderr.is_empty());
     for args in [vec![], vec!["--invalid".into()]] {
         let expected = argv::parse(&tool, &args).err().unwrap();
-        let output = catalog.prepare("renamed", &args).err().unwrap();
+        let output = catalog
+            .prepare("renamed", &args, &HashMap::new())
+            .err()
+            .unwrap();
         assert_eq!(output.stderr, format!("{expected}\n").as_bytes());
         assert_eq!(output.exit_code, 2);
     }
@@ -129,4 +132,109 @@ fn tool_failures_map_to_shell_statuses_and_messages() {
     for (error, code, message) in cases {
         assert_eq!(rpc_failure(error, &declared), (code, message.to_string()));
     }
+}
+
+fn option(name: &str, shape: OptionShape, default: Option<SchemaValue>) -> OptionSpec {
+    OptionSpec {
+        long: name.into(),
+        short: None,
+        aliases: vec![],
+        doc: Doc::default(),
+        value_name: None,
+        shape,
+        default,
+        required: false,
+        env_var: None,
+    }
+}
+
+/// A tool with one command, `run`, that takes `options`.
+fn tool_with(options: Vec<OptionSpec>) -> Tool {
+    let mut tool = fixture();
+    let mut run = tool.commands.nodes[0].clone();
+    run.name = "run".into();
+    let body = run.body.as_mut().unwrap();
+    body.positionals = Positionals::default();
+    body.options = options;
+    tool.commands.nodes[0].body = None;
+    tool.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+    tool.commands.nodes.push(run);
+    tool
+}
+
+fn string(value: &str) -> SchemaValue {
+    SchemaValue::String(value.into())
+}
+
+/// The input record that `tool run ARGS` gives when the shell has `variables`.
+fn record(tool: Tool, args: &[&str], variables: &[(&str, &str)]) -> Vec<SchemaValue> {
+    let catalog = Catalog::new(BTreeMap::from([("tool".into(), tool)])).unwrap();
+    let args: Vec<String> = ["run"].iter().chain(args).map(|s| s.to_string()).collect();
+    let variables: HashMap<String, String> = variables
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    let invocation = catalog
+        .prepare_invocation("tool", &args, &variables)
+        .unwrap_or_else(|output| panic!("{}", String::from_utf8_lossy(&output.stderr)));
+    match invocation.input.value() {
+        SchemaValue::Record { fields } => fields.clone(),
+        other => panic!("not a record: {other:?}"),
+    }
+}
+
+#[test]
+fn a_declared_variable_reaches_the_input_record() {
+    let tool = || {
+        let mut region = option(
+            "region",
+            OptionShape::Scalar(SchemaType::string()),
+            Some(string("local")),
+        );
+        region.env_var = Some("REGION".into());
+        tool_with(vec![region])
+    };
+    assert_eq!(record(tool(), &[], &[]), vec![string("local")]);
+    assert_eq!(record(tool(), &[], &[("REGION", "eu")]), vec![string("eu")]);
+    assert_eq!(
+        record(tool(), &["--region", "us"], &[("REGION", "eu")]),
+        vec![string("us")]
+    );
+}
+
+#[test]
+fn an_option_gets_the_shell_directory_only_when_it_declares_the_variable() {
+    // The shape of `npm`, `node` and `tsc`: a plain `--cwd` with a default and no declaration.
+    let plain = || {
+        tool_with(vec![option(
+            "cwd",
+            OptionShape::Scalar(SchemaType::string()),
+            Some(string("/workspace")),
+        )])
+    };
+    assert_eq!(
+        record(plain(), &[], &[("PWD", "/work/app")]),
+        vec![string("/workspace")]
+    );
+    assert_eq!(
+        record(plain(), &["--cwd", "/x"], &[("PWD", "/work/app")]),
+        vec![string("/x")]
+    );
+    // The shape of `git`: an inherited global `--cwd` that declares `PWD`.
+    let declared = || {
+        let mut cwd = option(
+            "cwd",
+            OptionShape::Scalar(SchemaType::string()),
+            Some(string("/")),
+        );
+        cwd.env_var = Some("PWD".into());
+        let mut tool = tool_with(vec![]);
+        tool.commands.nodes[0].globals.options = vec![cwd];
+        tool
+    };
+    assert_eq!(record(declared(), &[], &[]), vec![string("/")]);
+    assert_eq!(
+        record(declared(), &[], &[("PWD", "/work/repo")]),
+        vec![string("/work/repo")]
+    );
 }

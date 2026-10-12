@@ -115,6 +115,7 @@ export type MarkerKind =
   | 'unstructured-binary'
   | 'secret'
   | 'result'
+  | 'option'
   | 'typed-array'
   | 'principal'
   | 'stream';
@@ -698,15 +699,21 @@ function typedArrayMarker<TArr, E extends number | bigint>(spec: {
     value instanceof spec.ctor
       ? ok(value)
       : fail(`Expected a ${spec.ctor.name} for a typed-array WIT list`);
-  const descriptor: MarkerDescriptor = () => {
-    const itemCodec: SchemaCodec = {
-      graph: { defs: new Map(), root: spec.elemType() },
-      toValue: (value) => spec.elemValue(value as E),
-      fromValue: (value) => (value as unknown as { value: E }).value,
-    };
+  const descriptor: MarkerDescriptor = (recurse) => {
+    const itemCodec = recurse(
+      marker<E>(
+        (value) => ok(value as E),
+        () => ({
+          graph: { defs: new Map(), root: spec.elemType() },
+          toValue: (value) => spec.elemValue(value as E),
+          fromValue: (value) => (value as unknown as { value: E }).value,
+        }),
+      ),
+    );
     return {
       graph: { defs: new Map(), root: t.list(itemCodec.graph.root) },
       listItem: itemCodec,
+      typedArrayConstructor: spec.ctor,
       toValue: (value) => v.list(Array.from(value as Iterable<E>).map((x) => spec.elemValue(x))),
       fromValue: (sv) => {
         const elements = (sv as Extract<SchemaValue, { tag: 'list' }>).elements;
@@ -1042,6 +1049,36 @@ function multimodalMarker(
 }
 
 // ============================================================
+// Option (WIT `option<inner>`)
+// ============================================================
+
+/**
+ * An `option<inner>` marker. Its output type is `Inner | undefined`: `undefined`
+ * is `none`, any other value is `some`. It wraps any schema, including markers
+ * such as `s.unstructuredBinary()` that vendor `optional` wrappers cannot wrap.
+ */
+function optionMarker<Inner>(
+  innerSchema: StandardSchemaV1<Inner>,
+): MarkerSchema<Inner | undefined, 'option'> {
+  const validate: Validator<Inner | undefined> = (value) =>
+    value === undefined ? ok(undefined) : innerSchema['~standard'].validate(value);
+  const descriptor: MarkerDescriptor = (recurse) => {
+    const innerCodec = recurse(innerSchema);
+    return {
+      graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
+      optionKind: 'optional',
+      optionInner: innerCodec,
+      toValue: (value) => v.option(value === undefined ? undefined : innerCodec.toValue(value)),
+      fromValue: (sv) => {
+        const inner = (sv as Extract<SchemaValue, { tag: 'option' }>).value;
+        return inner === undefined ? undefined : innerCodec.fromValue(inner);
+      },
+    };
+  };
+  return marker<Inner | undefined, 'option'>(validate, descriptor);
+}
+
+// ============================================================
 // Result (WIT `result<ok, err>`)
 // ============================================================
 
@@ -1258,9 +1295,9 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
  * Vendor-neutral marker schemas for WIT kinds Standard Schema can't express on
  * its own: numeric pins, `char`, `datetime`, `duration`, `url`, `bytes`, plus
  * the capability / rich nodes (`secret`, `quota-token`, `permission-card`, `multimodal`,
- * `unstructured*`). Each returns a {@link MarkerSchema} usable anywhere a
- * Standard Schema is accepted; `stream` is restricted to agent method inputs
- * and outputs by the agent schema validator.
+ * `unstructured*`) and the `option` / `result` wrappers. Each returns a
+ * {@link MarkerSchema} usable anywhere a Standard Schema is accepted; `stream`
+ * is restricted to agent method inputs and outputs by the agent schema validator.
  */
 export const s = {
   // Numeric pins (f64 is the default `number`, so it is intentionally absent).
@@ -1319,6 +1356,9 @@ export const s = {
   multimodal: (cases: MultimodalCase[]) => multimodalMarker(cases),
   unstructuredText: (opts?: UnstructuredTextOpts) => unstructuredTextMarker(opts),
   unstructuredBinary: (opts?: UnstructuredBinaryOpts) => unstructuredBinaryMarker(opts),
+
+  // Optional value: `s.option(inner)` → WIT `option<inner>`, `undefined` is `none`.
+  option: <Inner>(innerSchema: StandardSchemaV1<Inner>) => optionMarker(innerSchema),
 
   // Typed method result: `returns: s.result(ok, err)` → WIT `result<ok, err>`.
   result: <Ok, Err>(okSchema: StandardSchemaV1<Ok>, errSchema: StandardSchemaV1<Err>) =>

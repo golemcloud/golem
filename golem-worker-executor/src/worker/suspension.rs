@@ -133,21 +133,23 @@ impl OwnerSuspension {
 
     fn revoke_wait(&self, activity: &ActivityId, classification: u64) -> bool {
         let mut state = self.state.lock().unwrap();
+        if state.stopped.is_some() {
+            return false;
+        }
         if matches!(
             state.activities.get(activity),
             Some(ActivityClass::Wait { classification: current, .. }
                 | ActivityClass::RpcWait { classification: current, .. })
                 if *current == classification
-        ) && state.stopped.is_none()
-        {
+        ) {
             state
                 .activities
                 .insert(activity.clone(), ActivityClass::Unknown);
             Self::invalidate(&mut state);
-            true
-        } else {
-            false
         }
+        // A finished activity or a replacement classification is not a stopped owner.
+        // Leave a newer classification intact while releasing this wait's result.
+        true
     }
 
     fn eligible(state: &State, now: Instant, suspend_after: Duration) -> Option<Wakeup> {
@@ -2424,6 +2426,41 @@ pub(crate) mod tests {
         assert!(owner.prepare(now, Duration::from_secs(1)).is_some());
         drop(promise);
         assert!(owner.prepare(now, Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn ready_receive_outlives_its_runtime_activity_but_not_owner_suspension() {
+        for replaced in [false, true] {
+            let owner = OwnerSuspension::new();
+            let (store, activity, _timer) =
+                blocked_timer(&owner, Instant::now() + Duration::from_secs(60));
+            store.observe(RuntimeObservation::ActivityStarted {
+                activity,
+                kind: RuntimeActivityKind::Import,
+            });
+            let wait = store
+                .rpc_wait(activity, Duration::ZERO, Duration::from_secs(10))
+                .unwrap();
+            let _replacement = if replaced {
+                Some(store.promise(activity).unwrap())
+            } else {
+                store.observe(RuntimeObservation::ActivityFinished { activity });
+                None
+            };
+            assert!(eligible_now(&owner));
+            let mut result = Box::pin(wait.wait_result(std::future::ready(37), pending()));
+            assert!(matches!(poll_once(result.as_mut()), Poll::Ready(Ok(37))));
+            assert!(eligible_now(&owner));
+        }
+
+        let owner = OwnerSuspension::new();
+        let (_store, promise) = blocked_promise(&owner);
+        assert!(commit_now(&owner));
+        let mut result = Box::pin(promise.wait_result(std::future::ready(37), pending()));
+        assert!(matches!(
+            poll_once(result.as_mut()),
+            Poll::Ready(Err(InterruptKind::Suspend(_)))
+        ));
     }
 
     #[test]

@@ -1,83 +1,112 @@
 import { Callout } from "nextra/components"
+import { ThemedImage } from "@/components/themed-image"
 
-# Permissions and cards
+# Permissions
 
-Golem uses **permission cards** to carry authority between accounts, environments, and agents. A card is a durable capability: it describes which operations its holder may perform, who the authority belongs to, which recipients may use it, and which resources it covers.
+Golem decides what each agent may do with **permission cards**. A card lists operations the agent is allowed to perform, such as connecting to a host, reading a directory, revealing a secret, or calling a tool. Golem checks the agent's cards before every such operation, so an agent can do exactly what its cards allow, regardless of what its code, its prompt, or a model's output asks for.
 
-Cards are different from [API tokens](/next/cli/permissions#api-tokens). An API token authenticates a client to Golem's management API. A permission card authorizes an operation inside Golem's permission model.
+This matters for AI agents because they act on text from users, documents, and web pages, and that text can steer a model. An instruction in a prompt such as "never delete files outside the workspace" is not a security boundary. A card that does not grant delete permission outside the workspace is.
 
-## Cards, permissions, and wallets
+## How a permission check works
 
-A card contains permission patterns. Each pattern has five parts:
+Cards are capabilities: unforgeable values that only the Golem runtime can create. The set of cards an agent holds is its **wallet**. When agent code makes an HTTP request, opens a file, reads a secret, or calls another agent or a tool, the Golem host checks the request against the wallet first.
 
-- a permission class, such as an account, environment, agent, or filesystem operation
-- the **owner** whose resource is being accessed
-- the **recipient** allowed to exercise or receive the authority
-- a verb describing the operation
-- a resource pattern restricting what the operation applies to
+<ThemedImage
+  lightSrc="/images/getting-started/card-check-light.webp"
+  darkSrc="/images/getting-started/card-check-dark.webp"
+  alt="Agent code calls fetch on an external host. The host checks the agent's wallet for a network connect grant covering that host and port. If no card covers it, the request is denied before it leaves the agent and the denial is recorded in the oplog. If a card covers it, the request is sent and the response is recorded."
+  caption="Golem checks the wallet before the operation happens."
+  width={1536}
+  height={1024}
+/>
 
-Positive and negative grants form the card's lower and upper bounds. Derivation may narrow authority, but cannot create authority outside its parents' bounds.
+If no card allows the operation, Golem denies it before it happens and records the denial in the agent's oplog. Each method invocation records which cards it used, so when Golem recovers an agent after a failure, it makes the same permission decisions as the original run. An agent with no cards can compute and return results, but cannot touch files, the network, secrets, other agents, or tools.
 
-A **wallet** is the set of cards currently held by an account, application, or agent. For an agent invocation, Golem pins the wallet version and card IDs used by that invocation. This gives durable execution a stable authority snapshot even if the live wallet changes later.
+Tools act with the calling agent's cards, so a card that limits file deletion also limits a `bash` script that the agent runs through the `bash` tool.
 
-<Callout type="info">
-  For resources exposed through deployment bindings, such as tools, exposure and permission are
-  separate requirements. A binding does not grant permission, and permission does not create a
-  missing binding.
+## Grants
+
+Each card contains **grants**. A grant names an operation and the resources it applies to:
+
+```text
+filesystem(?agent) @ ?agent : read : /data/**
+network() @ ?agent : connect : api.openai.com:443
+```
+
+A grant has four parts: `resource-type(owner) @ recipient : operation : target`.
+
+| Part | In the first grant | Meaning |
+|---|---|---|
+| Resource type and owner | `filesystem(?agent)` | The filesystem that belongs to the agent |
+| Recipient | `@ ?agent` | Who may use the grant: the agent holding the card |
+| Operation | `read` | What may be done |
+| Target | `/data/**` | Where: anything under `/data` (`*` matches one path segment, `**` any depth) |
+
+The second grant lets the agent open connections to `api.openai.com` on port 443. `?agent` stands for whichever agent holds the card, so the same grant works for every agent of a type. Similar placeholders exist for the agent's component (`?component`) and environment (`?env`).
+
+A card has two sets of grants. Its **lower bound** lists what the card allows; an operation is allowed if any card in the wallet allows it. Its **upper bound** is a limit on the whole wallet, including cards the agent receives later. Each set can contain negative grants that exclude operations. An upper bound that excludes billing secrets, for example, keeps those secrets out of reach even if another card would allow them.
+
+## Default and explicit permissions
+
+If an agent type does not declare its permissions, Golem gives it a **broad default card** so that a first deployment works without configuration. The default card allows the agent's own files, any network destination, the environment's secrets and storage, and calls to any agent and tool in the environment.
+
+<Callout type="warning">
+  The default card is meant for getting started. Before you run agents that act on untrusted
+  input, declare explicit permissions.
 </Callout>
 
-## Ownership and recipients
+To declare explicit permissions, give the agent type an `initialCard` in `golem.yaml`. It replaces the default card, so list everything the agent needs:
 
-The **holder** identifies a wallet: supported holder kinds are accounts, applications, and agents. Wallet membership is separate from ownership of a guest handle; deriving a card returns a handle without installing the card in a wallet. The holder and the permission owner are also different concepts: an agent can hold a card granting access to a resource owned by another account.
+```yaml
+# golem.yaml (excerpt)
+agents:
+  ReportAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "tool(?component/bash) @ ?agent : invoke : *"
+          - "filesystem(?agent) @ ?agent : read : /workspace/**"
+          - "filesystem(?agent) @ ?agent : delete : /workspace/*"
+          - "network() @ ?agent : connect : api.openai.com:443"
+      upperBound:
+        negative:
+          - "secret(?env) @ ?agent : reveal : billing.*"
+```
 
-Recipient patterns restrict where authority can flow. They can identify:
+This agent may run `bash`, read anything under `/workspace`, delete files directly inside `/workspace`, and connect to one host. It can never reveal secrets whose names start with `billing.`.
 
-- an account
-- all environments or agents in an account
-- all environments in an application, or one environment
-- all agents in an application, environment, or component
-- a particular agent type
-- a component's external-tool owner
-- any recipient (`*`)
+## Delegating, expiring, and revoking
 
-For installation, at least one lower-positive, upper-positive, or upper-negative grant must cover the target agent. Only grants whose recipient pattern covers the holder contribute to that holder's effective permissions; matching lower-negative grants alone do not make a card installable.
+Every card comes from an earlier one. An account starts with a **root card**. An account owner can give another account part of its authority with a **permission share**, and each environment has **default cards** for managing it. When you deploy, Golem creates an **initial card** for each agent type, which can never exceed the authority of the person deploying.
 
-## Where cards come from
+At runtime, an agent can derive a narrower card from one it holds and pass it to another agent or a tool, for example read access to one folder for 30 days (written `P30D`). A derived card can only narrow its parent; it can never add permissions. Cards can expire, and revoking a card also revokes every card derived from it.
 
-Golem manages several kinds of cards:
+<ThemedImage
+  lightSrc="/images/getting-started/card-derivation-light.webp"
+  darkSrc="/images/getting-started/card-derivation-dark.webp"
+  alt="An account root card leads to permission shares, environment default cards, and initial cards created at deploy for each agent type. Initial cards must fall within the deployer's authority. An agent derives a narrower card at runtime, and that card can be derived again, narrower still. Revoking a card also revokes every card derived from it."
+  caption="Each derived card is narrower than its parent. Revoking a card revokes everything derived from it."
+  width={1536}
+  height={1024}
+/>
 
-- **account root cards** establish an account's root authority
-- **permission-share cards** represent authority shared with another account
-- **environment-default cards** supply default authority for an environment
-- **component or agent-initial cards** are produced from deployment and agent-type configuration
-- **runtime-derived cards** are created durably by an agent from authority already available to it
+## Secrets
 
-The CLI can filter account root, permission-share, environment-default, and initial cards when listing an account. Runtime-derived cards retain their parent IDs, so their authority and revocation lineage remain auditable, but account card listing does not enumerate them.
+Secrets are passed to agents as opaque handles. An agent can pass a handle to a tool or a Golem integration without seeing the value. To use a secret's value directly, for example to put an API key in an HTTP header, the agent must **reveal** it, which requires a `reveal` permission and is recorded; the revealed value is then ordinary data and appears in the recorded request. A tool binding can prevent a tool from revealing any secret, which keeps API keys away from code generated by a model.
 
-## Derivation, transfer, and installation
+## What permissions do not cover
 
-Agents use the `golem:permissions` guest interfaces to work with cards:
+Permissions decide what an agent may do, not which users may call it. Checking that the signed-in user may access a particular agent is application logic, described in [Artifacts](/next/concepts/artifacts#login).
 
-1. **Derive** a persistent child with `derive` from one explicit parent, or with `derive-from-wallet` from one compatible card selected from the active wallet. `derive-scope` instead creates an invocation-local, in-memory card from one or more persistent or scope parents. Every child must be no more permissive than its parent authority.
-2. **Transfer** the resulting owned card handle through a component-model call. Permission-card handles are affine: transferring a handle consumes the sender's handle, so it cannot be copied and reused.
-3. **Install** a persistent card into a target agent's wallet. Installation currently supports agent targets only and consumes the supplied handle.
+Permissions limit how much damage an agent can do; they do not judge whether an agent's intentions are good. An agent can still misuse permissions it legitimately holds. For irreversible operations, such as payments or deletions, add an approval step in [tool middleware](/next/concepts/tools#middleware), which the agent cannot bypass.
 
-Deriving a card does not install it. Transfer moves an owned handle between components; installation changes the target agent's wallet. Installing a concrete card that is already in the caller's wallet removes it from that source wallet before delivery. Installing a polymorphic card materializes a child and retains the template in the source wallet.
+## Next
 
-Scope cards cannot be persisted, installed, or transferred as ordinary persistent card snapshots. A persistent derivation is recorded by Golem before the guest receives its handle.
+[Agent communication](/next/concepts/communication): how agents call each other and wait for people and external events.
 
-## Revocation and expiry
+Related guides:
 
-Cards may expire, and expired cards fail validation. Revoking a card revokes its descendants as well, because a child cannot outlive the authority from which it was derived. You can revoke eligible cards from an agent through the guest API or administratively with [`golem card revoke`](/next/cli/permissions#inspect-and-revoke-cards). System cards and cards managed by permission shares or environment defaults cannot be revoked directly; change their managing resource instead.
-
-A new attempt to revoke an already or concurrently revoked card returns `card-revoked`, even though the desired state already holds. Replaying a completed revocation reproduces its recorded result. An invocation already pinned to a wallet still revalidates card status where the permission operation requires it; revocation is not a way to rewrite previously recorded execution.
-
-## Replay and failures
-
-Persistent derivation, installation, and revocation participate in Golem's durable execution protocol: mutation results and audit events are written to the operation log. During replay, Golem reproduces the recorded result instead of performing the external mutation again, and verifies that the replayed card and wallet generation match the recorded event. Ordinary handle transfer travels in the surrounding durable call's value; it is not a separate audited card mutation.
-
-Permission operations return typed failures for conditions such as invalid grants or recipients, insufficient parent authority, a missing or changed wallet parent, unsupported installation targets, recipient mismatch, and expired, missing, or revoked cards. A failed installation does not partially add a card to the target wallet. Runtime and infrastructure failures can still fail the invocation according to the normal [durability and retry model](/next/concepts/reliability).
-
-## Administration
-
-Use the [permissions CLI guide](/next/cli/permissions) to manage API tokens and account permission shares, inspect account or agent cards, and revoke a card. Card derivation, transfer, and installation are application operations exposed through the guest permission APIs, not card-creation CLI commands.
+- [Cards reference](/next/develop/cards)
+- [Configuration and secrets](/next/develop/config-and-secrets)
+- [Application manifest](/next/app-manifest)
+- [Permissions CLI](/next/cli/permissions)

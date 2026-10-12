@@ -2635,6 +2635,507 @@ mod tests {
         assert!(err.contains("Language code 'fr' is not allowed"));
     }
 
+    #[agent_definition]
+    trait RawResponseAgent {
+        fn new(id: String) -> Self;
+
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>>;
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String>;
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String>;
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText>;
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String>;
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String>;
+    }
+
+    struct RawResponseAgentImpl;
+
+    #[agent_implementation]
+    impl RawResponseAgent for RawResponseAgentImpl {
+        fn new(_id: String) -> Self {
+            RawResponseAgentImpl
+        }
+
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
+            input
+        }
+
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>> {
+            input
+        }
+
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String> {
+            input
+        }
+
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String> {
+            input
+        }
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang> {
+            input
+        }
+
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText> {
+            input
+        }
+
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String> {
+            input
+        }
+
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String> {
+            input
+        }
+    }
+
+    #[allow(dead_code)]
+    #[golem_rust::agent_client]
+    trait RawResponseApi {
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>>;
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String>;
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String>;
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText>;
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String>;
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String>;
+    }
+
+    #[allow(dead_code)]
+    #[golem_rust::agent_client(type_name = "RawResponseAgent")]
+    trait CompleteRawResponseApi {
+        fn new(id: String) -> Self;
+
+        fn binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
+        fn optional_binary(
+            &self,
+            input: Option<UnstructuredBinary<MyMimeType>>,
+        ) -> Option<UnstructuredBinary<MyMimeType>>;
+        fn fallible_binary(
+            &self,
+            input: Result<UnstructuredBinary<MyMimeType>, String>,
+        ) -> Result<UnstructuredBinary<MyMimeType>, String>;
+        fn fallible_optional_binary(
+            &self,
+            input: Result<Option<UnstructuredBinary<MyMimeType>>, String>,
+        ) -> Result<Option<UnstructuredBinary<MyMimeType>>, String>;
+
+        fn text(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+        fn optional_text(&self, input: Option<UnstructuredText>) -> Option<UnstructuredText>;
+        fn fallible_text(
+            &self,
+            input: Result<UnstructuredText<MyLang>, String>,
+        ) -> Result<UnstructuredText<MyLang>, String>;
+        fn fallible_optional_text(
+            &self,
+            input: Result<Option<UnstructuredText>, String>,
+        ) -> Result<Option<UnstructuredText>, String>;
+    }
+
+    fn raw_leaf(ty: &SchemaType) -> &SchemaType {
+        match ty {
+            SchemaType::Option { inner, .. } => raw_leaf(inner),
+            SchemaType::Result { spec, .. } => {
+                raw_leaf(spec.ok.as_deref().expect("result ok payload"))
+            }
+            other => other,
+        }
+    }
+
+    fn assert_raw_schema_on_both_paths<T: IntoSchema + FromSchema + WireSchema>(
+        expected_leaf: &SchemaType,
+    ) {
+        use golem_rust::schema::wit::{decode_graph, direct};
+
+        let name = std::any::type_name::<T>();
+        let model = golem_rust::schema::try_into_schema_graph::<T>().unwrap();
+        assert_eq!(
+            decode_graph(&direct::schema::<T>()).unwrap(),
+            model,
+            "{name}"
+        );
+        assert_eq!(
+            <T as Schema>::get_type().get_schema_graph().unwrap(),
+            model,
+            "{name}"
+        );
+        assert!(model.defs.is_empty(), "{name}");
+        assert_eq!(raw_leaf(&model.root), expected_leaf, "{name}");
+    }
+
+    fn restrictions(all: &[&str]) -> Option<Vec<String>> {
+        (!all.is_empty()).then(|| all.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn raw_unstructured_schemas_are_identical_on_model_and_wire_paths() {
+        use golem_rust::agentic::unstructured_text_schema_type;
+        use golem_rust::agentic::{AnyLanguage, unstructured_binary_schema_type};
+
+        let binary = unstructured_binary_schema_type(restrictions(
+            <MyMimeType as golem_rust::agentic::AllowedMimeTypes>::all(),
+        ));
+        assert_eq!(
+            binary.metadata().role,
+            Some(golem_rust::schema::Role::UnstructuredBinary)
+        );
+        assert_raw_schema_on_both_paths::<UnstructuredBinary<MyMimeType>>(&binary);
+        assert_raw_schema_on_both_paths::<Option<UnstructuredBinary<MyMimeType>>>(&binary);
+        assert_raw_schema_on_both_paths::<Result<UnstructuredBinary<MyMimeType>, String>>(&binary);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredBinary<MyMimeType>>, String>>(
+            &binary,
+        );
+
+        let any_binary = unstructured_binary_schema_type(None);
+        assert_raw_schema_on_both_paths::<UnstructuredBinary<String>>(&any_binary);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredBinary<String>>, String>>(
+            &any_binary,
+        );
+
+        let text = unstructured_text_schema_type(restrictions(
+            <MyLang as golem_rust::agentic::AllowedLanguages>::all(),
+        ));
+        assert_eq!(
+            text.metadata().role,
+            Some(golem_rust::schema::Role::UnstructuredText)
+        );
+        assert_raw_schema_on_both_paths::<UnstructuredText<MyLang>>(&text);
+        assert_raw_schema_on_both_paths::<Option<UnstructuredText<MyLang>>>(&text);
+        assert_raw_schema_on_both_paths::<Result<UnstructuredText<MyLang>, String>>(&text);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredText<MyLang>>, String>>(&text);
+
+        let any_text = unstructured_text_schema_type(None);
+        assert_raw_schema_on_both_paths::<UnstructuredText<AnyLanguage>>(&any_text);
+        assert_raw_schema_on_both_paths::<Option<UnstructuredText>>(&any_text);
+        assert_raw_schema_on_both_paths::<Result<Option<UnstructuredText>, String>>(&any_text);
+    }
+
+    #[test]
+    fn raw_unstructured_agent_definition_schemas_match_agent_client_schemas() {
+        use golem_rust::golem_agentic::golem::agent::common::{InputSchema, OutputSchema};
+        use golem_rust::schema::wit::GraphDecoder;
+
+        fn model_root<T: IntoSchema>() -> SchemaType {
+            golem_rust::schema::try_into_schema_graph::<T>()
+                .unwrap()
+                .root
+        }
+
+        let expected = [
+            ("binary", model_root::<UnstructuredBinary<MyMimeType>>()),
+            (
+                "optional_binary",
+                model_root::<Option<UnstructuredBinary<MyMimeType>>>(),
+            ),
+            (
+                "fallible_binary",
+                model_root::<Result<UnstructuredBinary<MyMimeType>, String>>(),
+            ),
+            (
+                "fallible_optional_binary",
+                model_root::<Result<Option<UnstructuredBinary<MyMimeType>>, String>>(),
+            ),
+            ("text", model_root::<UnstructuredText<MyLang>>()),
+            ("optional_text", model_root::<Option<UnstructuredText>>()),
+            (
+                "fallible_text",
+                model_root::<Result<UnstructuredText<MyLang>, String>>(),
+            ),
+            (
+                "fallible_optional_text",
+                model_root::<Result<Option<UnstructuredText>, String>>(),
+            ),
+        ];
+
+        let descriptor = golem_rust::agentic::get_agent_type_by_name(&AgentTypeName(
+            "RawResponseAgent".to_string(),
+        ))
+        .expect("RawResponseAgent is registered");
+        let decoder = GraphDecoder::new(&descriptor.schema).unwrap();
+        for (name, root) in expected {
+            let method = descriptor
+                .methods
+                .iter()
+                .find(|method| method.name == name)
+                .unwrap_or_else(|| panic!("missing method {name}"));
+            let OutputSchema::Single(output) = method.output_schema else {
+                panic!("{name} must have a single output");
+            };
+            assert_eq!(
+                decoder.decode_type_at(output).unwrap(),
+                root,
+                "{name} output"
+            );
+            let InputSchema::Parameters(fields) = &method.input_schema;
+            assert_eq!(fields.len(), 1, "{name} input");
+            assert_eq!(
+                decoder.decode_type_at(fields[0].schema).unwrap(),
+                root,
+                "{name} input"
+            );
+        }
+
+        RawResponseApiClient::client_definition()
+            .expect("method-only agent_client accepts raw unstructured types");
+    }
+
+    fn assert_raw_value_on_both_paths<T>(value: T)
+    where
+        T: IntoSchema + FromSchema + IntoWire + FromWire + WireSchema,
+    {
+        use golem_rust::schema::wit::direct;
+
+        let name = std::any::type_name::<T>();
+        let model = value.to_value();
+        golem_rust::SchemaRef::new(golem_rust::schema::try_into_schema_graph::<T>().unwrap())
+            .validate_value(&model)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+
+        assert_eq!(
+            golem_rust::decode_schema_value(direct::encode(&value).unwrap()).unwrap(),
+            model,
+            "{name}"
+        );
+        assert_eq!(
+            direct::decode::<T>(golem_rust::encode_schema_value(&model).unwrap())
+                .unwrap()
+                .to_value(),
+            model,
+            "{name}"
+        );
+        assert_eq!(T::from_value(&model).unwrap().to_value(), model, "{name}");
+        assert_eq!(
+            direct::decode::<T>(direct::encode(&value).unwrap())
+                .unwrap()
+                .to_value(),
+            model,
+            "{name}"
+        );
+        assert_eq!(
+            <T as Schema>::from_schema_value(model.clone(), T::get_type())
+                .unwrap()
+                .to_value(),
+            model,
+            "{name}"
+        );
+    }
+
+    #[test]
+    fn raw_unstructured_values_round_trip_on_model_and_wire_paths() {
+        use golem_rust::agentic::AnyLanguage;
+
+        let png = || UnstructuredBinary::from_inline(vec![0, 255, 7], MyMimeType::PngImage);
+        let binary_url = || UnstructuredBinary::<MyMimeType>::from_url("https://example.com/b");
+        assert_raw_value_on_both_paths(png());
+        assert_raw_value_on_both_paths(binary_url());
+        assert_raw_value_on_both_paths(Some(png()));
+        assert_raw_value_on_both_paths(Some(binary_url()));
+        assert_raw_value_on_both_paths(None::<UnstructuredBinary<MyMimeType>>);
+        assert_raw_value_on_both_paths(Ok::<_, String>(png()));
+        assert_raw_value_on_both_paths(Ok::<_, String>(binary_url()));
+        assert_raw_value_on_both_paths(Err::<UnstructuredBinary<MyMimeType>, _>(
+            "boom".to_string(),
+        ));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(png())));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(binary_url())));
+        assert_raw_value_on_both_paths(Ok::<_, String>(None::<UnstructuredBinary<MyMimeType>>));
+        assert_raw_value_on_both_paths(Err::<Option<UnstructuredBinary<MyMimeType>>, _>(
+            "boom".to_string(),
+        ));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(UnstructuredBinary::from_inline(
+            vec![1],
+            "application/x-test".to_string(),
+        ))));
+
+        let german = || UnstructuredText::from_inline("Grüße", MyLang::German);
+        let text_url = || UnstructuredText::<MyLang>::Url("https://example.com/t".to_string());
+        assert_raw_value_on_both_paths(german());
+        assert_raw_value_on_both_paths(text_url());
+        assert_raw_value_on_both_paths(Some(german()));
+        assert_raw_value_on_both_paths(None::<UnstructuredText<MyLang>>);
+        assert_raw_value_on_both_paths(Ok::<_, String>(german()));
+        assert_raw_value_on_both_paths(Err::<UnstructuredText<MyLang>, _>("boom".to_string()));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(text_url())));
+        assert_raw_value_on_both_paths(Ok::<_, String>(None::<UnstructuredText<MyLang>>));
+        assert_raw_value_on_both_paths(Ok::<_, String>(Some(UnstructuredText::from_inline_any(
+            "no language",
+        ))));
+        assert_raw_value_on_both_paths(Some(UnstructuredText::from_inline(
+            "bonjour",
+            AnyLanguage::new("fr"),
+        )));
+        assert_raw_value_on_both_paths(Err::<Option<UnstructuredText>, _>("boom".to_string()));
+    }
+
+    #[test]
+    fn raw_unstructured_model_decoding_matches_wire_restrictions() {
+        use golem_rust::schema::wit::direct;
+
+        let french = Some(UnstructuredText::from_inline(
+            "bonjour",
+            golem_rust::agentic::AnyLanguage::new("fr"),
+        ))
+        .to_value();
+        let err = Option::<UnstructuredText<MyLang>>::from_value(&french).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Language code 'fr' is not allowed")
+        );
+        assert!(
+            direct::decode::<Option<UnstructuredText<MyLang>>>(
+                golem_rust::encode_schema_value(&french).unwrap()
+            )
+            .is_err()
+        );
+
+        let json = Ok::<_, String>(UnstructuredBinary::from_inline(
+            vec![5],
+            "application/json".to_string(),
+        ))
+        .to_value();
+        let err = Result::<UnstructuredBinary<MyMimeType>, String>::from_value(&json).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'application/json' is not allowed")
+        );
+        assert!(
+            direct::decode::<Result<UnstructuredBinary<MyMimeType>, String>>(
+                golem_rust::encode_schema_value(&json).unwrap()
+            )
+            .is_err()
+        );
+
+        let without_mime = SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: Some(Box::new(SchemaValue::Binary(
+                golem_rust::schema::BinaryValuePayload {
+                    bytes: vec![41],
+                    mime_type: None,
+                },
+            ))),
+        });
+        assert!(matches!(
+            UnstructuredBinary::<MyMimeType>::from_value(&without_mime).unwrap(),
+            UnstructuredBinary::Inline { data, mime_type: MyMimeType::PlainText } if data == [41]
+        ));
+
+        for case in [0, 2] {
+            let value = SchemaValue::Variant(VariantValuePayload {
+                case,
+                payload: Some(Box::new(SchemaValue::Url {
+                    url: "https://example.com".to_string(),
+                })),
+            });
+            assert!(UnstructuredText::<MyLang>::from_value(&value).is_err());
+            assert!(UnstructuredBinary::<MyMimeType>::from_value(&value).is_err());
+        }
+        assert!(UnstructuredBinary::<MyMimeType>::from_value(&SchemaValue::Bool(true)).is_err());
+    }
+
+    async fn invoke_raw_response_agent<T: IntoSchema + FromSchema>(method: &str, value: T) -> T {
+        let mut agent = RawResponseAgentImpl;
+        let input = golem_rust::encode_schema_value(&SchemaValue::Record {
+            fields: vec![value.to_value()],
+        })
+        .unwrap();
+        let output = agent
+            .invoke(method.to_string(), input, Principal::Anonymous)
+            .await
+            .unwrap();
+        let output = golem_rust::decode_schema_value(output.value.expect("raw output")).unwrap();
+        T::from_value(&output).unwrap()
+    }
+
+    #[test]
+    async fn raw_unstructured_agent_definition_dispatch_interoperates_with_model_encoding() {
+        let png = || UnstructuredBinary::from_inline(vec![9, 8, 7], MyMimeType::PngImage);
+        let cases: Vec<Result<Option<UnstructuredBinary<MyMimeType>>, String>> = vec![
+            Ok(Some(png())),
+            Ok(Some(UnstructuredBinary::from_url(
+                "https://example.com/raw",
+            ))),
+            Ok(None),
+            Err("missing".to_string()),
+        ];
+        for value in cases {
+            let expected = value.to_value();
+            let echoed = invoke_raw_response_agent("fallible_optional_binary", value).await;
+            assert_eq!(echoed.to_value(), expected);
+        }
+
+        let echoed = invoke_raw_response_agent("binary", png()).await;
+        assert_eq!(echoed.to_value(), png().to_value());
+        let echoed = invoke_raw_response_agent("optional_binary", Some(png())).await;
+        assert_eq!(echoed.to_value(), Some(png()).to_value());
+        let echoed = invoke_raw_response_agent(
+            "fallible_binary",
+            Err::<UnstructuredBinary<MyMimeType>, _>("nope".to_string()),
+        )
+        .await;
+        assert_eq!(echoed.unwrap_err(), "nope");
+
+        let german = || UnstructuredText::from_inline("hallo", MyLang::German);
+        let echoed = invoke_raw_response_agent("text", german()).await;
+        assert_eq!(echoed.to_value(), german().to_value());
+        let echoed = invoke_raw_response_agent("fallible_text", Ok::<_, String>(german())).await;
+        assert_eq!(echoed.to_value(), Ok::<_, String>(german()).to_value());
+        let echoed = invoke_raw_response_agent("optional_text", None::<UnstructuredText>).await;
+        assert!(echoed.is_none());
+        let value = Ok::<_, String>(Some(UnstructuredText::from_inline_any("plain")));
+        let expected = value.to_value();
+        let echoed = invoke_raw_response_agent("fallible_optional_text", value).await;
+        assert_eq!(echoed.to_value(), expected);
+    }
+
     #[derive(IntoSchema, FromSchema, PartialEq, Debug, Clone)]
     enum EnumCasePayloadNames {
         Unit,

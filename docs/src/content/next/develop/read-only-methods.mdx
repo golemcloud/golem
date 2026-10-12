@@ -18,13 +18,13 @@ are promising.
 Golem enforces the most important part of that contract — but **not all of it**. It is essential to understand
 exactly what is and isn't checked.
 
-### Enforced: writes, HTTP, and RPC trap
+### Enforced: durable writes, HTTP, and RPC trap
 
 The following all go through Golem's durability layer, and a read-only method **traps immediately** on any of
 them — *before* the call runs and *before* any change is persisted. The invocation fails with a typed
 `ReadOnlyViolation` that identifies the agent method and offending host function.
 
-- writing or changing persistent state (key-value & blob storage, databases, promises, worker management, …),
+- writes through Golem's durable host APIs (key-value and blob storage, external databases, promises, agent management, …),
 - making outgoing HTTP requests,
 - calling other agents over RPC.
 
@@ -37,15 +37,16 @@ the cache. You must avoid them yourself:
 - **Mutating the agent's in-memory state** (assigning to a field). This is a plain in-memory write, not a host
   call, so there is nothing for the runtime to intercept. It does **not** trap — but it must never be done in a
   read-only method.
+- **Changing the agent's own files** (creating, writing, or deleting them). Filesystem permissions still apply, but the read-only marker does not block these operations.
 - Reading the clock / current time.
 - Using randomness.
 - Reading environment variables.
 - Remote / blob reads.
 
 <Callout type="warning">
-  The read-only guarantee enforced at runtime is precisely **"no writes, no outgoing HTTP, no RPC"**. It does
-  **not** cover in-memory state mutation or non-deterministic reads (time, randomness, environment, remote reads).
-  Those are not checked and will not trap — keeping a read-only method pure is the author's responsibility.
+  The runtime rejects durable write calls, outgoing HTTP, and RPC from read-only methods. It does
+  **not** prevent mutation of the agent's own memory or files, or reject non-deterministic reads
+  (time, randomness, environment, remote reads). Keeping a read-only method pure is the author's responsibility.
 </Callout>
 
 In exchange for honoring this contract, Golem provides:
@@ -60,7 +61,7 @@ In exchange for honoring this contract, Golem provides:
   A cache **hit** writes nothing to the oplog and does not load the agent. A cache **miss** (or a `no-cache`
   method) still runs through the queue and writes the usual `AgentInvocationStarted` / `AgentInvocationFinished`
   markers — needed for oplog visibility, fuel accounting, and idempotency-key result lookup. No durable *write*
-  entries are produced, because writes trap before they can append to the oplog.
+  entries are produced, because durable write calls trap before they can append to the oplog.
 </Callout>
 
 ## Cache policies
@@ -71,7 +72,7 @@ The cache policy is part of the read-only marker — non-read-only methods canno
 |---|---|
 | `until-write` (default) | The cached result is valid until the next non-read-only invocation on the same agent invalidates it. |
 | `ttl(d)` | The cached result expires after duration `d`, even if no write happened in the meantime. |
-| `no-cache` | The method runs every time. It is still side-effect-free, but its result is never cached. |
+| `no-cache` | The method runs every time without caching; the read-only contract still applies. |
 
 After a successful non-read-only invocation commits its completion marker, Golem invalidates cached read-only
 results for that agent. While a mutation is queued or running, readers can still receive the previous cached
@@ -107,11 +108,12 @@ but which still break the contract and must be avoided by you.
 
 | Allowed | Not allowed — **traps** with `ReadOnlyViolation` | Not allowed — **not checked**, your responsibility |
 |---|---|---|
-| Reading the agent's state fields | Writing persistent state (storage, databases, …) | Mutating in-memory state (assigning to a field) |
+| Reading the agent's state fields | Writing through durable host APIs (storage, external databases, …) | Mutating in-memory state (assigning to a field) |
 | Computation over the method inputs | Outgoing HTTP requests | Reading the clock / current time |
 | Returning derived/aggregated values | RPC calls to other agents | Randomness |
 | | | Reading environment variables |
 | | | Remote / blob reads |
+| | | Creating, writing, or deleting the agent's own files |
 
 Everything in the middle column traps *before* it runs. Everything in the right column runs silently — it will
 **not** trap, but it corrupts the cache, so you must avoid it yourself. If you need any of these operations, use a

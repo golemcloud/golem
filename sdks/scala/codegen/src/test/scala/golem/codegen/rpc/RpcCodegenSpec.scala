@@ -311,6 +311,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     assertEquals(RpcCodegen.unwrapFutureType("Unit"), "Unit")
     assertEquals(RpcCodegen.unwrapFutureType("Option[String]"), "Option[String]")
     assertEquals(RpcCodegen.unwrapFutureType("Future[(Int, String)]"), "(Int, String)")
+    assertEquals(
+      RpcCodegen.unwrapFutureType("""Future[Either[String, Option[UnstructuredBinary["image/png" | "image/jpeg"]]]]"""),
+      """Either[String, Option[UnstructuredBinary["image/png" | "image/jpeg"]]]"""
+    )
   }
 
   test("generated method classes extend AbstractRemoteMethod and delegate via helpers") {

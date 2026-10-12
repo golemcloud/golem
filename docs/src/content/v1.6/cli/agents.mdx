@@ -1,0 +1,301 @@
+import { Callout } from "nextra/components"
+
+# Golem CLI Agents
+
+Using `golem agent` command you can:
+
+- Start and stop agent
+- Interrupt and resume agents
+- Invoke agent function
+- Get agent stdout, stderr and logs
+- Update agents
+- Search agents, get metadata, etc.
+- Revert a agent to a previous state
+
+## Create a new agent
+
+Even though agents can automatically start on the first invocation, it is possible to explicitly start an agent.
+This allows specifying environment variables (`--env`) and configuration values (`--config`) for the agent.
+
+```shell copy
+golem agent new 'CounterAgent("my-counter")' --env A=1 --env B=2
+```
+
+## Get agent metadata
+
+### Using the agent ID
+
+You can get the agent metadata using the agent-id (the agent type and it's constructor parameters), optionally prefixed by the environment name (`<ENVIRONMENT>/`, `<APPLICATION>/<ENVIRONMENT>/` or `<ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/`) if it is not inferrable from the current context:
+
+```shell copy
+golem agent get 'CounterAgent("my-counter")'
+golem agent get 'staging/CounterAgent("my-counter")'
+```
+
+## Search agents
+
+You can search for agents of some components or agent types using the `agent list` command with one or more `--filter` arguments.
+
+For instance lets find idle agents with component revision older than 2 of the component `example:counter`:
+
+```shell copy
+golem agent list --filter "status = Idle" --filter "revision < 2" --component-name example:counter
+```
+
+<Callout type="warning">
+  Enumerating agents is a slow operation and should only be used for debugging an administrative
+  tasks.
+</Callout>
+
+## Invoking agent methods
+
+The folowing section shows the basics of invoking agents through the CLI. See the [dedicated invocation with CLI page](/v1.6/invoke/cli) for more details.
+
+### Without waiting for result
+
+You can invoke an agent function without waiting for function result using `agent invoke --trigger` command:
+
+```shell copy
+golem agent invoke --trigger 'CounterAgent("my-counter")' add 5
+```
+
+### Waiting for result
+
+You can invoke an agent method and wait for result using `agent invoke` command:
+
+```shell copy
+golem agent invoke 'CounterAgent("my-counter")' value
+```
+
+```
+Invocation result in TypeScript syntax:
+5
+```
+
+The result is rendered using the source-language syntax of the agent.
+
+### Using idempotency key
+
+If you want to make sure function was called only once even if you called CLI multiple times (for instance due to retries on network errors) you can use the `--idempotency-key` parameter of the `invoke` command, both with and without `--trigger`.
+
+You can use any string as idempotency key.
+
+## Live streaming agent logs
+
+You can connect to your running agent and stream its logs using the `agent stream` command:
+
+```shell copy
+golem agent stream 'CounterAgent("my-counter")'
+```
+
+By default, the `invoke` command streams the agent's output. Use the `--no-stream` option to disable this.
+
+## Agent update
+
+To update the agent to a specific component revision, use the `agent update` command:
+
+```shell copy
+golem agent update 'CounterAgent("my-counter")' auto 2
+```
+
+## Interrupt and resume agents
+
+If you want to interrupt and later resume a long-running agent you can use `interrupt` and `resume` commands:
+
+```shell copy
+golem agent interrupt 'CounterAgent("my-counter")'
+golem agent resume 'CounterAgent("my-counter")'
+```
+
+## Testing crash recovery
+
+There is a special command to simulate a crash on an agent:
+
+```shell copy
+golem agent simulate-crash 'CounterAgent("my-counter")'
+```
+
+## Deleting agents
+
+Idle agents are not actively consuming resources but they take storage as their state is persisted. An agent can be deleted using the `agent delete` command:
+
+```shell copy
+golem agent delete 'CounterAgent("my-counter")'
+```
+
+This command deletes agent state.
+
+Please note that a next invocation to the same agent will recreate it with fresh state:
+
+```shell
+golem agent delete 'CounterAgent("my-counter")'
+golem agent invoke 'CounterAgent("my-counter")' value
+```
+
+```
+Invocation result in TypeScript syntax:
+0
+```
+
+## Oplog query
+
+It is possible to **query** an existing agent's oplog for debugging purposes. To get the **full oplog** of an agent, use the `agent oplog` command:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")'
+```
+
+With the optional `--from` parameter it is possible to only get oplog entries _after_ a certain oplog index:
+
+```shell copy
+golem agent oplog --from 100 'CounterAgent("my-counter")'
+```
+
+Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the agent.
+
+### Searching for oplog entries
+
+The same command can also be used to **search** for oplog entries, using the `--query` parameter. This parameter requires a query using **lucene query syntax**. The following syntax elements are supported:
+
+- `search terms` looks for `search` AND `terms`
+- `AND`, `OR` and `NOT`
+- grouping using parentheses `()`
+- `"quoted terms"`
+- regular expression matches using `/regex/`
+- `field:value` to search for a specific information
+
+The terms and fields are interpreted in the following way:
+
+| Oplog entry                                                  | Matching queries                                                                                                                                              |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Create`                                                     | `create`                                                                                                                                                      |
+| `Start` (durable host call started)                          | `start`, `imported-function`, match on the host function's name, match on request value(\*)                                                                   |
+| `End` (durable host call finished)                           | `end`, match on response value(\*)                                                                                                                            |
+| `Cancelled`                                                  | `cancelled`, match on partial value(\*)                                                                                                                       |
+| `CompletionDiscarded` / `CompletionDelivered`                | `completion-discarded` / `completion-delivered`                                                                                                               |
+| `AgentInvocationStarted`                                     | `agent-invocation-started`, `invoke`, and depending on the invocation kind: `agent-initialization`, `agent-method-invocation`, `external-tool`, `save-snapshot`, `load-snapshot`, `process-oplog-entries`; match on method or tool name, match on idempotency key, match on target revision (manual updates) |
+| `AgentInvocationFinished`                                    | `agent-invocation-finished`, `invoke`, match on consumed fuel                                                                                                 |
+| `PendingAgentInvocation`                                     | `pending-agent-invocation`, `invoke`, and the same invocation kind terms and matches as `AgentInvocationStarted` (pending external tool calls are not matched on idempotency key) |
+| `Suspend`                                                    | `suspend`                                                                                                                                                     |
+| `Error`                                                      | `error`, match on error message                                                                                                                               |
+| `RecoverySucceeded`                                          | `recovery-succeeded`                                                                                                                                          |
+| `NoOp`                                                       | `noop`                                                                                                                                                        |
+| `Jump`                                                       | `jump`                                                                                                                                                        |
+| `Interrupted`                                                | `interrupted`                                                                                                                                                 |
+| `Exited`                                                     | `exited`                                                                                                                                                      |
+| `BeginAtomicRegion`                                          | `begin-atomic-region`                                                                                                                                         |
+| `EndAtomicRegion`                                            | `end-atomic-region`                                                                                                                                           |
+| `PendingUpdate`                                              | `pending-update`, `update`, match on target revision                                                                                                          |
+| `SuccessfulUpdate`                                           | `successful-update`, `update`, match on target revision                                                                                                       |
+| `FailedUpdate`                                               | `failed-update`, `update`, match on target revision, match on error details                                                                                   |
+| `GrowMemory`                                                 | `grow-memory`                                                                                                                                                 |
+| `CreateResource`                                             | `create-resource`                                                                                                                                             |
+| `DropResource`                                               | `drop-resource`                                                                                                                                               |
+| `Log`                                                        | `log`, match on context, match on message                                                                                                                     |
+| `Restart`                                                    | `restart`                                                                                                                                                     |
+| `Resumed`                                                    | `resumed`                                                                                                                                                     |
+| `ActivatePlugin`                                             | `activate-plugin`                                                                                                                                             |
+| `DeactivatePlugin`                                           | `deactivate-plugin`                                                                                                                                           |
+| `Revert`                                                     | `revert`                                                                                                                                                      |
+| `CancelPendingInvocation`                                    | `cancel`, `cancel-invocation`, match on idempotency key                                                                                                       |
+| `StartSpan`                                                  | `start-span`, `startspan`, match on span ID, match on parent ID, match on linked context, match on attributes(\*)                                             |
+| `FinishSpan`                                                 | `finish-span`, `finishspan`, match on span ID                                                                                                                 |
+| `SetSpanAttribute`                                           | `set-span-attribute`, `setspanattribute`, match on key, match on value(\*)                                                                                    |
+| `SetRetryPolicy` / `RemoveRetryPolicy`                       | `set-retry-policy` / `remove-retry-policy`                                                                                                                    |
+| `Snapshot`                                                   | `snapshot`                                                                                                                                                    |
+| `OplogProcessorCheckpoint`                                   | `oplog-processor-checkpoint`                                                                                                                                  |
+| `BeginRemoteTransaction`, `CommittedRemoteTransaction`, etc. | `begin-remote-transaction`, `pre-commit-remote-transaction`, `pre-rollback-remote-transaction`, `committed-remote-transaction`, `rolled-back-remote-transaction` |
+| Card entries                                                 | `card-installed`, `card-install-failed`, `card-derived`, `card-revoked`, `card-revoked-cascade`, `card-expired`, `card-event-queued`, `card-transfer-started`, `card-transferred`, `card-transfer-confirmed`; match on card ID or transfer ID |
+| Stream entries                                               | `host-stream-frame`, `stream-registered`, `stream-items`, `stream-end`, `stream-cancel`, `stream-session`                                                     |
+
+Search terms are case-insensitive substring matches, so for example `start` also matches `agent-invocation-started` and `start-span` entries; combine terms with `AND` / `NOT` to narrow the results. Most entry kinds can also be matched by their name without dashes (for example `beginatomicregion`), except `CancelPendingInvocation`.
+
+The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured values. For `Start`, `End` and `Cancelled` entries the field path starts with `request`, `response` or `partial` and continues with record field names, for example `request.product-id:123`. For span attributes, the field path is the attribute key, for example `http.method:GET`.
+
+For example to look for **durable host calls** whose request value is a **record** having a field `product-id` with either value `123` or `456`, we can use the following query:
+
+```shell
+golem agent oplog --query 'start AND (request.product-id:123 OR request.product-id:456)' 'CounterAgent("my-counter")'
+```
+
+## Reverting an agent
+
+It is possible to revert an agent to its previous state. This can be useful if an agent got into a **failed** state to make it usable again, or to undo some accidental invocations or updates.
+
+There are two possible ways to specify which state to revert to:
+
+- **By index**: The index of the oplog entry to revert to. Use the **oplog query** command to check the agent's oplog and find the index of the desired state.
+- **By undoing the last invocations**: The given number is the number of invocations to revert.
+
+To revert to a given oplog, use the `agent revert` command:
+
+```shell copy
+golem agent revert 'CounterAgent("my-counter")' --last-oplog-index 42
+```
+
+To revert some of the last invocations, use the `--number-of-invocations` parameter instead:
+
+```shell copy
+golem agent revert 'CounterAgent("my-counter")' --number-of-invocations 3
+```
+
+## Cancelling a pending invocation
+
+If an invocation is enqueued for an agent, but it has not been started yet, it can be removed from the invocation queue by using it's idempotency key:
+
+```shell copy
+golem agent cancel-invocation 'CounterAgent("my-counter")' my-key
+```
+
+## Shell access: `golem ssh`
+
+When the built-in bash tool is bound to an agent, `golem ssh` opens a command prompt on that agent. Each command you type is one call of the tool's `run` operation, the same call `golem tool invoke --agent <AGENT> bash -- run` makes:
+
+```shell copy
+golem ssh 'MyAgent("m1")'
+```
+
+The prompt's first line is a row of blocks in purple and grey, a cell apart: `ssh` with a dot for what the agent is doing, the agent's type and name (its constructor arguments), the directory the last command ended in and, inside a git repository when the git tool is bound to the agent, the branch. The directory and the branch are the agent's to name, so a character in them that would act on your terminal is spelled out: an escape character shows as `^[`. The dot is green when the agent is idle, yellow when something is running or waiting on it, so your command will queue, and red when the agent has failed or exited; a hollow dot means the status could not be read. The dot is read when the prompt is drawn and does not change while you type. A terminal with only 16 colours shows the slabs in its own magenta and grey. The row sits on a dark band, from edge to edge, which sets the session's prompts apart from the shell you started it in; set `GOLEM_SSH_BACKGROUND=0` to drop the band. The band has the same colour on every terminal: `golem ssh` does not ask your terminal for its colours and does not change them. At the right edge the prompt shows the last exit status, when it was not zero, the number of commands waiting on the agent, when there are any, and how long the last command took. In a window too narrow for both, the row keeps the line and the colour of `❯` alone shows a failure. You type on the line below, after `❯`. Each command in the scrollback keeps these blocks, so you can see the directory it ran in. When colours are off, for example with `NO_COLOR` set, the prompt is one line of plain text. Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line being typed.
+
+The prompt edits like a shell:
+
+- **Unfinished input continues.** An open quote, a here-document, a trailing `|`, `&&`, `||` or `\`, or an unclosed `if`, loop, `case`, `{` or `(` continues on a new line marked `┃`, or `·` without colours. Ctrl+C discards it. `golem ssh` recognises these itself and sends anything it is not sure about as typed, so bash reports the error.
+- **Tab completes** command names, including the tools bound to the agent, and paths on the agent. A completed path can be completed further, also where its name had to be escaped, as in `my\ dir/`. With colours on, the list says what each entry is: a keyword, a command, a tool, a directory or a file. To learn the command names, `golem ssh` runs one short command on the agent when the session opens, and a completion that is not already known runs another; these appear among the agent's invocations. So does the short command that reads the git branch. It runs only in a session with colours, and only after a command that changed the directory or ran `git`, so a script that switches the branch some other way is not noticed until then. If the agent does not answer within about three seconds, Tab offers nothing, and it stays quiet until a command has come back.
+- **History is kept per agent** across sessions, in `ssh-history/` under the CLI's configuration directory, readable only by you. Up and Down recall, Ctrl+R searches, and a suggestion from history appears as you type. A line that starts with a space is not saved.
+- **Typed text is coloured.** A command name turns red when the agent does not know it.
+
+While a command runs, a line shows a small animation, how long the command has been running and how to stop waiting for it. A narrow window gets a shorter line, and one under 24 columns none. The animation is drawn with runes; set `GOLEM_SSH_RUNES=0` if your terminal's fonts have none and it shows boxes, and a plain shape takes their place. Without colours, for example with `NO_COLOR` set, the line does not move: it says that the command is running and how to stop waiting. The command's output appears when it finishes, with standard error dimmed.
+
+At a terminal, `golem ssh` answers two words itself: `help` explains the session, and `tools` lists the tools bound to the agent. `help NAME` still asks bash, and `builtin help` or `command tools` reach bash's own. With piped input both words go to bash like any other command.
+
+When an AI coding agent runs `golem ssh` at a terminal, the session is plain: a one-line prompt, lines read as the terminal hands them over, no colours, no line while a command runs, and no question to the terminal. Nothing is completed or recalled, so no helper command runs on the agent either. `golem ssh` recognises the agent from its environment, as the rest of the CLI does. Set `GOLEM_CLI_AGENT_HINTS=1` to get the plain session anywhere, or `GOLEM_CLI_AGENT_HINTS=0` to get the full one in an agent's terminal.
+
+<Callout type="info">
+Every command runs in a fresh shell. Only the directory a command ends in carries over to the next one; variables, functions, aliases, shell options and `$?` do not. Write anything that must last to the agent's files, for example a file you `source`.
+</Callout>
+
+A tool bound to the agent is not a program the shell starts, so it does not inherit the shell's directory by itself. A tool that declares an option for it does start where the session is: after `cd repo`, `git status` reports on `repo`. A tool that does not declare one starts from its own default, whatever directory the session is in.
+
+Waiting at the prompt holds nothing open on the agent, so its other methods and tools keep running. If the directory the session is in is removed, the next command is refused before it runs, and the session says so and continues from the directory it started in. A session at a prompt ends with the status of its last command, or with `N` after `exit N`.
+
+To run one script and exit with its status, pass `-c`. Standard output and standard error carry exactly what the script wrote:
+
+```shell copy
+golem ssh 'MyAgent("m1")' -c 'ls -l /data'
+```
+
+Exit status 255 means the script did not run: the agent or the binding was not found, access was denied, the tool refused the call, the call failed, or `golem ssh` could not start at all, for example with a profile that does not exist. A script that exits with 255 itself is reported the same way, so check standard error to tell them apart. A mistake in the options exits with 2, as for every `golem` command.
+
+When standard input is not a terminal, `golem ssh` reads commands from it and shows no prompt. A command is as many lines as bash needs for it: an `if`, a loop or a here-document that spans lines runs as one command, and blank lines and comment lines run nothing. Each command still has a fresh shell of its own, so `exit` inside a command, as in `cd build || exit 1`, ends that shell and the commands after it still run. Only a command that is just `exit` or `exit N` ends the session. The session exits with the status of its last command, or with `N`. It stops with status 255, without running the rest, when the directory it is in is refused, since the remaining commands were written for that directory, or when the input cannot be read, for example at a line that is not valid UTF-8. When a command's output cannot be written, for example to a full disk, the session says so on standard error, runs the remaining commands, and exits with 1 instead of 0.
+
+The tool returns the script's output as text: bytes that are not valid UTF-8 are replaced with `�`, so use `golem ssh` for text and move binary files through the agent's file system instead.
+
+Other options:
+
+- `--cwd DIR` starts in `DIR` instead of the agent's starting directory.
+- `--timeout SECONDS` stops any command still running after that many seconds.
+- `--tool NAME` uses another binding whose `run` operation matches bash's; the default is `bash`.
+
+Pressing Ctrl+C while a command runs stops waiting for it. `golem ssh` asks Golem to cancel the call: a call that was still queued is cancelled, but Golem cannot stop one that has started, so that command keeps running on the agent until it finishes or reaches its time limit, and your next command waits behind it. `golem ssh` prints the `golem tool invoke --lookup` command that fetches its result later. If the command had in fact finished by the time you pressed the key, `golem ssh` says so and shows its result. At the prompt the session continues and shows status 130; with `-c` or piped input, `golem ssh` exits with status 130.
+
+If the connection fails before a result arrives, the command may or may not have run, so `golem ssh` prints the same lookup command and ends the session with status 255 instead of continuing from a directory it no longer knows. When the agent itself has failed, it says that instead: a failed agent runs no commands until it is recovered or made again.
