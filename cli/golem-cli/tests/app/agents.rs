@@ -787,6 +787,22 @@ async fn test_streaming_invocation_cli_end_to_end() {
     );
     assert!(sibling_error.stdout_text().contains("$[1]: 63"));
 
+    let sibling_error_closed_stderr_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let sibling_error_closed_stderr = ctx
+        .cli_with_broken_stderr([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &sibling_error_closed_stderr_agent,
+            "produce_sibling_error",
+            "--no-stream",
+        ])
+        .await;
+    let exit_code = sibling_error_closed_stderr.exit_code();
+    assert!(
+        exit_code.is_some_and(|code| code != 0),
+        "a failed invocation with a closed stderr must end with its own non-zero exit code, got {exit_code:?}"
+    );
+
     let broken_pipe_agent = streaming_agent(&Uuid::new_v4().to_string());
     let broken_pipe = ctx
         .cli_with_broken_stdout([

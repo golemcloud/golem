@@ -18,6 +18,7 @@ use crate::command_handler::agent::parse_method_argument_schema_value;
 use crate::command_handler::log::render_command_output_document;
 use crate::context::Context;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
+use crate::log::eprint_line;
 use crate::model::agent::invocation_session::{
     AgentInvocationSessionEvent, AgentInvocationSessionEventKind,
 };
@@ -460,8 +461,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         stdin_format == InvocationStdinFormat::Value && !std::io::stdin().is_terminal();
     let has_input = input_binding.is_some();
     if resuming_from_checkpoint && has_input {
-        eprintln!(
-            "Resumed stdin starts after the server's durable input high-water; stdin bytes lost when the previous CLI process exited cannot be recovered."
+        eprint_line(
+            "Resumed stdin starts after the server's durable input high-water; stdin bytes lost when the previous CLI process exited cannot be recovered.",
         );
     }
     let mut input_failure_open = has_input;
@@ -1594,7 +1595,7 @@ async fn handle_response(
                 event.error = Some(message);
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprintln!("Invocation rejected ({reason}): {message}");
+                eprint_line(format!("Invocation rejected ({reason}): {message}"));
             }
         }
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
@@ -1779,7 +1780,7 @@ async fn handle_response(
                 event.reason = reason;
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else if let Some(error) = error {
-                eprintln!("Output stream {channel} failed: {error}");
+                eprint_line(format!("Output stream {channel} failed: {error}"));
             }
         }
         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {}
@@ -1806,7 +1807,7 @@ async fn handle_response(
                 event.reason = Some(format!("{reason:?}"));
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprintln!("Stream {channel} was cancelled");
+                eprint_line(format!("Stream {channel} was cancelled"));
             }
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { reason, .. }) => {
@@ -1827,7 +1828,7 @@ async fn handle_response(
                 event.error = error;
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else if let Some(error) = error {
-                eprintln!("Invocation failed: {error}");
+                eprint_line(format!("Invocation failed: {error}"));
             }
         }
     }

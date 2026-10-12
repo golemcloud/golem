@@ -23,7 +23,7 @@ use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
-use crate::log::{LogColorize, log_action, print_text};
+use crate::log::{LogColorize, eprint_line, log_action, print_text};
 use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
@@ -499,15 +499,12 @@ impl ToolCommandHandler {
                 } else {
                     self.ctx.format()
                 };
-                eprintln!(
-                    "{}",
-                    render_command_output_document_masked(
-                        format,
-                        self.ctx.should_colorize(),
-                        self.ctx.masking_config(),
-                        view,
-                    )?
-                );
+                eprint_line(render_command_output_document_masked(
+                    format,
+                    self.ctx.should_colorize(),
+                    self.ctx.masking_config(),
+                    view,
+                )?);
                 return finish_tool_report(failed);
             }
             if report_destination == LiveReportDestination::Suppress {
