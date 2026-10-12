@@ -45,6 +45,7 @@ use uuid::Uuid;
 pub const OBSERVABILITY_DB_FILE_NAME: &str = "observability.db";
 const SCHEMA_VERSION: i64 = 2;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+const RETENTION_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const RETENTION_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const RETENTION_BYTES: u64 = 1024 * 1024 * 1024;
 const DEFAULT_FAMILY_LIMIT: u16 = 100;
@@ -127,14 +128,24 @@ impl LocalObservability {
                 });
                 let sampler = service.clone();
                 join_set.spawn(async move {
-                    let mut interval = tokio::time::interval(SAMPLE_INTERVAL);
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    let mut sample_interval = tokio::time::interval(SAMPLE_INTERVAL);
+                    sample_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    let mut retention_interval = tokio::time::interval(RETENTION_INTERVAL);
+                    retention_interval
+                        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     loop {
-                        interval.tick().await;
-                        if let Err(error) = sampler.sample_services(&registry).await {
-                            sampler
-                                .fail(format!("service metric sampling failed: {error:#}"))
-                                .await;
+                        let result = tokio::select! {
+                            _ = sample_interval.tick() => sampler
+                                .sample_services(&registry)
+                                .await
+                                .context("service metric sampling failed"),
+                            _ = retention_interval.tick() => sampler
+                                .prune_metrics()
+                                .await
+                                .context("metric retention failed"),
+                        };
+                        if let Err(error) = result {
+                            sampler.fail(format!("{error:#}")).await;
                         }
                     }
                     #[allow(unreachable_code)]
@@ -339,10 +350,13 @@ impl LocalObservability {
             Ordering::Relaxed,
         );
         insert_points(pool, &points).await?;
-        prune(pool).await?;
         self.last_service_sample
             .store(timestamp_ns, Ordering::Relaxed);
         Ok(())
+    }
+
+    async fn prune_metrics(&self) -> anyhow::Result<()> {
+        prune(self.ready_pool().await?).await
     }
 
     pub async fn families(
@@ -1745,6 +1759,11 @@ async fn open_store(path: &Path) -> anyhow::Result<SqlitePool> {
     .execute(&pool)
     .await?;
     sqlx::query(
+        "CREATE INDEX IF NOT EXISTS metric_points_retention ON metric_points(timestamp_ns)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
         "CREATE INDEX IF NOT EXISTS metric_points_scope ON metric_points(environment_id, component_id, agent_type, agent_id)",
     )
     .execute(&pool)
@@ -1828,7 +1847,11 @@ async fn prune(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await?;
 
-    while store_allocated_bytes(pool).await? > RETENTION_BYTES {
+    if store_allocated_bytes(pool).await? <= RETENTION_BYTES {
+        return Ok(());
+    }
+
+    while store_live_bytes(pool).await? > RETENTION_BYTES {
         let deleted = sqlx::query(
             "DELETE FROM metric_points WHERE id IN (SELECT id FROM metric_points ORDER BY timestamp_ns, id LIMIT 10000)",
         )
@@ -1838,11 +1861,11 @@ async fn prune(pool: &SqlitePool) -> anyhow::Result<()> {
         if deleted == 0 {
             break;
         }
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(pool)
-            .await?;
-        sqlx::query("VACUUM").execute(pool).await?;
     }
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(pool)
+        .await?;
+    sqlx::query("VACUUM").execute(pool).await?;
     Ok(())
 }
 
@@ -1854,6 +1877,19 @@ async fn store_allocated_bytes(pool: &SqlitePool) -> anyhow::Result<u64> {
         .fetch_one(pool)
         .await?;
     Ok((page_count as u64).saturating_mul(page_size as u64))
+}
+
+async fn store_live_bytes(pool: &SqlitePool) -> anyhow::Result<u64> {
+    let page_count: i64 = sqlx::query_scalar("PRAGMA page_count")
+        .fetch_one(pool)
+        .await?;
+    let freelist_count: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+        .fetch_one(pool)
+        .await?;
+    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+        .fetch_one(pool)
+        .await?;
+    Ok((page_count.saturating_sub(freelist_count) as u64).saturating_mul(page_size as u64))
 }
 
 #[derive(Clone, Debug)]
@@ -3317,6 +3353,92 @@ mod tests {
         );
 
         drop(service);
+        pool.close().await;
+        clear_store(&db_path).await.unwrap();
+        tokio::fs::remove_dir(&test_dir).await.unwrap();
+    }
+
+    #[test]
+    async fn retention_pruning_uses_timestamp_index_and_removes_only_expired_points() {
+        assert!(RETENTION_INTERVAL > SAMPLE_INTERVAL);
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "golem-local-observability-retention-test-{}",
+            Uuid::new_v4()
+        ));
+        tokio::fs::create_dir_all(&test_dir).await.unwrap();
+        let db_path = test_dir.join(OBSERVABILITY_DB_FILE_NAME);
+        let pool = open_store(&db_path).await.unwrap();
+
+        let plan =
+            sqlx::query("EXPLAIN QUERY PLAN DELETE FROM metric_points WHERE timestamp_ns < ?")
+                .bind(0_i64)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| row.get::<String, _>("detail"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        assert!(plan.contains("metric_points_retention"), "{plan}");
+        assert!(!plan.contains("SCAN metric_points"), "{plan}");
+
+        let oldest_plan = sqlx::query(
+            "EXPLAIN QUERY PLAN SELECT id FROM metric_points ORDER BY timestamp_ns, id LIMIT 10000",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("detail"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(
+            oldest_plan.contains("metric_points_retention"),
+            "{oldest_plan}"
+        );
+        assert!(!oldest_plan.contains("TEMP B-TREE"), "{oldest_plan}");
+
+        let current = now_ns();
+        let expired = current
+            .saturating_sub(RETENTION_AGE.as_nanos() as i64)
+            .saturating_sub(1_000_000_000);
+        insert_points(
+            &pool,
+            &[
+                service_point(
+                    "retention_test",
+                    "Retention test",
+                    LocalMetricKind::Gauge,
+                    expired,
+                    1.0,
+                    "value",
+                    BTreeMap::new(),
+                ),
+                service_point(
+                    "retention_test",
+                    "Retention test",
+                    LocalMetricKind::Gauge,
+                    current,
+                    2.0,
+                    "value",
+                    BTreeMap::new(),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+        prune(&pool).await.unwrap();
+
+        let retained = sqlx::query_scalar::<_, i64>(
+            "SELECT timestamp_ns FROM metric_points ORDER BY timestamp_ns",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(retained, vec![current]);
+
         pool.close().await;
         clear_store(&db_path).await.unwrap();
         tokio::fs::remove_dir(&test_dir).await.unwrap();
