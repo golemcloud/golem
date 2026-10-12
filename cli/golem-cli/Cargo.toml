@@ -10,6 +10,9 @@ license-file = "../../LICENSE"
 autotests = false
 build = "build.rs"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 server-commands = []

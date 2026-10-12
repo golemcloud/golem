@@ -126,6 +126,29 @@ async fn assert_closed_stdout_ends_with_success(ctx: &TestContext, args: &[&str]
 }
 
 #[test]
+async fn closed_stdout_keeps_the_exit_code_of_a_failed_command(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+
+    let usage_error = ctx
+        .cli_with_broken_stdout(["--no-such-flag", cmd::NEW])
+        .await;
+    assert_eq!(
+        usage_error.exit_code(),
+        Some(2),
+        "a usage error with a closed stdout changed its exit code"
+    );
+
+    let no_manifest = ctx.cli_with_broken_stdout([cmd::BUILD]).await;
+    assert_eq!(
+        no_manifest.exit_code(),
+        Some(1),
+        "a failed command with a closed stdout changed its exit code: {}",
+        no_manifest.stderr_text()
+    );
+    assert!(!no_manifest.stderr_text().contains("panicked"));
+}
+
+#[test]
 async fn closed_stdout_ends_the_help_of_clap_with_its_exit_code(_tracing: &Tracing) {
     let ctx = TestContext::new();
     assert_closed_stdout_ends_with_success(&ctx, &["--help"]).await;

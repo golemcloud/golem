@@ -234,6 +234,49 @@ fn assert_generated_driver(output: std::process::Output, language: &str, marker:
 #[test]
 #[tag(agents_streaming)]
 #[timeout("15 minutes")]
+async fn test_agent_stream_ends_when_stdout_is_closed() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let created = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+        .await;
+    assert!(created.success_or_dump());
+
+    let stream = tokio::time::timeout(
+        Duration::from_secs(120),
+        ctx.cli_with_broken_stdout([cmd::AGENT, "stream", &agent]),
+    );
+    let producer = async {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        for round in 0..6 {
+            let logged = ctx
+                .cli([
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    &agent,
+                    "bug_golem1265",
+                    &format!("\"round {round}\""),
+                ])
+                .await;
+            assert!(logged.success_or_dump());
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+    let (stream, ()) = tokio::join!(stream, producer);
+    let stream = stream.expect("the agent stream kept running with a closed stdout");
+    assert_eq!(
+        stream.exit_code(),
+        Some(0),
+        "the agent stream with a closed stdout did not end with exit code 0: {}",
+        stream.stderr_text()
+    );
+    assert!(!stream.stderr_text().contains("panicked"));
+}
+
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
 async fn test_streaming_invocation_cli_end_to_end() {
     let ctx = streaming_invocation_context().await;
     let agent = streaming_agent(&Uuid::new_v4().to_string());
@@ -797,10 +840,11 @@ async fn test_streaming_invocation_cli_end_to_end() {
             "--no-stream",
         ])
         .await;
-    let exit_code = sibling_error_closed_stderr.exit_code();
-    assert!(
-        exit_code.is_some_and(|code| code != 0),
-        "a failed invocation with a closed stderr must end with its own non-zero exit code, got {exit_code:?}"
+    assert!(sibling_error.exit_code().is_some_and(|code| code != 0));
+    assert_eq!(
+        sibling_error_closed_stderr.exit_code(),
+        sibling_error.exit_code(),
+        "a failed invocation with a closed stderr changed its exit code"
     );
 
     let broken_pipe_agent = streaming_agent(&Uuid::new_v4().to_string());

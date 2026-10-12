@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use golem_cli::fs;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use std::path::{Path, PathBuf};

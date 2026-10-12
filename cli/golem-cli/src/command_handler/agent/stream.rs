@@ -14,6 +14,7 @@
 
 use crate::command_handler::agent::parse_worker_error;
 use crate::command_handler::agent::stream_output::AgentStreamOutput;
+use crate::log::stdout_closed;
 use crate::model::agent::AgentLogStreamOptions;
 use crate::model::format::Format;
 use anyhow::{Context, anyhow};
@@ -436,8 +437,13 @@ impl AgentConnection {
                         },
                     }
 
+                    if stdout_closed() {
+                        goal_reached.store(true, Ordering::Release);
+                    }
+
                     if goal_reached.load(Ordering::Acquire) {
-                        // Early return from the stream as the goal of observing a given idempotency key has been reached
+                        // Early return from the stream as the goal of observing a given idempotency key has been reached,
+                        // or as nobody reads the output any more
                         Err(tungstenite::error::Error::ConnectionClosed)
                     } else {
                         Ok(())

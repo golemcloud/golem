@@ -18,7 +18,7 @@ use crate::command_handler::agent::parse_method_argument_schema_value;
 use crate::command_handler::log::render_command_output_document;
 use crate::context::Context;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
-use crate::log::eprint_line;
+use crate::log::{eprint_line, is_closed_pipe};
 use crate::model::agent::invocation_session::{
     AgentInvocationSessionEvent, AgentInvocationSessionEventKind,
 };
@@ -52,7 +52,7 @@ use golem_common::schema::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, ErrorKind, IsTerminal, Read, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -2066,7 +2066,7 @@ fn render_output_job(job: OutputJob, format: Format, colorize: bool) -> anyhow::
 
 fn write_and_flush(output: &mut impl Write, bytes: &[u8]) -> anyhow::Result<()> {
     if let Err(error) = output.write_all(bytes).and_then(|()| output.flush()) {
-        if error.kind() == ErrorKind::BrokenPipe {
+        if is_closed_pipe(&error) {
             bail!(PipedExitCode(0));
         }
         return Err(error.into());
@@ -2624,6 +2624,7 @@ mod public_tests {
         PublicStreamDirection, PublicStreamMapping,
     };
     use golem_common::schema::metadata::MetadataEnvelope;
+    use std::io::ErrorKind;
     use test_r::test;
 
     fn checkpoint() -> InvocationSessionCheckpoint {
