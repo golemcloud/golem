@@ -628,7 +628,7 @@ pub mod filter {
     }
 }
 
-/// Supports trace-context propagation without recording spans or exporting them.
+/// Supports trace-context propagation for INFO-and-higher spans without recording or export.
 /// Propagated contexts are unsampled, including children of sampled parents.
 pub fn propagation_layer() -> impl Layer<Registry> + Send + Sync {
     global::set_text_map_propagator(TraceContextPropagator::new());
@@ -637,7 +637,12 @@ pub fn propagation_layer() -> impl Layer<Registry> + Send + Sync {
         .build();
     tracing_opentelemetry::layer()
         .with_tracer(provider.tracer("golem"))
-        .with_filter(tracing_subscriber::filter::filter_fn(|meta| meta.is_span()))
+        .with_filter(
+            tracing_subscriber::filter::filter_fn(|meta| {
+                meta.is_span() && *meta.level() <= tracing::Level::INFO
+            })
+            .with_max_level_hint(tracing_subscriber::filter::LevelFilter::INFO),
+        )
 }
 
 pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTracer>
@@ -983,6 +988,7 @@ pub(crate) mod test {
         use opentelemetry::propagation::TextMapPropagator;
         use opentelemetry::trace::TraceContextExt;
         use opentelemetry_sdk::propagation::TraceContextPropagator;
+        use tracing::Subscriber;
         use tracing_opentelemetry::OpenTelemetrySpanExt;
         use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
 
@@ -999,6 +1005,11 @@ pub(crate) mod test {
                 .with_filter(EnvFilter::new("off"))
                 .boxed(),
         ]);
+        assert_eq!(
+            subscriber.max_level_hint(),
+            Some(tracing_subscriber::filter::LevelFilter::INFO),
+            "propagation must not enable verbose log-facade argument evaluation"
+        );
         tracing::subscriber::with_default(subscriber, || {
             for sampled in ["00", "01"] {
                 let headers = std::collections::HashMap::from([(
