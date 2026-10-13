@@ -348,8 +348,8 @@ wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
-# The head of the branch `gol-874-marked-packs-in-index` of the fork.
-rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "50d7a040d9ac8e591f5b0a5332c4a3984cc502c7" }
+# The head of the branch `golem-rustic_core-v0.13.0` of the fork.
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "2269cbb0b2b89dc55cd4dca0172ead894b7b43fd" }
 
 [profile.dev]
 panic = "abort"
