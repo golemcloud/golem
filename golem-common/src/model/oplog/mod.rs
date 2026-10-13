@@ -158,6 +158,10 @@ impl OplogEntry {
             | OplogEntry::StreamSession {
                 entity_parent_start_index,
                 ..
+            }
+            | OplogEntry::ToolAttachmentRead {
+                entity_parent_start_index,
+                ..
             } => EntityAttribution::of_store(*entity_parent_start_index),
             OplogEntry::Create { .. }
             | OplogEntry::Start { .. }
@@ -349,7 +353,8 @@ impl OplogEntry {
             | OplogEntry::StreamItems { .. }
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
-            | OplogEntry::StreamSession { .. } => true,
+            | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentRead { .. } => true,
         }
     }
 
@@ -434,7 +439,8 @@ impl OplogEntry {
             | OplogEntry::StreamItems { .. }
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
-            | OplogEntry::StreamSession { .. } => None,
+            | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentRead { .. } => None,
         }
     }
 }
@@ -528,7 +534,8 @@ impl OplogScopeProjection {
             | OplogEntry::StreamItems { .. }
             | OplogEntry::StreamEnd { .. }
             | OplogEntry::StreamCancel { .. }
-            | OplogEntry::StreamSession { .. } => entry
+            | OplogEntry::StreamSession { .. }
+            | OplogEntry::ToolAttachmentRead { .. } => entry
                 .entity_parent_start_index()
                 .is_some_and(|parent| self.starts.contains(&parent)),
             OplogEntry::BeginRemoteTransaction {

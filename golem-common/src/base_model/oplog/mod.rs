@@ -891,6 +891,24 @@ oplog_entry! {
             payload: TypedSchemaValue,
         }
     },
+    /// A consumed tool attachment read. Metadata remains inline so reconstruction can
+    /// index read boundaries without downloading bytes. Only an original data observation
+    /// owns a payload; re-observations refer to their original observation instead.
+    /// Guest observations reserve their replay boundary despite being hint entries.
+    ToolAttachmentRead {
+        hint: true
+        wit_raw_type: "raw-tool-attachment-read-parameters"
+        wit_public_type: "tool-attachment-read-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            observation: Box<attachment::ToolAttachmentReadObservation>,
+            payload: Option<payload::OplogPayload<Vec<u8>>>,
+        }
+        public {
+            observation: TypedSchemaValue,
+            payload: Option<Vec<u8>>,
+        }
+    },
     /// Registers a durable stream before its handle can be observed.
     StreamRegistered {
         hint: true

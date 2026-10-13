@@ -248,6 +248,12 @@ impl<'a> PublicOplogAttributionResolver<'a> {
 
         let owner_start_index = match entry {
             OplogEntry::Start { .. } => Some(index),
+            OplogEntry::ToolAttachmentRead { observation, .. } => match observation.observation {
+                golem_common::base_model::durable_stream::StreamConsumerObservation::Host => None,
+                golem_common::base_model::durable_stream::StreamConsumerObservation::Guest {
+                    parent_start_index,
+                } => parent_start_index,
+            },
             OplogEntry::End { start_index, .. }
             | OplogEntry::Cancelled { start_index, .. }
             | OplogEntry::CompletionDiscarded { start_index, .. }
@@ -1513,6 +1519,30 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .into_typed_schema_value()
                         .map_err(|e| e.to_string())?,
                 }))
+            }
+            OplogEntry::ToolAttachmentRead {
+                timestamp,
+                observation,
+                payload,
+                ..
+            } => {
+                let payload = match payload {
+                    Some(payload) => Some(
+                        oplog_service
+                            .download_payload(owned_agent_id, agent_mode, payload)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                Ok(PublicOplogEntry::ToolAttachmentRead(
+                    golem_common::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                        timestamp,
+                        observation: (*observation)
+                            .into_typed_schema_value()
+                            .map_err(|error| error.to_string())?,
+                        payload,
+                    },
+                ))
             }
             OplogEntry::StreamItems {
                 timestamp, record, ..

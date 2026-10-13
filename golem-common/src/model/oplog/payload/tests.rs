@@ -55,6 +55,100 @@ mod tool_attachment {
     }
 
     #[test]
+    fn attachment_deleted_observation_missing_source_is_not_removal() {
+        let (mut history, read) = fixture();
+        history.observations.insert(index(10), read);
+        history.writes.clear();
+        let deleted = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+        history.retain_history(&deleted);
+        assert_eq!(
+            history.validate_observations(&deleted),
+            Err(ToolAttachmentHistoryError::MissingAcceptance)
+        );
+    }
+
+    #[test]
+    fn attachment_consumer_payload_ownership_and_lengths() {
+        let (mut history, mut read) = fixture();
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"12345678")),
+            Ok(())
+        );
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, None),
+            Err(ToolAttachmentHistoryError::InvalidEffect)
+        );
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"1234567")),
+            Err(ToolAttachmentHistoryError::InvalidRange)
+        );
+        read.outcome = ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(index(7)));
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"abcdefghijklm")),
+            Ok(())
+        );
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"12345678")),
+            Err(ToolAttachmentHistoryError::InvalidRange)
+        );
+        history.controls.insert(
+            index(9),
+            ToolAttachmentControlMetadata {
+                attachment: read.attachment,
+                producer_start: None,
+                transition: ToolAttachmentControl::TerminalSelected(
+                    ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+                        ByteStreamFailure::Abandoned,
+                    )),
+                ),
+                retained: true,
+            },
+        );
+        for outcome in [
+            ToolAttachmentReadOutcome::Eof {
+                terminal_index: index(9),
+            },
+            ToolAttachmentReadOutcome::Error {
+                terminal_index: index(9),
+                failure: ByteStreamFailure::Abandoned,
+            },
+        ] {
+            read.outcome = outcome;
+            assert_eq!(
+                history.validate_read_payload(index(10), &read, None),
+                Ok(())
+            );
+            assert_eq!(
+                history.validate_read_payload(index(10), &read, Some(b"")),
+                Err(ToolAttachmentHistoryError::InvalidEffect)
+            );
+        }
+        let (original_history, original) = fixture();
+        history = original_history;
+        history.observations.insert(index(10), original.clone());
+        read = original.clone();
+        read.reobserves = Some(index(10));
+        history.observations.insert(index(20), read.clone());
+        read.reobserves = Some(index(20));
+        assert_eq!(
+            history.validate_read_payload(index(30), &read, None),
+            Ok(())
+        );
+        assert_eq!(
+            history.validate_read_payload(index(30), &read, Some(b"12345678")),
+            Err(ToolAttachmentHistoryError::InvalidEffect)
+        );
+        history.observations.insert(index(30), read);
+        let deleted = DeletedRegions::from_regions([OplogRegion::from_range(10..=20)]);
+        assert_eq!(history.validate_observations(&deleted), Ok(()));
+        history.observations.insert(index(40), original);
+        assert_eq!(
+            history.validate_observations(&deleted),
+            Err(ToolAttachmentHistoryError::DuplicateObservation)
+        );
+    }
+
+    #[test]
     fn attachment_reference_validates_asymmetric_ranges() {
         let (history, mut read) = fixture();
         assert_eq!(history.validate_read(index(10), &read), Ok(()));
@@ -182,6 +276,100 @@ mod tool_attachment {
     }
 
     #[test]
+    fn attachment_rollback_replaces_input_only_when_acceptance_is_removed() {
+        let (mut history, read) = fixture();
+        history.observations.insert(index(10), read.clone());
+        let request = ToolAttachmentWriteRequest::new(read.attachment, b"second");
+        history.writes.insert(
+            index(19),
+            ToolAttachmentWriteOutcome::Accepted
+                .metadata(&request, index(18), true)
+                .unwrap(),
+        );
+        let mut replacement = read;
+        replacement.outcome =
+            ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(index(19)));
+        history.observations.insert(index(20), replacement);
+        let read_only_cut = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+        history.retain_history(&read_only_cut);
+        assert_eq!(
+            history.validate_observations(&read_only_cut),
+            Err(ToolAttachmentHistoryError::DuplicateObservation)
+        );
+        let source_cut = DeletedRegions::from_regions([OplogRegion::from_range(4..=15)]);
+        history.retain_history(&source_cut);
+        assert_eq!(history.validate_observations(&source_cut), Ok(()));
+        let inconsistent_cut = DeletedRegions::from_regions([OplogRegion::from_range(4..=7)]);
+        history.retain_history(&inconsistent_cut);
+        assert_eq!(
+            history.validate_observations(&inconsistent_cut),
+            Err(ToolAttachmentHistoryError::RemovedAcceptance)
+        );
+    }
+
+    #[test]
+    fn attachment_terminal_reobservation_requires_the_same_retained_source() {
+        for error in [false, true] {
+            let (mut history, mut read) = fixture();
+            history.controls.insert(
+                index(9),
+                ToolAttachmentControlMetadata {
+                    attachment: read.attachment,
+                    producer_start: Some(index(8)),
+                    transition: ToolAttachmentControl::TerminalSelected(
+                        ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+                            ByteStreamFailure::Abandoned,
+                        )),
+                    ),
+                    retained: true,
+                },
+            );
+            read.outcome = if error {
+                ToolAttachmentReadOutcome::Error {
+                    terminal_index: index(9),
+                    failure: ByteStreamFailure::Abandoned,
+                }
+            } else {
+                ToolAttachmentReadOutcome::Eof {
+                    terminal_index: index(9),
+                }
+            };
+            history.observations.insert(index(10), read.clone());
+            let mut replacement = read;
+            replacement.reobserves = Some(index(10));
+            history.observations.insert(index(20), replacement.clone());
+            let read_cut = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+            history.retain_history(&read_cut);
+            assert_eq!(history.validate_observations(&read_cut), Ok(()));
+            history.controls.insert(
+                index(18),
+                ToolAttachmentControlMetadata {
+                    producer_start: Some(index(17)),
+                    ..history.controls[&index(9)].clone()
+                },
+            );
+            match &mut replacement.outcome {
+                ToolAttachmentReadOutcome::Error { terminal_index, .. }
+                | ToolAttachmentReadOutcome::Eof { terminal_index } => *terminal_index = index(18),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                history.validate_read(index(20), &replacement),
+                Err(ToolAttachmentHistoryError::DifferentObservation)
+            );
+            let source_cut = DeletedRegions::from_regions([OplogRegion::from_range(8..=15)]);
+            history.retain_history(&source_cut);
+            assert_eq!(
+                history.validate_observations(&source_cut),
+                Err(ToolAttachmentHistoryError::RemovedAcceptance)
+            );
+            replacement.reobserves = None;
+            history.observations.insert(index(20), replacement);
+            assert_eq!(history.validate_observations(&source_cut), Ok(()));
+        }
+    }
+
+    #[test]
     fn attachment_fold_restores_unacknowledged_unread_bytes_only_at_crossed_boundaries() {
         let (mut history, mut read) = fixture();
         let id = read.attachment;
@@ -200,6 +388,7 @@ mod tool_attachment {
                 attachment: id,
                 producer_start: None,
                 transition: ToolAttachmentControl::TerminalSelected(cancelled.clone()),
+                retained: true,
             },
         );
         let retained = DeletedRegions::new();
@@ -263,6 +452,7 @@ mod tool_attachment {
                 attachment: id,
                 producer_start: None,
                 transition: ToolAttachmentControl::ReaderDiscarded,
+                retained: true,
             },
         );
         reconstructed
@@ -293,23 +483,31 @@ mod tool_attachment {
             ToolAttachmentControlMetadata {
                 attachment: id,
                 producer_start: Some(index(9)),
+                retained: true,
                 transition: ToolAttachmentControl::TerminalSelected(
                     ToolAttachmentTerminal::HostResourceExhausted,
                 ),
             },
         );
         read.ordinal += 1;
-        read.outcome = ToolAttachmentReadOutcome::Eof;
+        read.outcome = ToolAttachmentReadOutcome::Eof {
+            terminal_index: index(11),
+        };
         history.observations.insert(index(12), read.clone());
         let retained = DeletedRegions::new();
         assert_eq!(
             ToolAttachmentProjection::default().advance_to(index(12), &history, &retained),
             Err(ToolAttachmentHistoryError::InvalidEffect)
         );
-        read.outcome = ToolAttachmentReadOutcome::Error(ByteStreamFailure::ResourceExhausted);
+        read.outcome = ToolAttachmentReadOutcome::Error {
+            terminal_index: index(11),
+            failure: ByteStreamFailure::ResourceExhausted,
+        };
         history.observations.insert(index(12), read.clone());
         read.ordinal += 1;
-        read.outcome = ToolAttachmentReadOutcome::Eof;
+        read.outcome = ToolAttachmentReadOutcome::Eof {
+            terminal_index: index(11),
+        };
         history.observations.insert(index(13), read);
         let mut projection = ToolAttachmentProjection::default();
         projection
@@ -329,6 +527,7 @@ mod tool_attachment {
             ToolAttachmentControlMetadata {
                 attachment: id,
                 producer_start: Some(index(9)),
+                retained: true,
                 transition: ToolAttachmentControl::TerminalSelected(
                     ToolAttachmentTerminal::HostResourceExhausted,
                 ),
@@ -449,7 +648,10 @@ mod tool_attachment {
             ByteStreamFailure::ResourceExhausted,
             ByteStreamFailure::Failed("exact message".into()),
         ] {
-            read.outcome = ToolAttachmentReadOutcome::Error(failure.clone());
+            read.outcome = ToolAttachmentReadOutcome::Error {
+                terminal_index: index(9),
+                failure: failure.clone(),
+            };
             let record = ToolAttachmentRecord::Read(read.clone());
             let bytes = desert_rust::serialize_to_byte_vec(&record).unwrap();
             assert_eq!(

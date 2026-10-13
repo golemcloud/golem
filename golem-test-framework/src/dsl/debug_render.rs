@@ -612,6 +612,16 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 typed_schema_value_to_string(&params.payload)
             );
         }
+        PublicOplogEntry::ToolAttachmentRead(params) => {
+            let _ = writeln!(result, "TOOL ATTACHMENT READ");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}observation:       {}",
+                typed_schema_value_to_string(&params.observation)
+            );
+            let _ = writeln!(result, "{pad}payload:           {:?}", params.payload);
+        }
         PublicOplogEntry::StreamRegistered(params) => {
             let _ = writeln!(result, "STREAM REGISTERED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

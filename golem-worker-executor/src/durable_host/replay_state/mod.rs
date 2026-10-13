@@ -226,15 +226,78 @@ struct ToolAttachmentReconstruction {
     starts: HashMap<OplogIndex, (Option<OplogIndex>, bool)>,
     accepted: HashMap<OplogIndex, OplogIndex>,
     completed: HashSet<OplogIndex>,
+    boundaries: HashSet<OplogIndex>,
+    requests: HashMap<
+        OplogIndex,
+        golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteRequest,
+    >,
+    terminal_requests:
+        HashMap<OplogIndex, golem_common::model::oplog::attachment::ToolAttachmentId>,
+    history: golem_common::model::oplog::attachment::ToolAttachmentHistory,
+    logical_observations: HashMap<
+        (
+            golem_common::model::oplog::attachment::ToolAttachmentId,
+            IdempotencyKey,
+            u64,
+        ),
+        (OplogIndex, Option<OplogIndex>),
+    >,
 }
 
 impl ToolAttachmentReconstruction {
     fn retain(&mut self, visible: impl Fn(OplogIndex) -> bool) {
+        self.boundaries.retain(|index| visible(*index));
         self.starts.retain(|index, _| visible(*index));
         self.accepted
             .retain(|start, end| visible(*start) && visible(*end));
         self.completed
             .retain(|start| self.accepted.contains_key(start));
+        for (end, write) in &mut self.history.writes {
+            write.retained &=
+                visible(*end) && visible(write.start) && visible(write.attachment.creation_start);
+        }
+        for (index, control) in &mut self.history.controls {
+            control.retained &= visible(*index)
+                && control.producer_start.is_none_or(&visible)
+                && visible(control.attachment.creation_start);
+        }
+        self.index_logical_observations();
+    }
+
+    fn truncate(&mut self, target: OplogIndex) {
+        self.retain(|index| index <= target);
+        self.requests.retain(|index, _| *index <= target);
+        self.terminal_requests.retain(|index, _| *index <= target);
+        self.history.writes.retain(|index, _| *index <= target);
+        self.history
+            .observations
+            .retain(|index, _| *index <= target);
+        self.history.controls.retain(|index, _| *index <= target);
+        self.logical_observations
+            .retain(|_, (original, _)| *original <= target);
+    }
+
+    fn index_logical_observations(&mut self) {
+        self.logical_observations.clear();
+        for (index, read) in &self.history.observations {
+            if self.history.source_was_removed(read) {
+                continue;
+            }
+            let key = (
+                read.attachment,
+                read.logical_invocation.clone(),
+                read.ordinal,
+            );
+            if read.reobserves.is_none() {
+                self.logical_observations
+                    .insert(key.clone(), (*index, None));
+            }
+            if self.boundaries.contains(index)
+                && let Some((_, boundary)) = self.logical_observations.get_mut(&key)
+            {
+                *boundary = Some(*index);
+            }
+        }
     }
 
     fn pending_under(&self, root: OplogIndex) -> bool {

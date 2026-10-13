@@ -1195,6 +1195,7 @@ impl CursorTx<'_> {
         HeadDrainFacts {
             claimed_ahead: self.st.claimed_starts.contains(&index),
             awaited_terminal: self.is_awaited_terminal(index, entry),
+            guest_observation: self.is_stream_observation(index),
         }
     }
 
@@ -1276,17 +1277,7 @@ impl CursorTx<'_> {
     }
 
     fn is_stream_observation(&self, index: OplogIndex) -> bool {
-        self.cursor
-            .stream_observations
-            .lock()
-            .unwrap()
-            .get(&index)
-            .is_some_and(|parent| {
-                parent.is_none_or(|parent| {
-                    !self.st.skipped_regions.is_in_deleted_region(parent)
-                        && self.custom_subtree_root(parent).is_none()
-                })
-            })
+        is_active_stream_observation(self.cursor, &self.st, index)
     }
 
     /// Commits a just-read entry: apply its commit-only side effects, publish the cursor advance,
@@ -2545,6 +2536,92 @@ impl CursorTx<'_> {
 }
 
 impl ReplayState {
+    /// Finds the original logical input and its retained physical replay boundary.
+    pub(crate) fn tool_attachment_observation(
+        &self,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+        invocation: &golem_common::model::IdempotencyKey,
+        ordinal: u64,
+    ) -> Option<(OplogIndex, Option<OplogIndex>)> {
+        let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        index
+            .logical_observations
+            .get(&(attachment, invocation.clone(), ordinal))
+            .copied()
+    }
+
+    /// Resolves a validated decreasing re-observation chain and downloads only its original body.
+    pub(crate) async fn hydrate_tool_attachment_observation(
+        &self,
+        mut source: OplogIndex,
+    ) -> Result<
+        (
+            OplogIndex,
+            golem_common::model::oplog::attachment::ToolAttachmentReadObservation,
+            Option<Vec<u8>>,
+        ),
+        WorkerExecutorError,
+    > {
+        let requested_index = source;
+        let (requested_read, read) = {
+            let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+            let history = &index.history;
+            let read = history
+                .observations
+                .get(&source)
+                .ok_or_else(|| WorkerExecutorError::runtime("missing attachment observation"))?;
+            history.validate_read(source, read).map_err(|error| {
+                WorkerExecutorError::runtime(format!("invalid attachment observation: {error:?}"))
+            })?;
+            while let Some(original) = history.observations[&source].reobserves {
+                source = original;
+            }
+            (read.clone(), history.observations[&source].clone())
+        };
+        let entries = self.cursor.oplog.read_exact(source, 1).await;
+        let Some(OplogEntry::ToolAttachmentRead {
+            observation,
+            payload,
+            ..
+        }) = entries.get(&source)
+        else {
+            return Err(WorkerExecutorError::runtime(
+                "missing original attachment entry",
+            ));
+        };
+        if observation.as_ref() != &read {
+            return Err(WorkerExecutorError::runtime(
+                "changed attachment observation",
+            ));
+        }
+        let bytes = match payload {
+            Some(payload) => Some(
+                self.cursor
+                    .oplog
+                    .download_payload(payload.clone())
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+            ),
+            None => None,
+        };
+        // Re-read acceptance after the download: a Jump can remove it while hydration awaits.
+        let current = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        if current.history.observations.get(&source) != Some(&read)
+            || current.history.observations.get(&requested_index) != Some(&requested_read)
+        {
+            return Err(WorkerExecutorError::runtime(
+                "attachment observation outside replay target",
+            ));
+        }
+        current
+            .history
+            .validate_read_payload(source, &read, bytes.as_deref())
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!("invalid attachment body: {error:?}"))
+            })?;
+        Ok((source, read, bytes))
+    }
+
     /// Marks an accepted output write's regenerated arguments validated and its resident
     /// output restored. This must precede the write's acknowledgment delivery gate.
     pub fn complete_tool_attachment_reconstruction(&self, start: OplogIndex) {
@@ -2689,15 +2766,79 @@ impl ReplayState {
                 if marker_idx > to {
                     break;
                 }
-                if skipped_regions.is_in_deleted_region(marker_idx) {
+                if let OplogEntry::ToolAttachmentRead {
+                    observation,
+                    payload,
+                    ..
+                } = &entry
+                {
+                    observation
+                        .validate_payload_presence(payload.is_some())
+                        .map_err(|error| {
+                            WorkerExecutorError::runtime(format!(
+                                "invalid attachment payload at {marker_idx}: {error:?}"
+                            ))
+                        })?;
+                    attachments
+                        .history
+                        .observations
+                        .insert(marker_idx, *observation.clone());
+                }
+                if skipped_regions.is_in_deleted_region(marker_idx)
+                    && !matches!(entry, OplogEntry::Start { .. } | OplogEntry::End { .. })
+                {
                     continue;
                 }
                 let marker = match entry {
                     OplogEntry::Start {
                         function_name,
                         parent_start_index,
+                        request,
                         ..
                     } => {
+                        if function_name == HostFunctionName::GolemToolOutputWrite {
+                            let request = request.ok_or_else(|| {
+                                WorkerExecutorError::runtime("output write Start has no request")
+                            })?;
+                            let request = oplog
+                                .download_payload(request)
+                                .await
+                                .map_err(WorkerExecutorError::runtime)?;
+                            let request = golem_common::model::oplog::HostRequestToolAttachmentWrite::try_from(request)
+                                .map_err(WorkerExecutorError::runtime)?;
+                            attachments.requests.insert(marker_idx, request.request);
+                        } else if matches!(
+                            function_name,
+                            HostFunctionName::GolemToolOutputFinish
+                                | HostFunctionName::GolemToolStdinFinish
+                                | HostFunctionName::GolemToolOutputFail
+                                | HostFunctionName::GolemToolStdinFail
+                        ) {
+                            let request = request.ok_or_else(|| {
+                                WorkerExecutorError::runtime(
+                                    "attachment terminal Start has no request",
+                                )
+                            })?;
+                            let request = oplog
+                                .download_payload(request)
+                                .await
+                                .map_err(WorkerExecutorError::runtime)?;
+                            let attachment = if matches!(
+                                function_name,
+                                HostFunctionName::GolemToolOutputFail
+                                    | HostFunctionName::GolemToolStdinFail
+                            ) {
+                                golem_common::model::oplog::HostRequestToolAttachmentFail::try_from(
+                                    request,
+                                )
+                                .map_err(WorkerExecutorError::runtime)?
+                                .attachment
+                            } else {
+                                golem_common::model::oplog::HostRequestToolAttachmentEndpoint::try_from(request)
+                                    .map_err(WorkerExecutorError::runtime)?.attachment
+                            };
+                            attachments.terminal_requests.insert(marker_idx, attachment);
+                        }
                         attachments.starts.insert(
                             marker_idx,
                             (
@@ -2711,11 +2852,7 @@ impl ReplayState {
                         start_index,
                         response,
                         ..
-                    } if attachments
-                        .starts
-                        .get(&start_index)
-                        .is_some_and(|(_, output)| *output) =>
-                    {
+                    } if attachments.requests.contains_key(&start_index) => {
                         let response = response.ok_or_else(|| {
                             WorkerExecutorError::runtime(format!(
                                 "output write End at {marker_idx} has no response"
@@ -2730,6 +2867,33 @@ impl ReplayState {
                                 response,
                             )
                             .map_err(WorkerExecutorError::runtime)?;
+                        let request = attachments.requests.get(&start_index).ok_or_else(|| {
+                            WorkerExecutorError::runtime("output write End has no indexed request")
+                        })?;
+                        let metadata = response
+                            .outcome
+                            .metadata(request, start_index, true)
+                            .ok_or_else(|| {
+                                WorkerExecutorError::runtime("invalid output write outcome")
+                            })?;
+                        if request.attachment.creation_start >= start_index
+                            || start_index >= marker_idx
+                            || !request.attachment.creation_start.is_defined()
+                        {
+                            return Err(WorkerExecutorError::runtime(
+                                "invalid output write chronology",
+                            ));
+                        }
+                        attachments.history.writes.insert(marker_idx, metadata);
+                        if response.outcome == golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::HostResourceExhausted {
+                            use golem_common::model::oplog::attachment::{ToolAttachmentControlMetadata, ToolAttachmentControl, ToolAttachmentTerminal};
+                            attachments.history.controls.insert(marker_idx, ToolAttachmentControlMetadata {
+                                attachment: request.attachment,
+                                producer_start: Some(start_index),
+                                transition: ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::HostResourceExhausted),
+                                retained: true,
+                            });
+                        }
                         if matches!(response.outcome, golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::Accepted) {
                             let mut ancestor = start_index;
                             while let Some((Some(parent), _)) = attachments.starts.get(&ancestor) {
@@ -2744,11 +2908,52 @@ impl ReplayState {
                         }
                         None
                     }
+                    OplogEntry::End {
+                        start_index,
+                        response,
+                        ..
+                    } if attachments.terminal_requests.contains_key(&start_index) => {
+                        use golem_common::model::oplog::attachment::{
+                            ToolAttachmentControl, ToolAttachmentControlMetadata,
+                        };
+                        use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentTerminalOutcome;
+                        let response = response.ok_or_else(|| {
+                            WorkerExecutorError::runtime("attachment terminal End has no response")
+                        })?;
+                        let response = oplog
+                            .download_payload(response)
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let response = golem_common::model::oplog::HostResponseToolAttachmentTerminalResult::try_from(response)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        if let ToolAttachmentTerminalOutcome::Selected(terminal) = response.outcome
+                        {
+                            attachments.history.controls.insert(
+                                marker_idx,
+                                ToolAttachmentControlMetadata {
+                                    attachment: attachments.terminal_requests[&start_index],
+                                    producer_start: Some(start_index),
+                                    transition: ToolAttachmentControl::TerminalSelected(terminal),
+                                    retained: true,
+                                },
+                            );
+                        }
+                        None
+                    }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
                         Some((start_index, CompletionMarker::Delivered(marker_idx)))
                     }
                     OplogEntry::CompletionDiscarded { start_index, .. } => {
                         Some((start_index, CompletionMarker::Discarded(marker_idx)))
+                    }
+                    OplogEntry::ToolAttachmentRead { observation, .. } => {
+                        attachments.boundaries.insert(marker_idx);
+                        if let golem_common::model::durable_stream::StreamConsumerObservation::Guest {
+                            parent_start_index,
+                        } = observation.observation {
+                            stream_observations.insert(marker_idx, parent_start_index);
+                        }
+                        None
                     }
                     OplogEntry::StreamSession { record, .. } => {
                         use golem_common::model::durable_stream::{
@@ -2805,6 +3010,15 @@ impl ReplayState {
             }
             next = last_read.next();
         }
+        attachments.history.retain_history(skipped_regions);
+        attachments.retain(|index| !skipped_regions.is_in_deleted_region(index));
+        attachments
+            .history
+            .validate_observations(skipped_regions)
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!("invalid attachment history: {error:?}"))
+            })?;
+        attachments.index_logical_observations();
         Ok((markers, stream_observations))
     }
 
@@ -3273,11 +3487,20 @@ impl ReplayState {
                         tx.st.skipped_regions.add(region);
                     }
                     let skipped_regions = tx.st.skipped_regions.clone();
-                    tx.cursor
-                        .tool_attachment_reconstruction
-                        .lock()
-                        .unwrap()
-                        .retain(|index| !skipped_regions.is_in_deleted_region(index));
+                    {
+                        let mut attachments =
+                            tx.cursor.tool_attachment_reconstruction.lock().unwrap();
+                        attachments.history.retain_history(&skipped_regions);
+                        attachments
+                            .history
+                            .validate_observations(&skipped_regions)
+                            .map_err(|error| {
+                                WorkerExecutorError::runtime(format!(
+                                    "invalid attachment history after Jump: {error:?}"
+                                ))
+                            })?;
+                        attachments.retain(|index| !skipped_regions.is_in_deleted_region(index));
+                    }
                     tx.cursor
                         .stream_observations
                         .lock()
@@ -3445,7 +3668,9 @@ impl ReplayState {
                         if !included {
                             return Ok(None);
                         }
-                        if is_auto_skippable_hint(&entry) {
+                        if is_auto_skippable_hint(&entry)
+                            && !is_active_stream_observation(cursor, &st, index)
+                        {
                             return Ok(None);
                         }
                         if terminal_start_index(&entry).is_some_and(|start_index| {
@@ -3619,7 +3844,7 @@ impl ReplayState {
                         .retain(|_, marker| marker.index() <= new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
                     cursor.tool_attachment_reconstruction.lock().unwrap()
-                        .retain(|index| index <= new_target);
+                        .truncate(new_target);
                 }
                 std::cmp::Ordering::Greater => {
                     let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
@@ -3656,6 +3881,11 @@ impl ReplayState {
                     let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
                     current.starts.extend(attachments.starts);
                     current.accepted.extend(attachments.accepted);
+                    current.requests = attachments.requests;
+                    current.terminal_requests = attachments.terminal_requests;
+                    current.history = attachments.history;
+                    current.boundaries = attachments.boundaries;
+                    current.logical_observations = attachments.logical_observations;
                 }
             }
             if new_target > cursor.last_replayed_index() {
@@ -4355,6 +4585,27 @@ pub(super) fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {
     entry.is_hint() && !matches!(entry, OplogEntry::CompletionDelivered { .. })
 }
 
+fn is_active_stream_observation(
+    cursor: &ReplayCursor,
+    state: &CursorState,
+    index: OplogIndex,
+) -> bool {
+    cursor
+        .stream_observations
+        .lock()
+        .unwrap()
+        .get(&index)
+        .is_some_and(|parent| {
+            parent.is_none_or(|parent| {
+                !state.skipped_regions.is_in_deleted_region(parent)
+                    && !state
+                        .custom_subtrees
+                        .values()
+                        .any(|members| members.contains(&parent))
+            })
+        })
+}
+
 pub(super) fn scope_entry_owner(
     index: OplogIndex,
     entry: &OplogEntry,
@@ -4367,6 +4618,12 @@ pub(super) fn scope_entry_owner(
 
     match entry {
         OplogEntry::Start { .. } => Some(index),
+        OplogEntry::ToolAttachmentRead { observation, .. } => match observation.observation {
+            golem_common::model::durable_stream::StreamConsumerObservation::Guest {
+                parent_start_index,
+            } => parent_start_index,
+            golem_common::model::durable_stream::StreamConsumerObservation::Host => None,
+        },
         OplogEntry::End { start_index, .. }
         | OplogEntry::Cancelled { start_index, .. }
         | OplogEntry::CompletionDiscarded { start_index, .. }
@@ -4528,6 +4785,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
         | OplogEntry::HostStreamFrame { .. }
+        | OplogEntry::ToolAttachmentRead { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
         | OplogEntry::StreamEnd { .. }
@@ -4575,13 +4833,16 @@ pub(super) struct HeadDrainFacts {
     pub(super) claimed_ahead: bool,
     /// The entry is an `End` or `Cancelled` that a registered awaiter owns.
     pub(super) awaited_terminal: bool,
+    /// A native guest read must acknowledge this active observation before advancement.
+    pub(super) guest_observation: bool,
 }
 
 /// Whether the head path drains `entry` instead of stopping at it: a hint, a `Start` claimed
 /// ahead of the cursor, or a terminal a registered awaiter owns. A scan that passes the cursor
 /// head uses it to find the entry the head path would stop at.
 pub(super) fn is_drained_at_head(entry: &OplogEntry, facts: HeadDrainFacts) -> bool {
-    is_auto_skippable_hint(entry) || facts.claimed_ahead || facts.awaited_terminal
+    !facts.guest_observation
+        && (is_auto_skippable_hint(entry) || facts.claimed_ahead || facts.awaited_terminal)
 }
 
 /// The `parent_start_index` of a `Start` entry.

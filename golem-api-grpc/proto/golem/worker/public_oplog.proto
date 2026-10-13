@@ -83,6 +83,7 @@ message OplogEntry {
     TimestampParameter Resumed = 65;
     TimestampParameter RecoverySucceeded = 66;
     SnapshotConfirmedParameters SnapshotConfirmed = 67;
+    ToolAttachmentReadParameters ToolAttachmentRead = 68;
   }
 }
 
@@ -557,6 +558,12 @@ message HostStreamFrameParameters {
   uint64 parent_start_index = 2;
   HostStreamKind kind = 3;
   golem.schema.TypedSchemaValue payload = 4;
+}
+
+message ToolAttachmentReadParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.schema.TypedSchemaValue observation = 2;
+  optional bytes payload = 3;
 }
 
 message DurableStreamRecordParameters {

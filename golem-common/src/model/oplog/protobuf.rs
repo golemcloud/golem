@@ -96,6 +96,14 @@ use golem_api_grpc::proto::golem::worker::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 
+fn decode_attachment_observation(
+    value: &crate::schema::TypedSchemaValue,
+) -> Result<crate::base_model::oplog::attachment::ToolAttachmentReadObservation, String> {
+    use crate::schema::FromSchema as _;
+    crate::base_model::oplog::attachment::ToolAttachmentReadObservation::from_value(value.value())
+        .map_err(|error| error.to_string())
+}
+
 impl TryFrom<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
 {
@@ -1834,6 +1842,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     payload: params.payload.ok_or("Missing payload field")?.try_into()?,
                 }))
             }
+            oplog_entry::Entry::ToolAttachmentRead(params) => {
+                let observation = params
+                    .observation
+                    .ok_or("Missing observation field")?
+                    .try_into()?;
+                decode_attachment_observation(&observation)?
+                    .validate_payload_presence(params.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(PublicOplogEntry::ToolAttachmentRead(
+                    crate::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                        timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                        observation,
+                        payload: params.payload,
+                    },
+                ))
+            }
             oplog_entry::Entry::StreamRegistered(params) => {
                 Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -2552,6 +2576,17 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
                             timestamp: Some(params.timestamp.into()),
                             record: Some(params.record.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ToolAttachmentRead(
+                        golem_api_grpc::proto::golem::worker::ToolAttachmentReadParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            observation: Some(params.observation.try_into()?),
+                            payload: params.payload,
                         },
                     )),
                 }
@@ -4262,6 +4297,17 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     ).map_err(|error| error.to_string())?)),
                 })
             }
+            PublicOplogEntry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(&p.observation)?;
+                observation.validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp: p.timestamp,
+                    entity_parent_start_index: None,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(|bytes| OplogPayload::Inline(Box::new(bytes))),
+                })
+            }
             PublicOplogEntry::StreamItems(p) => {
                 use crate::schema::FromSchema as _;
                 let record = StreamItemsRecord::from_value(p.record.value())
@@ -5282,6 +5328,24 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 record: Some(oplog_payload_to_proto(record)?),
                 summary: summary.map(Into::into),
             }),
+            OplogEntry::ToolAttachmentRead {
+                observation,
+                payload,
+                ..
+            } => {
+                use crate::schema::IntoTypedSchemaValue as _;
+                Entry::ToolAttachmentRead(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentReadParameters {
+                        observation: Some(
+                            (*observation)
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                        payload: payload.map(oplog_payload_to_proto).transpose()?,
+                    },
+                )
+            }
             OplogEntry::StreamItems {
                 record, summary, ..
             } => Entry::StreamItems(RawDurableStreamRecordParameters {
@@ -5911,6 +5975,20 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
+            Entry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(
+                    &p.observation.ok_or("Missing observation")?.try_into()?,
+                )?;
+                observation
+                    .validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp,
+                    entity_parent_start_index,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(oplog_payload_from_proto).transpose()?,
+                })
+            }
             Entry::StreamItems(p) => Ok(OplogEntry::StreamItems {
                 timestamp,
                 entity_parent_start_index,

@@ -776,6 +776,23 @@ impl TextOutput for PublicOplogEntry {
                     typed_schema_value_to_string(&params.payload)
                 ));
             }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                logln(format_message_highlight("TOOL ATTACHMENT READ"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}observation:       {}",
+                    typed_schema_value_to_string(&params.observation)
+                ));
+                if let Some(payload) = &params.payload {
+                    logln(format!(
+                        "{pad}payload:           {}",
+                        BASE64_STANDARD.encode(payload)
+                    ));
+                }
+            }
             PublicOplogEntry::StreamRegistered(params) => {
                 logln(format_message_highlight("STREAM REGISTERED"));
                 logln(format!(

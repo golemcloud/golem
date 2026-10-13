@@ -3561,6 +3561,449 @@ fn consumer_observation(reader_slot: u32, guest: bool, terminal: bool) -> OplogE
     OplogEntry::stream_session(None, OplogPayload::Inline(Box::new(record)), summary)
 }
 
+fn attachment_terminal_observation(guest: bool, parent: Option<OplogIndex>) -> OplogEntry {
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentId, ToolAttachmentReadObservation, ToolAttachmentReadOutcome,
+        ToolAttachmentSlot,
+    };
+    OplogEntry::ToolAttachmentRead {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: parent,
+        observation: Box::new(ToolAttachmentReadObservation {
+            attachment: ToolAttachmentId {
+                creation_start: OplogIndex::INITIAL,
+                slot: ToolAttachmentSlot::Stdout,
+            },
+            logical_invocation: IdempotencyKey::new("attachment-observation".into()),
+            observation: if guest {
+                StreamConsumerObservation::Guest {
+                    parent_start_index: parent,
+                }
+            } else {
+                StreamConsumerObservation::Host
+            },
+            ordinal: 0,
+            outcome: ToolAttachmentReadOutcome::Eof {
+                terminal_index: OplogIndex::from_u64(3),
+            },
+            reobserves: None,
+        }),
+        payload: None,
+    }
+}
+
+fn attachment_index_fixture(payload: OplogPayload<Vec<u8>>) -> Vec<OplogEntry> {
+    use golem_common::model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentReadOutcome,
+    };
+    use golem_common::model::oplog::payload::tool_attachment::{
+        ToolAttachmentWriteOutcome, ToolAttachmentWriteRequest,
+    };
+    use golem_common::model::oplog::{
+        HostRequestToolAttachmentWrite, HostResponseToolAttachmentWrite,
+    };
+    let mut read = attachment_terminal_observation(true, None);
+    let OplogEntry::ToolAttachmentRead {
+        observation,
+        payload: body,
+        ..
+    } = &mut read
+    else {
+        unreachable!()
+    };
+    observation.outcome =
+        ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3)));
+    *body = Some(payload);
+    let request = HostRequestToolAttachmentWrite {
+        request: ToolAttachmentWriteRequest::new(observation.attachment, b"abc"),
+    };
+    let mut start = start_now_with_request_payload(OplogPayload::Inline(Box::new(request.into())));
+    let OplogEntry::Start { function_name, .. } = &mut start else {
+        unreachable!()
+    };
+    *function_name = HostFunctionName::GolemToolOutputWrite;
+    let mut end = end_for(2, 0);
+    let OplogEntry::End { response, .. } = &mut end else {
+        unreachable!()
+    };
+    *response = Some(OplogPayload::Inline(Box::new(
+        HostResponseToolAttachmentWrite {
+            outcome: ToolAttachmentWriteOutcome::Accepted,
+        }
+        .into(),
+    )));
+    vec![start_now(), start, end, read]
+}
+
+fn attachment_terminal_prefix() -> Vec<OplogEntry> {
+    use golem_common::model::oplog::attachment::{
+        ByteStreamCloseCause, ToolAttachmentId, ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentTerminalOutcome;
+    use golem_common::model::oplog::{
+        HostRequestToolAttachmentEndpoint, HostResponseToolAttachmentTerminalResult,
+    };
+    let mut start = start_now_with_request_payload(OplogPayload::Inline(Box::new(
+        HostRequestToolAttachmentEndpoint {
+            attachment: ToolAttachmentId {
+                creation_start: OplogIndex::INITIAL,
+                slot: ToolAttachmentSlot::Stdout,
+            },
+        }
+        .into(),
+    )));
+    let OplogEntry::Start { function_name, .. } = &mut start else {
+        unreachable!()
+    };
+    *function_name = HostFunctionName::GolemToolOutputFinish;
+    let mut end = end_for(2, 0);
+    let OplogEntry::End { response, .. } = &mut end else {
+        unreachable!()
+    };
+    *response = Some(OplogPayload::Inline(Box::new(
+        HostResponseToolAttachmentTerminalResult {
+            outcome: ToolAttachmentTerminalOutcome::Selected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Finished,
+            )),
+        }
+        .into(),
+    )));
+    vec![noop(), start, end]
+}
+
+#[test]
+async fn attachment_index_hydrates_external_body_only_on_demand() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let id = PayloadId::new();
+    let hash = vec![1];
+    *oplog.entries.lock().unwrap() = attachment_index_fixture(OplogPayload::External {
+        payload_id: id.clone(),
+        md5_hash: hash.clone(),
+        cached: None,
+    });
+    // The body is deliberately unavailable during indexing.
+    let replay = test_replay_state(test_agent_id(), oplog.clone(), DeletedRegions::new(), None)
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4))
+            .await
+            .is_err()
+    );
+    oplog.external_payloads.lock().await.push((
+        id,
+        hash,
+        golem_common::serialization::serialize(&b"abc".to_vec()).unwrap(),
+    ));
+    let (source, read, bytes) = replay
+        .hydrate_tool_attachment_observation(OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    assert_eq!(bytes, Some(b"abc".to_vec()));
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        Some((source, Some(source)))
+    );
+    replay
+        .register_replay_jump(vec![OplogRegion {
+            start: source,
+            end: source,
+        }])
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        Some((source, None))
+    );
+    replay
+        .register_replay_jump(vec![OplogRegion::from_range(2..=4)])
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        None
+    );
+    let reconstructed = test_replay_state(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::from_regions([OplogRegion::from_range(2..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reconstructed.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        None
+    );
+    replay
+        .set_replay_target(OplogIndex::from_u64(3))
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        None
+    );
+}
+
+#[test]
+async fn attachment_index_retains_deleted_original_for_reobservation() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+    let mut reobservation = entries[3].clone();
+    let OplogEntry::ToolAttachmentRead {
+        observation,
+        payload,
+        ..
+    } = &mut reobservation
+    else {
+        unreachable!()
+    };
+    observation.reobserves = Some(OplogIndex::from_u64(4));
+    *payload = None;
+    entries.push(reobservation);
+    *oplog.entries.lock().unwrap() = entries;
+    let replay = test_replay_state(
+        test_agent_id(),
+        oplog.clone(),
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    let (source, read, bytes) = replay
+        .hydrate_tool_attachment_observation(OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    assert_eq!(source, OplogIndex::from_u64(4));
+    assert_eq!(bytes, Some(b"abc".to_vec()));
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        Some((source, Some(OplogIndex::from_u64(5))))
+    );
+    replay
+        .set_replay_target(OplogIndex::from_u64(3))
+        .await
+        .unwrap();
+    replay
+        .set_replay_target(OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5))
+            .await
+            .is_ok()
+    );
+    assert!(
+        replay
+            .register_replay_jump(vec![OplogRegion::from_range(3..=3)])
+            .await
+            .is_err()
+    );
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5))
+            .await
+            .is_err()
+    );
+    assert!(
+        test_replay_state(
+            test_agent_id(),
+            oplog,
+            DeletedRegions::from_regions([OplogRegion::from_range(3..=4)]),
+            None
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[test]
+async fn attachment_terminal_index_preserves_source_across_target_changes() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let mut entries = attachment_terminal_prefix();
+    let original = attachment_terminal_observation(true, None);
+    let mut replacement = original.clone();
+    let OplogEntry::ToolAttachmentRead { observation, .. } = &mut replacement else {
+        unreachable!()
+    };
+    observation.reobserves = Some(OplogIndex::from_u64(4));
+    let read = *observation.clone();
+    entries.extend([original, replacement]);
+    *oplog.entries.lock().unwrap() = entries;
+    let replay = test_replay_state(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    for target in [5, 4, 5] {
+        replay
+            .set_replay_target(OplogIndex::from_u64(target))
+            .await
+            .unwrap();
+        assert_eq!(
+            replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+            Some((
+                OplogIndex::from_u64(4),
+                (target == 5).then_some(OplogIndex::from_u64(5))
+            )),
+        );
+    }
+    assert!(
+        replay
+            .register_replay_jump(vec![OplogRegion::from_range(2..=3)])
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+async fn attachment_index_rejects_invalid_acceptance_and_reobservation() {
+    for case in 0..5 {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+        if case == 0 {
+            entries[2] = noop();
+        }
+        if case == 4 {
+            let OplogEntry::End { response, .. } = &mut entries[2] else {
+                unreachable!()
+            };
+            *response = Some(OplogPayload::Inline(Box::new(golem_common::model::oplog::HostResponseToolAttachmentWrite {
+                outcome: golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::Empty,
+            }.into())));
+        }
+        let OplogEntry::ToolAttachmentRead {
+            observation,
+            payload,
+            ..
+        } = &mut entries[3]
+        else {
+            unreachable!()
+        };
+        match case {
+            1 => {
+                observation.attachment.slot =
+                    golem_common::model::oplog::attachment::ToolAttachmentSlot::Stderr
+            }
+            2 => {
+                observation.reobserves = Some(OplogIndex::from_u64(2));
+                *payload = None;
+            }
+            3 => {
+                *payload = None;
+            }
+            _ => {}
+        }
+        *oplog.entries.lock().unwrap() = entries;
+        assert!(
+            test_replay_state(test_agent_id(), oplog, DeletedRegions::new(), None)
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn completed_entity_body_detects_unconsumed_attachment_read() {
+    for guest in [false, true] {
+        let parent = OplogIndex::from_u64(4);
+        let mut entries = attachment_terminal_prefix();
+        entries.extend([
+            start_now(),
+            attachment_terminal_observation(guest, Some(parent)),
+            end_for(4, 42),
+        ]);
+        let rs = replay_state_over(entries).await;
+        let terminal = rs
+            .claim_concurrent_start(
+                &HostFunctionName::GolemToolOutputFinish,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(terminal).await.unwrap();
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rs.unconsumed_scope_head(parent, HashSet::new())
+                .await
+                .unwrap(),
+            guest.then_some(OplogIndex::from_u64(5)),
+        );
+        if guest {
+            let mut resolution = Box::pin(rs.await_resolution(handle));
+            assert!(futures::poll!(resolution.as_mut()).is_pending());
+            let barrier = rs
+                .await_stream_observation(OplogIndex::from_u64(5))
+                .await
+                .unwrap();
+            assert!(futures::poll!(resolution.as_mut()).is_pending());
+            barrier.acknowledge();
+            assert!(matches!(
+                resolution.await.unwrap(),
+                Resolution::Completed { .. }
+            ));
+        } else {
+            assert!(matches!(
+                rs.await_resolution(handle).await.unwrap(),
+                Resolution::Completed { .. }
+            ));
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn custom_subtree_attachment_observation_does_not_block_resolution() {
+    let mut entries = attachment_terminal_prefix();
+    entries.extend([
+        custom_start("outer", 1, None, 1),
+        attachment_terminal_observation(true, Some(OplogIndex::from_u64(4))),
+        custom_end(4, 10),
+    ]);
+    let rs = replay_state_over(entries).await;
+    let terminal = rs
+        .claim_concurrent_start(
+            &HostFunctionName::GolemToolOutputFinish,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(terminal).await.unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".into()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(4), HashSet::new())
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(matches!(
+        rs.await_resolution_outcome(claimed.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+}
+
 #[test]
 #[test_r::timeout("10s")]
 async fn custom_subtree_guest_observation_does_not_block_resolution() {

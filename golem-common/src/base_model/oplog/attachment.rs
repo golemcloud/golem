@@ -21,14 +21,14 @@ use std::ops::Bound::{Excluded, Included};
 
 /// Owner-relative identity. Explicit constructors own their Start; implicit
 /// endpoints use the entity Start and a fixed slot. Moving an endpoint preserves it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, IntoSchema, FromSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct ToolAttachmentId {
     pub creation_start: OplogIndex,
     pub slot: ToolAttachmentSlot,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, IntoSchema, FromSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ToolAttachmentSlot {
     Stdin,
@@ -83,8 +83,13 @@ pub enum ToolAttachmentReadOutcome {
         offset: u64,
         length: u64,
     },
-    Eof,
-    Error(ByteStreamFailure),
+    Eof {
+        terminal_index: OplogIndex,
+    },
+    Error {
+        terminal_index: OplogIndex,
+        failure: ByteStreamFailure,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -96,6 +101,26 @@ pub struct ToolAttachmentReadObservation {
     pub ordinal: u64,
     pub outcome: ToolAttachmentReadOutcome,
     pub reobserves: Option<OplogIndex>,
+}
+
+impl ToolAttachmentReadObservation {
+    /// Checks payload ownership without fetching an external body or source write.
+    pub fn validate_payload_presence(
+        &self,
+        present: bool,
+    ) -> Result<(), ToolAttachmentHistoryError> {
+        let owns_payload = self.reobserves.is_none()
+            && matches!(
+                self.outcome,
+                ToolAttachmentReadOutcome::TypedChunk(_)
+                    | ToolAttachmentReadOutcome::RawBytes { .. }
+            );
+        if owns_payload == present {
+            Ok(())
+        } else {
+            Err(ToolAttachmentHistoryError::InvalidEffect)
+        }
+    }
 }
 
 /// Only effective semantic transitions are recorded. Executor teardown is not
@@ -133,6 +158,7 @@ pub struct ToolAttachmentControlMetadata {
     /// Present for an effect carried by a producer End, absent for a standalone control.
     pub producer_start: Option<OplogIndex>,
     pub transition: ToolAttachmentControl,
+    pub retained: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,7 +177,7 @@ pub enum ToolAttachmentHistoryError {
 
 /// A disposable metadata index, including removed observations for logical
 /// re-observation checks. Removing an observation never removes its acceptance.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ToolAttachmentHistory {
     pub writes: BTreeMap<OplogIndex, ToolAttachmentWriteMetadata>,
     pub observations: BTreeMap<OplogIndex, ToolAttachmentReadObservation>,
@@ -160,6 +186,22 @@ pub struct ToolAttachmentHistory {
 }
 
 impl ToolAttachmentHistory {
+    /// A removed source does not constrain the replacement branch's logical input.
+    /// Missing metadata is not proof of removal and remains a validation error.
+    pub fn source_was_removed(&self, read: &ToolAttachmentReadObservation) -> bool {
+        match read.outcome {
+            ToolAttachmentReadOutcome::TypedChunk(end)
+            | ToolAttachmentReadOutcome::RawBytes { end, .. } => {
+                self.writes.get(&end.0).is_some_and(|write| !write.retained)
+            }
+            ToolAttachmentReadOutcome::Eof { terminal_index }
+            | ToolAttachmentReadOutcome::Error { terminal_index, .. } => self
+                .controls
+                .get(&terminal_index)
+                .is_some_and(|control| !control.retained),
+        }
+    }
+
     /// Applies the owner's authoritative skipped regions to the derived index.
     /// Removed observations remain available for logical re-observation checks.
     pub fn retain_history(&mut self, deleted: &DeletedRegions) {
@@ -167,6 +209,13 @@ impl ToolAttachmentHistory {
             write.retained = !deleted.is_in_deleted_region(*end)
                 && !deleted.is_in_deleted_region(write.start)
                 && !deleted.is_in_deleted_region(write.attachment.creation_start);
+        }
+        for (index, control) in &mut self.controls {
+            control.retained = !deleted.is_in_deleted_region(*index)
+                && !control
+                    .producer_start
+                    .is_some_and(|start| deleted.is_in_deleted_region(start))
+                && !deleted.is_in_deleted_region(control.attachment.creation_start);
         }
     }
 
@@ -176,21 +225,57 @@ impl ToolAttachmentHistory {
         deleted: &DeletedRegions,
     ) -> Result<(), ToolAttachmentHistoryError> {
         let mut boundaries = BTreeMap::new();
+        let mut originals = BTreeMap::new();
         for (index, read) in &self.observations {
-            if deleted.is_in_deleted_region(*index) {
+            if deleted.is_in_deleted_region(*index) && self.source_was_removed(read) {
                 continue;
             }
-            self.validate_read(*index, read)?;
             let key = (
                 read.attachment,
                 read.logical_invocation.value.as_str(),
                 read.ordinal,
             );
+            if read.reobserves.is_none() && originals.insert(key, index).is_some() {
+                return Err(ToolAttachmentHistoryError::DuplicateObservation);
+            }
+            self.validate_read(*index, read)?;
+            if deleted.is_in_deleted_region(*index) {
+                continue;
+            }
             if boundaries.insert(key, index).is_some() {
                 return Err(ToolAttachmentHistoryError::DuplicateObservation);
             }
         }
         Ok(())
+    }
+
+    /// Validates resolved consumer bytes without storing them in the metadata index.
+    /// An accepted producer End supplies the length, never the body.
+    pub fn validate_read_payload(
+        &self,
+        index: OplogIndex,
+        read: &ToolAttachmentReadObservation,
+        payload: Option<&[u8]>,
+    ) -> Result<(), ToolAttachmentHistoryError> {
+        self.validate_read(index, read)?;
+        read.validate_payload_presence(payload.is_some())?;
+        let expected = if read.reobserves.is_some() {
+            None
+        } else {
+            match &read.outcome {
+                ToolAttachmentReadOutcome::TypedChunk(end) => self.writes[&end.0].accepted_length,
+                ToolAttachmentReadOutcome::RawBytes { length, .. } => Some(*length),
+                ToolAttachmentReadOutcome::Eof { .. } | ToolAttachmentReadOutcome::Error { .. } => {
+                    None
+                }
+            }
+        };
+        match (expected, payload) {
+            (Some(length), Some(bytes)) if u64::try_from(bytes.len()) == Ok(length) => Ok(()),
+            (None, None) => Ok(()),
+            (Some(_), Some(_)) => Err(ToolAttachmentHistoryError::InvalidRange),
+            _ => Err(ToolAttachmentHistoryError::InvalidEffect),
+        }
     }
 
     pub fn validate_read(
@@ -242,6 +327,45 @@ impl ToolAttachmentHistory {
                 }
             }
         }
+        let terminal_index = match &read.outcome {
+            ToolAttachmentReadOutcome::Eof { terminal_index }
+            | ToolAttachmentReadOutcome::Error { terminal_index, .. } => Some(*terminal_index),
+            _ => None,
+        };
+        if let Some(terminal_index) = terminal_index {
+            let control = self
+                .controls
+                .get(&terminal_index)
+                .ok_or(MissingAcceptance)?;
+            if control.attachment != read.attachment {
+                return Err(WrongAttachment);
+            }
+            if terminal_index <= read.attachment.creation_start
+                || terminal_index >= index
+                || control.producer_start.is_some_and(|start| {
+                    start <= read.attachment.creation_start || start >= terminal_index
+                })
+            {
+                return Err(InvalidChronology);
+            }
+            if !control.retained {
+                return Err(RemovedAcceptance);
+            }
+            if let ToolAttachmentReadOutcome::Error { failure, .. } = &read.outcome {
+                let matches = match &control.transition {
+                    ToolAttachmentControl::TerminalSelected(
+                        ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(selected)),
+                    ) => selected == failure,
+                    ToolAttachmentControl::TerminalSelected(
+                        ToolAttachmentTerminal::HostResourceExhausted,
+                    ) => *failure == ByteStreamFailure::ResourceExhausted,
+                    _ => false,
+                };
+                if !matches {
+                    return Err(InvalidEffect);
+                }
+            }
+        }
         let mut previous_index = index;
         let mut previous_read = read;
         while let Some(original) = previous_read.reobserves {
@@ -263,6 +387,7 @@ impl ToolAttachmentHistory {
             }
             if old.attachment.creation_start >= original
                 || source.is_some_and(|(end, _)| end.0 >= original)
+                || terminal_index.is_some_and(|index| index >= original)
             {
                 return Err(InvalidChronology);
             }
@@ -291,6 +416,7 @@ pub struct ToolAttachmentUnreadRange {
 pub struct ToolAttachmentProjectedState {
     pub unread: BTreeMap<OplogIndex, ToolAttachmentUnreadRange>,
     pub terminal: Option<ToolAttachmentTerminal>,
+    pub terminal_index: Option<OplogIndex>,
     pub reader_discarded: bool,
     pub error_observed: bool,
 }
@@ -411,7 +537,10 @@ impl ToolAttachmentProjection {
                                 entry.remove();
                             }
                         }
-                        ToolAttachmentReadOutcome::Error(failure) => {
+                        ToolAttachmentReadOutcome::Error {
+                            terminal_index,
+                            failure,
+                        } => {
                             let matches = match &state.terminal {
                                 Some(ToolAttachmentTerminal::Application(
                                     ByteStreamCloseCause::Failed(selected),
@@ -421,12 +550,16 @@ impl ToolAttachmentProjection {
                                 }
                                 _ => false,
                             };
-                            if !state.unread.is_empty() || !matches || state.error_observed {
+                            if !state.unread.is_empty()
+                                || !matches
+                                || state.error_observed
+                                || state.terminal_index != Some(*terminal_index)
+                            {
                                 return Err(InvalidEffect);
                             }
                             state.error_observed = true;
                         }
-                        ToolAttachmentReadOutcome::Eof => {
+                        ToolAttachmentReadOutcome::Eof { terminal_index } => {
                             let finished = matches!(
                                 state.terminal,
                                 Some(ToolAttachmentTerminal::Application(
@@ -434,13 +567,19 @@ impl ToolAttachmentProjection {
                                         | ByteStreamCloseCause::ConsumerCancelled
                                 ))
                             );
-                            if !state.unread.is_empty() || !(finished || state.error_observed) {
+                            if !state.unread.is_empty()
+                                || !(finished || state.error_observed)
+                                || state.terminal_index != Some(*terminal_index)
+                            {
                                 return Err(InvalidEffect);
                             }
                         }
                     }
                 }
                 Effect::Control(control) => {
+                    if !control.retained {
+                        continue;
+                    }
                     let id = control.attachment;
                     if let Some(start) = control.producer_start {
                         if start <= id.creation_start || start >= index {
@@ -463,6 +602,7 @@ impl ToolAttachmentProjection {
                                 return Err(InvalidEffect);
                             }
                             state.terminal = Some(terminal.clone());
+                            state.terminal_index = Some(index);
                             if matches!(
                                 terminal,
                                 ToolAttachmentTerminal::Application(
@@ -478,6 +618,9 @@ impl ToolAttachmentProjection {
                             }
                             state.reader_discarded = true;
                             state.unread.clear();
+                            if state.terminal.is_none() {
+                                state.terminal_index = Some(index);
+                            }
                             state
                                 .terminal
                                 .get_or_insert(ToolAttachmentTerminal::Application(

@@ -611,6 +611,11 @@ impl PublicOplogEntry {
                     || Self::string_match("host-stream-frame", &[], query_path, query)
                     || Self::match_typed_schema_value(&params.payload, &[], query_path, query)
             }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                Self::string_match("toolattachmentread", &[], query_path, query)
+                    || Self::string_match("tool-attachment-read", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.observation, &[], query_path, query)
+            }
             PublicOplogEntry::StreamRegistered(params) => {
                 Self::string_match("streamregistered", &[], query_path, query)
                     || Self::string_match("stream-registered", &[], query_path, query)

@@ -9,6 +9,7 @@ import "golem/component/agent.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/public_oplog.proto";
+import "golem/schema/schema.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_error.proto";
 import "golem/worker/worker_id.proto";
@@ -79,6 +80,7 @@ message RawOplogEntry {
     RawTimestampOnly resumed = 64;
     RawTimestampOnly recovery_succeeded = 65;
     RawSnapshotConfirmedParameters snapshot_confirmed = 66;
+    RawToolAttachmentReadParameters tool_attachment_read = 67;
   }
 }
 
@@ -549,6 +551,11 @@ message RawHostStreamFrameParameters {
   uint64 parent_start_index = 1;
   HostStreamKind kind = 2;
   RawOplogPayload payload = 3;
+}
+
+message RawToolAttachmentReadParameters {
+  golem.schema.TypedSchemaValue observation = 1;
+  RawOplogPayload payload = 2;
 }
 
 message RawDurableStreamRecordParameters {

@@ -35,6 +35,11 @@ where
                 copy_payload(payload, &mut copy).await?;
             }
         }
+        OplogEntry::ToolAttachmentRead { payload, .. } => {
+            if let Some(payload) = payload {
+                copy_payload(payload, &mut copy).await?;
+            }
+        }
         OplogEntry::End { response, .. }
         | OplogEntry::Cancelled {
             partial: response, ..
@@ -140,6 +145,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::base_model::durable_stream::StreamConsumerObservation;
+    use golem_common::base_model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadObservation,
+        ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
     use golem_common::model::OplogIndex;
     use std::sync::Arc;
     use test_r::test;
@@ -269,6 +279,32 @@ mod tests {
             }
         }
         let mut entries = vec![
+            OplogEntry::ToolAttachmentRead {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                entity_parent_start_index: Some(OplogIndex::INITIAL),
+                observation: Box::new(ToolAttachmentReadObservation {
+                    attachment: ToolAttachmentId {
+                        creation_start: OplogIndex::INITIAL,
+                        slot: ToolAttachmentSlot::Stdout,
+                    },
+                    logical_invocation: golem_common::model::IdempotencyKey::new(
+                        "attachment".into(),
+                    ),
+                    observation: StreamConsumerObservation::Guest {
+                        parent_start_index: None,
+                    },
+                    ordinal: 0,
+                    outcome: ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(
+                        OplogIndex::from_u64(3),
+                    )),
+                    reobserves: None,
+                }),
+                payload: Some(OplogPayload::External {
+                    payload_id: PayloadId::new(),
+                    md5_hash: vec![11; 16],
+                    cached: Some(Arc::new(vec![99u8])),
+                }),
+            },
             OplogEntry::Snapshot {
                 timestamp: golem_common::model::Timestamp::now_utc(),
                 data: external(),
@@ -310,6 +346,23 @@ mod tests {
             .await
             .unwrap();
         }
+        if let OplogEntry::ToolAttachmentRead {
+            observation,
+            payload,
+            ..
+        } = &mut entries[0]
+        {
+            observation.reobserves = Some(OplogIndex::from_u64(5));
+            *payload = None;
+        }
+        copy_entry_payloads(
+            &mut entries[0],
+            |_, _| -> std::future::Ready<Result<RawOplogPayload, String>> {
+                panic!("reobservation must not own another body")
+            },
+        )
+        .await
+        .unwrap();
     }
 
     #[test]

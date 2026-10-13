@@ -29,6 +29,7 @@ pub mod entity;
 pub mod external_durable_stream;
 pub mod golem;
 pub mod http;
+mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
