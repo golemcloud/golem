@@ -251,10 +251,9 @@ async fn require_recording_before_response_demand(
     }
 }
 
-/// Settles a persisted chunk completion at the producer's observation boundary rather than when
-/// the background task merely queues the reply. The latter is too early: another concurrent guest
-/// future can win and drop the producer before it consumes the queued reply, making replay observe
-/// a different cancellation order.
+/// Settles a persisted frame when its first bytes (or EOF) reach the reader. Guest reads settle
+/// through Wasmtime's consumption observer, not when the producer queues a buffer. Host reads
+/// and explicit cancellation acknowledgements retain the producer handoff boundary.
 pub(super) struct HttpBodyChunkDelivery {
     delivery: Option<CompletionDelivery>,
     observed: Option<oneshot::Sender<()>>,
@@ -282,6 +281,30 @@ impl HttpBodyChunkDelivery {
             .take()
             .expect("body chunk observation is sent exactly once")
             .send(());
+    }
+
+    fn observe_read<D>(
+        self,
+        store: &mut StoreContextMut<'_, D>,
+        destination: &mut Destination<'_, u8, Bytes>,
+    ) -> wasmtime::Result<()> {
+        if destination.remaining(&mut *store).is_some() {
+            destination.register_read_observer(&mut *store, move |consumption| {
+                match consumption {
+                    TerminalConsumption::Delivered => self.observed(),
+                    TerminalConsumption::NotDelivered => drop(self),
+                    TerminalConsumption::Superseded => {
+                        // Dropping the token poisons replay rather than releasing a recorded
+                        // guest boundary that was not reproduced.
+                        tracing::error!("HTTP body read observer was superseded");
+                        drop(self);
+                    }
+                }
+            })
+        } else {
+            self.observed();
+            Ok(())
+        }
     }
 }
 
@@ -417,17 +440,17 @@ impl Drop for HttpTrailersDeliveryGuard {
 /// demand/reply protocol: when the guest needs more bytes the producer sends a
 /// demand and parks; the task reads (live) or replays (on replay) exactly one
 /// body frame, persists/claims it as a child durable call, and replies with the
-/// bytes. The whole frame is then handed to the runtime's buffer
-/// (`Destination::set_buffer`), which delivers it across however many guest
-/// reads and only calls `poll_produce` again once it is fully drained — so
-/// exactly one child chunk is produced per real demand, identically live and on
-/// replay.
+/// bytes. The producer retains the frame's suffix across read-sized buffers, so the read observer
+/// covers only the bytes accepted by that read. No further durable demand is made until the suffix
+/// is drained. A fresh demand always parks; an already recorded suffix is available inline, both
+/// live and on replay.
 pub(super) struct DurableHttpBodyProducer {
     demand_tx: mpsc::Sender<HttpBodyDemand>,
     demand_signal: Arc<HttpBodyDemandSignal>,
     hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
     pending: Option<PendingHttpBodyRead>,
     pending_cancel: Option<oneshot::Receiver<()>>,
+    buffered: Bytes,
     finished: bool,
 }
 
@@ -451,6 +474,7 @@ impl DurableHttpBodyProducer {
             hook,
             pending: None,
             pending_cancel: None,
+            buffered: Bytes::new(),
             finished: false,
         }
     }
@@ -470,6 +494,13 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
         loop {
             if self.finished {
                 return Poll::Ready(Ok(StreamResult::Dropped));
+            }
+
+            if !self.buffered.is_empty() {
+                let capacity = dst.remaining(&mut store).unwrap_or(self.buffered.len());
+                let count = capacity.min(self.buffered.len());
+                dst.set_buffer(self.buffered.split_to(count));
+                return Poll::Ready(Ok(StreamResult::Completed));
             }
 
             if let Some(rx) = self.pending_cancel.as_mut() {
@@ -533,24 +564,29 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         // the remote peer producing more body bytes.
                         return Poll::Pending;
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::Data { bytes, delivery })) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::Data {
+                        mut bytes,
+                        delivery,
+                    })) => {
                         self.pending = None;
                         if bytes.is_empty() {
                             continue;
                         }
-                        // Hand the whole frame to the runtime; it delivers it
-                        // across as many guest reads as needed and only calls
-                        // us again once it is drained.
-                        dst.set_buffer(bytes);
-                        delivery.observed();
+                        let capacity = dst.remaining(&mut store).unwrap_or(bytes.len());
+                        let count = capacity.min(bytes.len());
+                        delivery.observe_read(&mut store, &mut dst)?;
+                        dst.set_buffer(bytes.split_to(count));
+                        self.buffered = bytes;
                         return Poll::Ready(Ok(StreamResult::Completed));
                     }
                     Poll::Ready(Ok(HttpBodyChunkReply::End { delivery })) => {
                         let cancelling = pending.cancelling;
                         let cancel_ack = pending.cancel_ack.take();
                         self.pending = None;
-                        delivery.observed();
                         if cancelling {
+                            // A cancellation acknowledgement is not a successful EOF read. It
+                            // must release the task before waiting for parent finalization.
+                            delivery.observed();
                             if let Some(cancel_ack) = cancel_ack {
                                 self.pending_cancel = Some(cancel_ack);
                                 continue;
@@ -558,6 +594,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                             self.finished = true;
                             return Poll::Ready(Ok(StreamResult::Cancelled));
                         } else {
+                            delivery.observe_read(&mut store, &mut dst)?;
                             self.finished = true;
                             return Poll::Ready(Ok(StreamResult::Dropped));
                         }
@@ -827,9 +864,9 @@ pub(super) enum ProducedChunk {
     Cancelled,
 }
 
-/// Crosses the final HTTP body delivery boundary after a child terminal is durable. Unlike the
-/// generic demand-stream transfer, queueing the reply is not sufficient: the producer must poll
-/// it and hand it to Wasmtime before the completion is guest-observable.
+/// Waits for the reader's delivery boundary after a child terminal is durable. Queueing a reply
+/// or installing a Wasmtime buffer is not guest consumption; the read observer settles ordinary
+/// data and EOF. Explicit cancellation acknowledgements settle at the producer handoff.
 async fn deliver_http_body_reply(
     activity: &TailActivity,
     mut demand: oneshot::Sender<HttpBodyChunkReply>,
@@ -1052,11 +1089,14 @@ where
         // it exists only for its drop timing.
         let mut _rebuild_io_guard: Option<AbortOnDropIoTask> = None;
         // Set when a terminal error must not be routed through worker-level
-        // retry: a refused rebuild (request body not reconstructable — a retry
+        // or inline retry: a captured non-idempotent request, a refused rebuild
+        // (request body not reconstructable — a retry
         // would replay into the same refusal forever) or a content-changed
         // response-body resume (416 / short full response — deterministic for
         // the same request).
-        let mut retry_exempt = false;
+        let mut retry_exempt = resume_context
+            .as_ref()
+            .is_some_and(|(_, _, is_idempotent)| !*is_idempotent);
         // In-function retry budget of the response-body resume path, shared across all resume
         // attempts of this consume-body scope.
         let mut resume_retry_state = InFunctionRetryState::new();
@@ -1154,13 +1194,9 @@ where
             // the upstream body and persist it (live). Delivery to the guest-facing
             // stream happens afterwards, identically on both paths.
             //
-            // The demand-channel send below is the chunk's real guest-facing
-            // delivery boundary — one more fallible transfer *after* the child's
-            // durable `End` — so the child terminal goes through the
-            // deferred-delivery API: a closed demand receiver after the persisted
-            // `End` records the child's `CompletionDiscarded` marker instead of
-            // replay redelivering a chunk the recorded run never handed to the
-            // guest.
+            // A child terminal is durable before transfer, but its deferred-delivery token
+            // remains owned by the reply until the reader observes it. Dropping an unread reply
+            // records a discard; merely handing bytes to the producer is not delivery.
             let (produced, delivery) = match item {
                 DurableDemandItem::Replayed { response, delivery } => {
                     let replay_at_marker = delivery.is_replay_at_marker();
@@ -1466,8 +1502,9 @@ where
                     // transient ones whose retry budget is exhausted — fall through
                     // and are recorded as the terminal, which is also what a
                     // recorded terminal replays as. A retry-exempt failure (refused
-                    // rebuild, content-changed resume) is never retry-routed: its
-                    // replay would hit the same deterministic failure again.
+                    // rebuild, content-changed resume, or captured non-idempotent
+                    // request) is never retry-routed: repeating it would either
+                    // fail deterministically or risk duplicating an external effect.
                     if let HttpBodyFrame::Error(error_code) = &frame
                         && !retry_exempt
                         && let Some(retry_properties) = retry_properties.clone()
@@ -1586,7 +1623,7 @@ where
             // single point where chunks reach the guest, identically live and on
             // replay, so the count/order of delivered chunks always matches the
             // count/order of persisted children. It is also where the child's
-            // deferred-delivery token is consumed: producer observation is
+            // deferred-delivery token is consumed: reader observation is
             // `delivered`, a dropped reply reserves the child's `CompletionDiscarded`
             // marker, and a replay-discarded child is never re-sent (the task parks
             // until the replayed guest drops the body reader at the same point it

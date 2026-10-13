@@ -906,6 +906,17 @@ request. A shared slot receives the scope index when admission returns the handl
 no scope is installed in the durable context. Both replay consumption and live execution disarm
 the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
 
+P3 HTTP response frames remain batched parent/child durable calls, not consumer-journal records.
+Data and ordinary EOF settle their child delivery tokens at Wasmtime's per-read consumption
+observer. Producer readiness is too early: it can reverse a timer/EOF ordering during replay.
+The producer exposes at most the guest read's capacity and retains the frame's suffix; the first
+positive consumption records the frame's marker, and later suffix reads add no durable child.
+A fresh frame demand always parks, while an already buffered suffix is available inline on both
+paths. Explicit cancellation acknowledgements keep their producer handoff boundary before
+waiting for parent finalization, avoiding an observer/acknowledgement cycle. Trailers still settle
+the parent's token at the future's terminal observer. Tests: `tests/http.rs` cancellation and
+offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download recovery.
+
 ## Durable RPC exactly-once
 
 `RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
@@ -1067,6 +1078,15 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
 - `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
+- `UPDATE_BLOB_STORAGE_REFUSED`: at the update point, the blob storage refused the executor a read
+  of an initial-file source of the target (`FilesystemError::InitialFileRefused`, from
+  `BlobFailure::Refused` of a `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other
+  than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
+  loads every source before its first change, so the agent runs on its source revision. The text
+  names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
+  update and retries as a recovery; outside the update point a refused source is a
+  reconstruction error. The guest blob store maps the same refusal to a permanent
+  `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with
 `services/component.rs::component_support_error`. Admission uses the same support policy.
@@ -1150,7 +1170,72 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
-With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
+`AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
+uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development
+and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `Temporary` and
+`Directory` make byte copies, so binding `Enabled` on them fails at startup. The sandbox reports
+`copies_on_write`; the snapshot service owns this rule.
+
+`seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other
+storage. `Apfs` makes the root as `Directory` does, then probes a file clone with `fclonefileat`
+under it. A failed clone prevents startup. There is no filesystem type check, exclusive root lock
+or volume identity check. Both case-sensitive and case-insensitive APFS volumes use `Conservative`
+filename coordination. An entry edit waits for conflicting operations in the same parent directory;
+two observations can run together. macOS keeps its native filename spelling, case sensitivity and
+lookup behavior. Users do not normalize names. Case sensitivity does not prove byte-exact lookup,
+because both APFS variants alias Unicode normalization forms. No special volume, disk image or
+privilege is required. The mode logs that it is for local development and tests only.
+
+On macOS, the shared `seed` path for `Apfs`, `Directory` and `Temporary` explicitly uses plain
+native `fsync` for each seeded regular file, rather than `File::sync_all` for each file. The
+directory scopes attempt the required namespace `fsync` calls before the final batch flush.
+Each fresh macOS filesystem has one precreated, unlinked regular `seed_flusher` owned by
+`NativeRoot`. Seed admission pins the root and `seed_flusher` atomically. Batch completion
+attempts ordinary `fsync` on `seed_flusher`, ordinary `fsync` on the root, then `F_FULLFSYNC`
+on `seed_flusher`. This includes empty, symlink-only and directory-only batches, and batches
+that fail early. The finalizers attempt every required submission and keep the first error.
+In unwind-capable builds, later required finalizers also run after a panic. The original panic
+or an earlier error retains priority. Production panic-abort profiles do not run unwind cleanup.
+
+`seed_flusher` creates no per-batch directory entry, so batch completion does not change the
+root's modification time or require a writable root. A pathname replacement cannot redirect
+the admitted descriptors. A setup or admission failure before pinning them has no admitted
+`seed_flusher` to flush.
+
+This policy applies only to macOS seed synchronization. Native cloning and byte copying are
+unchanged. Linux seed synchronization and explicit guest flush operations keep their existing
+behavior. XFS remains the validated, supported production copy-on-write path. Initial-file
+installation still calls `seed` once per file. A seed batch does not combine separate install
+operations. The policy does not guarantee seed, snapshot capture, blob upload or worker recovery
+time. See
+[macOS seed synchronization](../../../golem-worker-executor/worker-executor-walkthrough.html#macos-seed-synchronization)
+for the internal policy.
+
+`Apfs` states `AgentAccounting::Unaccounted`, as `ReflinkXfs` does. All disk limits resolve to
+`Unlimited`; the mode has no project quotas or per-agent usage reports, and filesystem metering
+is refused at startup. It reads volume space with `fstatvfs`, so startup capacity checks, capture
+admission and write pressure recovery apply. APFS volumes in one container share free bytes,
+so byte targets are approximate. Object counts are synthetic and very large, so object targets
+always pass. `Temporary` and `Directory` do not use this pressure recovery.
+
+On macOS, the local `golem server run` command defaults to `Apfs` at `<data_dir>/agents` and
+`Enabled` filesystem snapshots. No filesystem TOML or environment settings are needed. The
+`--agent-filesystem-root` option changes the default root. The server reads filesystem settings
+from the optional exact `config/worker-executor.toml` in the working directory, without searching
+parent directories, then applies `GOLEM__` environment variables. These settings override the
+defaults. An existing file with invalid TOML prevents startup. Standalone executors and local
+servers on other platforms keep disabled snapshots by default. To choose `Directory` or `Temporary`
+on macOS, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting
+policy. Without a configured `repository_key`, the local server generates a 64-byte repository key
+and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions
+`0600` on Unix. Later starts use the retained repository key. A configured key takes precedence.
+Without one, a corrupt retained repository key prevents startup and is not replaced. The snapshot
+store uses the executor's blob storage, which the local server keeps at `<data_dir>/blobs`. There
+is no separate snapshot destination.
+See `docs/src/content/next/operate/filesystem_snapshots.mdx` for the local setup and
+`reference/testing-patterns.md` for the native APFS checks.
+
+With `filesystem_snapshots` set to `Enabled`, a snapshot record also names a filesystem snapshot
 (`services/agent_filesystem_snapshots`). The snapshots belong to one agent incarnation: they are
 keyed by `AgentSnapshots::agent(agent, fingerprint)`, and a fork target uses its stage id as its
 fingerprint. `invocation_loop.rs::take_guest_snapshot` calls one function,
@@ -1269,12 +1354,19 @@ suffix-rollback check reads `StartFilesystem::replay()` before the filesystem is
 manual-update record without a name restores the initial files of the source revision when they
 are all read-only, and then applies the initial files of the target revision.
 
+A capture leaves out initial-file bytes only when every stored path component has the declaration's
+exact spelling. Native alias lookup is not that proof. An APFS file or parent renamed to a Unicode
+or case alias stays in the tree under its stored spelling; its declared path is not in `left_out`.
+The check retains sorted, boxed names for each relevant parent within one fenced operation.
+A separate positive byte-exact lookup proof avoids that name listing on validated XFS parents.
+Canonical coordination labels alone are not a lookup proof.
+
 An application snapshot is used only when the files of the agent can come back with it. With
 `filesystem_snapshots` disabled, the admission answers `InitialFilesOnly`, and the snapshot checks
 the tree in place of the capture (`agent_filesystem::check_initial_files`): the same fence and
 the same rule as a capture, with no host directory, copy or store call. The tree holds only
 initial files when each declaration is a read-only initial file that is untouched and has a single
-name, no entity-provisioned file exists, no call set a chosen modification time, and the tree
+name, every stored path component has the declaration's exact spelling, no entity-provisioned file exists, no call set a chosen modification time, and the tree
 holds nothing else; a read-write initial file counts as a change. A rename or hard link of any
 file, or a given time that the agent sets, counts as a change; a time that Golem puts back from a
 recorded stat does not. A tree of initial files gives a record without a name. Any other tree,
@@ -1334,9 +1426,13 @@ Filesystem permission failures carry their cause. `FilesystemStorageError::io` t
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
 return `not-permitted` without invalidation when a failed writable open rechecks a read-only regular
-file, or a failed hard link rechecks a directory at the source without following the final symlink.
-A failed cleanup prevents either policy recheck from replacing the storage failure. A failed recheck
-or an object that does not establish that guest-policy refusal leaves the original permission failure
+file, or a hard link fails with `PermissionDenied` or `AlreadyExists` and rechecks a directory at the
+source without following the final symlink. The hard-link recheck holds the namespace edit lease, so a
+coordinated replacement cannot change the source during classification. A terminal failure of that
+recheck invalidates the generation through `classify_query_error`. A missing source, a non-directory
+source or a nonterminal recheck failure leaves the original link error in control. A failed cleanup
+prevents either policy recheck from replacing the storage failure. A failed writable-open recheck or
+an object that does not establish its guest-policy refusal leaves the original permission failure
 terminal. These rechecks use the current object and do not identify the object
 that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` and the permission
 failure table in the executor walkthrough.

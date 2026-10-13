@@ -775,6 +775,10 @@ pub enum GolemCliSubcommand {
     /// Open a command prompt on an existing agent through its bound bash tool. This is an
     /// interactive command; the global `--format` flag is ignored.
     ///
+    /// `deploy` binds the bash tool to every agent type, with access to the agent's files,
+    /// unless the environment leaves it out of `tools.defaults` in the application manifest or
+    /// the manifest declares `tools.bash` itself.
+    ///
     /// Each command is one call of the tool's `run` operation in a fresh shell: variables,
     /// functions, aliases, options and `$?` do not carry over. Only the directory a command ended
     /// in does; it is passed as `--cwd` to the next one. Anything that must last belongs in the
@@ -3141,8 +3145,11 @@ pub mod server {
         #[clap(long)]
         pub clean: bool,
 
-        /// Use deterministic agent filesystem directories rooted at the given
-        /// path instead of random temp directories. The directory layout is:
+        /// Set the root of the agent filesystem directories. On macOS, the
+        /// local server uses APFS and defaults to <data_dir>/agents. On other
+        /// platforms, this selects Directory storage instead of Temporary.
+        /// Filesystem TOML and environment settings can override this root.
+        /// The directory layout is:
         ///   <root>/<environment_id>/<component_id>/<agent_segment>/
         /// The agent segment is the agent name, with each character that is not
         /// an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32

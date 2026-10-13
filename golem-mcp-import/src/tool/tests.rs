@@ -103,6 +103,118 @@ fn filtering_collision_exclusions_and_precedence() {
 }
 
 #[test]
+fn an_import_can_supply_only_the_names_that_its_prefix_and_filters_allow() {
+    let patterns = |patterns: &[&str]| {
+        patterns
+            .iter()
+            .map(|pattern| pattern.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // With no option, each name is possible.
+    assert!(import_can_supply(None, None, None, "bash"));
+
+    // A prefix is a part of each name of the import.
+    assert!(!import_can_supply(Some("remote"), None, None, "bash"));
+    assert!(import_can_supply(Some("remote"), None, None, "remote-bash"));
+    assert!(import_can_supply(Some("web"), None, None, "web-fetch"));
+    assert!(!import_can_supply(Some("web"), None, None, "web-"));
+    assert!(!import_can_supply(Some("web"), None, None, "webfetch"));
+
+    // The filters see the name without the prefix.
+    assert!(!import_can_supply(
+        None,
+        None,
+        Some(&patterns(&["bash"])),
+        "bash"
+    ));
+    assert!(!import_can_supply(
+        None,
+        None,
+        Some(&patterns(&["ba*"])),
+        "bash"
+    ));
+    assert!(import_can_supply(
+        None,
+        None,
+        Some(&patterns(&["search*"])),
+        "bash"
+    ));
+    assert!(!import_can_supply(
+        None,
+        Some(&patterns(&["search*"])),
+        None,
+        "bash"
+    ));
+    assert!(import_can_supply(
+        None,
+        Some(&patterns(&["search*", "bash"])),
+        None,
+        "bash"
+    ));
+    assert!(!import_can_supply(
+        Some("web"),
+        None,
+        Some(&patterns(&["fetch"])),
+        "web-fetch"
+    ));
+
+    // The answer is the same as what a projection of a tool list gives.
+    for (prefix, include, exclude) in [
+        (None, None, None),
+        (Some("remote"), None, None),
+        (None, Some(patterns(&["search*"])), None),
+        (None, None, Some(patterns(&["bash"]))),
+    ] {
+        let batch = project_import(
+            &[definition("bash")],
+            prefix,
+            include.as_deref(),
+            exclude.as_deref(),
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            names(&batch).contains(&"bash"),
+            import_can_supply(prefix, include.as_deref(), exclude.as_deref(), "bash"),
+            "{prefix:?} {include:?} {exclude:?}"
+        );
+    }
+}
+
+#[test]
+fn the_imports_that_can_supply_a_name_are_found_without_a_tool_list() {
+    use golem_common::model::mcp_import::McpImportDeployment;
+    let import = |prefix: Option<&str>, exclude: Option<&[&str]>| McpImportDeployment {
+        url: "https://mcp.example/mcp".into(),
+        auth: None,
+        security_scheme: None,
+        prefix: prefix.map(str::to_string),
+        include: None,
+        exclude: exclude.map(|patterns| patterns.iter().map(|p| p.to_string()).collect()),
+        version: None,
+    };
+    let imports = [
+        import(None, None),
+        import(Some("remote"), None),
+        import(None, Some(&["bash"])),
+        import(Some("web"), None),
+    ];
+
+    assert_eq!(
+        imports_that_can_supply(&imports, ["bash", "web-fetch"]),
+        [
+            (0, "bash".to_string()),
+            (0, "web-fetch".to_string()),
+            (2, "web-fetch".to_string()),
+            (3, "web-fetch".to_string()),
+        ]
+    );
+    assert!(imports_that_can_supply(&imports[1..2], ["bash"]).is_empty());
+    assert!(imports_that_can_supply(&imports, [] as [&str; 0]).is_empty());
+}
+
+#[test]
 fn canonical_inputs_restore_exact_json_property_names() {
     let upstream = json!({"name":"fetch","title":"Fetch data","description":"Detailed documentation","inputSchema":{
         "type":"object","properties":{

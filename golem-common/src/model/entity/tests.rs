@@ -198,12 +198,18 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
         operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 7,
             command_path: vec!["files".to_string(), "search".to_string()],
-            args: crate::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["--ignore-case", "needle"],
-            )
-            .unwrap()
-            .args,
+            args: vec![
+                crate::model::card::ToolArgPattern::LongFlag {
+                    name: crate::model::card::ToolIdentifier("ignore-case".into()),
+                    value: None,
+                },
+                crate::model::card::ToolArgPattern::Positional(
+                    crate::model::card::ToolInvocationValue::Literal("needle".into()),
+                ),
+                crate::model::card::ToolArgPattern::Positional(
+                    crate::model::card::ToolInvocationValue::Opaque,
+                ),
+            ],
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,

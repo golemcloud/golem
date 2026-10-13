@@ -17,6 +17,13 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
+#[cfg(feature = "guest")]
+crate::schema::wit::direct::wire_string!(
+    ::rust_decimal::Decimal,
+    |value: &::rust_decimal::Decimal| value.to_string(),
+    |value: &str| value.parse::<::rust_decimal::Decimal>()
+);
+
 impl IntoSchema for ::rust_decimal::Decimal {
     fn type_id() -> TypeId {
         TypeId::new("rust_decimal.Decimal")

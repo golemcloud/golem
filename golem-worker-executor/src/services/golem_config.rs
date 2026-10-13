@@ -2208,6 +2208,31 @@ pub enum FilesystemStorageMode {
     /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
     /// per-agent usage.
     ReflinkXfs { root: Box<Path> },
+    /// APFS storage for local development and tests on macOS. Copies are clones. The executor
+    /// enforces no per-agent disk limit and measures no per-agent usage.
+    Apfs { root: Box<Path> },
+}
+
+/// The `type` tag of a [`FilesystemStorageMode`], without its settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FilesystemStorageModeKind {
+    Temporary,
+    Directory,
+    ManagedXfs,
+    ReflinkXfs,
+    Apfs,
+}
+
+impl FilesystemStorageMode {
+    pub fn kind(&self) -> FilesystemStorageModeKind {
+        match self {
+            Self::Temporary => FilesystemStorageModeKind::Temporary,
+            Self::Directory { .. } => FilesystemStorageModeKind::Directory,
+            Self::ManagedXfs { .. } => FilesystemStorageModeKind::ManagedXfs,
+            Self::ReflinkXfs { .. } => FilesystemStorageModeKind::ReflinkXfs,
+            Self::Apfs { .. } => FilesystemStorageModeKind::Apfs,
+        }
+    }
 }
 
 impl SafeDisplay for FilesystemStorageMode {
@@ -2217,6 +2242,7 @@ impl SafeDisplay for FilesystemStorageMode {
             Self::Directory { root } => format!("directory at {}", root.display()),
             Self::ManagedXfs { root } => format!("managed XFS at {}", root.display()),
             Self::ReflinkXfs { root } => format!("reflink XFS at {}", root.display()),
+            Self::Apfs { root } => format!("APFS for local development at {}", root.display()),
         }
     }
 }
@@ -2390,7 +2416,23 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_SAVE_THREADS: usize = 2;
 #[serde(tag = "type", content = "config")]
 pub enum FilesystemSnapshotsConfig {
     Disabled(FilesystemSnapshotsDisabledConfig),
-    Managed(Box<FilesystemSnapshotStoreConfig>),
+    Enabled(Box<FilesystemSnapshotStoreConfig>),
+}
+
+/// The `type` tag of a [`FilesystemSnapshotsConfig`], without its settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FilesystemSnapshotsKind {
+    Disabled,
+    Enabled,
+}
+
+impl FilesystemSnapshotsConfig {
+    pub fn kind(&self) -> FilesystemSnapshotsKind {
+        match self {
+            Self::Disabled(_) => FilesystemSnapshotsKind::Disabled,
+            Self::Enabled(_) => FilesystemSnapshotsKind::Enabled,
+        }
+    }
 }
 
 impl Default for FilesystemSnapshotsConfig {
@@ -2406,8 +2448,8 @@ impl SafeDisplay for FilesystemSnapshotsConfig {
             Self::Disabled(_) => {
                 let _ = writeln!(&mut result, "disabled");
             }
-            Self::Managed(store) => {
-                let _ = writeln!(&mut result, "managed:");
+            Self::Enabled(store) => {
+                let _ = writeln!(&mut result, "enabled:");
                 let _ = writeln!(&mut result, "{}", store.to_safe_string_indented());
             }
         }
@@ -3267,11 +3309,13 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig, GolemConfig,
-        InvocationResultsConfig, Limits, RetryConfig, default_filesystem_snapshot_storage_retry,
+        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
+        FilesystemSnapshotsKind, FilesystemStorageMode, GolemConfig, InvocationResultsConfig,
+        Limits, RetryConfig, default_filesystem_snapshot_storage_retry,
     };
     use golem_common::SafeDisplay;
     use serde_json::{Value, json};
+    use std::path::Path;
     use std::time::Duration;
     use test_r::test;
 
@@ -3284,6 +3328,7 @@ mod tests {
                 super::FilesystemStorageMode::Directory { root: root() },
                 super::FilesystemStorageMode::ManagedXfs { root: root() },
                 super::FilesystemStorageMode::ReflinkXfs { root: root() },
+                super::FilesystemStorageMode::Apfs { root: root() },
             ]
             .map(|storage| storage.to_safe_string()),
             [
@@ -3291,6 +3336,7 @@ mod tests {
                 "directory at /var/lib/golem/agents",
                 "managed XFS at /var/lib/golem/agents",
                 "reflink XFS at /var/lib/golem/agents",
+                "APFS for local development at /var/lib/golem/agents",
             ]
         );
     }
@@ -3466,20 +3512,20 @@ mod tests {
     const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\
                        202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";
 
-    fn managed(config: Value) -> Result<FilesystemSnapshotStoreConfig, String> {
+    fn enabled(config: Value) -> Result<FilesystemSnapshotStoreConfig, String> {
         serde_json::from_value::<FilesystemSnapshotsConfig>(json!({
-            "type": "Managed",
+            "type": "Enabled",
             "config": config,
         }))
         .map_err(|error| error.to_string())
         .and_then(|parsed| match parsed {
-            FilesystemSnapshotsConfig::Managed(store) => Ok(*store),
+            FilesystemSnapshotsConfig::Enabled(store) => Ok(*store),
             FilesystemSnapshotsConfig::Disabled(_) => Err("disabled".to_string()),
         })
     }
 
     fn refusal(config: Value) -> String {
-        managed(config).unwrap_err()
+        enabled(config).unwrap_err()
     }
 
     #[test]
@@ -3493,8 +3539,71 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_reads_the_key_the_deadline_and_the_thread_counts() {
-        let store = managed(json!({
+    fn filesystem_snapshots_serialization_uses_enabled_and_disabled() {
+        [
+            (FilesystemSnapshotsKind::Enabled, "Enabled"),
+            (FilesystemSnapshotsKind::Disabled, "Disabled"),
+        ]
+        .into_iter()
+        .for_each(|(kind, name)| {
+            let encoded = serde_json::to_value(kind).unwrap();
+            assert_eq!(encoded, json!(name));
+            assert_eq!(
+                serde_json::from_value::<FilesystemSnapshotsKind>(encoded).unwrap(),
+                kind,
+            );
+        });
+        let config: FilesystemSnapshotsConfig = serde_json::from_value(json!({
+            "type": "Enabled",
+            "config": { "repository_key": KEY },
+        }))
+        .unwrap();
+        let encoded = serde_json::to_value(config).unwrap();
+        assert_eq!(encoded["type"], "Enabled");
+        assert!(matches!(
+            serde_json::from_value::<FilesystemSnapshotsConfig>(encoded).unwrap(),
+            FilesystemSnapshotsConfig::Enabled(_),
+        ));
+    }
+
+    #[test]
+    fn filesystem_kinds_serialize_as_the_type_tags_of_their_owners() {
+        let root: Box<Path> = Path::new("agents").into();
+        [
+            FilesystemStorageMode::Temporary,
+            FilesystemStorageMode::Directory { root: root.clone() },
+            FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            FilesystemStorageMode::ReflinkXfs { root: root.clone() },
+            FilesystemStorageMode::Apfs { root },
+        ]
+        .into_iter()
+        .for_each(|mode| {
+            assert_eq!(
+                serde_json::to_value(&mode).unwrap()["type"],
+                serde_json::to_value(mode.kind()).unwrap(),
+                "{mode:?}"
+            );
+        });
+        [
+            FilesystemSnapshotsConfig::default(),
+            FilesystemSnapshotsConfig::Enabled(Box::new(
+                enabled(json!({ "repository_key": KEY })).unwrap(),
+            )),
+        ]
+        .into_iter()
+        .for_each(|config| {
+            assert_eq!(
+                serde_json::to_value(&config).unwrap()["type"],
+                serde_json::to_value(config.kind()).unwrap(),
+                "{:?}",
+                config.kind()
+            );
+        });
+    }
+
+    #[test]
+    fn filesystem_snapshots_enabled_config_reads_the_key_the_deadline_and_the_thread_counts() {
+        let store = enabled(json!({
             "repository_key": KEY,
             "storage_call_deadline": "45s",
             "restore_reader_threads": 7,
@@ -3514,8 +3623,8 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_gives_the_defaults_of_the_fields_it_does_not_set() {
-        let store = managed(json!({ "repository_key": KEY })).unwrap();
+    fn filesystem_snapshots_enabled_config_gives_the_defaults_of_the_fields_it_does_not_set() {
+        let store = enabled(json!({ "repository_key": KEY })).unwrap();
 
         assert_eq!(
             (
@@ -3528,8 +3637,8 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_reads_the_upload_settings() {
-        let store = managed(json!({
+    fn filesystem_snapshots_enabled_config_reads_the_upload_settings() {
+        let store = enabled(json!({
             "repository_key": KEY,
             "max_concurrent_uploads": 3,
             "max_concurrent_restores": 5,
@@ -3582,8 +3691,8 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_gives_the_upload_defaults() {
-        let store = managed(json!({ "repository_key": KEY })).unwrap();
+    fn filesystem_snapshots_enabled_config_gives_the_upload_defaults() {
+        let store = enabled(json!({ "repository_key": KEY })).unwrap();
         let uploads = store.uploads();
 
         assert_eq!(
@@ -3675,7 +3784,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_zero_counts_zero_waits_and_a_bad_retry() {
+    fn filesystem_snapshots_enabled_config_refuses_zero_counts_zero_waits_and_a_bad_retry() {
         let retry = |max_attempts: u32, min_delay: &str, max_delay: &str, multiplier: f64| {
             json!({
                 "repository_key": KEY,
@@ -3764,10 +3873,10 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_accepts_a_deadline_from_one_second_to_an_eighth_of_the_grace()
+    fn filesystem_snapshots_enabled_config_accepts_a_deadline_from_one_second_to_an_eighth_of_the_grace()
      {
         let deadline = |text: &str| {
-            managed(json!({ "repository_key": KEY, "storage_call_deadline": text }))
+            enabled(json!({ "repository_key": KEY, "storage_call_deadline": text }))
                 .map(|store| store.storage_call_deadline())
                 .map_err(|error| error.contains("storage_call_deadline must be from 1s to 112.5s"))
         };
@@ -3793,7 +3902,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_zero_restore_reader_threads() {
+    fn filesystem_snapshots_enabled_config_refuses_zero_restore_reader_threads() {
         assert!(
             refusal(json!({ "repository_key": KEY, "restore_reader_threads": 0 }))
                 .contains("restore_reader_threads must be greater than zero")
@@ -3801,7 +3910,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_zero_save_threads() {
+    fn filesystem_snapshots_enabled_config_refuses_zero_save_threads() {
         assert!(
             refusal(json!({ "repository_key": KEY, "save_threads": 0 }))
                 .contains("save_threads must be greater than zero")
@@ -3809,7 +3918,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_an_empty_short_or_non_hex_key() {
+    fn filesystem_snapshots_enabled_config_refuses_an_empty_short_or_non_hex_key() {
         let non_hex = format!("{}g", &KEY[..127]);
         let cases = [
             (json!({ "repository_key": "" }), "must not be empty"),
@@ -3838,9 +3947,9 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_hides_the_key() {
-        let store = managed(json!({ "repository_key": KEY })).unwrap();
-        let shown = FilesystemSnapshotsConfig::Managed(Box::new(store.clone())).to_safe_string();
+    fn filesystem_snapshots_enabled_config_hides_the_key() {
+        let store = enabled(json!({ "repository_key": KEY })).unwrap();
+        let shown = FilesystemSnapshotsConfig::Enabled(Box::new(store.clone())).to_safe_string();
         let debugged = format!("{store:?}");
 
         assert_eq!(

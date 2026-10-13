@@ -628,10 +628,11 @@ export function schemaValueConforms(
   return schemaValueMatches(graph, type, value);
 }
 
-function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaValue): boolean {
-  const body = resolveType(graph, type, new Set());
-  if (!body) return false;
-  const resolvedBody = body.body;
+/** Check one resolved leaf without walking a schema graph or a value tree. */
+export function schemaLeafValueMatches(
+  resolvedBody: SchemaType['body'],
+  value: SchemaValue,
+): boolean | undefined {
   switch (resolvedBody.tag) {
     case 'bool':
       return value.tag === 'bool' && typeof value.value === 'boolean';
@@ -775,6 +776,18 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
       );
     case 'quantity':
       return value.tag === 'quantity' && quantityMatches(resolvedBody.spec, value.value);
+    default:
+      return undefined;
+  }
+}
+
+function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaValue): boolean {
+  const body = resolveType(graph, type, new Set());
+  if (!body) return false;
+  const resolvedBody = body.body;
+  const leafMatches = schemaLeafValueMatches(resolvedBody, value);
+  if (leafMatches !== undefined) return leafMatches;
+  switch (resolvedBody.tag) {
     case 'record':
       return (
         value.tag === 'record' &&
@@ -864,6 +877,8 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
       return value.tag === 'stream';
     case 'future':
     case 'ref':
+      return false;
+    default:
       return false;
   }
 }

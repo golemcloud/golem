@@ -20,11 +20,18 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::ToolOwnerPattern;
 use serde::{Deserialize, Serialize};
 
+mod canonical;
+pub use canonical::*;
+mod value;
+pub use value::{ToolGlobToken, ToolPatternError};
+mod normalization;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ToolResourcePattern {
     AnyInvocation,
-    Invocation(ToolInvocationPattern),
+    Invocation(CanonicalToolPattern),
+    Request(ToolInvocation),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -106,16 +113,16 @@ impl ToolInvocationPattern {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum ToolArgPattern {
+pub enum ToolArgPattern<V = ToolValuePattern> {
     ShortFlags {
         flags: Vec<char>,
-        value: Option<ToolValuePattern>,
+        value: Option<V>,
     },
     LongFlag {
         name: ToolIdentifier,
-        value: Option<ToolValuePattern>,
+        value: Option<V>,
     },
-    Positional(ToolValuePattern),
+    Positional(V),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -124,6 +131,7 @@ pub enum ToolValuePattern {
     Literal(ToolValueLiteral),
     Star,
     GlobStar,
+    Glob(Vec<ToolGlobToken>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -135,32 +143,38 @@ impl ToolResourcePattern {
     pub fn any() -> Self {
         Self::AnyInvocation
     }
+
+    pub fn parse_with_definition(
+        resource: &str,
+        definition: Option<&crate::schema::tool::Tool>,
+    ) -> Result<Self, ToolPatternError> {
+        if resource == "*" {
+            return Ok(Self::AnyInvocation);
+        }
+        if resource.trim().is_empty() {
+            return Err(ToolPatternError::Invalid("empty tool resource".into()));
+        }
+        let parsed = parse_tool_invocation_pattern(resource).map_err(ToolPatternError::Invalid)?;
+        parsed.normalize(definition).map(Self::Invocation)
+    }
 }
 
 impl ResourcePattern for ToolResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource == "*" {
-            Ok(ToolResourcePattern::AnyInvocation)
-        } else if resource.is_empty() {
-            Err(CardParseError::InvalidResource {
-                class: ToolClass::NAME.to_string(),
-                resource: resource.to_string(),
-            })
-        } else {
-            parse_tool_invocation_pattern(resource)
-                .map(ToolResourcePattern::Invocation)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: ToolClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
+        Self::parse_with_definition(resource, None).map_err(|_| CardParseError::InvalidResource {
+            class: ToolClass::NAME.to_string(),
+            resource: resource.to_string(),
+        })
     }
 
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AnyInvocation, _) => true,
-            (Self::Invocation(a), Self::Invocation(b)) => a == b,
-            (Self::Invocation(_), Self::AnyInvocation) => false,
+            (Self::Invocation(a), Self::Invocation(b)) => {
+                a.subsumes_invocation_pattern(b).unwrap_or(false)
+            }
+            (Self::Invocation(a), Self::Request(b)) => a.definitely_matches(b).unwrap_or(false),
+            _ => false,
         }
     }
 }
@@ -200,8 +214,13 @@ impl PermissionClass for ToolClass {
 }
 
 fn parse_tool_invocation_pattern(value: &str) -> Result<ToolInvocationPattern, String> {
-    let mut tokens = value.split_whitespace().peekable();
+    let tokens = tokenize(value)?;
+    let mut tokens = tokens.iter().map(String::as_str).peekable();
     let command_path = match tokens.peek().copied() {
+        Some(".") => {
+            tokens.next();
+            None
+        }
         Some(first) if !first.starts_with('-') => {
             let command = tokens.next().unwrap();
             Some(
@@ -215,20 +234,26 @@ fn parse_tool_invocation_pattern(value: &str) -> Result<ToolInvocationPattern, S
     };
 
     let mut args = Vec::new();
+    let mut positional_only = false;
     while let Some(token) = tokens.next() {
-        if let Some(long) = token.strip_prefix("--") {
+        if token == "--" && !positional_only {
+            positional_only = true;
+        } else if positional_only {
+            args.push(ToolArgPattern::Positional(parse_tool_value_pattern(token)?));
+        } else if let Some(long) = token.strip_prefix("--") {
             let (name, value) = split_flag_value(long, &mut tokens)?;
             args.push(ToolArgPattern::LongFlag {
                 name: ToolIdentifier::parse(name)?,
                 value,
             });
         } else if let Some(short) = token.strip_prefix('-') {
+            let (short, flag_value) = split_flag_value(short, &mut tokens)?;
             if short.is_empty() || !short.chars().all(|c| c.is_ascii_alphabetic()) {
                 return Err(value.to_string());
             }
             args.push(ToolArgPattern::ShortFlags {
                 flags: short.chars().collect(),
-                value: None,
+                value: flag_value,
             });
         } else {
             args.push(ToolArgPattern::Positional(parse_tool_value_pattern(token)?));
@@ -253,15 +278,47 @@ where
 }
 
 fn parse_tool_value_pattern(value: &str) -> Result<ToolValuePattern, String> {
-    if value.is_empty() {
-        Err(value.to_string())
-    } else if value == "*" {
-        Ok(ToolValuePattern::Star)
-    } else if value == "**" {
-        Ok(ToolValuePattern::GlobStar)
-    } else {
-        Ok(ToolValuePattern::Literal(ToolValueLiteral(
-            value.to_string(),
-        )))
+    ToolValuePattern::parse_glob(value).map_err(|e| e.to_string())
+}
+
+fn tokenize(value: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quote = None;
+    let mut started = false;
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                token.push(c);
+                token.push(chars.next().ok_or("incomplete escape")?);
+                started = true;
+            }
+            '\'' | '"' if quote == Some(c) => quote = None,
+            '\'' | '"' if quote.is_none() => {
+                quote = Some(c);
+                started = true;
+            }
+            c if c.is_whitespace() && quote.is_none() => {
+                if started {
+                    tokens.push(std::mem::take(&mut token));
+                    started = false;
+                }
+            }
+            c => {
+                token.push(c);
+                started = true;
+            }
+        }
+        if token.len() > 8192 || tokens.len() > 256 {
+            return Err("tool permission syntax exceeds complexity limit".into());
+        }
     }
+    if quote.is_some() {
+        return Err("unterminated quote".into());
+    }
+    if started {
+        tokens.push(token);
+    }
+    Ok(tokens)
 }

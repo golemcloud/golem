@@ -14,17 +14,22 @@
 
 mod handler;
 mod session_store;
+mod sql_session_store;
 
-use golem_common::config::{DbSqliteConfig, RedisConfig};
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_test_framework::components::rdb::{DbInfo, Rdb};
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::spawned_tls::{CERT_PEM, SpawnedRedisTls};
+use golem_worker_service::config::{PostgresSessionStoreConfig, SqliteSessionStoreConfig};
 use golem_worker_service::custom_api::oidc::session_store::SessionStore;
 use golem_worker_service::custom_api::oidc::session_store::{
-    RedisSessionStore, SqliteSessionStore,
+    PostgresSessionStore, RedisSessionStore, SqliteSessionStore,
 };
 use rustls::RootCertStore;
 use std::sync::{Arc, Once};
@@ -32,6 +37,7 @@ use std::time::Duration;
 use tempfile::NamedTempFile;
 use test_r::test_dep;
 use tracing::Level;
+use uuid::Uuid;
 
 test_r::enable!();
 
@@ -81,28 +87,42 @@ fn tracing() -> Tracing {
     Tracing::init()
 }
 
+/// Long enough that background cleanup never runs during a test after the first tick at store
+/// construction, so expiry tests observe the read-side expiry checks. Background cleanup is tested
+/// separately with its own stores.
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(3600);
+
 #[test_dep(scope = PerWorker)]
 async fn sqlite_store_file() -> NamedTempFile {
     NamedTempFile::new().unwrap()
 }
 
-#[test_dep(scope = PerWorker)]
-async fn sqlite_pool(db_file: &NamedTempFile) -> SqlitePool {
-    let db_config = DbSqliteConfig {
+fn sqlite_config(db_file: &NamedTempFile) -> DbSqliteConfig {
+    DbSqliteConfig {
         database: db_file.path().to_string_lossy().to_string(),
         max_connections: 10,
         foreign_keys: false,
-    };
-
-    SqlitePool::configured(&db_config).await.unwrap()
+    }
 }
 
-async fn sqlite_store(sqlite_pool: &SqlitePool, expiration_secs: i64) -> SqliteSessionStore {
-    SqliteSessionStore::new(
-        sqlite_pool.clone(),
-        expiration_secs,
-        Duration::from_millis(50),
-    )
+/// Config for the per-worker SQLite file, migrated once so that the stores that share the file do
+/// not race to apply the migrations.
+#[test_dep(scope = PerWorker)]
+async fn migrated_sqlite_config(db_file: &NamedTempFile) -> DbSqliteConfig {
+    let config = sqlite_config(db_file);
+    drop(sqlite_store(&config, Duration::from_secs(60)).await);
+    config
+}
+
+pub async fn sqlite_store(
+    sqlite_config: &DbSqliteConfig,
+    pending_login_expiration: Duration,
+) -> SqliteSessionStore {
+    SqliteSessionStore::configured(&SqliteSessionStoreConfig {
+        pending_login_expiration,
+        cleanup_interval: CLEANUP_INTERVAL,
+        sqlite_config: sqlite_config.clone(),
+    })
     .await
     .unwrap()
 }
@@ -110,45 +130,55 @@ async fn sqlite_store(sqlite_pool: &SqlitePool, expiration_secs: i64) -> SqliteS
 #[test_dep(scope = PerWorker, tagged_as = "sqlite")]
 async fn sqlite_store_default(
     _tracing: &Tracing,
-    sqlite_pool: &SqlitePool,
+    config: &DbSqliteConfig,
 ) -> Arc<dyn SessionStore> {
-    Arc::new(sqlite_store(sqlite_pool, 60).await)
+    Arc::new(sqlite_store(config, Duration::from_secs(60)).await)
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "sqlite_pair")]
-async fn sqlite_store_pair(_tracing: &Tracing, sqlite_pool: &SqlitePool) -> SessionStorePair {
+async fn sqlite_store_pair(_tracing: &Tracing, config: &DbSqliteConfig) -> SessionStorePair {
     SessionStorePair {
-        first: Arc::new(sqlite_store(sqlite_pool, 60).await),
-        second: Arc::new(sqlite_store(sqlite_pool, 60).await),
+        first: Arc::new(sqlite_store(config, Duration::from_secs(60)).await),
+        second: Arc::new(sqlite_store(config, Duration::from_secs(60)).await),
     }
+}
+
+async fn sqlite_stores_with_failing_inserts(
+    table: &str,
+) -> (
+    Arc<dyn SessionStore>,
+    Arc<dyn SessionStore>,
+    Arc<NamedTempFile>,
+) {
+    use golem_service_base::db::PoolApi;
+
+    let db_file = Arc::new(NamedTempFile::new().unwrap());
+    let config = sqlite_config(&db_file);
+    let healthy: Arc<dyn SessionStore> =
+        Arc::new(sqlite_store(&config, Duration::from_secs(60)).await);
+    let failing: Arc<dyn SessionStore> =
+        Arc::new(sqlite_store(&config, Duration::from_secs(60)).await);
+    SqlitePool::configured(&config)
+        .await
+        .unwrap()
+        .with_rw("session_store_test", "reject_inserts")
+        .execute(sqlx::query(&format!(
+            r#"
+            CREATE TRIGGER reject_{table}_insert
+            BEFORE INSERT ON {table}
+            BEGIN
+                SELECT RAISE(ABORT, 'injected write failure');
+            END;
+            "#
+        )))
+        .await
+        .unwrap();
+    (healthy, failing, db_file)
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "sqlite_bearer_write_failure")]
 async fn sqlite_bearer_write_failure_stores(_tracing: &Tracing) -> BearerWriteFailureStores {
-    use golem_service_base::db::PoolApi;
-
-    let db_file = Arc::new(NamedTempFile::new().unwrap());
-    let pool = SqlitePool::configured(&DbSqliteConfig {
-        database: db_file.path().to_string_lossy().to_string(),
-        max_connections: 10,
-        foreign_keys: false,
-    })
-    .await
-    .unwrap();
-    let healthy: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
-    let failing: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
-    pool.with_rw("session_store_test", "reject_bearer_writes")
-        .execute(sqlx::query(
-            r#"
-            CREATE TRIGGER reject_oidc_pkce_bearer_insert
-            BEFORE INSERT ON oidc_pkce_bearer
-            BEGIN
-                SELECT RAISE(ABORT, 'injected bearer write failure');
-            END;
-            "#,
-        ))
-        .await
-        .unwrap();
+    let (healthy, failing, db_file) = sqlite_stores_with_failing_inserts("oidc_pkce_bearer").await;
     BearerWriteFailureStores {
         healthy,
         failing,
@@ -160,30 +190,8 @@ async fn sqlite_bearer_write_failure_stores(_tracing: &Tracing) -> BearerWriteFa
 async fn sqlite_authorization_code_write_failure_stores(
     _tracing: &Tracing,
 ) -> AuthorizationCodeWriteFailureStores {
-    use golem_service_base::db::PoolApi;
-
-    let db_file = Arc::new(NamedTempFile::new().unwrap());
-    let pool = SqlitePool::configured(&DbSqliteConfig {
-        database: db_file.path().to_string_lossy().to_string(),
-        max_connections: 10,
-        foreign_keys: false,
-    })
-    .await
-    .unwrap();
-    let healthy: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
-    let failing: Arc<dyn SessionStore> = Arc::new(sqlite_store(&pool, 60).await);
-    pool.with_rw("session_store_test", "reject_authorization_code_writes")
-        .execute(sqlx::query(
-            r#"
-            CREATE TRIGGER reject_oidc_pkce_authorization_code_insert
-            BEFORE INSERT ON oidc_pkce_authorization_code
-            BEGIN
-                SELECT RAISE(ABORT, 'injected authorization code write failure');
-            END;
-            "#,
-        ))
-        .await
-        .unwrap();
+    let (healthy, failing, db_file) =
+        sqlite_stores_with_failing_inserts("oidc_pkce_authorization_code").await;
     AuthorizationCodeWriteFailureStores {
         healthy,
         failing,
@@ -191,12 +199,149 @@ async fn sqlite_authorization_code_write_failure_stores(
     }
 }
 
+/// A file of its own for the fast-expiry store: the construction-time cleanup of a store created
+/// later on a shared file would delete expired records before the read-side expiry checks see them.
+#[test_dep(scope = PerWorker, tagged_as = "fast_expiry")]
+async fn sqlite_fast_expiry_store_file() -> NamedTempFile {
+    NamedTempFile::new().unwrap()
+}
+
 #[test_dep(scope = PerWorker, tagged_as = "sqlite_fast_expiry")]
 async fn sqlite_store_fast_expiry(
     _tracing: &Tracing,
-    sqlite_pool: &SqlitePool,
+    #[tagged_as("fast_expiry")] db_file: &NamedTempFile,
 ) -> Arc<dyn SessionStore> {
-    Arc::new(sqlite_store(sqlite_pool, 0).await)
+    Arc::new(sqlite_store(&sqlite_config(db_file), Duration::ZERO).await)
+}
+
+#[test_dep(scope = Shared)]
+async fn postgres() -> DockerPostgresRdb {
+    DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await
+}
+
+/// Config for the database of the shared Postgres container. `schema` is `None` when the store
+/// should use its default schema.
+pub fn postgres_config(postgres: &DockerPostgresRdb, schema: Option<String>) -> DbPostgresConfig {
+    let DbInfo::Postgres(info) = postgres.info() else {
+        unreachable!("DockerPostgresRdb always reports Postgres info")
+    };
+    DbPostgresConfig {
+        host: info.public_host,
+        port: info.public_port,
+        database: info.database_name,
+        username: info.username,
+        password: info.password,
+        max_connections: 10,
+        schema,
+        acquire_timeout: None,
+    }
+}
+
+/// Config for a new, empty schema in the database of the shared Postgres container.
+pub fn unique_postgres_config(postgres: &DockerPostgresRdb) -> DbPostgresConfig {
+    postgres_config(
+        postgres,
+        Some(format!("session_store_{}", Uuid::new_v4().simple())),
+    )
+}
+
+pub async fn postgres_store(
+    postgres_config: &DbPostgresConfig,
+    pending_login_expiration: Duration,
+) -> PostgresSessionStore {
+    PostgresSessionStore::configured(&PostgresSessionStoreConfig {
+        pending_login_expiration,
+        cleanup_interval: CLEANUP_INTERVAL,
+        postgres_config: postgres_config.clone(),
+    })
+    .await
+    .unwrap()
+}
+
+#[test_dep(scope = Shared, tagged_as = "postgres")]
+async fn postgres_store_default(
+    _tracing: &Tracing,
+    postgres: &DockerPostgresRdb,
+) -> Arc<dyn SessionStore> {
+    Arc::new(postgres_store(&unique_postgres_config(postgres), Duration::from_secs(60)).await)
+}
+
+#[test_dep(scope = Shared, tagged_as = "postgres_pair")]
+async fn postgres_store_pair(_tracing: &Tracing, postgres: &DockerPostgresRdb) -> SessionStorePair {
+    let config = unique_postgres_config(postgres);
+    SessionStorePair {
+        first: Arc::new(postgres_store(&config, Duration::from_secs(60)).await),
+        second: Arc::new(postgres_store(&config, Duration::from_secs(60)).await),
+    }
+}
+
+async fn postgres_stores_with_failing_inserts(
+    postgres: &DockerPostgresRdb,
+    table: &str,
+) -> (Arc<dyn SessionStore>, Arc<dyn SessionStore>) {
+    use golem_service_base::db::{Pool, PoolApi};
+
+    let config = unique_postgres_config(postgres);
+    let healthy: Arc<dyn SessionStore> =
+        Arc::new(postgres_store(&config, Duration::from_secs(60)).await);
+    let failing: Arc<dyn SessionStore> =
+        Arc::new(postgres_store(&config, Duration::from_secs(60)).await);
+    let pool = PostgresPool::configured(&config).await.unwrap();
+    pool.with_rw("session_store_test", "reject_inserts")
+        .execute(sqlx::query(
+            r#"
+            CREATE FUNCTION reject_insert() RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'injected write failure';
+            END;
+            $$ LANGUAGE plpgsql
+            "#,
+        ))
+        .await
+        .unwrap();
+    pool.with_rw("session_store_test", "reject_inserts")
+        .execute(sqlx::query(&format!(
+            "CREATE TRIGGER reject_{table}_insert BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION reject_insert()"
+        )))
+        .await
+        .unwrap();
+    (healthy, failing)
+}
+
+#[test_dep(scope = Shared, tagged_as = "postgres_bearer_write_failure")]
+async fn postgres_bearer_write_failure_stores(
+    _tracing: &Tracing,
+    postgres: &DockerPostgresRdb,
+) -> BearerWriteFailureStores {
+    let (healthy, failing) =
+        postgres_stores_with_failing_inserts(postgres, "oidc_pkce_bearer").await;
+    BearerWriteFailureStores {
+        healthy,
+        failing,
+        _sqlite_file: None,
+    }
+}
+
+#[test_dep(scope = Shared, tagged_as = "postgres_authorization_code_write_failure")]
+async fn postgres_authorization_code_write_failure_stores(
+    _tracing: &Tracing,
+    postgres: &DockerPostgresRdb,
+) -> AuthorizationCodeWriteFailureStores {
+    let (healthy, failing) =
+        postgres_stores_with_failing_inserts(postgres, "oidc_pkce_authorization_code").await;
+    AuthorizationCodeWriteFailureStores {
+        healthy,
+        failing,
+        _sqlite_file: None,
+    }
+}
+
+#[test_dep(scope = Shared, tagged_as = "postgres_fast_expiry")]
+async fn postgres_store_fast_expiry(
+    _tracing: &Tracing,
+    postgres: &DockerPostgresRdb,
+) -> Arc<dyn SessionStore> {
+    Arc::new(postgres_store(&unique_postgres_config(postgres), Duration::ZERO).await)
 }
 
 #[test_dep(scope = Shared)]

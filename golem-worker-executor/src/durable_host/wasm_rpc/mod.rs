@@ -157,7 +157,7 @@ struct OutboundRpcDenial {
 
 enum RpcTargetAdmission {
     Recorded,
-    LiveOnly(PermissionTarget),
+    LiveOnly(Box<PermissionTarget>),
 }
 
 fn scheduled_invocation_principal(owner: &OwnedAgentId) -> Principal {
@@ -1975,7 +1975,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         if !deferred_durable {
-            return Ok(Ok(RpcTargetAdmission::LiveOnly(target)));
+            return Ok(Ok(RpcTargetAdmission::LiveOnly(Box::new(target))));
         }
 
         let begun =

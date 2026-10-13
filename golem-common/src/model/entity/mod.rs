@@ -811,7 +811,7 @@ pub enum EntityInvocationPlanReference {
 pub struct ToolInvocationDescriptor {
     pub attempt_ordinal: u64,
     pub command_path: Vec<String>,
-    pub args: Vec<crate::model::card::ToolArgPattern>,
+    pub args: Vec<crate::model::card::ToolArgPattern<crate::model::card::ToolInvocationValue>>,
     pub has_stdin: bool,
     pub has_stdout: bool,
     pub declares_stdout: bool,

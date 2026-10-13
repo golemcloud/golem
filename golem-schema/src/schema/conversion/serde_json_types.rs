@@ -17,6 +17,13 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
+#[cfg(feature = "guest")]
+crate::schema::wit::direct::wire_string!(
+    ::serde_json::Value,
+    |value: &::serde_json::Value| value.to_string(),
+    |value: &str| ::serde_json::from_str::<::serde_json::Value>(value)
+);
+
 impl IntoSchema for ::serde_json::Value {
     fn type_id() -> TypeId {
         TypeId::new("serde_json.Value")
