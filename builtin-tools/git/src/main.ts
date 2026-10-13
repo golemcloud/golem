@@ -693,7 +693,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       .doc({
         summary: "Push one branch or tag through released isomorphic-git.",
         description:
-          "Multi-ref, matching and atomic pushes are unsupported and fail before sending. --all and --tags work only when selecting at most one ref. Deletion requires an existing local HEAD. A lost response has an uncertain remote outcome; reconcile before retrying. Released upstream parsing tolerates some malformed trailing status records and can wait for an unfinished response.",
+          "Multi-ref, matching and atomic pushes are unsupported and fail before sending. --all and --tags work only when selecting at most one ref. Deletion requires an existing local HEAD. The released parser requires side-band-64k receive-pack status; a server without it can accept the push before status parsing fails. A lost or unparseable response has an uncertain remote outcome; reconcile before retrying. Released upstream parsing tolerates some malformed trailing status records and can wait for an unfinished response.",
       })
       .annotations({
         readOnly: false,
@@ -817,7 +817,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         summary:
           "Fetch validated objects and update mapped references and FETCH_HEAD.",
         description:
-          "Copies existing objects to a disposable repository and fetches selected refs separately. Validates reachable objects before publication. Unsolicited shallow lines without a depth request are ignored. Raw non-sideband upload-pack can stall; partial-download replay and active cancellation still depend on unresolved runtime work.",
+          "Copies existing objects to a disposable repository and fetches selected refs separately. Validates reachable objects before publication. Unsolicited shallow lines without a depth request are ignored. Raw non-sideband upload-pack can stall in the released parser. Supported HTTP transfers use runtime-owned recovery and cancellation; a cancelled partial pack does not publish application refs.",
       })
       .annotations({
         readOnly: false,

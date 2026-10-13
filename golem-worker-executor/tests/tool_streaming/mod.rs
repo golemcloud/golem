@@ -15182,7 +15182,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
                                 "{}0000{}0000",
                                 pkt_line("# service=git-receive-pack\n"),
                                 pkt_line(&format!(
-                                    "{} refs/heads/main\0report-status delete-refs atomic\n",
+                                    "{} refs/heads/main\0report-status side-band-64k delete-refs atomic\n",
                                     "0".repeat(40)
                                 )),
                             );
@@ -15323,6 +15323,9 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
                         let oid = fields[1].to_string();
                         assert_eq!(fields[2].split('\0').next(), Some("refs/heads/fresh"));
                         assert!(!command.contains("atomic"));
+                        let capabilities = command.split('\0').nth(1).unwrap();
+                        assert!(capabilities.split_whitespace().any(|cap| cap == "report-status"));
+                        assert!(capabilities.split_whitespace().any(|cap| cap == "side-band-64k"));
                         assert_eq!(&bytes[line_len..line_len + 4], b"0000");
                         let pack = bytes[line_len + 4..].to_vec();
                         assert_eq!(&pack[..4], b"PACK");
@@ -15340,7 +15343,13 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
                                         true,
                                     ))
                                 } else {
-                                    Some((Ok(Bytes::from(pkt_line("unpack ok\n"))), true))
+                                    Some((
+                                        Ok(Bytes::from(pkt_line(&format!(
+                                            "\x01{}",
+                                            pkt_line("unpack ok\n")
+                                        )))),
+                                        true,
+                                    ))
                                 }
                             });
                             return Response::builder()
@@ -15351,9 +15360,12 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
                         Response::builder()
                             .header("content-type", "application/x-git-receive-pack-result")
                             .body(Body::from(format!(
-                                "{}{}0000",
-                                pkt_line("unpack ok\n"),
-                                pkt_line("ok refs/heads/fresh\n")
+                                "{}0000",
+                                pkt_line(&format!(
+                                    "\x01{}{}0000",
+                                    pkt_line("unpack ok\n"),
+                                    pkt_line("ok refs/heads/fresh\n")
+                                ))
                             )))
                             .unwrap()
                     }

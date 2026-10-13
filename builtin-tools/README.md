@@ -78,7 +78,9 @@ remote state, not blindly retried. No exactly-once guarantee is made for an exte
 Successful single-ref status is required before local tracking/upstream writes, but released
 receive-pack parsing tolerates some duplicate, truncated or trailing status records. An invalid
 unfinished response can remain pending until the server closes it; strict report validation and
-fail-fast cleanup are not claimed.
+fail-fast cleanup are not claimed. The released parser requires `side-band-64k` receive-pack
+status. A server that returns protocol-valid plain report-status can accept the push before the
+tool reports a parsing error. Reconcile that uncertain outcome with remote state before retrying.
 
 Pull resolves the upstream, fetches, and selects the explicit/configured ff, merge, or rebase
 strategy. Conflicted merges can be resolved with `add` and `commit` or `merge --continue`, or
@@ -100,16 +102,15 @@ Git operations fail closed when a `100755` entry is observable rather than silen
 Relative symlinks are supported. File-to-directory checkout transitions are also rejected because
 the pinned library cannot apply them safely.
 
-Recovery and active cancellation of real HTTP transfers are not release-ready. The retained
-partial-download test completes an authenticated smart-HTTP probe and an ordinary tool clone,
-then times out after a controlled worker restart. It does not reach active HTTP cancellation,
-push roundtrip, or push-response-loss checks. A completion-delivery replay error appears during
-executor shutdown; its relation to the timeout is not established. The candidate uses
-`wasm-rquickjs` 0.4.11's upstream Node HTTP unfinished-response cleanup fix, without an SDK
-generator patch, and Golem's merged WebSocket host integration. Related stream-observation work
-in [Wasmtime #11](https://github.com/golemcloud/wasmtime/pull/11) and
-[Golem #4124](https://github.com/golemcloud/golem/pull/4124) does not establish HTTP clone recovery.
-Publication waits for the complete recovery and active-cancellation checks to pass.
+HTTP transfers use `wasm-rquickjs` 0.4.11's upstream Node HTTP unfinished-response cleanup fix,
+without an SDK generator patch. Golem records response data and EOF at actual guest-read
+consumption through Wasmtime's existing read observer, rather than at producer readiness.
+The real transfer tests cover authenticated pack transfer, replay of a completed clone,
+restart during a partial download, active cancellation and connection disposal, subsequent tool
+usability, and a push/clone roundtrip. A cancelled partial download publishes no application refs.
+An accepted push with a lost response returns an uncertain-outcome error without retransmission;
+replaying that completed error also performs no second push. These checks are not an exactly-once
+guarantee for an external Git server or comprehensive parity with native Git.
 
 ### Git differential test prerequisites
 
