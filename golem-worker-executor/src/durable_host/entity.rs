@@ -1056,6 +1056,9 @@ impl EntityInvocationDurability {
                 let cancelled = terminal.cancelled();
                 *replay_terminal.lock().unwrap() = Some(terminal);
                 Ok(if cancelled {
+                    replay_state
+                        .await_tool_attachment_reconstruction(structural_start)
+                        .await?;
                     // Select attachment cancellation before the coordinator
                     // aborts the body and drops its producer resources.
                     on_completed_cancelled();

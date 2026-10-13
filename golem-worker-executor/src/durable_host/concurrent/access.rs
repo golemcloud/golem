@@ -14,12 +14,88 @@
 
 use super::*;
 
+pub(super) fn accept_access_terminal_effect<Resp, R, A>(
+    response: &Resp,
+    oplog: &Arc<dyn Oplog>,
+    end: OplogEntry,
+    accept: A,
+) -> Option<(R, crate::services::oplog::OplogAddReceipt)>
+where
+    A: FnOnce(&Resp, Box<dyn FnOnce(R) + '_>),
+{
+    let mut accepted = None;
+    accept(
+        response,
+        Box::new(|reservation| {
+            accepted = Some((reservation, oplog.enqueue_add(end)));
+        }),
+    );
+    accepted
+}
+
+pub(super) fn prepare_access_terminal_effect<R, C, F, E, EF>(
+    tasks: &crate::worker::tasks::WorkerTasks,
+    recording: tokio_util::task::task_tracker::TaskTrackerToken,
+    commit: C,
+    publish: F,
+    failed: E,
+) -> Result<
+    (
+        oneshot::Sender<(R, crate::services::oplog::OplogAddReceipt)>,
+        tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+    ),
+    WorkerExecutorError,
+>
+where
+    R: Send + 'static,
+    C: Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
+    F: FnOnce(R) + Send + 'static,
+    E: FnOnce(WorkerExecutorError) -> EF + Send + 'static,
+    EF: Future<Output = ()> + Send + 'static,
+{
+    let (accept, accepted) = oneshot::channel::<(R, crate::services::oplog::OplogAddReceipt)>();
+    let (complete, completed) = oneshot::channel();
+    tasks
+        .spawn_metadata(async move {
+            let _recording = recording;
+            let Ok((reservation, append)) = accepted.await else {
+                return;
+            };
+            let persisted = async {
+                append.await?;
+                commit.await
+            }
+            .await;
+            if let Err(error) = persisted {
+                // Fence synchronously before releasing the reservation. Election may wait for
+                // cancellation cleanup to join this receipt, so resolve it before polling cleanup.
+                let cleanup = failed(error.clone());
+                drop(reservation);
+                let _ = complete.send(Err(error));
+                cleanup.await;
+            } else {
+                publish(reservation);
+                let _ = complete.send(Ok(()));
+            }
+        })
+        .map_err(WorkerExecutorError::runtime)?;
+    let receipt = tokio::spawn(async move {
+        completed.await.map_err(|error| {
+            WorkerExecutorError::runtime(format!(
+                "durable effect coordinator stopped without a receipt: {error}"
+            ))
+        })?
+    });
+    Ok((accept, receipt))
+}
+
 enum AccessTerminalGuardState {
     BeforeTerminal {
         call: DroppedCall,
     },
     CleanupAfterTerminal {
         atomic_lease: Option<Arc<AtomicRegionLease>>,
+        successful_end: bool,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -93,6 +169,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         &mut self,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
         discard_marker: Option<CompletionMarkerRecord>,
+        successful_end: bool,
     ) {
         let call = match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { call } => call,
@@ -100,6 +177,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         };
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
             atomic_lease: call.atomic_lease.clone(),
+            successful_end,
             function_type: call.function_type().clone(),
             durable_begin_index: call.begin_index(),
             terminal: Some(terminal),
@@ -109,6 +187,23 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
             live_call_permit: call.live_call_permit,
             discard_marker,
         };
+    }
+
+    pub(super) fn finish_atomic_region(
+        &self,
+        regions: &mut [crate::durable_host::ActiveAtomicRegion],
+    ) -> Result<(), WorkerExecutorError> {
+        match &self.state {
+            AccessTerminalGuardState::CleanupAfterTerminal {
+                atomic_lease,
+                successful_end,
+                ..
+            } => finish_terminal_atomic_region(regions, atomic_lease.as_deref(), *successful_end),
+            AccessTerminalGuardState::BeforeTerminal { call } => {
+                finish_terminal_atomic_region(regions, call.atomic_lease.as_deref(), true)
+            }
+            AccessTerminalGuardState::Disarmed => Ok(()),
+        }
     }
 
     /// Disarms only the `CompletionDiscarded` marker while keeping the terminal cleanup armed.
@@ -197,6 +292,7 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
             }
             AccessTerminalGuardState::CleanupAfterTerminal {
                 atomic_lease,
+                successful_end,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -228,6 +324,7 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 if let Some(sink) = &self.cleanup_sink {
                     let _ = sink.send(DropEvent::CleanupAfterTerminal {
                         atomic_lease,
+                        successful_end,
                         function_type,
                         durable_begin_index,
                         terminal,

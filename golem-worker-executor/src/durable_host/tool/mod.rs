@@ -21,6 +21,7 @@
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
+mod durability;
 mod mcp;
 pub(crate) mod operation;
 mod streams;
@@ -5956,10 +5957,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         self_: Resource<ToolOutputWriterEntry>,
         bytes: Vec<u8>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        let writer = accessor.with(|mut access| {
-            Ok::<_, anyhow::Error>(access.get().table().get(&self_)?.producer.writer())
+        let (writer, controller) = accessor.with(|mut access| {
+            let entry = access.get().table().get(&self_)?;
+            Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
         })?;
-        Ok(writer.write(bytes).await)
+        durability::write(accessor, writer, controller, bytes).await
     }
 
     async fn finish(
@@ -6072,14 +6074,65 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         Resource<ToolOutputEntry>,
         StreamReader<Result<Vec<u8>, ByteStreamFailure>>,
     )> {
-        accessor.with(|mut access| {
+        use crate::durable_host::concurrent::DeferredCallReplayOutcome;
+        use golem_common::model::oplog::HostResponseToolAttachmentCreated;
+        use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+        use golem_common::model::oplog::host_functions::GolemToolCreateOutput;
+        use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentCreated;
+
+        let mut call = DurableCallSession::<GolemToolCreateOutput, NotCancellable>::start_access(
+            accessor,
+            accessor.getter(),
+            HostRequestNoInput {},
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+        let identity = ToolAttachmentId {
+            creation_start: call.start_index(),
+            slot: ToolAttachmentSlot::Output,
+        };
+        let (created, delivery) = 'creation: {
+            if !call.is_live() {
+                match call
+                    .replay_access_deferred(accessor, accessor.getter())
+                    .await?
+                {
+                    DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                        anyhow::ensure!(
+                            response.created.attachment == identity,
+                            "tool output identity changed during replay"
+                        );
+                        break 'creation (response.created, delivery);
+                    }
+                    DeferredCallReplayOutcome::Incomplete(live) => call = live,
+                }
+            }
+            let capacity_bytes = accessor.with(|mut access| {
+                access.get().state.config.limits.max_tool_attachment_bytes as u64
+            });
+            let (response, delivery) = call
+                .complete_access_deferred(
+                    accessor,
+                    accessor.getter(),
+                    HostResponseToolAttachmentCreated {
+                        created: ToolAttachmentCreated {
+                            attachment: identity,
+                            capacity_bytes,
+                        },
+                    },
+                )
+                .await?;
+            (response.created, delivery)
+        };
+        let output = accessor.with(|mut access| -> anyhow::Result<_> {
+            let capacity = usize::try_from(created.capacity_bytes)?;
             let ctx = access.get();
             let memory = AttachmentMemory::for_store(
                 ctx.public_state.worker().active_agents(),
                 ctx.state.is_live(),
             );
-            let (producer, consumer, _) =
-                attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
+            let (producer, consumer, _) = attachment_pair(capacity, memory);
+            producer.writer().set_identity(created.attachment);
             let target = ctx.table().push(ToolOutputEntry {
                 producer: Some(producer),
                 completion_only: false,
@@ -6091,7 +6144,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                     Err(error.into())
                 }
             }
-        })
+        });
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                delivery.suppress();
+                return Err(error);
+            }
+        };
+        if delivery.is_replay_discarded() {
+            std::future::pending::<()>().await;
+        }
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(output)
     }
 
     async fn get_invoke_results(

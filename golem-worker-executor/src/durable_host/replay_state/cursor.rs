@@ -2545,6 +2545,52 @@ impl CursorTx<'_> {
 }
 
 impl ReplayState {
+    /// Marks an accepted output write's regenerated arguments validated and its resident
+    /// output restored. This must precede the write's acknowledgment delivery gate.
+    pub fn complete_tool_attachment_reconstruction(&self, start: OplogIndex) {
+        let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        if attachments.accepted.contains_key(&start) {
+            attachments.completed.insert(start);
+        }
+        drop(attachments);
+        self.cursor.progress.notify_waiters();
+    }
+
+    /// Waits for retained accepted output writes beneath the root, including unclaimed
+    /// Starts and descendants through durable scopes and nested entity bodies.
+    pub async fn await_tool_attachment_reconstruction(
+        &self,
+        root: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
+                return Err(WorkerExecutorError::runtime(failure));
+            }
+            if let Some(failure) = self.cursor.owner_tool_operations.selected_owner_failure() {
+                return Err(historical_reconstruction_owner_failure(failure));
+            }
+            if !self
+                .cursor
+                .tool_attachment_reconstruction
+                .lock()
+                .unwrap()
+                .pending_under(root)
+            {
+                return Ok(());
+            }
+            tokio::select! {
+                biased;
+                failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                    return Err(historical_reconstruction_owner_failure(failure));
+                }
+                _ = progress => {}
+            }
+        }
+    }
+
     pub(crate) async fn new_for_owner(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -2554,11 +2600,13 @@ impl ReplayState {
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
+        let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let (completion_markers, stream_observations) = Self::scan_completion_markers(
             &oplog,
             OplogIndex::INITIAL,
             last_oplog_index,
             &skipped_regions,
+            &mut tool_attachment_reconstruction,
         )
         .await?;
         let concurrent_resolver = ConcurrentReplayResolver::default();
@@ -2593,6 +2641,7 @@ impl ReplayState {
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
             completion_markers: std::sync::Mutex::new(completion_markers),
+            tool_attachment_reconstruction: std::sync::Mutex::new(tool_attachment_reconstruction),
             log_hashes: std::sync::Mutex::new(HashMap::new()),
             pending_replay_events: std::sync::Mutex::new(Vec::new()),
             progress: Notify::new(),
@@ -2626,6 +2675,7 @@ impl ReplayState {
         from: OplogIndex,
         to: OplogIndex,
         skipped_regions: &DeletedRegions,
+        attachments: &mut ToolAttachmentReconstruction,
     ) -> Result<(CompletionMarkers, StreamObservationPositions), WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
         let mut markers = HashMap::new();
@@ -2643,6 +2693,57 @@ impl ReplayState {
                     continue;
                 }
                 let marker = match entry {
+                    OplogEntry::Start {
+                        function_name,
+                        parent_start_index,
+                        ..
+                    } => {
+                        attachments.starts.insert(
+                            marker_idx,
+                            (
+                                parent_start_index,
+                                function_name == HostFunctionName::GolemToolOutputWrite,
+                            ),
+                        );
+                        None
+                    }
+                    OplogEntry::End {
+                        start_index,
+                        response,
+                        ..
+                    } if attachments
+                        .starts
+                        .get(&start_index)
+                        .is_some_and(|(_, output)| *output) =>
+                    {
+                        let response = response.ok_or_else(|| {
+                            WorkerExecutorError::runtime(format!(
+                                "output write End at {marker_idx} has no response"
+                            ))
+                        })?;
+                        let response = oplog
+                            .download_payload(response)
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let response =
+                            golem_common::model::oplog::HostResponseToolAttachmentWrite::try_from(
+                                response,
+                            )
+                            .map_err(WorkerExecutorError::runtime)?;
+                        if matches!(response.outcome, golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::Accepted) {
+                            let mut ancestor = start_index;
+                            while let Some((Some(parent), _)) = attachments.starts.get(&ancestor) {
+                                if *parent >= ancestor {
+                                    return Err(WorkerExecutorError::runtime(
+                                        "invalid accepted tool output ancestor",
+                                    ));
+                                }
+                                ancestor = *parent;
+                            }
+                            attachments.accepted.insert(start_index, marker_idx);
+                        }
+                        None
+                    }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
                         Some((start_index, CompletionMarker::Delivered(marker_idx)))
                     }
@@ -3173,6 +3274,11 @@ impl ReplayState {
                     }
                     let skipped_regions = tx.st.skipped_regions.clone();
                     tx.cursor
+                        .tool_attachment_reconstruction
+                        .lock()
+                        .unwrap()
+                        .retain(|index| !skipped_regions.is_in_deleted_region(index));
+                    tx.cursor
                         .stream_observations
                         .lock()
                         .unwrap()
@@ -3512,13 +3618,17 @@ impl ReplayState {
                         .unwrap()
                         .retain(|_, marker| marker.index() <= new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
+                    cursor.tool_attachment_reconstruction.lock().unwrap()
+                        .retain(|index| index <= new_target);
                 }
                 std::cmp::Ordering::Greater => {
+                    let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
                     let (additions, stream_observations) = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
                         &tx.st.skipped_regions,
+                        &mut attachments,
                     )
                     .await?;
                     if !additions.is_empty() {
@@ -3543,6 +3653,9 @@ impl ReplayState {
                         markers.extend(additions);
                     }
                     cursor.stream_observations.lock().unwrap().extend(stream_observations);
+                    let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
+                    current.starts.extend(attachments.starts);
+                    current.accepted.extend(attachments.accepted);
                 }
             }
             if new_target > cursor.last_replayed_index() {

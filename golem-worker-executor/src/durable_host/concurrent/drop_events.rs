@@ -421,6 +421,7 @@ pub enum DropEvent {
     /// rather than ambient state.
     CleanupAfterTerminal {
         atomic_lease: Option<Arc<AtomicRegionLease>>,
+        successful_end: bool,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -546,6 +547,27 @@ pub async fn drain_queued_dropped_call_events<Ctx: WorkerCtx>(
     Ok(recorded)
 }
 
+pub(super) fn finish_terminal_atomic_region(
+    regions: &mut [crate::durable_host::ActiveAtomicRegion],
+    lease: Option<&AtomicRegionLease>,
+    successful_end: bool,
+) -> Result<(), WorkerExecutorError> {
+    if let Some(lease) = lease {
+        let owner = lease.owner();
+        let marked = !successful_end
+            || owner.is_none_or(|index| {
+                crate::durable_host::mark_atomic_region_has_side_effects_for(regions, index)
+            });
+        lease.release();
+        if !marked {
+            return Err(WorkerExecutorError::runtime(
+                "durable call completed after its atomic region closed",
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn record_dropped_call_event<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     event: DropEvent,
@@ -571,6 +593,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
         }
         DropEvent::CleanupAfterTerminal {
             atomic_lease,
+            successful_end,
             function_type,
             durable_begin_index,
             terminal,
@@ -592,9 +615,12 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                     }
                 }
             }
-            if let Some(lease) = &atomic_lease {
-                lease.release();
-            }
+            finish_terminal_atomic_region(
+                &mut ctx.state.active_atomic_regions,
+                atomic_lease.as_deref(),
+                successful_end,
+            )
+            .map_err(|err| TerminalCallError::new(err, trap_context))?;
             ctx.end_durable_function(&function_type, durable_begin_index, false)
                 .await
                 .map_err(|err| TerminalCallError::new(err, trap_context))?;
@@ -880,6 +906,7 @@ where
             }
             DropEvent::CleanupAfterTerminal {
                 atomic_lease,
+                successful_end,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -890,6 +917,7 @@ where
                 live_call_permit: _,
             } => {
                 let atomic_lease = atomic_lease.clone();
+                let successful_end = *successful_end;
                 let function_type = function_type.clone();
                 let durable_begin_index = *durable_begin_index;
                 let trap_context = *trap_context;
@@ -912,8 +940,16 @@ where
                     }
                 }
                 if terminal_recorded {
-                    if let Some(lease) = &atomic_lease {
-                        lease.release();
+                    let finish = store.with(|mut access| {
+                        finish_terminal_atomic_region(
+                            &mut get_ctx(access.data_mut()).state.active_atomic_regions,
+                            atomic_lease.as_deref(),
+                            successful_end,
+                        )
+                    });
+                    if let Err(err) = finish {
+                        first_error
+                            .get_or_insert_with(|| TerminalCallError::new(err, trap_context));
                     }
                     if let Err(err) = end_durable_function_access(
                         store,

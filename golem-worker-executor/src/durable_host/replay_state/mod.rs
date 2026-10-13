@@ -221,6 +221,39 @@ enum ReplayTransitionPhase {
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
 
+#[derive(Debug, Default, Clone)]
+struct ToolAttachmentReconstruction {
+    starts: HashMap<OplogIndex, (Option<OplogIndex>, bool)>,
+    accepted: HashMap<OplogIndex, OplogIndex>,
+    completed: HashSet<OplogIndex>,
+}
+
+impl ToolAttachmentReconstruction {
+    fn retain(&mut self, visible: impl Fn(OplogIndex) -> bool) {
+        self.starts.retain(|index, _| visible(*index));
+        self.accepted
+            .retain(|start, end| visible(*start) && visible(*end));
+        self.completed
+            .retain(|start| self.accepted.contains_key(start));
+    }
+
+    fn pending_under(&self, root: OplogIndex) -> bool {
+        self.accepted.keys().any(|start| {
+            if self.completed.contains(start) {
+                return false;
+            }
+            let mut current = Some(*start);
+            while let Some(index) = current {
+                if index == root {
+                    return true;
+                }
+                current = self.starts.get(&index).and_then(|(parent, _)| *parent);
+            }
+            false
+        })
+    }
+}
+
 /// The shared replay cursor: the position reached in the oplog, the target it replays up to, and
 /// every piece of state mutated while advancing it.
 ///
@@ -289,6 +322,9 @@ struct ReplayCursor {
     /// recorder is an owned tokio task that must not queue on the cursor lock, and all accesses
     /// are short synchronous map operations that never hold the lock across an `await`.
     completion_markers: std::sync::Mutex<CompletionMarkers>,
+    /// Retained accepted output writes and their ancestor links, independent of Start claims
+    /// and acknowledgment disposition. Contains no argument or output bytes.
+    tool_attachment_reconstruction: std::sync::Mutex<ToolAttachmentReconstruction>,
     /// Hashes of log entries persisted since the last read non-hint oplog entry, with their
     /// number of occurrences. A counted multiset (not a set) because large or repetitive
     /// stdout/stderr output regularly produces identical consecutive log entries, each of which

@@ -932,6 +932,34 @@ impl TestWorkerExecutor {
         )
     }
 
+    pub fn gate_next_oplog_function_end_failure(
+        &self,
+        agent_id: &AgentId,
+        function: HostFunctionName,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .oplog_end_failures
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                (
+                    function,
+                    None,
+                    OplogReadGate {
+                        entered_tx,
+                        release_rx,
+                    },
+                ),
+            );
+        (entered_rx, release_tx)
+    }
+
     /// Stores the automatic snapshot entries at `indexes` as rejected for the incarnation of the
     /// agent, as a start that could not load them does. A later start of the agent selects none
     /// of them.
@@ -5072,7 +5100,39 @@ impl TestOplog {
         gate.abort_append.load(Ordering::SeqCst)
     }
 
+    fn take_targeted_end_failure(&self, entry: &OplogEntry) -> Option<(OplogIndex, OplogReadGate)> {
+        let mut failures = self.additional_test_deps.oplog_end_failures.lock().unwrap();
+        if let OplogEntry::End { start_index, .. } = entry
+            && failures
+                .get(&self.owned_agent_id.agent_id)
+                .is_some_and(|(_, start, _)| *start == Some(*start_index))
+        {
+            let (_, _, gate) = failures.remove(&self.owned_agent_id.agent_id).unwrap();
+            return Some((*start_index, gate));
+        }
+        None
+    }
+
+    fn observe_end_failure_target(&self, index: OplogIndex, function: &HostFunctionName) {
+        if let Some((target, start, _)) = self
+            .additional_test_deps
+            .oplog_end_failures
+            .lock()
+            .unwrap()
+            .get_mut(&self.owned_agent_id.agent_id)
+            && target == function
+            && start.is_none()
+        {
+            *start = Some(index);
+        }
+    }
+
     async fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
+        if let Some((start, gate)) = self.take_targeted_end_failure(entry) {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+            return Err(format!("injected End append failure for Start {start}"));
+        }
         let entry_name = match entry {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
             OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
@@ -5185,6 +5245,9 @@ impl Oplog for TestOplog {
         // A refused write never reaches storage, so the boundaries below stay unarmed and the
         // error propagates to the fence handling instead.
         let index = self.oplog.add(entry.clone()).await?;
+        if let OplogEntry::Start { function_name, .. } = &entry {
+            self.observe_end_failure_target(index, function_name);
+        }
         if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
             IndexedExecutionGate::enter_and_wait(
                 &self.additional_test_deps.invocation_started_gates,
@@ -5216,6 +5279,15 @@ impl Oplog for TestOplog {
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        if let Some((start, gate)) = self.take_targeted_end_failure(&entry) {
+            return Box::pin(async move {
+                let _ = gate.entered_tx.send(());
+                let _ = gate.release_rx.await;
+                Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                    format!("injected End append failure for Start {start}"),
+                ))
+            });
+        }
         let gated = self.is_consume_body_chunk_data_end(&entry);
         let ended_start = match &entry {
             OplogEntry::End { start_index, .. } => Some(*start_index),
@@ -5223,6 +5295,10 @@ impl Oplog for TestOplog {
         };
         let delivered_start = match &entry {
             OplogEntry::CompletionDelivered { start_index, .. } => Some(*start_index),
+            _ => None,
+        };
+        let started_function = match &entry {
+            OplogEntry::Start { function_name, .. } => Some(function_name.clone()),
             _ => None,
         };
         let pending = self.oplog.enqueue_add(entry);
@@ -5235,6 +5311,9 @@ impl Oplog for TestOplog {
         Box::pin(async move {
             // A refused receipt means the entry never landed, so the end boundary stays unarmed.
             let index = pending.await?;
+            if let Some(function) = started_function {
+                this.observe_end_failure_target(index, &function);
+            }
             if let Some(start_index) = ended_start {
                 this.observe_rpc_memory_end(start_index);
             }
@@ -5500,6 +5579,9 @@ impl Oplog for TestOplog {
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
             .await?;
+        if let OplogEntry::Start { function_name, .. } = &ordered.entry {
+            self.observe_end_failure_target(ordered.index, function_name);
+        }
         self.observe_http_body_read_start(ordered.index, &ordered.entry);
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
@@ -5532,6 +5614,9 @@ impl Oplog for TestOplog {
             .oplog
             .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
+        if let OplogEntry::Start { function_name, .. } = &ordered.entry {
+            self.observe_end_failure_target(ordered.index, function_name);
+        }
         self.observe_http_body_read_start(ordered.index, &ordered.entry);
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
@@ -5836,6 +5921,9 @@ pub struct AdditionalTestDeps {
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    oplog_end_failures: Arc<
+        std::sync::Mutex<HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, OplogReadGate)>>,
+    >,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
@@ -5915,6 +6003,7 @@ impl AdditionalTestDeps {
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,
+            oplog_end_failures: Arc::default(),
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),

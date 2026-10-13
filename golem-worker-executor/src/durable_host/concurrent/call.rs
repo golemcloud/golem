@@ -3884,6 +3884,140 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .map_err(|source| TerminalCallError::new(source, context))
     }
 
+    /// Prepares the End before calling `accept`. The caller must hold its local effect lock
+    /// while reserving the unpublished effect and invoking `enqueue(reservation)`. Returning
+    /// without invoking `enqueue` rejects the candidate. Rejection returns the
+    /// unfinished call and response, so the caller can select another terminal or retry.
+    /// Publication owns the reservation until the End append and DurableOnly commit succeed;
+    /// it must be infallible after acceptance.
+    /// `failed` must synchronously fence observers before returning the owner cleanup future.
+    /// The owned coordinator resolves the terminal receipt before polling that future, so
+    /// cleanup may join the receipt without depending on itself. Runtime replacement and
+    /// worker retirement retain the coordinator until cleanup completes.
+    /// Replay uses the ordinary deferred replay interface; this callback is live-only.
+    pub async fn complete_access_deferred_with_effect<T, D, Ctx, R, A, F, E, EF>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+        accept: A,
+        publish: F,
+        failed: E,
+    ) -> Result<Result<(Pair::Resp, CompletionDelivery), (Self, Pair::Resp)>, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        R: Send + 'static,
+        A: FnOnce(&Pair::Resp, Box<dyn FnOnce(R) + '_>),
+        F: FnOnce(R) + Send + 'static,
+        E: FnOnce(WorkerExecutorError) -> EF + Send + 'static,
+        EF: Future<Output = ()> + Send + 'static,
+    {
+        let context = self.trap_context();
+        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+            self.abandon_for_trap();
+            return Err(err);
+        }
+        self.ensure_accessor_terminal_supported("complete_access_deferred_with_effect")
+            .map_err(|err| TerminalCallError::new(err, context))?;
+        if !self.is_live || !self.persisted {
+            return Err(TerminalCallError::new(
+                WorkerExecutorError::runtime(
+                    "local effect completion requires a persisted live call",
+                ),
+                context,
+            ));
+        }
+        let (oplog, recorder, worker) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.oplog.clone(),
+                ctx.state.completion_marker_recorder(),
+                ctx.public_state.worker(),
+            )
+        });
+        let prepared = prepare_end_entry::<Pair>(
+            &oplog,
+            &self.request_upload,
+            self.start_idx,
+            response,
+            None,
+            None,
+        )
+        .await;
+        let (response, end) = match prepared {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                self.abandon_for_trap();
+                return Err(TerminalCallError::new(err, context));
+            }
+        };
+        let Some(recording) = worker.runtime_append_tasks().register() else {
+            self.abandon_for_trap();
+            return Err(TerminalCallError::new(
+                WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                },
+                context,
+            ));
+        };
+        let tasks = worker.tasks.clone();
+        let coordinator = prepare_access_terminal_effect(
+            &tasks,
+            recording,
+            async move {
+                worker
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await?;
+                Ok(())
+            },
+            publish,
+            failed,
+        );
+        let (handoff, terminal) = match coordinator {
+            Ok(coordinator) => coordinator,
+            Err(err) => {
+                self.abandon_for_trap();
+                return Err(TerminalCallError::new(err, context));
+            }
+        };
+        let mut guard = AccessTerminalGuard::<P>::new(
+            self.dropped_call_snapshot(self.live_call_permit.clone()),
+            self.drop_sink.clone(),
+            self.cleanup_sink.clone(),
+            self.teardown_probe(),
+        );
+        let accepted = accept_access_terminal_effect(&response, &oplog, end, accept);
+        let (reservation, append) = match accepted {
+            Some(accepted) => accepted,
+            None => {
+                guard.disarm();
+                return Ok(Err((self, response)));
+            }
+        };
+        // Admission preceded acceptance; the coordinator cannot be cancelled by retirement.
+        self.finished = true;
+        assert!(handoff.send((reservation, append)).is_ok());
+        guard.cleanup_after_terminal(
+            terminal,
+            Some(CompletionMarkerRecord {
+                start_idx: self.start_idx,
+                recorder,
+            }),
+            true,
+        );
+        if let Err(err) = guard.wait_terminal().await {
+            guard.release_atomic_lease();
+            guard.disarm();
+            return Err(TerminalCallError::new(err, context));
+        }
+        self.finish_access_terminal_scope(store, get_ctx, &mut guard)
+            .await
+            .map_err(|err| TerminalCallError::new(err, context))?;
+        Ok(Ok((response, guard.take_completion_delivery())))
+    }
+
     pub async fn complete_access_deferred_with_span<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
@@ -3964,8 +4098,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "complete_access called on a replay handle; use replay_access first",
             ));
         }
-        let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         {
             let (oplog, completion_marker_recorder) = store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
@@ -3996,49 +4128,54 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Ok(response)
             };
 
-            // Read the current owner through the lease *after* the terminal is persisted, so a
-            // region close that transferred this call mid-flight marks side effects against the
-            // region that now owns it.
-            let atomic_region = self.execution_scope.atomic_region();
-            let finish_result = store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
-                let mut result = Ok(());
-                if let Some(begin_index) = atomic_region
-                    && persist_result.is_ok()
-                    && !ctx.state.mark_atomic_region_has_side_effects_for(begin_index)
-                {
-                        result = Err(WorkerExecutorError::runtime(format!(
-                            "durable call {} completed after its atomic region {begin_index} was closed",
-                            self.start_idx
-                        )));
-                }
-                result
-            });
-            guard.release_atomic_lease();
-
             let response = match persist_result {
                 Ok(response) => response,
                 Err(err) => {
+                    guard.release_atomic_lease();
                     guard.disarm();
                     return Err(err);
                 }
             };
-            // From here on the `End` is persisted, but these error returns are *observed* by the
-            // caller (the worker traps): the completion was not silently discarded by the guest,
-            // so the marker must not be recorded — while the terminal join / permit release must
-            // still reach the drain through the guard's drop event.
-            if let Err(err) = finish_result {
-                guard.suppress_discard_marker();
-                return Err(err);
-            }
-            if let Err(err) =
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false).await
-            {
-                guard.suppress_discard_marker();
-                return Err(err);
-            }
+            self.finish_access_terminal_scope(store, get_ctx, &mut guard)
+                .await?;
             Ok((response, guard))
         }
+    }
+
+    async fn finish_access_terminal_scope<T, D, Ctx>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        guard: &mut AccessTerminalGuard<P>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let result = async {
+            // Consult the current lease owner: a region may have transferred this call
+            // while its terminal was being persisted.
+            store.with(|mut access| {
+                guard.finish_atomic_region(
+                    &mut get_ctx(access.data_mut()).state.active_atomic_regions,
+                )
+            })?;
+            end_durable_function_access(
+                store,
+                get_ctx,
+                self.retry.function_type().clone(),
+                self.begin_index(),
+                false,
+            )
+            .await
+        }
+        .await;
+        if result.is_err() {
+            // The caller observes this failure; it is not a guest-discarded completion.
+            guard.suppress_discard_marker();
+        }
+        result
     }
 
     /// Persistence stage of [`Self::complete_access_impl`]: wait for the (possibly deferred)
@@ -4084,19 +4221,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             observer.closed(finished);
         }
         let end_append = oplog.enqueue_add(end);
-        let terminal = tokio::spawn(async move {
-            end_append.await?;
-            Ok(())
-        });
         // Arm the discard marker together with the owned `End` append: from this point a torn
         // completion future means the guest discarded a persisted successful completion (a tear
         // *during* `wait_terminal` still counts — the owned task appends the `End` regardless).
         guard.cleanup_after_terminal(
-            terminal,
+            tokio::spawn(async move {
+                end_append
+                    .await
+                    .map(|_| ())
+                    .map_err(WorkerExecutorError::from)
+            }),
             completion_marker_recorder.map(|recorder| CompletionMarkerRecord {
                 start_idx,
                 recorder,
             }),
+            true,
         );
         guard.wait_terminal().await?;
         Ok(response)
@@ -4924,7 +5063,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         Ok(())
                     });
                     // Cancellation terminal: never a discarded completion, no marker.
-                    guard.cleanup_after_terminal(terminal, None);
+                    guard.cleanup_after_terminal(terminal, None, false);
                     guard.wait_terminal().await
                 }
                 .await;

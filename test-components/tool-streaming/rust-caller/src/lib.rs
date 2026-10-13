@@ -703,6 +703,7 @@ pub trait ToolStreamingCaller {
     async fn native_effect_count(&self) -> String;
     async fn native_config(&self, key: String) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
+    async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
     async fn hold_open_stdin(&self, calls: u32);
@@ -3419,6 +3420,56 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         .await
         .expect("invoke native config probe");
         String::from_utf8(read_all(stdout).await).unwrap()
+    }
+
+    async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (mut source, stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input(if cancel_write {
+                "cancel-pending-write"
+            } else {
+                "accepted-unread"
+            }),
+            Some(pump_tool_stdin(stdin)),
+            Some(target),
+            None,
+        );
+        wait_at_promise_checkpoint("unread-before-cancel").await;
+        if cancel_write {
+            assert!(
+                source
+                    .write_all(vec![Ok(b"cancel".to_vec())])
+                    .await
+                    .is_empty()
+            );
+            wait_at_promise_checkpoint("unread-after-write-drop").await;
+            panic!("failed output persistence must fail the owner");
+        }
+        invocation.cancel();
+        assert!(matches!(
+            raw_result(&invocation).await,
+            Err(ToolRpcError::Cancelled)
+        ));
+        wait_at_promise_checkpoint("unread-after-cancel").await;
+        let mut output = Vec::new();
+        loop {
+            match stdout.next().await {
+                Some(Ok(bytes)) => output.extend(bytes),
+                Some(Err(ByteStreamFailure::Cancelled)) => break,
+                other => panic!("expected accepted bytes followed by cancellation, got {other:?}"),
+            }
+        }
+        assert_eq!(output, b"marker:");
+        assert!(
+            stdout.next().await.is_none(),
+            "cancellation terminal must occur once"
+        );
+        drop(source);
+        output
     }
 
     async fn raw_handle_lifecycles(&self) -> Vec<String> {

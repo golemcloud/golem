@@ -921,6 +921,12 @@ pub trait StreamingRpcCaller {
         after_delivery: bool,
         pending_gate: Option<PromiseId>,
     ) -> Vec<u32>;
+    async fn recover_ready_output(
+        &self,
+        source_gate: PromiseId,
+        cancel_gate: PromiseId,
+        resume_gate: PromiseId,
+    ) -> Vec<u32>;
     async fn transfer_input_after_timer(&self) -> Vec<u32>;
     async fn fork_drop_inherited_output(
         &self,
@@ -1224,6 +1230,52 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         if after_delivery {
             golem_rust::await_promise(&resume_gate).await;
         }
+        loop {
+            let (result, buffer) = reader.read(Vec::with_capacity(1)).await;
+            if format!("{result:?}") == "Dropped" {
+                assert!(buffer.is_empty());
+                break;
+            }
+            assert_eq!(buffer.len(), 1);
+            values.extend(buffer.into_iter().map(decode));
+        }
+        values
+    }
+
+    async fn recover_ready_output(
+        &self,
+        source_gate: PromiseId,
+        cancel_gate: PromiseId,
+        resume_gate: PromiseId,
+    ) -> Vec<u32> {
+        use std::future::poll_fn;
+        use std::task::Poll;
+
+        let output = StreamingRpcTargetClient::get(self.name.clone())
+            .benchmark_gated_output(7, 17, source_gate)
+            .await;
+        let mut reader = output.into_raw().await.expect("unwrap durable output");
+        let decode = |tree| {
+            u32::from_value(&golem_rust::decode_schema_value(tree).expect("decode raw item"))
+                .expect("decode u32 item")
+        };
+        let (_, prefix) = reader.read(Vec::with_capacity(1)).await;
+        let mut values = prefix.into_iter().map(decode).collect::<Vec<_>>();
+        assert_eq!(values, [17]);
+        let mut read = Box::pin(reader.read(Vec::with_capacity(3)));
+        poll_fn(|cx| match read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("read completed before source gate: {result:?}"),
+        })
+        .await;
+        golem_rust::await_promise(&cancel_gate).await;
+        let (result, buffer) = read.as_mut().cancel();
+        assert_eq!(format!("{result:?}"), "Complete(1)");
+        assert_eq!(buffer.len(), 1, "ready cancellation must retain its item");
+        values.extend(buffer.into_iter().map(decode));
+        assert_eq!(values, [17, 20]);
+        drop(read);
+        golem_rust::await_promise(&resume_gate).await;
         loop {
             let (result, buffer) = reader.read(Vec::with_capacity(1)).await;
             if format!("{result:?}") == "Dropped" {

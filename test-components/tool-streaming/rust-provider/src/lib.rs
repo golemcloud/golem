@@ -1552,6 +1552,29 @@ impl Streaming for StreamingImpl {
         }
 
         match mode.as_str() {
+            "cancel-pending-write" => {
+                use std::future::{Future, poll_fn};
+                use std::task::Poll;
+
+                let mut write = Box::pin(stdout.write(MARKER.to_vec()));
+                poll_fn(|cx| {
+                    assert!(write.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                assert_eq!(stdin.next().await.unwrap().unwrap(), b"cancel");
+                drop(write);
+                println!("pending-output-write-dropped");
+                while stdin.next().await.is_some() {}
+            }
+            "accepted-unread" => {
+                stdout
+                    .write(MARKER.to_vec())
+                    .await
+                    .expect("accept unread marker");
+                println!("accepted-unread-marker");
+                while stdin.next().await.is_some() {}
+            }
             "empty" => {}
             "binary" => {
                 summary.output_closed =
