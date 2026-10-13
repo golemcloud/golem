@@ -2625,8 +2625,10 @@ impl ReplayState {
     pub(crate) fn accepted_tool_attachment_write_end(
         &self,
         start: OplogIndex,
-    ) -> Result<golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd, WorkerExecutorError>
-    {
+    ) -> Result<
+        golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+        WorkerExecutorError,
+    > {
         self.cursor
             .tool_attachment_reconstruction
             .lock()
@@ -2638,6 +2640,34 @@ impl ReplayState {
             .ok_or_else(|| {
                 WorkerExecutorError::runtime(format!(
                     "tool attachment write at {start} has no retained acceptance"
+                ))
+            })
+    }
+
+    pub(crate) fn selected_tool_attachment_terminal_end(
+        &self,
+        start: OplogIndex,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+        terminal: &golem_common::model::oplog::attachment::ToolAttachmentTerminal,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        use golem_common::model::oplog::attachment::ToolAttachmentControl;
+
+        let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        index
+            .history
+            .controls
+            .iter()
+            .find_map(|(end, control)| {
+                (control.retained
+                    && control.producer_start == Some(start)
+                    && control.attachment == attachment
+                    && matches!(&control.transition,
+                        ToolAttachmentControl::TerminalSelected(selected) if selected == terminal))
+                .then_some(*end)
+            })
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "tool attachment terminal at {start} has no matching retained selection"
                 ))
             })
     }

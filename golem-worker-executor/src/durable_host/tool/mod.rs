@@ -5968,7 +5968,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<ToolOutputWriterEntry>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| Ok(access.get().table().get(&self_)?.producer.writer().finish()))
+        let (writer, controller) = accessor.with(|mut access| {
+            let entry = access.get().table().get(&self_)?;
+            Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
+        })?;
+        durability::finish(accessor, writer, controller).await
     }
 
     async fn fail(
@@ -5976,15 +5980,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         self_: Resource<ToolOutputWriterEntry>,
         reason: ByteStreamFailure,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| {
-            Ok(access
-                .get()
-                .table()
-                .get(&self_)?
-                .producer
-                .writer()
-                .fail(reason))
-        })
+        let (writer, controller) = accessor.with(|mut access| {
+            let entry = access.get().table().get(&self_)?;
+            Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
+        })?;
+        durability::fail(accessor, writer, controller, reason).await
     }
 }
 
