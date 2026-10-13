@@ -3979,8 +3979,10 @@ mod app_builder {
     };
     use crate::model::app_raw;
     use crate::model::cascade::error::StoreGetValueError;
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::language::GuestLanguage;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
@@ -5630,6 +5632,17 @@ mod app_builder {
                 &ctx,
             ) {
                 Ok(component_layer_properties) => {
+                    if component_layer_properties
+                        .node_http_routers
+                        .value()
+                        .is_some()
+                        && *component_layer_properties.guest_language.value()
+                            != Some(GuestLanguage::TypeScript)
+                    {
+                        validation.add_error(format!(
+                            "Component {component_name}: nodeHttpRouters requires TypeScript. Set guestLanguage: ts on the component template or remove nodeHttpRouters."
+                        ));
+                    }
                     let component_properties = ComponentProperties::from_merged(
                         validation,
                         &source,
@@ -6041,6 +6054,69 @@ mod test {
     }
 
     #[test]
+    fn node_http_routers_require_resolved_typescript_language() {
+        for language in [
+            None,
+            Some("ts"),
+            Some("rust"),
+            Some("scala"),
+            Some("moonbit"),
+            Some("effect"),
+        ] {
+            for location in [
+                "absent",
+                "component",
+                "template",
+                "component-preset",
+                "template-preset",
+            ] {
+                for routers in [json!({}), json!({"3000": {"name": "Web", "mount": "/"}})] {
+                    let mut manifest = json!({
+                        "app": "hello-app",
+                        "environments": {"local": {"server": "local", "componentPresets": "selected"}},
+                        "componentTemplates": {"base": {
+                            "componentWasm": "main.wasm", "presets": {"selected": {}}
+                        }},
+                        "components": {"app:main": {"templates": "base", "presets": {"selected": {}}}}
+                    });
+                    if let Some(language) = language {
+                        manifest["componentTemplates"]["base"]["guestLanguage"] = json!(language);
+                    }
+                    match location {
+                        "component" => {
+                            manifest["components"]["app:main"]["nodeHttpRouters"] = routers
+                        }
+                        "template" => {
+                            manifest["componentTemplates"]["base"]["nodeHttpRouters"] = routers
+                        }
+                        "component-preset" => {
+                            manifest["components"]["app:main"]["presets"]["selected"]["nodeHttpRouters"] =
+                                routers
+                        }
+                        "template-preset" => {
+                            manifest["componentTemplates"]["base"]["presets"]["selected"]["nodeHttpRouters"] =
+                                routers
+                        }
+                        "absent" => (),
+                        _ => unreachable!(),
+                    }
+                    let errors = load_app_errors(&serde_yaml::to_string(&manifest).unwrap());
+                    if location == "absent" || language == Some("ts") {
+                        assert!(errors.is_empty(), "{language:?}/{location}: {errors:#?}");
+                    } else {
+                        assert_eq!(errors.len(), 1, "{language:?}/{location}: {errors:#?}");
+                        assert!(errors[0].contains("app:main"), "{errors:#?}");
+                        assert!(
+                            errors[0].contains("nodeHttpRouters requires TypeScript"),
+                            "{errors:#?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn node_http_router_layers_replace_clear_and_reserve_build_configuration() {
         let source = indoc! { r#"
             app: hello-app
@@ -6049,6 +6125,7 @@ mod test {
                 server: local
             componentTemplates:
               base:
+                guestLanguage: ts
                 nodeHttpRouters:
                   "3000": { name: Template, mount: /template }
                 build:
