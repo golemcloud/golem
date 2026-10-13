@@ -26,7 +26,7 @@ The build is a multi-step pipeline:
    - **Effect**: runs `tsc` and `rollup`, then injects the bundle into the QuickJS WASM shipped by `@golemcloud/effect-golem`. Effect agents are self-describing, so this pipeline does not run `golem-typegen`.
    - **Scala**: runs Scala.js compilation, JavaScript linking, QuickJS WASM injection, agent wrapper generation, and WASM composition.
 3. **Add Metadata** — embeds component name and version into the output WASM binary.
-4. **Generate Bridge** — generates bridge SDK code if the project uses inter-component communication.
+4. **Generate Bridge** — automatically generates guest clients selected by component `dependencies.agents` and `dependencies.tools`, and any explicitly selected bridge targets. Local providers build before their consumers; dependency clients are generated before consumer compilation. Prefer tool dependencies over explicit bridge selection for clients used by a component. Configure runtime tool bindings separately: a dependency does not add a binding, and a binding alone does not generate a client.
 
 ### Up-to-date Checks
 

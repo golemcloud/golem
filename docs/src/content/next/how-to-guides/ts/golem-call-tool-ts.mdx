@@ -3,8 +3,10 @@
 ## Call an existing tool through a generated client
 
 Load [`golem-generating-tool-clients`](/next/how-to-guides/common/golem-generating-tool-clients) to select a built-in release or MCP import,
-generate its client with `golem build`, and wire the generated package into the
-consumer. Do not copy the existing tool's schema into `toolDefinition`.
+add it to the consumer's `dependencies.tools`, and configure its runtime binding.
+`golem build` automatically generates the TypeScript client without an explicit
+bridge selection. Wire the generated package into the consumer. Do not copy the
+existing tool's schema into `toolDefinition`.
 
 For the built-in `bash` release `0.2.1`, call from an agent method:
 

@@ -41,7 +41,8 @@ steps:
       the imported tool must be remote-pigment-render, distinct from the local pigment
       tool. Generate its TypeScript guest client.
       Add remote-pigment-render to the CounterAgent component's dependencies.tools,
-      bind it for CounterAgent, and select it in bridge.ts.internal.tools. Wire the
+      bind it for CounterAgent, and use automatic dependency client generation with
+      golem build, without an explicit bridge.ts.internal.tools selection. Wire the
       generated source into TypeScript compilation and imports. Do not hand-write or
       copy a consumer tool schema, edit generated source, use raw invocation APIs,
       call the provider directly, or hardcode outputs.

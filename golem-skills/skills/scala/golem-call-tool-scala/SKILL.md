@@ -8,7 +8,9 @@ description: "Calls a generated typed Golem tool client from Scala. Use when inv
 ## Call an existing tool through a generated client
 
 Load `golem-generating-tool-clients` to select a built-in release or MCP import and
-generate its Scala client. Include the generated sources in the consumer build.
+add it to the Scala component's `dependencies.tools`. Configure its runtime binding
+separately. `golem build` automatically generates the client without an explicit
+bridge selection. Include the generated sources in the consumer build.
 In the standard sbt template, add this setting to the consumer project's existing
 `.settings(...)` block. `LocalRootProject` resolves the application root rather
 than the component directory:

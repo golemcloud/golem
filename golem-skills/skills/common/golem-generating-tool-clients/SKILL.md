@@ -6,9 +6,53 @@ description: "Generates typed clients for existing built-in tools and MCP import
 # Generate typed clients for existing tools
 
 Use a generated client to call an existing tool without copying its schema into the
-consumer. Select the tool in `golem.yaml`, generate its client with `golem build`,
-then import that client into the consumer. Client generation and permission to
-invoke the tool are separate steps.
+consumer. Add the tool to the consumer's `dependencies.tools` in `golem.yaml`.
+`golem build` automatically generates its client in the consumer's language, like
+an agent client selected through `dependencies.agents`. Import that client into
+the consumer and configure its tool binding separately.
+
+## Dependencies and tool bindings
+
+Prefer `components.<consumer>.dependencies.tools` for a typed tool client. Keep
+the consumer's language template: the build uses it to select the generator.
+For a custom template, set `componentTemplates.<template-name>.guestLanguage`
+and apply that template to the consumer. No additional
+`bridge.<language>.internal.tools` entry is needed.
+
+These manifest entries have different roles:
+
+| Entry | Role |
+|-------|------|
+| Top-level `tools.<name>` | Selects a registry release or local implementing component; MCP imported and ambient native names need no declaration |
+| `components.<consumer>.dependencies.tools` | Requests automatic client generation during `golem build`; local providers build before their consumers |
+| `components.<consumer>.tools` or an agent's `tools` | Binds the tool for runtime invocation; a binding alone does not request generation |
+
+A dependency does not add a runtime binding. A binding does not generate a client
+or wire a generated package into the consumer's compiler configuration. Neither
+replaces the caller's runtime permissions or the deployer's authority. The build
+does not scan source code to infer dependencies from tool calls.
+
+For a tool defined in another component, declare the provider and depend on the
+tool's name:
+
+```yaml
+tools:
+  echo:
+    component: my-app:provider
+
+components:
+  my-app:consumer:
+    dependencies:
+      tools: [echo]
+    tools:
+      echo: {}
+```
+
+Keep both components' existing directories and language templates. A structured
+dependency `{ component: 'my-app:provider', name: echo }` also identifies a local
+tool. Do not add a guest-client dependency on the consumer itself: self-dependencies
+are rejected. For a definition owned by the same component, use the language SDK's
+definition-owned client described in its call-tool guide.
 
 Run commands from the application root. The examples assume the selected
 environment is `local`. To select it explicitly, use
@@ -38,14 +82,9 @@ components:
     tools:
       bash:
         filesystemAccess: allowed
-
-bridge:
-  ts:
-    internal:
-      tools: [bash]
 ```
 
-The dependency selects the consumer language and generates a client. The component
+The dependency automatically generates the TypeScript client. The component
 binding exposes `bash` to its agents and permits filesystem access. Use an agent
 binding instead when only one agent needs the tool. Bindings do not replace the
 calling agent's runtime permissions or the deployer's authority.
@@ -138,16 +177,11 @@ components:
       tools: [catalog-lookup]
     tools:
       catalog-lookup: {}
-
-bridge:
-  ts:
-    internal:
-      tools: [catalog-lookup]
 ```
 
 Upstream names are sanitized to kebab-case before filtering: `catalog.lookup`
 becomes `catalog-lookup`. An import `prefix: remote` would make the canonical name
-`remote-catalog-lookup`; change the dependency, binding, and bridge selection to
+`remote-catalog-lookup`; change the dependency and binding to
 that name too. Application and ambient native tools take precedence over imported
 names, and earlier imports take precedence over later imports. No top-level
 `tools.catalog-lookup` declaration is needed.
@@ -214,13 +248,10 @@ consumer and deploy the import and binding with `golem deploy --yes`.
 
 ## Other supported languages
 
-Tool clients are internal guest bridges. Use `rust`, `ts`, `effect`, `scala`, or
-`moonbit` under `bridge`, and the corresponding component template. With default
-paths, dependencies generate under
+Tool clients are internal guest bridges. The consumer's `rust`, `ts`, `effect`,
+`scala`, or `moonbit` language template selects its dependency client generator.
+With default paths, dependencies generate under
 `golem-temp/bridge-sdk/<language>/internal/<tool-name>-tool-guest-client/`.
-An explicit bridge `outputDir` changes the bridge target to
-`<outputDir>/<tool-name>-tool-guest-client/`; component dependency targets retain
-the default dependency path.
 
 | Language | Generated files and consumer entry point for `bash` | Consumer wiring |
 |----------|---------------------------------------------------|-----------------|
@@ -234,8 +265,22 @@ Use the language's call-tool guide for invocation and error handling:
 `golem-call-tool-ts`, `golem-tools-middleware-effect`, `golem-call-tool-rust`,
 `golem-call-tool-scala`, and `golem-call-tool-moonbit`.
 
-An explicit bridge selection is an alternative when the component dependency
-does not select the required language. It does not add a deployment binding.
+## Explicit bridge generation
+
+Use `bridge.<language>.internal.tools` only when you need a generation target
+separate from the consumer's dependency, such as another language or output
+directory. Do not repeat the dependency selection in ordinary consumer examples.
+
+```yaml
+bridge:
+  rust:
+    internal:
+      tools: [bash]
+```
+
+An explicit bridge `outputDir` changes this target to
+`<outputDir>/<tool-name>-tool-guest-client/`; component dependency targets retain
+the default dependency path. An explicit selection does not add a runtime binding.
 Use `golem build`, not a tool selector on `golem generate-bridge`: that command
 does not expose one.
 
@@ -249,7 +294,7 @@ edit the generated client or copy a stale schema to bypass discovery. Use
 
 | Failure | What to check |
 |---------|---------------|
-| Default `bash` has no generated client | Declare its release and select it for generation; deployment defaults are not build selections |
+| Default `bash` has no generated client | Declare its release and add it to the consumer's tool dependencies; deployment defaults are not build selections |
 | Release metadata cannot be read | Check release coordinates, selected server/environment, and authority to reconcile its grant |
 | An imported name cannot be resolved | Check the upstream list, sanitized name, prefix, filter, precedence, and selected environment |
 | MCP metadata or consent is missing | Make the endpoint reachable and complete OAuth consent for the exact manifest target |

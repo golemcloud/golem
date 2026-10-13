@@ -8,7 +8,9 @@ description: "Calls a generated typed Golem tool client from MoonBit. Use when i
 ## Call an existing tool through a generated client
 
 Load `golem-generating-tool-clients` for built-in releases and MCP imports. Add the
-generated module as a local dependency, then import
+tool to the MoonBit component's `dependencies.tools` and configure its runtime
+binding separately. `golem build` automatically generates the client without an
+explicit bridge selection. Add the generated module as a local dependency, then import
 `"bash-tool-guest-client/client" @bash` in the consumer's `moon.pkg`.
 Call the built-in `bash` release `0.2.1` inside an async agent method:
 

@@ -17,8 +17,9 @@ steps:
       Declare tools.bash.release with account builtin-tool-owner@golem.cloud, name bash,
       version "0.2.1". Add bash to the CounterAgent component's dependencies.tools and
       bind bash at the component or agent level with filesystemAccess: allowed.
-      Configure bridge.ts.internal.tools: [bash], generate the client with Golem, and
-      wire its generated source into the TypeScript compiler and runtime imports.
+      Use the dependency's automatic client generation with golem build, without an
+      explicit bridge.ts.internal.tools selection. Wire its generated source into
+      the TypeScript compiler and runtime imports.
       Do not hand-write or copy a consumer tool schema, edit generated code, use a raw
       tool invocation API, or execute the script directly in the agent. Preserve the
       template CounterAgent identity. Make sure the app builds and deploys locally.

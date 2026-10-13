@@ -2,8 +2,11 @@
 
 ## Call an existing tool through a generated client
 
-Load [`golem-generating-tool-clients`](/next/how-to-guides/common/golem-generating-tool-clients) for built-in releases and MCP imports. Add a
-local Cargo dependency on the generated crate, relative to the consumer manifest:
+Load [`golem-generating-tool-clients`](/next/how-to-guides/common/golem-generating-tool-clients) for built-in releases and MCP imports. Add the
+tool to the Rust component's `dependencies.tools` and configure its runtime binding
+separately. `golem build` automatically generates the client without an explicit
+bridge selection. Add a local Cargo dependency on the generated crate, relative
+to the consumer manifest:
 
 ```toml
 [dependencies]

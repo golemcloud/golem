@@ -8,8 +8,10 @@ description: Defines and calls Golem tools and attaches Effect-native typed or u
 ## Call an existing tool through a generated client
 
 Load `golem-generating-tool-clients` to select a built-in release or MCP import.
-Use `bridge.effect.internal.tools` or an Effect component's tool dependencies,
+Add the tool to the Effect component's `dependencies.tools`; `golem build`
+automatically generates its Effect client. Configure its runtime binding separately,
 then wire the generated source into the consumer's TypeScript paths and includes.
+No explicit bridge selection is needed for the dependency.
 Call the built-in `bash` release `0.2.1` from an Effect agent method:
 
 ```typescript
