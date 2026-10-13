@@ -1117,6 +1117,7 @@ where
             durable_worker_ctx::<Ctx, U>,
             demand_rx,
             AccessClaimOptions {
+                scope_function_name: Some(crate::durable_host::consume_body_scope_name()),
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,

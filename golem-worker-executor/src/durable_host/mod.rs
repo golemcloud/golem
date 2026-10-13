@@ -64,6 +64,13 @@ pub(crate) fn batched_write_scope_name() -> HostFunctionName {
 
 const BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
 
+/// The recorded function name of the batched-write scope `Start` that a P3 HTTP `consume-body`
+/// opens. The name tells the scope of a response body apart from the scope of a send in the
+/// oplog; it does not identify the call.
+pub(crate) fn consume_body_scope_name() -> HostFunctionName {
+    HostFunctionName::Custom("<scope:batched-write:consume-body>".to_string())
+}
+
 /// The per-call quota an outbound durable call is charged against: the per-invocation call
 /// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

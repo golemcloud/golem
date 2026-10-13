@@ -624,6 +624,9 @@ pub(crate) struct AccessClaimOptions {
     /// invocation `Start` when it rejects the call before dispatch. Replay claims either one, as a
     /// historical reconstruction claim.
     pub(crate) tool_rejection_function_name: Option<HostFunctionName>,
+    /// The function name of the batched-write scope `Start` that the call opens. Unset means
+    /// `<scope:batched-write>`.
+    pub(crate) scope_function_name: Option<HostFunctionName>,
     /// Explicit durable parent for runtimes whose invocation scope is established outside the
     /// calling Store, such as entity sidecar bodies. When an ambient durable parent also exists,
     /// both identities must agree.
@@ -2441,7 +2444,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
     {
         let function_type = prepared.retry.function_type().clone();
-        let scope_name = crate::durable_host::batched_write_scope_name();
+        let scope_name = prepared
+            .claim_options
+            .scope_function_name
+            .clone()
+            .unwrap_or_else(crate::durable_host::batched_write_scope_name);
         if prepared.is_live {
             match &mut prepared.claim_options.scope_replay_recovery {
                 ScopeReplayRecovery::Forbidden => {

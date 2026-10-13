@@ -540,8 +540,9 @@ order and skips hints. Key kinds:
   its `Start` index; `End`/`Cancelled` is its *terminal*. A terminal is *visible* when it lies
   below the replay target and outside a `Jump`/`Revert`-skipped region
   (`has_visible_terminal` / `visible_terminal_record`, `replay_state/cursor.rs`). Request-less Start/End pairs are *scopes* (batched writes, transactions),
-  named `<scope:batched-write>` or `<scope:transaction>`; replay tells concurrent scopes apart by
-  the invocation id of the call that opened them.
+  named `<scope:batched-write>`, `<scope:batched-write:consume-body>` (the scope of a P3 HTTP
+  response body) or `<scope:transaction>`; replay tells concurrent scopes apart by the invocation
+  id of the call that opened them.
 - `AgentInvocationStarted` / `AgentInvocationFinished` bracket one invocation;
   `PendingAgentInvocation` (hint) is the durable queue entry.
 - `CompletionDelivered` / `CompletionDiscarded` (hints, always after their `End`) record the
