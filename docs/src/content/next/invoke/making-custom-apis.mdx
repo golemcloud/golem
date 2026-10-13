@@ -297,6 +297,26 @@ pub fn MyAgent::serve_file(self : Self, path : String) -> FileData {
 </Tabs.Tab>
 </Tabs>
 
+### JSON Request Bodies
+
+For ordinary structured body parameters, the request body is a JSON object with one field per user-supplied method parameter not bound to a path, query parameter, or header. Auto-injected parameters are excluded. This rule applies to all SDKs, even when there is only one body parameter.
+
+For example, a string body parameter named `text` requires:
+
+```json
+{ "text": "hello" }
+```
+
+A single object-valued body parameter named `request`, with a `text` field, requires an outer `request` field:
+
+```json
+{ "request": { "text": "hello" } }
+```
+
+The fields inside `request` are not flattened into the body. Unstructured text and binary parameters instead consume the raw body, as described below.
+
+This is different from [CLI invocation](/next/invoke/cli#encoding-parameters), which takes one native-language value per user-supplied parameter in declaration order. The CLI takes the object value itself as one argument, without the HTTP parameter-name wrapper.
+
 ### Response Conventions
 
 Return types control the HTTP response:
@@ -351,10 +371,10 @@ fn upload(&mut self, file: UnstructuredBinary<String>) -> u64;
 `String` implements `AllowedMimeTypes` and accepts any MIME type. Use an enum deriving `AllowedMimeTypes` to restrict accepted values.
 </Tabs.Tab>
 <Tabs.Tab>
-The current Scala SDK does not expose the removed `UnstructuredBinary`/`BinarySegment` API. Use a supported structured byte-array parameter, or handle raw binary in another supported SDK.
+Use `golem.schema.UnstructuredBinary[M]` for raw binary bodies. Use `String` as the type argument for unrestricted MIME types, or a string-literal union such as `"image/png" | "image/jpeg"` to restrict them. `golem.schema.UnstructuredText[L]` provides the corresponding raw-text mapping. See the [Scala HTTP parameter guide](/next/how-to-guides/scala/golem-http-params-scala) for examples.
 </Tabs.Tab>
 <Tabs.Tab>
-The current MoonBit SDK does not yet expose a user-facing unstructured-binary wrapper. `Bytes` is structured binary data and does not opt an endpoint into the raw unstructured-binary body mapping.
+Use `@schema.UnstructuredBinary[M]` for raw binary bodies and `@schema.UnstructuredText[L]` for raw text, from `golemcloud/golem_sdk/schema`. The type arguments implement `AllowedMimeTypes` or `AllowedLanguages`; use `AnyMimeType` or `AnyLanguage` for unrestricted values. A bare `Bytes` parameter also accepts a raw binary body when it is the only body parameter. Use `UnstructuredBinary[M]` for MIME restrictions and inline-or-URL values. See the [MoonBit HTTP parameter guide](/next/how-to-guides/moonbit/golem-http-params-moonbit) for examples.
 </Tabs.Tab>
 </Tabs>
 

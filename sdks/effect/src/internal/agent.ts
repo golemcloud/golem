@@ -583,7 +583,7 @@ export const defineAgent = <
   // `ImplementedAgent` produced by `spec.implement(...)` below.
   const sharedClient = clientFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
   const sharedBinding = bindingFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
-  let identityCodec: CompiledInputCodec<C> | undefined
+  let identityCodec: CompiledInputCodec<C, CallerInput<C>> | undefined
   const agentId = (input: CallerInput<C>, phantomId?: string) =>
     Effect.gen(function* () {
       if (canonical.mode === "ephemeral" && phantomId === undefined)
@@ -597,7 +597,7 @@ export const defineAgent = <
         canonical.id,
       ))
       const constructorValue = yield* codec
-        .encodeAsync(input as unknown as MethodInput<C>)
+        .encodeAsync(input)
         .pipe(Effect.mapError((cause) => new AgentIdentity.AgentIdentityError(cause)))
       return yield* AgentIdentity.make({
         typeName: canonical.name,
@@ -835,7 +835,7 @@ export const registerAgent = <
     ]
     const encoder = new GraphEncoder(mergeGraphDefs(graphs))
     const inputSchema = <P extends MethodParams>(
-      codec: CompiledInputCodec<P>,
+      codec: Pick<CompiledInputCodec<P>, "graph" | "inputSchema">,
     ): AgentCommon.InputSchema => {
       const fields = codec.graph.root.body.tag === "record" ? codec.graph.root.body.fields : []
       return {
@@ -858,7 +858,7 @@ export const registerAgent = <
         description: spec.description ?? "",
         httpEndpoint: [...eps],
         promptHint: spec.promptHint,
-        inputSchema: inputSchema(mc.inputCodec),
+        inputSchema: inputSchema(mc),
         outputSchema:
           mc.outputCodec === undefined
             ? { tag: "unit" }
@@ -1187,7 +1187,12 @@ export const dispatchInvoke = async (
   let program = invokeWireValue(
     mc.inputCodec,
     mc.encodeOutput,
-    { errorWrapped: mc.errorWrapped, successVoid: mc.successVoid },
+    {
+      errorWrapped: mc.errorWrapped,
+      successVoid: mc.successVoid,
+      inputSchema: compiled.agentType.methods.find((method) => method.name === methodName)!
+        .inputSchema,
+    },
     handler,
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>

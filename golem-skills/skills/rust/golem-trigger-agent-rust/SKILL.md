@@ -70,6 +70,8 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 ## Value Syntax
 
+Pass one native argument per user-supplied method parameter in signature order, excluding `self` and config parameters. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not wrap all parameters in a JSON object. No-parameter methods take no arguments, not `'{}'`. `--format json` controls output only. Load `golem-invoke-agent-rust` for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
 The agent ID parameters and method arguments use **Rust syntax**:
 
 - Field names use `snake_case`
@@ -77,6 +79,8 @@ The agent ID parameters and method arguments use **Rust syntax**:
 - Records: `MyRecord { field_one: 1, field_two: "hello" }`
 - Enums/Variants: `MyEnum::VariantName(value)`
 - Tuples: `(1, "hello")`
+
+This example assumes `fn send_email(&mut self, request: EmailRequest)` with `struct EmailRequest { to: String, subject: String, body: String }`. Pass the single request value, not a wrapper containing `request`:
 
 ```shell
 golem agent invoke --trigger 'MyAgent("user-123")' send_email 'EmailRequest { to: "alice@example.com", subject: "Hello", body: "World" }'

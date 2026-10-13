@@ -74,7 +74,7 @@ export type ParamInputType<P extends MethodParam> =
 export type MethodInput<Input extends MethodParams> = {
   readonly [K in keyof Input]: ParamInputType<Input[K]>
 }
-/** Caller-supplied constructor parameters omit principals injected by the host. @since 1.6.0 @category models */
+/** Caller-supplied parameters omit principals injected by the host. @since 1.6.0 @category models */
 export type CallerInput<Input extends MethodParams> = {
   readonly [K in keyof Input as Input[K] extends PrincipalInputSchema ? never : K]: ParamInputType<
     Input[K]
@@ -273,20 +273,23 @@ export const invoke = <I extends MethodParams, S extends MethodSuccess, E extend
 ): Effect.Effect<MethodSuccessType<S>, E["Type"], R> => m.body(input)
 
 /** A compiled named input record. @since 1.6.0 @category codecs */
-export interface CompiledInputCodec<Input extends MethodParams = MethodParams> {
+export interface CompiledInputCodec<
+  Input extends MethodParams = MethodParams,
+  Value = MethodInput<Input>,
+> {
   readonly graph: SchemaGraph
   readonly schemaGraph: CoreTypes.SchemaGraph
   readonly inputSchema: AgentCommon.InputSchema
-  readonly codec: Schema.Codec<MethodInput<Input>, SchemaValue, any, any>
+  readonly codec: Schema.Codec<Value, SchemaValue, any, any>
   readonly encode: (
-    value: MethodInput<Input>,
+    value: Value,
   ) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>
   readonly encodeAsync: (
-    value: MethodInput<Input>,
+    value: Value,
   ) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>
   readonly decode: (
     value: CoreTypes.SchemaValueTree,
-  ) => Effect.Effect<MethodInput<Input>, Schema.SchemaError, any>
+  ) => Effect.Effect<Value, Schema.SchemaError, any>
 }
 
 const isPrincipal = (schema: Schema.Top): boolean =>
@@ -381,11 +384,11 @@ export const compileParamBindings = <Input extends MethodParams>(
     }
   })
 
-/** Compile only caller-supplied constructor fields; principal fields are supplied by the host. @since 1.6.0 @category operations */
+/** Compile only caller-supplied fields; principal fields are supplied by the host. @since 1.6.0 @category operations */
 export const compileCallerParamBindings = <Input extends MethodParams>(
   context: string,
   input: Input,
-): Effect.Effect<CompiledInputCodec<Input>, UnsupportedSchemaError> =>
+): Effect.Effect<CompiledInputCodec<Input, CallerInput<Input>>, UnsupportedSchemaError> =>
   compileParamBindings(
     context,
     Object.fromEntries(
@@ -394,7 +397,10 @@ export const compileCallerParamBindings = <Input extends MethodParams>(
           isElementSpec(param) || isMultimodal(param) || !isPrincipal(param as Schema.Top),
       ),
     ) as Input,
-  )
+  ) as unknown as Effect.Effect<
+    CompiledInputCodec<Input, CallerInput<Input>>,
+    UnsupportedSchemaError
+  >
 
 /** @since 1.6.0 @category models */
 export interface MethodCodec<
@@ -406,7 +412,7 @@ export interface MethodCodec<
   readonly spec: MethodSpec<I, S, E>
   readonly graph: SchemaGraph
   readonly schemaGraph: CoreTypes.SchemaGraph
-  readonly inputCodec: CompiledInputCodec<I>
+  readonly inputCodec: CompiledInputCodec<I, CallerInput<I>>
   readonly outputCodec: WitCodec<Schema.Top> | undefined
   readonly encodeOutput:
     | ((value: unknown) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>)
@@ -483,6 +489,7 @@ export const compileMethodSpec = <
 ): Effect.Effect<MethodCodec<I, S, E>, UnsupportedSchemaError> =>
   Effect.gen(function* () {
     const inputCodec = yield* compileParamBindings(name, spec.input)
+    const callerCodec = yield* compileCallerParamBindings(name, spec.input)
     const usesPrincipal = Object.values(spec.input).some(
       (param) => !isElementSpec(param) && !isMultimodal(param) && isPrincipal(param as Schema.Top),
     )
@@ -533,12 +540,7 @@ export const compileMethodSpec = <
       spec,
       graph,
       schemaGraph,
-      inputCodec: {
-        ...inputCodec,
-        graph: { defs: graph.defs, root: inputRoot },
-        schemaGraph,
-        inputSchema,
-      },
+      inputCodec: callerCodec,
       outputCodec:
         outputCodec && outputType
           ? { ...outputCodec, graph: { defs: graph.defs, root: outputType } }
@@ -587,7 +589,7 @@ export const invokeSchemaValue = <
     options,
     handler,
     input,
-  )
+  ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R>
 
 /** Invoke with concrete wire operations supplied by a generated contract. */
 export const invokeWireValue = <
@@ -595,19 +597,35 @@ export const invokeWireValue = <
   S extends MethodSuccess,
   E extends Schema.Top,
   R,
+  Value = MethodInput<I>,
 >(
-  inputCodec: Pick<CompiledInputCodec<I>, "decode">,
+  inputCodec: Pick<CompiledInputCodec<I, Value>, "decode">,
   encodeOutput:
     | ((value: unknown) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>)
     | undefined,
-  options: { readonly errorWrapped: boolean; readonly successVoid: boolean },
+  options: {
+    readonly errorWrapped: boolean
+    readonly successVoid: boolean
+    readonly inputSchema?: AgentCommon.InputSchema
+  },
   handler: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>,
   input: CoreTypes.SchemaValueTree,
-): Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R> =>
+): Effect.Effect<
+  CoreTypes.SchemaValueTree | undefined,
+  Schema.SchemaError | E["Type"],
+  R | Principal
+> =>
   Effect.gen(function* () {
     const decoded = yield* inputCodec.decode(input)
+    const injected =
+      options.inputSchema?.val.filter((field) => field.source.tag === "auto-injected") ?? []
+    const principal = injected.length > 0 ? yield* Principal : undefined
+    const fullInput = {
+      ...decoded,
+      ...Object.fromEntries(injected.map((field) => [field.name, principal])),
+    } as unknown as MethodInput<I>
     if (options.errorWrapped) {
-      const result = yield* handler(decoded).pipe(
+      const result = yield* handler(fullInput).pipe(
         Effect.match({
           onFailure: (error) => Result.fail(error),
           onSuccess: (success) => Result.succeed(options.successVoid ? {} : success),
@@ -615,7 +633,7 @@ export const invokeWireValue = <
       )
       return yield* encodeOutput!(result)
     }
-    const success = yield* handler(decoded)
+    const success = yield* handler(fullInput)
     if (encodeOutput === undefined) return undefined
     return yield* encodeOutput(success)
   })
@@ -634,7 +652,15 @@ export const invokeMethod = <
   invokeWireValue(
     codec.inputCodec,
     codec.encodeOutput,
-    { errorWrapped: codec.errorWrapped, successVoid: codec.successVoid },
+    {
+      errorWrapped: codec.errorWrapped,
+      successVoid: codec.successVoid,
+      inputSchema: codec.inputSchema,
+    },
     handler,
     input,
-  )
+  ) as Effect.Effect<
+    CoreTypes.SchemaValueTree | undefined,
+    Schema.SchemaError | E["Type"],
+    R | (HasPrincipalInput<I> extends true ? Principal : never)
+  >

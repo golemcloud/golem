@@ -1,3 +1,5 @@
+import { Tabs } from "nextra/components"
+
 # Invoke using Golem CLI
 
 The `golem` command line interface exposes agent and native tool invocations:
@@ -26,7 +28,82 @@ The function to be invoked is selected by the second parameter. Read the [page a
 
 ## Encoding parameters
 
-The function parameters are specified as positional arguments following the function name (one for each invocation parameter), using the source language's native syntax. See the [Type Mapping](/next/type-mapping) page for details on how types are represented.
+Pass one shell argument per user-supplied method parameter after the function name, using the source language's native value syntax. Parameters follow signature order in Rust, Scala, and MoonBit, and the method's `input` declaration order in TypeScript and Effect. Skip host-injected `Principal` fields without changing the order of the remaining inputs. Do not supply `self` or configuration parameters.
+
+Do not supply a `Principal` value or placeholder. Effect SDK clients also omit explicitly declared `PrincipalSchema` input fields; the host injects those fields into handlers. The normal `Principal.Principal` service remains available and does not add a caller-supplied input.
+
+Do not wrap all method inputs in one JSON object. A parameter whose value is an object or struct still takes just one argument. A method with no user-supplied parameters takes no arguments, not `'{}'`. Awaited, triggered, and scheduled invocations share the same CLI argument parser and input rules.
+
+The following examples show method declarations and the corresponding CLI method names and arguments. Prefix each command fragment with `golem agent invoke '<agent-id>'`.
+
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]}>
+<Tabs.Tab>
+
+| Method | Input schema | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: z.string() }` | `prompt '"hello"'` |
+| `submit` | `input: { request: z.object({ text: z.string() }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: z.string(), quantity: z.number() }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+Object field names must be unquoted: use `{ text: "hello" }`, not `{"text": "hello"}`. See the [TypeScript invocation guide](/next/how-to-guides/ts/golem-invoke-agent-ts) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input schema | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `input: { text: Schema.String }` | `prompt '"hello"'` |
+| `submit` | `input: { request: Schema.Struct({ text: Schema.String }) }` | `submit '{ text: "hello" }'` |
+| `processOrder` | `input: { orderId: Schema.String, quantity: Schema.Number }` | `processOrder '"order-456"' 42` |
+| `history` | `input: {}` | `history` |
+
+Effect agents use TypeScript value syntax, including unquoted object field names. See the [Effect invocation guide](/next/how-to-guides/effect/golem-invoke-agent-effect).
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `fn prompt(&self, text: String)` | `prompt '"hello"'` |
+| `fn submit(&self, request: Request)` with `struct Request { text: String }` | `submit 'Request { text: "hello" }'` |
+| `fn process_order(&self, order_id: String, quantity: u32)` | `process_order '"order-456"' 42` |
+| `fn history(&self)` | `history` |
+
+See the [Rust invocation guide](/next/how-to-guides/rust/golem-invoke-agent-rust) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `def prompt(text: String): Future[Unit]` | `prompt '"hello"'` |
+| `def submit(request: Request): Future[Unit]` with `case class Request(text: String)` | `submit 'Request(text = "hello")'` |
+| `def processOrder(orderId: String, quantity: Int): Future[Unit]` | `processOrder '"order-456"' 42` |
+| `def history(): Future[Unit]` | `history` |
+
+See the [Scala invocation guide](/next/how-to-guides/scala/golem-invoke-agent-scala) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method signature | CLI method and arguments |
+|------------------|--------------------------|
+| `pub fn MyAgent::prompt(self : Self, text : String) -> Unit` | `prompt '"hello"'` |
+| `pub fn MyAgent::submit(self : Self, request : Request) -> Unit` with `struct Request { text : String }` | `submit 'Request::{ text: "hello" }'` |
+| `pub fn MyAgent::process_order(self : Self, order_id : String, quantity : UInt) -> Unit` | `process_order '"order-456"' 42` |
+| `pub fn MyAgent::history(self : Self) -> Unit` | `history` |
+
+See the [MoonBit invocation guide](/next/how-to-guides/moonbit/golem-invoke-agent-moonbit) for other value types.
+
+</Tabs.Tab>
+</Tabs>
+
+Quote each native literal as one shell argument. For example, `'"hello"'` preserves the string literal's double quotes for the CLI parser. For a string parameter, if native literal parsing fails, the CLI falls back to using the argument as raw text. Passing `'{"text": "hello"}'` to a method taking a single string therefore passes the entire JSON text, not just `hello`.
+
+[Custom HTTP endpoints](/next/invoke/making-custom-apis) use a different input convention: structured JSON bodies contain named body parameters. A single `request` parameter containing a `text` field needs `{"request": {"text": "hello"}}`. Path/query/header parameters are not body fields, and unstructured text and binary parameters use raw bodies. Do not reuse the HTTP body wrapper for CLI arguments.
+
+The [Type Mapping](/next/type-mapping) page describes REST JSON values, not CLI native literals. `--format json` selects output formatting; it does not change input encoding.
 
 ## Getting results
 
