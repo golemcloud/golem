@@ -79,8 +79,10 @@ mod reader;
 #[cfg(test)]
 pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
 
+pub use reader::{OplogReadError, UnreadableOplog};
+
 #[cfg(test)]
-pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};
+pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source};
 
 #[cfg(test)]
 pub mod tests;
@@ -251,14 +253,16 @@ pub trait OplogService: Debug + Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex;
+    ) -> Result<OplogIndex, UnreadableOplog>;
 
+    /// The last index for archive maintenance: every storage failure is returned, not only an
+    /// unreadable archive.
     async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, String> {
-        Ok(self.get_last_index(owned_agent_id, agent_mode).await)
+        Ok(self.get_last_index(owned_agent_id, agent_mode).await?)
     }
 
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
@@ -292,7 +296,7 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry>;
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>;
 
     /// Reads the part of the requested range physically present in this service.
     ///
@@ -304,19 +308,25 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.read_exact(owned_agent_id, agent_mode, idx, n).await
     }
 
     /// Checks whether the oplog exists in the oplog, without opening it
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog>;
 
+    /// Existence for archive maintenance: every storage failure is returned, not only an
+    /// unreadable archive.
     async fn try_exists(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<bool, String> {
-        Ok(self.exists(owned_agent_id, agent_mode).await)
+        Ok(self.exists(owned_agent_id, agent_mode).await?)
     }
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
@@ -1094,41 +1104,49 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError>;
 
     /// Reads exactly `n` contiguous entries starting at `oplog_index`.
-    async fn read_exact(&self, oplog_index: OplogIndex, n: u64)
-    -> BTreeMap<OplogIndex, OplogEntry>;
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>;
 
     /// Reads the part of the requested range physically present in this oplog.
     async fn read_source(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.read_exact(oplog_index, n).await
     }
 
+    /// The part of the range present in this oplog, for archive maintenance: every storage failure
+    /// is returned, not only an unreadable archive.
     async fn try_read_source(
         &self,
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
-        Ok(self.read_source(oplog_index, n).await)
+        Ok(self.read_source(oplog_index, n).await?)
     }
 
     /// Reads the entry at the given oplog index.
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        self.read_exact(oplog_index, 1)
-            .await
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
+        Ok(self
+            .read_exact(oplog_index, 1)
+            .await?
             .remove(&oplog_index)
             .unwrap_or_else(|| {
                 panic!("Missing oplog entry {oplog_index} after an exact single-entry read")
-            })
+            }))
     }
 
     /// Gets the total number of entries in the oplog
-    async fn length(&self) -> u64;
+    async fn length(&self) -> Result<u64, UnreadableOplog>;
 
+    /// The length for archive maintenance: every storage failure is returned, not only an
+    /// unreadable archive.
     async fn try_length(&self) -> Result<u64, String> {
-        Ok(self.length().await)
+        Ok(self.length().await?)
     }
 
     /// Adds an entry to the oplog and immediately commits it

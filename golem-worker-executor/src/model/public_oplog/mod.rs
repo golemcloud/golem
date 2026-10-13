@@ -489,7 +489,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         let entry = self
             .oplog_service
             .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
-            .await
+            .await?
             .remove(&index);
         let start = entry
             .as_ref()
@@ -577,7 +577,7 @@ pub async fn get_public_oplog_chunk(
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     let available = if initial_oplog_index <= last_index {
         last_index.as_u64() - initial_oplog_index.as_u64() + 1
     } else {
@@ -590,7 +590,7 @@ pub async fn get_public_oplog_chunk(
             initial_oplog_index,
             (count as u64).min(available),
         )
-        .await;
+        .await?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -712,13 +712,13 @@ pub async fn find_component_revision_at(
     let mut initial_component_revision = ComponentRevision::INITIAL;
     let last_oplog_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     let mut current = OplogIndex::INITIAL;
     while current < start && current <= last_oplog_index {
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
             .read_exact(owned_agent_id, agent_mode, current, 1)
-            .await
+            .await?
             .remove(&current);
 
         if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {

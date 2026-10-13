@@ -3268,7 +3268,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &result,
         ) {
             self.parent.record_recovery_failure(error).await;
-            if self.parent.retired_for_lost_shard() {
+            // An oplog that does not read fails the agent: it is not restarted.
+            if self.parent.retired_for_lost_shard()
+                || matches!(error, WorkerExecutorError::OplogUnreadable { .. })
+            {
                 return CommandOutcome::BreakInnerLoop(RetryDecision::None);
             }
             return CommandOutcome::BreakInnerLoopForRecovery {
@@ -3924,7 +3927,10 @@ fn selected_infrastructure_recovery_error<'a>(
         return None;
     }
     match result {
-        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
+        Err(
+            error @ (WorkerExecutorError::RecoveryRequired { .. }
+            | WorkerExecutorError::OplogUnreadable { .. }),
+        ) => Some(error),
         _ => None,
     }
 }

@@ -26,8 +26,8 @@ use super::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogOps, OplogReadSource,
-    OrderedOplogStart, PendingUpload, RawDurableStreamSessionStatus, checked_range_end,
-    exact_from_source, fail_stop,
+    OrderedOplogStart, PendingUpload, RawDurableStreamSessionStatus, UnreadableOplog,
+    checked_range_end, exact_from_source,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -447,25 +447,26 @@ impl Oplog for TestOplog {
         Ok(true)
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         self.point_reads.fetch_add(1, Ordering::Relaxed);
-        self.state
+        Ok(self
+            .state
             .lock()
             .unwrap()
             .entries
             .get(&oplog_index)
             .cloned()
-            .expect("missing test oplog entry")
+            .expect("missing test oplog entry"))
     }
 
     async fn read_exact(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.read_ranges.lock().unwrap().push((oplog_index, n));
         let state = self.state.lock().unwrap();
-        let end = fail_stop(checked_range_end(oplog_index, n));
+        let end = checked_range_end(oplog_index, n).expect("a valid test oplog range");
         let entries = end.map_or_else(BTreeMap::new, |end| {
             state
                 .entries
@@ -473,16 +474,17 @@ impl Oplog for TestOplog {
                 .map(|(index, entry)| (*index, entry.clone()))
                 .collect()
         });
-        fail_stop(exact_from_source(
+        Ok(exact_from_source(
             OplogReadSource::Other("durable stream test oplog"),
             oplog_index,
             n,
             entries,
-        ))
+        )
+        .expect("an exact test oplog read"))
     }
 
-    async fn length(&self) -> u64 {
-        self.state.lock().unwrap().entries.len() as u64
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
+        Ok(self.state.lock().unwrap().entries.len() as u64)
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -557,7 +559,7 @@ async fn test_oplog_read_exact_includes_uncommitted_entries() {
     let entry = OplogEntry::interrupted();
     let index = oplog.add(entry.clone()).await.unwrap();
 
-    let entries = oplog.read_exact(index, 1).await;
+    let entries = oplog.read_exact(index, 1).await.unwrap();
 
     assert_eq!(entries.get(&index), Some(&entry));
 }
@@ -589,7 +591,7 @@ async fn test_oplog_read_exact_accepts_single_entry_at_max_index() {
         .entries
         .insert(index, entry.clone());
 
-    let entries = oplog.read_exact(index, 1).await;
+    let entries = oplog.read_exact(index, 1).await.unwrap();
 
     assert_eq!(entries.get(&index), Some(&entry));
 }
@@ -5085,6 +5087,7 @@ async fn provisional_external_append_retains_entity_attribution() {
             oplog
                 .read(OplogIndex::from_u64(position))
                 .await
+                .unwrap()
                 .entity_parent_start_index(),
             attribution
         );
@@ -5368,6 +5371,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
             oplog.current_oplog_index().await.as_u64(),
         )
         .await
+        .unwrap()
         .into_iter()
         .filter(|(_, entry)| matches!(entry, OplogEntry::StreamItems { .. }))
         .count();
@@ -6902,7 +6906,7 @@ async fn nested_registration_and_enclosing_item_share_one_ordered_batch() {
             .replayed
     );
     assert_eq!(oplog.committed_length(), 3);
-    let entries = oplog.read_exact(OplogIndex::INITIAL, 3).await;
+    let entries = oplog.read_exact(OplogIndex::INITIAL, 3).await.unwrap();
     assert!(matches!(
         entries.get(&OplogIndex::from_u64(2)),
         Some(OplogEntry::StreamRegistered { .. })
@@ -7712,7 +7716,8 @@ async fn session_control_batch_validates_before_appending_any_record() {
     for (offset, expected) in [cancel, tombstone].into_iter().enumerate() {
         let entry = oplog
             .read(OplogIndex::from_u64(before.as_u64() + 1 + offset as u64))
-            .await;
+            .await
+            .unwrap();
         let OplogEntry::StreamSession { record, .. } = entry else {
             panic!("expected session control record");
         };
@@ -8708,7 +8713,8 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
         finishing.await.unwrap();
         let finished_index = oplog.current_oplog_index().await;
         assert_eq!(finished_index.as_u64(), before.as_u64() + 4);
-        let OplogEntry::StreamSession { record, .. } = oplog.read(finished_index).await else {
+        let OplogEntry::StreamSession { record, .. } = oplog.read(finished_index).await.unwrap()
+        else {
             panic!("terminal batch must end with Finished");
         };
         assert_eq!(

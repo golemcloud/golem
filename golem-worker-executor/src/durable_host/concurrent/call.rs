@@ -2705,6 +2705,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .replay_state
                     .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                     .await
+                    .map_err(|error| {
+                        (
+                            error,
+                            AccessStartCleanup {
+                                atomic_lease: prepared.atomic_lease.clone(),
+                            },
+                        )
+                    })?
                     .is_none()
                 {
                     switch_prepared_access_to_live(prepared, store, get_ctx)
@@ -2742,7 +2750,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         ScopeScanState::new(begin_index),
                         OplogEntry::track_scope_membership,
                     )
-                    .await;
+                    .await
+                    .map_err(|error| {
+                        (
+                            error,
+                            AccessStartCleanup {
+                                atomic_lease: prepared.atomic_lease.clone(),
+                            },
+                        )
+                    })?;
 
                 match lookup_result {
                     OplogEntryLookupResult::Found { .. } => Ok(AccessOpenedScope {
@@ -2759,7 +2775,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             prepared.retry.durable_execution_state().assume_idempotence,
                         ) =>
                     {
-                        if !prepared.replay_state.has_attempt_suffix(begin_index).await {
+                        if !prepared
+                            .replay_state
+                            .has_attempt_suffix(begin_index)
+                            .await
+                            .map_err(|error| {
+                                (
+                                    error,
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                )
+                            })?
+                        {
                             switch_prepared_access_to_live(prepared, store, get_ctx)
                                 .await
                                 .map_err(|error| {
@@ -3078,7 +3106,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     where
         Pair::Req: TryFrom<HostRequest, Error = String>,
     {
-        let entry = ctx.state.oplog.read(self.start_idx).await;
+        let entry = ctx.state.oplog.read(self.start_idx).await?;
         let OplogEntry::Start {
             request: Some(request),
             ..
@@ -3112,7 +3140,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         &self,
         ctx: &DurableWorkerCtx<Ctx>,
     ) -> Result<Option<golem_common::model::oplog::SpanStarted>, WorkerExecutorError> {
-        match ctx.state.oplog.read(self.start_idx).await {
+        match ctx.state.oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
                 format!("Start at {}", self.start_idx),
@@ -3132,7 +3160,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
     {
         let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-        match oplog.read(self.start_idx).await {
+        match oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
                 format!("Start at {}", self.start_idx),

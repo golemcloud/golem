@@ -186,6 +186,7 @@ use crate::services::linear_memory::{
 };
 use crate::services::oplog::{
     CommitLevel, Oplog, OplogError, OplogOps, OplogPayloadDownloadError, OplogService,
+    UnreadableOplog,
 };
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
@@ -213,7 +214,7 @@ use crate::worker::invocation::{
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::start_outcome::{self, BaselineRole, SnapshotRecoveryResult};
-use crate::worker::status::calculate_last_known_status_with_checkpoint;
+use crate::worker::status::{StatusError, calculate_last_known_status_with_checkpoint};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
@@ -3266,7 +3267,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 // The recorded span metadata is authoritative on replay: the owning host path
                 // restores `SpanStarted` from the claimed scope `Start` rather than from the
                 // live caller's value.
-                recorded_span_started = match self.state.oplog.read(begin_index).await {
+                recorded_span_started = match self.state.oplog.read(begin_index).await? {
                     OplogEntry::Start { span_started, .. } => span_started.map(|span| *span),
                     other => {
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -3288,7 +3289,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .state
                         .replay_state
                         .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
-                        .await;
+                        .await?;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
                         self.switch_to_live().await?;
@@ -3313,7 +3314,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             ScopeScanState::new(begin_index),
                             OplogEntry::track_scope_membership,
                         )
-                        .await;
+                        .await?;
                     match lookup_result {
                         OplogEntryLookupResult::Found { index, .. } => {
                             debug!(
@@ -3354,7 +3355,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     ScopeScanState::new(begin_index),
                                     OplogEntry::track_scope_membership,
                                 )
-                                .await;
+                                .await?;
                             if matches!(recovery_failure, OplogEntryLookupResult::Found { .. }) {
                                 scope_replay_handle = Some(scope_handle);
                                 Ok(begin_index)
@@ -3363,7 +3364,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     .state
                                     .replay_state
                                     .has_attempt_suffix(begin_index)
-                                    .await
+                                    .await?
                             {
                                 self.switch_to_live().await?;
                                 Ok(begin_index)
@@ -3757,7 +3758,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .state
             .replay_state
             .has_attempt_suffix(scope_start_index)
-            .await
+            .await?
         {
             // A runtime cut intentionally preserves the transaction scope Start but removes its
             // Begin marker. Only that precisely empty retained scope starts a replacement
@@ -3810,7 +3811,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ScopeScanState::new(original_begin_index),
                 OplogEntry::track_scope_membership,
             )
-            .await;
+            .await?;
 
         let tx_id = try_match!(
             begin_entry,
@@ -3836,7 +3837,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         ScopeScanState::new(original_begin_index),
                         OplogEntry::track_scope_membership,
                     )
-                    .await;
+                    .await?;
 
                 match end_entry {
                     OplogEntryLookupResult::Found { .. } => {}
@@ -4356,13 +4357,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         debug!("Attempting snapshot-based recovery from oplog index {snapshot_index}");
 
-        let oplog_entry = store
+        let oplog_entry = match store
             .as_context()
             .data()
             .get_public_state()
             .oplog()
             .read(snapshot_index)
-            .await;
+            .await
+        {
+            Ok(oplog_entry) => oplog_entry,
+            Err(error) => return SnapshotRecoveryResult::Failed(error.into()),
+        };
 
         let (data_payload, mime_type) = match oplog_entry {
             OplogEntry::Snapshot {
@@ -7098,14 +7103,24 @@ fn replace_wallet_cards(
 /// is visible and gets acted on, the quiet one is not. It is also the shape the oplog layers
 /// already have - a bounded storage retry, then a fatal failure - at a lower cost, since a failed
 /// assignment is one RPC rather than a process exit.
+///
+/// An oplog that does not read (`StatusError::Unreadable`) is not that kind of failure: no retry of
+/// the assignment reads it, so failing the assignment would stop every other agent forever. That
+/// one agent is skipped and logged, and its oplog is left as it is.
 fn recovered_status(
     owned_agent_id: &OwnedAgentId,
-    computed: Result<Option<AgentStatusRecord>, String>,
+    computed: Result<Option<AgentStatusRecord>, StatusError>,
 ) -> Result<Option<AgentStatusRecord>, anyhow::Error> {
     match computed {
         Ok(Some(status)) => Ok(Some(status)),
         Ok(None) => {
             error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
+            Ok(None)
+        }
+        // No retry reads the oplog, so failing the assignment would keep every other agent from
+        // being resumed. The agent is left as it is, with its oplog, for an operator to inspect.
+        Err(StatusError::Unreadable(error)) => {
+            error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
             Ok(None)
         }
         Err(error) => Err(anyhow!(
@@ -7387,6 +7402,8 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     })
 }
 
+/// The error that ends a replay outside the guest's failure handling: a reconstruction that is
+/// required, or an oplog that does not read. Either ends the start with the error.
 fn selected_replay_recovery_error(
     owner_failure_selected: bool,
     agent_mode: AgentMode,
@@ -7396,7 +7413,10 @@ fn selected_replay_recovery_error(
         return None;
     }
     match result {
-        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
+        Err(
+            error @ (WorkerExecutorError::RecoveryRequired { .. }
+            | WorkerExecutorError::OplogUnreadable { .. }),
+        ) => Some(error),
         _ => None,
     }
 }
@@ -7801,6 +7821,23 @@ mod tests {
         assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_some());
         assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
         assert!(selected_replay_recovery_error(false, AgentMode::Ephemeral, &result).is_none());
+    }
+
+    /// An oplog that does not read ends the replay with its error instead of failing the guest.
+    #[test]
+    fn replay_recovery_branch_selects_an_unreadable_oplog() {
+        let result = Err(WorkerExecutorError::oplog_unreadable(
+            AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "unreadable".to_string(),
+            },
+            "corrupt oplog data from archive layer 1",
+        ));
+        assert_eq!(
+            selected_replay_recovery_error(false, AgentMode::Durable, &result),
+            result.as_ref().err()
+        );
+        assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
     }
 
     #[test]
@@ -9408,7 +9445,7 @@ mod tests {
     fn shard_assignment_recovery_fails_on_a_status_it_cannot_compute() {
         let error = recovered_status(
             &recovered_agent(),
-            Err("failed to load durable stream session payload: redis failover".to_string()),
+            Err("failed to load durable stream session payload: redis failover".into()),
         )
         .expect_err("an uncomputable status was skipped rather than failing the assignment");
 
@@ -9417,6 +9454,23 @@ mod tests {
                 && error.to_string().contains("redis failover"),
             "{error}"
         );
+    }
+
+    /// An agent whose oplog does not read is skipped and does not fail the assignment: no retry of
+    /// the assignment would read it, and failing it would keep every other agent from resuming.
+    #[test]
+    fn shard_assignment_recovery_skips_an_agent_whose_oplog_does_not_read() {
+        let unreadable = crate::services::oplog::UnreadableOplog {
+            agent_id: recovered_agent().agent_id(),
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        };
+        assert!(matches!(
+            recovered_status(&recovered_agent(), Err(StatusError::Unreadable(unreadable))),
+            Ok(None)
+        ));
     }
 
     /// A revoke that races recovery refuses the worker an epoch. That agent is skipped, so the rest
@@ -9925,10 +9979,14 @@ async fn last_error<T: HasOplogService + HasConfig>(
         return None;
     }
 
-    let last_index = this
+    let last_index = match this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await
+    {
+        Ok(last_index) => last_index,
+        Err(error) => return Some(unreadable_last_error(error)),
+    };
     if last_index == OplogIndex::NONE {
         return None;
     }
@@ -9942,7 +10000,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
     let mut window_end = last_index;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = this
+        let entries = match this
             .oplog_service()
             .read_exact(
                 owned_agent_id,
@@ -9950,7 +10008,11 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 window_start,
                 window_end.as_u64() - window_start.as_u64() + 1,
             )
-            .await;
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => return Some(unreadable_last_error(error)),
+        };
 
         let mut idx = window_end;
         loop {
@@ -10021,6 +10083,15 @@ async fn last_error<T: HasOplogService + HasConfig>(
     }
 }
 
+/// The last error of an agent whose oplog does not read back to it: the read failure itself.
+fn unreadable_last_error(error: UnreadableOplog) -> LastError {
+    LastError {
+        error: AgentError::InternalError(WorkerExecutorError::from(error).to_string()),
+        stderr: String::new(),
+        retry_from: OplogIndex::NONE,
+    }
+}
+
 fn next_atomic_region_idempotency_key_oplog_index(
     next_idempotency_key_oplog_index: &mut OplogIndex,
 ) -> OplogIndex {
@@ -10051,7 +10122,8 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     let mut window_end = last_oplog_idx;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = this
+        // The stderr is the context of an error, so a window that does not read ends it.
+        let Ok(entries) = this
             .oplog_service()
             .read_exact(
                 owned_agent_id,
@@ -10059,7 +10131,10 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                 window_start,
                 window_end.as_u64() - window_start.as_u64() + 1,
             )
-            .await;
+            .await
+        else {
+            break 'scan;
+        };
 
         let mut idx = window_end;
         loop {
@@ -11046,7 +11121,7 @@ impl PrivateDurableWorkerState {
                         }
                     };
                 if let Some(snapshot_idx) = last_snapshot_index {
-                    match oplog.read(snapshot_idx).await {
+                    match oplog.read(snapshot_idx).await? {
                         OplogEntry::Snapshot {
                             active_cards,
                             wallet_generation,

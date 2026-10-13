@@ -121,11 +121,12 @@ async fn scan(
 
 async fn observe(service: &BlobOplogArchiveService, agent: &OwnedAgentId) -> Observed {
     (
-        service.exists(agent, MODE).await,
+        service.exists(agent, MODE).await.unwrap(),
         service
             .read_source(agent, MODE, OplogIndex::INITIAL, 1)
-            .await,
-        service.get_last_index(agent, MODE).await,
+            .await
+            .unwrap(),
+        service.get_last_index(agent, MODE).await.unwrap(),
     )
 }
 
@@ -281,7 +282,7 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     let dropped = archive.drop_prefix(OplogIndex::INITIAL).await.unwrap();
     let emptied = (
         dropped,
-        service.exists(&agent, MODE).await,
+        service.exists(&agent, MODE).await.unwrap(),
         scan(&service, environment_id, component_id).await,
     );
     archive
@@ -289,11 +290,12 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
         .await
         .unwrap();
     let appended = (
-        service.exists(&agent, MODE).await,
+        service.exists(&agent, MODE).await.unwrap(),
         scan(&service, environment_id, component_id).await,
         service
             .read_source(&agent, MODE, OplogIndex::INITIAL.next(), 1)
-            .await,
+            .await
+            .unwrap(),
     );
 
     assert_eq!(
@@ -338,7 +340,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
         .await
         .unwrap();
     let before = (
-        service.exists(&agent, MODE).await,
+        service.exists(&agent, MODE).await.unwrap(),
         scan(&service, environment_id, component_id).await,
     );
     service
@@ -348,11 +350,12 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
         .await
         .unwrap();
     let after = (
-        service.exists(&agent, MODE).await,
+        service.exists(&agent, MODE).await.unwrap(),
         scan(&service, environment_id, component_id).await,
         service
             .read_source(&agent, MODE, OplogIndex::INITIAL, 1)
-            .await,
+            .await
+            .unwrap(),
     );
 
     assert_eq!(

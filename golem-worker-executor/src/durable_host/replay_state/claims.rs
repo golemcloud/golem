@@ -1010,7 +1010,7 @@ impl ReplayState {
                                     }
                                 },
                             )
-                            .await;
+                            .await?;
 
                         let result = match exact {
                             OplogEntryLookupResult::Found {

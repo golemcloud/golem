@@ -123,22 +123,12 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         let archive = self.open(owned_agent_id, agent_mode, None).await;
-        archive.read_source(idx, n).await.unwrap_or_else(|error| {
-            panic!("Oplog archive read failed for {owned_agent_id}: {error}")
-        })
+        archive.read_source(idx, n).await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
-        self.try_exists(owned_agent_id, agent_mode)
-            .await
-            .unwrap_or_else(|error| {
-                panic!("Failed to check compressed oplog archive existence: {error}")
-            })
-    }
-
-    async fn try_exists(
+    async fn exists(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -170,18 +160,6 @@ impl OplogArchiveService for CompressedOplogArchiveService {
     }
 
     async fn get_last_index(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> OplogIndex {
-        self.try_get_last_index(owned_agent_id, agent_mode)
-            .await
-            .unwrap_or_else(|error| {
-                panic!("Failed to read compressed oplog archive index: {error}")
-            })
-    }
-
-    async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -367,7 +345,7 @@ impl OplogArchive for CompressedOplogArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry>> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         if n == 0 {
             return Ok(BTreeMap::new());
         }
@@ -397,11 +375,7 @@ impl OplogArchive for CompressedOplogArchive {
 
             // we encountered an entry that is not in our cache. fetch the chunk that contains the entry and use as much as we can from it.
             // after the end of the chunk
-            if let Some(chunk) = self
-                .fetch_and_cache_range(idx, last_idx)
-                .await
-                .map_err(|error| error.to_string())?
-            {
+            if let Some(chunk) = self.fetch_and_cache_range(idx, last_idx).await? {
                 last_idx = last_idx.subtract(chunk.len() as u64);
                 for (index, entry) in chunk {
                     result.insert(index, entry);
@@ -493,7 +467,10 @@ impl OplogArchive for CompressedOplogArchive {
             self.level,
             self.retry_config.clone(),
         );
-        let actual = uncached.read_source(*start, entries.len() as u64).await?;
+        let actual = uncached
+            .read_source(*start, entries.len() as u64)
+            .await
+            .map_err(|error| error.to_string())?;
         verify_persisted_entries(OplogReadSource::Archive(self.level), entries, actual)
             .map_err(|error| error.to_string())
     }

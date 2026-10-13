@@ -205,10 +205,10 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
                     let operations = worker.owner_execution().tool_operation_metadata();
                     assert_eq!(operations.operations.len(), 2);
                     assert_eq!(operations.owner_failure, None);
-                    let tip = worker.oplog_service().get_last_index(&owned, AgentMode::Durable).await;
+                    let tip = worker.oplog_service().get_last_index(&owned, AgentMode::Durable).await.unwrap();
                     let committed = worker.oplog_service().read_exact(
                         &owned, AgentMode::Durable, OplogIndex::INITIAL, tip.as_u64(),
-                    ).await;
+                    ).await.unwrap();
                     for start in [parent, child].into_iter().chain(primary_waits.iter().copied()) {
                         assert!(matches!(committed.get(&start), Some(OplogEntry::Start { .. })));
                     }
@@ -240,7 +240,8 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
     let tip = worker
         .oplog_service()
         .get_last_index(&owned, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     let committed = worker
         .oplog_service()
         .read_exact(
@@ -249,7 +250,8 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
             OplogIndex::INITIAL,
             tip.as_u64(),
         )
-        .await;
+        .await
+        .unwrap();
     let failures: Vec<_> = oplog
         .iter()
         .filter(|entry| {

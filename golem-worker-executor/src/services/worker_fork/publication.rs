@@ -7,7 +7,7 @@
 //     http://license.golem.cloud/LICENSE
 
 use crate::services::agent_filesystem_snapshots::PublishFound;
-use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps};
+use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{StreamId, StreamOffset, StreamSessionRecord};
 use golem_common::model::oplog::host_functions::GolemApiFork;
@@ -17,6 +17,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{AgentFingerprint, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use tracing::warn;
 use uuid::Uuid;
 
 pub(crate) fn request_hash(
@@ -101,27 +102,27 @@ pub(crate) async fn existing_fork(
 ) -> Result<ExistingFork, WorkerExecutorError> {
     let mode = AgentMode::Durable;
     let conflict = || conflict(target);
-    if service.exists(target, AgentMode::Ephemeral).await {
+    if service.exists(target, AgentMode::Ephemeral).await? {
         return Err(conflict());
     }
-    if !service.exists(target, mode).await {
+    if !service.exists(target, mode).await? {
         return Ok(ExistingFork::Absent);
     }
     let initial = service
         .read_source(target, mode, OplogIndex::INITIAL, 1)
-        .await;
+        .await?;
     let Some(OplogEntry::Create { parameters, .. }) = initial.get(&OplogIndex::INITIAL) else {
         return Err(conflict());
     };
     let other = ExistingFork::Other(AgentFingerprint(parameters.instance_id));
-    if service.get_last_index(target, mode).await < cut.next() {
+    if service.get_last_index(target, mode).await? < cut.next() {
         return Ok(other);
     }
     if parameters.agent_id != target.agent_id || parameters.environment_id != target.environment_id
     {
         return Ok(other);
     }
-    let entries = service.read_source(target, mode, cut.next(), 1).await;
+    let entries = service.read_source(target, mode, cut.next(), 1).await?;
     let Some(OplogEntry::StreamSession { record, .. }) = entries.get(&cut.next()) else {
         return Ok(other);
     };
@@ -147,20 +148,31 @@ pub(crate) async fn existing_fork(
 }
 
 /// The instance id of the live durable target, from its `Create`, or `None` when no target with
-/// a `Create` is there.
+/// a `Create` is there or the oplog of the target does not read, so the outcome stays unknown.
 pub(crate) async fn live_instance(
     service: &dyn OplogService,
     target: &OwnedAgentId,
 ) -> Option<AgentFingerprint> {
     let mode = AgentMode::Durable;
-    if !service.exists(target, mode).await {
-        return None;
+    let initial = async {
+        if !service.exists(target, mode).await? {
+            return Ok::<_, UnreadableOplog>(None);
+        }
+        service
+            .read_source(target, mode, OplogIndex::INITIAL, 1)
+            .await
+            .map(Some)
     }
-    match service
-        .read_source(target, mode, OplogIndex::INITIAL, 1)
-        .await
-        .get(&OplogIndex::INITIAL)
-    {
+    .await
+    .unwrap_or_else(|error| {
+        warn!(
+            agent_id = %target,
+            error = %error,
+            "Failed to read the oplog of a fork target after a refused publication"
+        );
+        None
+    })?;
+    match initial.get(&OplogIndex::INITIAL) {
         Some(OplogEntry::Create { parameters, .. }) => {
             Some(AgentFingerprint(parameters.instance_id))
         }
@@ -502,7 +514,8 @@ mod tests {
         assert_eq!(live_instance(&service, &target).await, Some(live));
         let result = service
             .read_exact(&target, AgentMode::Durable, OplogIndex::from_u64(5), 1)
-            .await;
+            .await
+            .unwrap();
         let OplogEntry::End {
             start_index,
             response: Some(payload),

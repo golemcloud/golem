@@ -84,7 +84,7 @@ impl OplogArchive for GatedArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.read_calls.fetch_add(1, Ordering::Relaxed);
         let end = idx.as_u64().saturating_add(n);
         Ok(self
@@ -179,11 +179,11 @@ impl OplogArchiveService for SingletonArchiveService {
         _: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.0.read_source(idx, n).await.unwrap()
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        self.0.read_source(idx, n).await
     }
-    async fn exists(&self, _: &OwnedAgentId, _: AgentMode) -> bool {
-        self.0.length().await.unwrap() != 0
+    async fn exists(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<bool> {
+        Ok(self.0.length().await? != 0)
     }
     async fn scan_for_component(
         &self,
@@ -195,8 +195,12 @@ impl OplogArchiveService for SingletonArchiveService {
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         Ok((cursor, Vec::new()))
     }
-    async fn get_last_index(&self, _: &OwnedAgentId, _: AgentMode) -> OplogIndex {
-        self.0.get_last_index().await.unwrap()
+    async fn get_last_index(
+        &self,
+        _: &OwnedAgentId,
+        _: AgentMode,
+    ) -> OplogArchiveResult<OplogIndex> {
+        self.0.get_last_index().await
     }
 }
 
@@ -326,10 +330,18 @@ async fn read_exact_combines_persisted_handed_off_and_buffer_without_reading_buf
     }
     fixture.archive.wait_for_appends(2).await;
 
-    let all = fixture.oplog.read_exact(OplogIndex::INITIAL, 5).await;
+    let all = fixture
+        .oplog
+        .read_exact(OplogIndex::INITIAL, 5)
+        .await
+        .unwrap();
     assert_eq!(all.into_values().collect::<Vec<_>>(), expected);
     let reads = fixture.archive.read_calls.load(Ordering::Relaxed);
-    let suffix = fixture.oplog.read_exact(OplogIndex::from_u64(3), 3).await;
+    let suffix = fixture
+        .oplog
+        .read_exact(OplogIndex::from_u64(3), 3)
+        .await
+        .unwrap();
     assert_eq!(suffix.into_values().collect::<Vec<_>>(), expected[2..]);
     assert_eq!(fixture.archive.read_calls.load(Ordering::Relaxed), reads);
 
@@ -577,6 +589,7 @@ async fn a_refused_batch_fails_the_commit_waiting_on_it_and_every_later_write() 
             .oplog
             .read_exact(OplogIndex::INITIAL, 1)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>(),
         vec![refused]

@@ -137,7 +137,7 @@ impl StreamSessionIndexService {
         fingerprint: AgentFingerprint,
     ) -> Result<ProducerIdentityLookup, String> {
         let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
-        let horizon = oplog.get_last_index(id, mode).await;
+        let horizon = oplog.get_last_index(id, mode).await?;
         self.catch_up(id, mode, fingerprint, horizon).await?;
         let metadata: Metadata = self
             .kv
@@ -172,7 +172,7 @@ impl StreamSessionIndexService {
         let id = id.clone();
         spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
-            let horizon = oplog.get_last_index(&id, mode).await;
+            let horizon = oplog.get_last_index(&id, mode).await?;
             this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
             loop {
                 let mut fields = vec![METADATA_FIELD.to_string()];
@@ -242,7 +242,7 @@ impl StreamSessionIndexService {
         let key = key.clone();
         spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
-            let horizon = oplog.get_last_index(&id, mode).await;
+            let horizon = oplog.get_last_index(&id, mode).await?;
             let namespace = Self::namespace(&id, fingerprint);
             let resume_field = stream_resume_index_field(&key, attempt)?;
             loop {
@@ -286,7 +286,7 @@ impl StreamSessionIndexService {
         let id = id.clone();
         spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
-            let horizon = oplog.get_last_index(&id, mode).await;
+            let horizon = oplog.get_last_index(&id, mode).await?;
             this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
             let namespace = Self::namespace(&id, fingerprint);
             'snapshot: loop {
@@ -547,7 +547,7 @@ impl StreamSessionIndexService {
                 .oplog
                 .upgrade()
                 .ok_or_else(|| "oplog service is unavailable".to_string())?;
-            let horizon = oplog.get_last_index(&id, mode).await;
+            let horizon = oplog.get_last_index(&id, mode).await?;
             this.catch_up_inner(&id, mode, fingerprint, horizon).await?;
             let lock = this.index_lock(&id);
             let _guard = lock.inner.lock().await;
@@ -688,7 +688,7 @@ impl StreamSessionIndexService {
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, String> {
         let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
-        let horizon = oplog.get_last_index(id, mode).await;
+        let horizon = oplog.get_last_index(id, mode).await?;
         self.catch_up(id, mode, fingerprint, horizon).await?;
         let lock = self.index_lock(id);
         let _guard = lock.inner.lock().await;
@@ -865,7 +865,7 @@ impl StreamSessionIndexService {
             let count = (horizon.as_u64() - metadata.covered_through.as_u64()).min(1024);
             let mut entries = oplog
                 .read_exact(id, mode, metadata.covered_through.next(), count)
-                .await;
+                .await?;
             if entries.is_empty() {
                 return Err(format!(
                     "empty oplog range while indexing stream sessions for {id}"
@@ -966,7 +966,7 @@ impl StreamSessionIndexService {
                     break;
                 }
                 let next_index = physical_chunk_end.next();
-                let next = oplog.read_exact(id, mode, next_index, 1).await;
+                let next = oplog.read_exact(id, mode, next_index, 1).await?;
                 if next.is_empty() {
                     return Err(
                         "missing enclosing item while extending producer metadata chunk".into(),
@@ -1297,7 +1297,7 @@ impl StreamSessionIndexService {
                                     attached.pending_invocation_oplog_index,
                                     1,
                                 )
-                                .await;
+                                .await?;
                             persisted_referent.get(&attached.pending_invocation_oplog_index)
                         };
                         match referent {
@@ -1477,7 +1477,7 @@ impl StreamSessionIndexService {
                     .upgrade()
                     .ok_or_else(|| "oplog service is unavailable".to_string())?
                     .get_last_index(id, mode)
-                    .await
+                    .await?
             }
         };
         self.catch_up_inner(id, mode, fingerprint, horizon).await?;

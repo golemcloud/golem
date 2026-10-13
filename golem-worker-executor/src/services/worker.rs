@@ -386,6 +386,16 @@ impl StaleReason {
     }
 }
 
+/// Logs that recovery leaves the agent as it is, because its oplog does not read. The member stays
+/// in the recovery index, and the oplog stays as it is, so an operator can inspect it.
+fn skip_unreadable_agent(owned_agent_id: &OwnedAgentId, error: &WorkerExecutorError) {
+    error!(
+        agent_id = %owned_agent_id,
+        error = %error,
+        "Skipping agent during recovery: its oplog is unreadable"
+    );
+}
+
 /// Tells why the member of the incarnation `fingerprint` is stale, when `identity` is the stored
 /// identity of its agent: no identity, or an identity with another fingerprint. `None` means that
 /// the member is the stored incarnation.
@@ -865,7 +875,17 @@ impl DefaultWorkerService {
             //   transient cause is already absorbed by the storage retry budget, and one that
             //   outlives it leaves this executor unable to do its job, so replacing it beats
             //   carrying on with an unknown number of agents stranded.
-            let identity = self.resolve_agent_identity(owned_agent_id).await?;
+            //
+            // An oplog that does not read is the exception: no retry reads it, so failing the scan
+            // would strand every other agent of the shards behind it. That agent is left as it is.
+            let identity = match self.resolve_agent_identity(owned_agent_id).await {
+                Ok(identity) => identity,
+                Err(error @ WorkerExecutorError::OplogUnreadable { .. }) => {
+                    skip_unreadable_agent(owned_agent_id, &error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if let Some(reason) = stale_reason(identity.as_ref(), running_worker.fingerprint) {
                 self.drop_stale_member(key, &running_worker, reason, on_stale)
                     .await?;
@@ -905,6 +925,9 @@ impl DefaultWorkerService {
                             "failed to load metadata for existing {owned_agent_id} during recovery"
                         )));
                     }
+                }
+                Err(error @ WorkerExecutorError::OplogUnreadable { .. }) => {
+                    skip_unreadable_agent(owned_agent_id, &error);
                 }
                 Err(err) => {
                     return Err(WorkerExecutorError::runtime(format!(
@@ -1403,7 +1426,7 @@ impl DefaultWorkerService {
         let entry = self
             .oplog_service
             .read_source(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
-            .await
+            .await?
             .remove(&OplogIndex::INITIAL);
         match entry {
             None => Ok(None),
@@ -2093,7 +2116,7 @@ impl WorkerService for DefaultWorkerService {
                             metadata.covered_through.next(),
                             count,
                         )
-                        .await;
+                        .await?;
                     if entries.is_empty() {
                         return Err(format!(
                             "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {} was empty",
@@ -2485,6 +2508,7 @@ mod tests {
     use super::*;
     use crate::model::ExecutionStatus;
     use crate::services::oplog::Oplog;
+    use crate::services::oplog::UnreadableOplog;
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::keyvalue::KeyValueStorageError;
     use crate::storage::keyvalue::fault_injecting::{
@@ -2627,12 +2651,13 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> OplogIndex {
-            self.entries
+        ) -> Result<OplogIndex, UnreadableOplog> {
+            Ok(self
+                .entries
                 .keys()
                 .next_back()
                 .copied()
-                .unwrap_or(OplogIndex::NONE)
+                .unwrap_or(OplogIndex::NONE))
         }
 
         async fn assert_owning_epoch(
@@ -2661,21 +2686,26 @@ mod tests {
             _agent_mode: AgentMode,
             idx: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
             self.reads.lock().unwrap().push((idx, n));
             if self.pause_next_read.swap(false, Ordering::AcqRel) {
                 self.read_started.notify_one();
                 self.resume_read.notified().await;
             }
             let end = idx.as_u64().saturating_add(n.saturating_sub(1));
-            self.entries
+            Ok(self
+                .entries
                 .range(idx..=OplogIndex::from_u64(end))
                 .map(|(index, entry)| (*index, entry.clone()))
-                .collect()
+                .collect())
         }
 
-        async fn exists(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
-            true
+        async fn exists(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> Result<bool, UnreadableOplog> {
+            Ok(true)
         }
 
         async fn scan_for_component(
@@ -4610,7 +4640,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> OplogIndex {
+        ) -> Result<OplogIndex, UnreadableOplog> {
             unreachable!()
         }
 
@@ -4646,8 +4676,8 @@ mod tests {
             _agent_mode: AgentMode,
             _idx: OplogIndex,
             _n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
-            BTreeMap::new()
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+            Ok(BTreeMap::new())
         }
 
         async fn read_source(
@@ -4656,21 +4686,26 @@ mod tests {
             agent_mode: AgentMode,
             _idx: OplogIndex,
             _n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
             if self.hide_identity_after_delete_attempt
                 && self.delete_attempts.load(Ordering::Relaxed) > 0
             {
-                return BTreeMap::new();
+                return Ok(BTreeMap::new());
             }
-            self.initial_entries
+            Ok(self
+                .initial_entries
                 .get(&(owned_agent_id.clone(), agent_mode))
                 .cloned()
                 .map(|entry| BTreeMap::from([(OplogIndex::INITIAL, entry)]))
-                .unwrap_or_default()
+                .unwrap_or_default())
         }
 
-        async fn exists(&self, owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
-            self.existing.contains(owned_agent_id)
+        async fn exists(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> Result<bool, UnreadableOplog> {
+            Ok(self.existing.contains(owned_agent_id))
         }
 
         async fn scan_for_component(

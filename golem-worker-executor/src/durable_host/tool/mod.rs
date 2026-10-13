@@ -5126,7 +5126,7 @@ where
                 accepted.durability.scope().invocation_id().start_index(),
             )
         });
-        replay.has_visible_scope_descendant(start).await
+        replay.has_visible_scope_descendant(start).await?
     } else {
         false
     };

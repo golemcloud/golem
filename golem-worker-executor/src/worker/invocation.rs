@@ -26,6 +26,7 @@ use crate::preview2::exports::golem::api1_5_0::save_snapshot as save_snapshot_ex
 use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_processor as oplog_processor_exports;
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::services::HasWorker;
+use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
@@ -519,6 +520,19 @@ fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
     error.downcast_ref::<wasmtime::WasmBacktrace>().is_some()
 }
 
+/// The oplog that a host call could not read, in the chain of `error`: either already a
+/// `WorkerExecutorError`, or the read failure itself. It fails the agent, not the guest call.
+fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<WorkerExecutorError> {
+    error
+        .chain()
+        .find_map(|cause| match cause.downcast_ref::<WorkerExecutorError>() {
+            Some(error @ WorkerExecutorError::OplogUnreadable { .. }) => Some(error.clone()),
+            _ => cause
+                .downcast_ref::<UnreadableOplog>()
+                .map(|error| error.clone().into()),
+        })
+}
+
 fn classify_guest_call_settlement<R>(
     result: wasmtime::Result<R>,
     tail_timeout: Option<(std::time::Duration, usize)>,
@@ -540,6 +554,8 @@ fn classify_guest_call_settlement<R>(
             )
         {
             GuestCallSettlementError::Interrupted(error)
+        } else if let Some(unreadable) = unreadable_oplog_in(&error) {
+            GuestCallSettlementError::Infrastructure(unreadable)
         } else if let Some(recovery_failure) = error
             .chain()
             .find_map(|cause| cause.downcast_ref::<DurableRecoveryFailure>())
@@ -2469,6 +2485,39 @@ mod tests {
             ),
             Err(GuestCallSettlementError::Interrupted(_))
         ));
+    }
+
+    /// A host call whose oplog read failed fails the agent, not the guest call: the read failure,
+    /// raw or already a `WorkerExecutorError`, settles as an unreadable oplog of the agent.
+    #[test]
+    fn an_unreadable_oplog_settles_as_infrastructure() {
+        let unreadable = UnreadableOplog {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "unreadable".to_string(),
+            },
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        };
+        let expected = WorkerExecutorError::from(unreadable.clone());
+        for error in [
+            wasmtime::Error::from_anyhow(
+                anyhow::Error::from(unreadable.clone()).context("host call"),
+            ),
+            wasmtime::Error::from_anyhow(
+                anyhow::Error::from(expected.clone()).context("host call"),
+            ),
+        ] {
+            match classify_guest_call_settlement::<()>(Err(error), None, false) {
+                Err(GuestCallSettlementError::Infrastructure(error)) => {
+                    assert_eq!(error, expected)
+                }
+                Err(_) => panic!("an unreadable oplog did not settle as infrastructure"),
+                Ok(()) => panic!("an unreadable oplog settled"),
+            }
+        }
     }
 
     #[test]

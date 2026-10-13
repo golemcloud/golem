@@ -40,7 +40,7 @@ use crate::durable_host::http::policy::{
 use crate::durable_host::http::types::classify_http_error_code;
 use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState, PendingStatusRetryDecision};
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::oplog::{Oplog, OplogOps, OplogPayloadDownloadError};
+use crate::services::oplog::{Oplog, OplogOps, OplogPayloadDownloadError, UnreadableOplog};
 use crate::services::{HasOplog, HasWorker};
 use anyhow::Context;
 use bytes::Bytes;
@@ -207,6 +207,13 @@ impl HttpStreamResumeError {
 
     fn http_content(error: impl Into<anyhow::Error>) -> Self {
         Self::HttpContent(error.into())
+    }
+}
+
+/// The recorded history of the response cannot be read back, so it cannot be resumed.
+impl From<UnreadableOplog> for HttpStreamResumeError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::CorruptHistory(error.into())
     }
 }
 
@@ -390,7 +397,7 @@ async fn reconstruct_outgoing_body_chunks_after(
     // current_oplog_index() returns the index OF the last written entry,
     // so we need +1 to include it in the scan range.
     let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
-    let entries = oplog.read_exact(begin_index, n).await;
+    let entries = oplog.read_exact(begin_index, n).await?;
     let mut chunks = Vec::new();
 
     let write_fn_name =
@@ -514,7 +521,7 @@ pub async fn count_incoming_body_bytes(
     // current_oplog_index() returns the index OF the last written entry,
     // so we need +1 to include it in the scan range.
     let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
-    let entries = oplog.read_exact(begin_index, n).await;
+    let entries = oplog.read_exact(begin_index, n).await?;
     let mut total: u64 = 0;
 
     let read_fn_name =

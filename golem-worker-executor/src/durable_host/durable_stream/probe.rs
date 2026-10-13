@@ -357,7 +357,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let current = self
             .oplog_service
             .get_last_index(&consumer, AgentMode::Durable)
-            .await;
+            .await?;
         if !current.is_defined() {
             return Ok(None);
         }
@@ -391,7 +391,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 OplogIndex::INITIAL,
                 current.as_u64(),
             )
-            .await
+            .await?
         {
             if lineage.deleted_regions().is_in_deleted_region(index) {
                 continue;
@@ -408,7 +408,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 let original = self
                     .oplog_service
                     .read_exact(&consumer, AgentMode::Durable, original_index, 1)
-                    .await;
+                    .await?;
                 let Some(OplogEntry::StreamSession {
                     record: original, ..
                 }) = original.get(&original_index)

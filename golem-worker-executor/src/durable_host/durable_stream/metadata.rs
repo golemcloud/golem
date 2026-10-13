@@ -1114,7 +1114,7 @@ pub(crate) async fn project_producer_metadata(
                             "consumer re-observation must reference an earlier record".into()
                         );
                     }
-                    let original = oplog.read_exact(owner, mode, original_index, 1).await;
+                    let original = oplog.read_exact(owner, mode, original_index, 1).await?;
                     let Some(OplogEntry::StreamSession {
                         record: original, ..
                     }) = original.get(&original_index)
@@ -1956,7 +1956,7 @@ pub(super) async fn read_terminal_event(
     offset: StreamOffset,
 ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
     let (id, sequence, recorded_offset, terminal_author, payload) =
-        match oplog.read(offset.producer_oplog_index()).await {
+        match oplog.read(offset.producer_oplog_index()).await? {
             OplogEntry::StreamEnd { record, .. } => {
                 let record = oplog
                     .download_payload(record)
@@ -2438,11 +2438,15 @@ mod tests {
             .unwrap();
         let tip = fixture.oplog.current_oplog_index().await;
         for position in 2..=tip.as_u64() {
-            let entry = fixture.oplog.read(OplogIndex::from_u64(position)).await;
+            let entry = fixture
+                .oplog
+                .read(OplogIndex::from_u64(position))
+                .await
+                .unwrap();
             assert_eq!(entry.entity_parent_start_index(), entity_parent_start_index);
         }
         assert!(matches!(
-            fixture.oplog.read(tip).await,
+            fixture.oplog.read(tip).await.unwrap(),
             OplogEntry::StreamSession { .. }
         ));
     }
@@ -2470,6 +2474,7 @@ mod tests {
                 .oplog
                 .read(result_index)
                 .await
+                .unwrap()
                 .entity_parent_start_index(),
             attribution
         );
@@ -2488,7 +2493,7 @@ mod tests {
             .unwrap();
         let finished_index = fixture.oplog.current_oplog_index().await;
         assert_eq!(finished_index, result_index.next());
-        let entry = fixture.oplog.read(finished_index).await;
+        let entry = fixture.oplog.read(finished_index).await.unwrap();
         assert_eq!(entry.entity_parent_start_index(), attribution);
         let OplogEntry::StreamSession { record, .. } = entry else {
             panic!("expected session completion")
@@ -3690,7 +3695,7 @@ mod tests {
         source.invocation.callee = source.agent_id.clone();
         let oplog = Arc::new(TestOplog::default());
         oplog
-            .add(fixture.oplog.read(OplogIndex::INITIAL).await)
+            .add(fixture.oplog.read(OplogIndex::INITIAL).await.unwrap())
             .await
             .unwrap();
         let producer = DurableStreamStore::load(
@@ -3809,6 +3814,7 @@ mod tests {
                 retained.producer_oplog_index().as_u64(),
             )
             .await
+            .unwrap()
         {
             copied.add(entry).await.unwrap();
         }
@@ -3831,6 +3837,7 @@ mod tests {
                 oplog.current_oplog_index().await.as_u64() - 1,
             )
             .await
+            .unwrap()
         {
             fixture.oplog.add(entry).await.unwrap();
         }

@@ -98,7 +98,7 @@ impl DurableStreamStore {
         }
         let OplogEntry::StreamSession {
             record: original, ..
-        } = oplog.read(original_index).await
+        } = oplog.read(original_index).await?
         else {
             return Err(StreamStoreError::CorruptHistory(
                 "consumer re-observation does not reference a consumer record".into(),
@@ -286,7 +286,7 @@ impl DurableStreamStore {
             for (index, entry) in self
                 .oplog
                 .read_exact(metadata.covered_through().next(), count)
-                .await
+                .await?
             {
                 if self
                     .fork_lineage

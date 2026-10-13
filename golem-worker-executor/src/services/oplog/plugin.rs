@@ -20,7 +20,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder, StagePublication,
+    ReservedRawStartBuilder, StagePublication, UnreadableOplog,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -862,7 +862,7 @@ impl OplogService for ForwardingOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
@@ -905,7 +905,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner
             .read_exact(owned_agent_id, agent_mode, idx, n)
             .await
@@ -917,13 +917,17 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner
             .read_source(owned_agent_id, agent_mode, idx, n)
             .await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
         self.inner.exists(owned_agent_id, agent_mode).await
     }
 
@@ -1566,7 +1570,7 @@ impl Oplog for ForwardingOplog {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         self.inner.read(oplog_index).await
     }
 
@@ -1574,7 +1578,7 @@ impl Oplog for ForwardingOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_exact(oplog_index, n).await
     }
 
@@ -1582,7 +1586,7 @@ impl Oplog for ForwardingOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_source(oplog_index, n).await
     }
 
@@ -1594,7 +1598,7 @@ impl Oplog for ForwardingOplog {
         self.inner.try_read_source(oplog_index, n).await
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
         self.inner.length().await
     }
 
@@ -1985,7 +1989,20 @@ impl ForwardingOplogState {
         }
 
         let batch_count = (batch_end.as_u64() - batch_start.as_u64() + 1) as usize;
-        let entries = self.read_batch(batch_start, batch_count).await;
+        let entries = match self.read_batch(batch_start, batch_count).await {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::error!(
+                    grant_id = %grant_id,
+                    error = %error,
+                    "Oplog processor: failed to read the batch to deliver"
+                );
+                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                    s.send_in_progress = false;
+                }
+                return;
+            }
+        };
         if self.forwarding_retired.is_cancelled() {
             return;
         }
@@ -2214,9 +2231,13 @@ impl ForwardingOplogState {
 
     /// Read `count` entries starting at `start` from the buffer if available,
     /// otherwise fall back to the persisted oplog.
-    async fn read_batch(&self, start: OplogIndex, count: usize) -> Vec<OplogEntry> {
+    async fn read_batch(
+        &self,
+        start: OplogIndex,
+        count: usize,
+    ) -> Result<Vec<OplogEntry>, UnreadableOplog> {
         if count == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         if let Some(buffer) = &self.buffer
@@ -2227,15 +2248,16 @@ impl ForwardingOplogState {
 
             if request_end_idx <= buffer_end_idx {
                 let offset = (start.as_u64() - self.buffer_start_idx.as_u64()) as usize;
-                return buffer.iter().skip(offset).take(count).cloned().collect();
+                return Ok(buffer.iter().skip(offset).take(count).cloned().collect());
             }
         }
 
-        self.inner
+        Ok(self
+            .inner
             .read_exact(start, count as u64)
-            .await
+            .await?
             .into_values()
-            .collect()
+            .collect())
     }
 
     /// Write an OplogProcessorCheckpoint entry, commit it, and update index tracking.
@@ -3391,7 +3413,7 @@ mod tests {
             &self,
             oplog_index: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
             self.read_exact_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.read_exact_requests
@@ -3410,11 +3432,11 @@ mod tests {
                 });
                 result.insert(OplogIndex::from_u64(i), entry.clone());
             }
-            result
+            Ok(result)
         }
 
-        async fn length(&self) -> u64 {
-            self.entries.lock().unwrap().len() as u64
+        async fn length(&self) -> Result<u64, UnreadableOplog> {
+            Ok(self.entries.lock().unwrap().len() as u64)
         }
 
         async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -3602,7 +3624,7 @@ mod tests {
         state.try_flush().await;
         assert_eq!(recording_plugin.send_count().await, 0);
         assert_eq!(
-            in_memory.length().await,
+            in_memory.length().await.unwrap(),
             3,
             "the refused checkpoint is the only entry the first flush adds"
         );
@@ -3612,7 +3634,7 @@ mod tests {
         state.try_flush().await;
 
         assert_eq!(
-            in_memory.length().await,
+            in_memory.length().await.unwrap(),
             3,
             "a flush after the fence must not add another checkpoint"
         );
@@ -3860,6 +3882,7 @@ mod tests {
         let entries = inner
             .read_exact(OplogIndex::INITIAL, 3)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>();
 

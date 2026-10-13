@@ -142,7 +142,7 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError, UnreadableOplog,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -728,7 +728,7 @@ impl TestWorkerExecutor {
         let create = services
             .oplog_service()
             .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-            .await
+            .await?
             .remove(&OplogIndex::INITIAL)
             .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
         let OplogEntry::Create { parameters, .. } = create else {
@@ -768,7 +768,8 @@ impl TestWorkerExecutor {
         };
         let last = oplog
             .get_last_index(&owned_agent_id, AgentMode::Durable)
-            .await;
+            .await
+            .expect("the oplog of the test agent reads");
         oplog
             .read_exact(
                 &owned_agent_id,
@@ -777,6 +778,7 @@ impl TestWorkerExecutor {
                 last.as_u64(),
             )
             .await
+            .expect("the oplog of the test agent reads")
             .into_values()
             .collect()
     }
@@ -801,10 +803,10 @@ impl TestWorkerExecutor {
                 OplogIndex::INITIAL,
                 oplog
                     .get_last_index(&owned_agent_id, AgentMode::Durable)
-                    .await
+                    .await?
                     .as_u64(),
             )
-            .await;
+            .await?;
         let mut records = Vec::new();
         for entry in entries.into_values() {
             if let OplogEntry::StreamSession { record, .. } = entry {
@@ -1040,7 +1042,7 @@ impl TestWorkerExecutor {
         let create = services
             .oplog_service()
             .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-            .await
+            .await?
             .remove(&OplogIndex::INITIAL)
             .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
         let OplogEntry::Create { parameters, .. } = create else {
@@ -1087,7 +1089,7 @@ impl TestWorkerExecutor {
             .oplog_service();
         let entries = oplog
             .read_exact(&owned_agent_id, AgentMode::Durable, end_index, 1)
-            .await;
+            .await?;
         match entries.get(&end_index) {
             Some(OplogEntry::End {
                 response:
@@ -1189,7 +1191,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         let entry = golem_worker_executor::services::HasOplog::oplog(worker.as_ref())
             .read(snapshot_index)
-            .await;
+            .await?;
         match entry {
             OplogEntry::Snapshot { .. } => {}
             OplogEntry::PendingUpdate {
@@ -5460,7 +5462,7 @@ impl Oplog for TestOplog {
         self.oplog.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         let gate = self
             .additional_test_deps
             .oplog_read_gates
@@ -5475,9 +5477,9 @@ impl Oplog for TestOplog {
             .additional_test_deps
             .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::no_op(None);
+            return Ok(OplogEntry::no_op(None));
         }
-        let mut entry = self.oplog.read(oplog_index).await;
+        let mut entry = self.oplog.read(oplog_index).await?;
         if matches!(entry, OplogEntry::Snapshot { .. }) {
             self.additional_test_deps
                 .record_oplog_call(&self.owned_agent_id, "read_automatic_snapshot");
@@ -5515,14 +5517,14 @@ impl Oplog for TestOplog {
                 _ => panic!("{oplog_index} is not a snapshot"),
             }
         }
-        entry
+        Ok(entry)
     }
 
     async fn read_exact(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let gate = self
             .additional_test_deps
             .oplog_read_gates
@@ -5544,11 +5546,11 @@ impl Oplog for TestOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.oplog.read_source(oplog_index, n).await
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
         self.oplog.length().await
     }
 

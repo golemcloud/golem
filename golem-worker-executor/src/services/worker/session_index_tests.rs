@@ -3799,7 +3799,10 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     assert!(resume.has_supported_format());
     let resumed = append_session(oplog.as_ref(), resume).await;
     assert_eq!(
-        oplog_service.get_last_index(&id, AgentMode::Durable).await,
+        oplog_service
+            .get_last_index(&id, AgentMode::Durable)
+            .await
+            .unwrap(),
         attached
     );
     let new = StreamSession::new(
@@ -3819,7 +3822,10 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         .await
         .expect("oplog write");
     assert_eq!(
-        oplog_service.get_last_index(&id, AgentMode::Durable).await,
+        oplog_service
+            .get_last_index(&id, AgentMode::Durable)
+            .await
+            .unwrap(),
         resumed
     );
     assert!(old.ensure_current_attachment().await.is_err());

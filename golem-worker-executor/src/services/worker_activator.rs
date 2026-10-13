@@ -430,7 +430,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                             .all
                             .oplog_service()
                             .exists(owned_agent_id, AgentMode::Durable)
-                            .await
+                            .await?
                         {
                             return Err(WorkerExecutorError::runtime(
                                 "durable stream target was published during activation",

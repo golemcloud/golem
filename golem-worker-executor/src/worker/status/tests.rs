@@ -15,6 +15,7 @@
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
+use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::names_in_use;
@@ -5120,8 +5121,8 @@ impl OplogService for TestCase {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) -> OplogIndex {
-        OplogIndex::from_u64(self.entries.len() as u64)
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        Ok(OplogIndex::from_u64(self.entries.len() as u64))
     }
 
     async fn assert_owning_epoch(
@@ -5149,12 +5150,12 @@ impl OplogService for TestCase {
         _agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let mut result = BTreeMap::new();
         let idx_u64: u64 = idx.into();
         self.read_starts.lock().unwrap().push(idx_u64);
         if n == 0 {
-            return result;
+            return Ok(result);
         }
         let end = idx_u64
             .checked_add(n - 1)
@@ -5171,10 +5172,14 @@ impl OplogService for TestCase {
                 });
             result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());
         }
-        result
+        Ok(result)
     }
 
-    async fn exists(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
+    async fn exists(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
         unreachable!()
     }
 

@@ -1925,7 +1925,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
         start_index: OplogIndex,
     ) -> Result<HostRequestGolemRpcActivate, WorkerExecutorError> {
-        let entry = self.state.oplog.read(start_index).await;
+        let entry = self.state.oplog.read(start_index).await?;
         let request = match entry {
             OplogEntry::Start {
                 function_name,

@@ -19,7 +19,7 @@ use crate::services::oplog::multilayer::{
     transfer_between_lower_layers,
 };
 use crate::services::oplog::reader::{
-    OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
+    OplogRead, OplogReadError, OplogReadSource, UnreadableOplog, checked_range_end,
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
@@ -1216,11 +1216,12 @@ impl Oplog for EphemeralOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         record_oplog_call("read_exact");
-        let mut read = fail_stop(OplogRead::new(oplog_index, n));
+        let unreadable = |error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error);
+        let mut read = OplogRead::new(oplog_index, n).map_err(unreadable)?;
         if read.next_range().is_none() {
-            return fail_stop(read.finish());
+            return read.finish().map_err(unreadable);
         }
 
         // A consistent snapshot of the uncommitted buffer and commit watermark is enough: a
@@ -1231,23 +1232,22 @@ impl Oplog for EphemeralOplog {
             .await;
 
         let req_start: u64 = oplog_index.into();
-        let req_end = fail_stop(checked_range_end(oplog_index, n))
+        let req_end = checked_range_end(oplog_index, n)
+            .map_err(unreadable)?
             .unwrap()
             .as_u64();
-        let snapshot_end = fail_stop(
-            snapshot
-                .last_committed_idx
-                .as_u64()
-                .checked_add(snapshot.tail.len() as u64)
-                .ok_or_else(|| {
-                    OplogReadError::corruption(
-                        OplogReadSource::EphemeralBuffer,
-                        "snapshot tail exceeds the oplog index range",
-                    )
-                }),
-        );
+        let snapshot_end = snapshot
+            .last_committed_idx
+            .as_u64()
+            .checked_add(snapshot.tail.len() as u64)
+            .ok_or_else(|| {
+                unreadable(OplogReadError::corruption(
+                    OplogReadSource::EphemeralBuffer,
+                    "snapshot tail exceeds the oplog index range",
+                ))
+            })?;
         if req_end > snapshot_end {
-            fail_stop::<()>(Err(OplogReadError::Gap {
+            return Err(unreadable(OplogReadError::Gap {
                 start: OplogIndex::from_u64(max(req_start, snapshot_end + 1)),
                 end: OplogIndex::from_u64(req_end),
             }));
@@ -1273,31 +1273,34 @@ impl Oplog for EphemeralOplog {
                 }
             }
         }
-        fail_stop(read.add_source(OplogReadSource::EphemeralBuffer, buffered));
+        read.add_source(OplogReadSource::EphemeralBuffer, buffered)
+            .map_err(unreadable)?;
 
         for (level, layer) in self.lower.iter().enumerate() {
             if let Some((start, count)) = read.next_range() {
-                let entries = layer.read_source(start, count).await.unwrap_or_else(|error| {
-                    panic!("Oplog read failed: failed to read oplog data from archive layer {level}: {error}")
-                });
-                fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
+                let entries = layer.read_source(start, count).await.map_err(unreadable)?;
+                read.add_source(OplogReadSource::Archive(level), entries)
+                    .map_err(unreadable)?;
             } else {
                 break;
             }
         }
 
-        fail_stop(read.finish())
+        read.finish().map_err(unreadable)
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
         record_oplog_call("length");
         let mut total = 0;
         for (level, layer) in self.lower.iter().enumerate() {
-            total += layer.length().await.unwrap_or_else(|error| {
-                panic!("Failed to read ephemeral oplog archive layer {level} length: {error}")
-            });
+            total += layer.length().await.map_err(|error| {
+                UnreadableOplog::new(
+                    &self.owned_agent_id.agent_id,
+                    OplogReadError::source_failure(OplogReadSource::Archive(level), error),
+                )
+            })?;
         }
-        total
+        Ok(total)
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {

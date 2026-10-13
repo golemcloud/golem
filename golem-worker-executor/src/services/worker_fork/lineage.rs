@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps};
+use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, StreamForkCutRecord, StreamItemsPayload,
@@ -45,7 +45,7 @@ impl LineageSource<'_> {
         &self,
         index: OplogIndex,
         count: u64,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         match self {
             Self::Open(oplog) => oplog.read_exact(index, count).await,
             Self::Service {
@@ -104,7 +104,7 @@ impl StreamForkLineage {
         let mut covered = from.previous();
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await;
+            let entries = source.read_exact(covered.next(), count).await?;
             if entries.len() as u64 != count {
                 return Err("missing oplog entries while discovering stream fork lineage".into());
             }
@@ -185,7 +185,7 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await;
+            let entries = source.read_exact(covered.next(), count).await?;
             if entries.len() as u64 != count {
                 return Err(
                     "missing oplog entries while discovering reverted stream history".into(),
@@ -223,7 +223,7 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await;
+            let entries = source.read_exact(covered.next(), count).await?;
             if entries.len() as u64 != count {
                 return Err("missing oplog entries while loading stream fork lineage".into());
             }

@@ -64,6 +64,7 @@ pub async fn folded_suffix_rollback_region(
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, horizon.as_u64())
         .await
+        .unwrap()
     {
         if !skipped_regions.is_in_deleted_region(index) {
             state.observe(index, &entry);
@@ -90,7 +91,7 @@ async fn scan_suffix_rollback_region(
     let mut next = OplogIndex::INITIAL;
     while next <= horizon {
         let count = CHUNK_SIZE.min(u64::from(horizon) - u64::from(next) + 1);
-        let entries = oplog.read_exact(next, count).await;
+        let entries = oplog.read_exact(next, count).await.unwrap();
         next = entries.last_key_value().unwrap().0.next();
         for (index, entry) in entries {
             if skipped_regions.is_in_deleted_region(index) {

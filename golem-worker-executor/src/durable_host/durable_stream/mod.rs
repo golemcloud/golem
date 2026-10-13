@@ -55,7 +55,7 @@ use crate::durable_host::stream_bus::{
 use crate::services::activity::{ActivityGate, spawn_with_activity};
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
-    OplogServiceOps,
+    OplogServiceOps, UnreadableOplog,
 };
 use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
@@ -497,6 +497,20 @@ impl SessionError {
     }
 }
 
+/// An oplog that does not read fails the stream operation that read it, with the cause as text.
+impl From<UnreadableOplog> for StreamStoreError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Oplog(error.to_string())
+    }
+}
+
+/// An oplog that does not read fails the session operation that read it, with the cause as text.
+impl From<UnreadableOplog> for SessionError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Failed(error.to_string())
+    }
+}
+
 impl From<SessionError> for StreamStoreError {
     fn from(error: SessionError) -> Self {
         match error {
@@ -922,7 +936,7 @@ impl DurableStreamStore {
         let mut covered = OplogIndex::NONE;
         while covered < current_index {
             let count = (current_index.as_u64() - covered.as_u64()).min(1024);
-            let entries = oplog.read_exact(covered.next(), count).await;
+            let entries = oplog.read_exact(covered.next(), count).await?;
             for (oplog_index, entry) in entries {
                 covered = oplog_index;
                 if lineage.deleted_regions().is_in_deleted_region(oplog_index) {

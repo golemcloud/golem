@@ -88,8 +88,8 @@ impl DurableStreamStore {
             ));
         }
         if cut_index < horizon
-            && matches!(oplog.read(cut_index).await, OplogEntry::Revert { .. })
-            && let OplogEntry::StreamSession { record, .. } = oplog.read(cut_index.next()).await
+            && matches!(oplog.read(cut_index).await?, OplogEntry::Revert { .. })
+            && let OplogEntry::StreamSession { record, .. } = oplog.read(cut_index.next()).await?
             && matches!(oplog.download_payload(record).await.map_err(StreamStoreError::Oplog)?,
                 StreamSessionRecord::ForkCut(cut) if cut.revert.is_some())
         {
@@ -185,7 +185,7 @@ impl DurableStreamStore {
         let mut covered = from;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = oplog.read_exact(covered.next(), count).await;
+            let entries = oplog.read_exact(covered.next(), count).await?;
             if entries.len() as u64 != count {
                 return Err(StreamStoreError::CorruptHistory(
                     "missing oplog entries while reading stream epochs".into(),
@@ -802,6 +802,7 @@ mod tests {
             for (_, entry) in history
                 .read_exact(OplogIndex::INITIAL, horizon.as_u64())
                 .await
+                .unwrap()
             {
                 copied.add(entry).await.unwrap();
             }
@@ -963,6 +964,7 @@ mod tests {
         for (_, entry) in oplog
             .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
             .await
+            .unwrap()
         {
             copied.add(entry).await.unwrap();
         }
@@ -1419,7 +1421,8 @@ mod tests {
                 .await
                 .unwrap();
             let horizon = oplog.current_oplog_index().await;
-            let OplogEntry::StreamSession { record, .. } = oplog.read(horizon).await else {
+            let OplogEntry::StreamSession { record, .. } = oplog.read(horizon).await.unwrap()
+            else {
                 panic!("missing Attached")
             };
             let StreamSessionRecord::Attached(attached) =

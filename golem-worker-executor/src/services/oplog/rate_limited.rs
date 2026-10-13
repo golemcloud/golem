@@ -17,7 +17,7 @@ use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogCloseCompletion, OplogError, OplogLifecycleGuard, OplogService, OrderedOplogStart,
-    RawOplogPayloadDownloadError, ReservedRawStartBuilder, StagePublication,
+    RawOplogPayloadDownloadError, ReservedRawStartBuilder, StagePublication, UnreadableOplog,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -256,7 +256,7 @@ impl Oplog for RateLimitedOplog {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         self.inner.read(oplog_index).await
     }
 
@@ -264,7 +264,7 @@ impl Oplog for RateLimitedOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_exact(oplog_index, n).await
     }
 
@@ -272,7 +272,7 @@ impl Oplog for RateLimitedOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_source(oplog_index, n).await
     }
 
@@ -284,7 +284,7 @@ impl Oplog for RateLimitedOplog {
         self.inner.try_read_source(oplog_index, n).await
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
         self.inner.length().await
     }
 
@@ -590,7 +590,7 @@ impl OplogService for RateLimitedOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
@@ -633,7 +633,7 @@ impl OplogService for RateLimitedOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner
             .read_exact(owned_agent_id, agent_mode, idx, n)
             .await
@@ -645,13 +645,17 @@ impl OplogService for RateLimitedOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner
             .read_source(owned_agent_id, agent_mode, idx, n)
             .await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
         self.inner.exists(owned_agent_id, agent_mode).await
     }
 
@@ -1049,7 +1053,7 @@ mod tests {
 
         // Read back from storage (no in-memory cache) and confirm the large request is external and
         // its deferred blob upload became durable via the commit barrier.
-        let large_entry = oplog.read(large_idx).await;
+        let large_entry = oplog.read(large_idx).await.unwrap();
         let large_stored = match large_entry {
             OplogEntry::Start {
                 request: Some(payload),

@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::AgentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -38,7 +40,7 @@ impl Display for OplogReadSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OplogReadError {
+pub enum OplogReadError {
     InvalidRange {
         start: OplogIndex,
         count: u64,
@@ -97,8 +99,46 @@ impl Display for OplogReadError {
 
 impl Error for OplogReadError {}
 
-pub(crate) fn fail_stop<T>(result: Result<T, OplogReadError>) -> T {
-    result.unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
+/// A read of an agent's oplog that did not give the requested entries: a source failed, gave
+/// corrupt data, or left a gap. The agent cannot replay or recover from such an oplog, so the
+/// read fails the agent that asked for it, and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnreadableOplog {
+    pub agent_id: AgentId,
+    pub error: OplogReadError,
+}
+
+impl UnreadableOplog {
+    pub fn new(agent_id: &AgentId, error: OplogReadError) -> Self {
+        Self {
+            agent_id: agent_id.clone(),
+            error,
+        }
+    }
+}
+
+impl Display for UnreadableOplog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "oplog of {} is unreadable: {}",
+            self.agent_id, self.error
+        )
+    }
+}
+
+impl Error for UnreadableOplog {}
+
+impl From<UnreadableOplog> for WorkerExecutorError {
+    fn from(value: UnreadableOplog) -> Self {
+        WorkerExecutorError::oplog_unreadable(value.agent_id, value.error.to_string())
+    }
+}
+
+impl From<UnreadableOplog> for String {
+    fn from(value: UnreadableOplog) -> Self {
+        value.to_string()
+    }
 }
 
 /// Merges contiguous suffixes returned by oplog storage tiers into one exact logical range.

@@ -119,6 +119,17 @@ async fn assert_panics<T>(future: impl Future<Output = T>) {
     assert!(AssertUnwindSafe(future).catch_unwind().await.is_err());
 }
 
+/// Asserts that the read fails as an unreadable oplog instead of panicking, and gives the failure.
+async fn assert_unreadable<T: Debug>(
+    future: impl Future<Output = Result<T, UnreadableOplog>>,
+) -> UnreadableOplog {
+    AssertUnwindSafe(future)
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| panic!("an oplog read panicked"))
+        .expect_err("the oplog read must fail")
+}
+
 #[derive(Debug, Default)]
 struct ArchiveCallCounts {
     open: AtomicUsize,
@@ -180,11 +191,11 @@ impl OplogArchiveService for RecordingArchiveService {
         mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.calls.read.fetch_add(1, Ordering::Relaxed);
         self.inner.read_source(id, mode, idx, n).await
     }
-    async fn exists(&self, id: &OwnedAgentId, mode: AgentMode) -> bool {
+    async fn exists(&self, id: &OwnedAgentId, mode: AgentMode) -> OplogArchiveResult<bool> {
         self.calls.exists.fetch_add(1, Ordering::Relaxed);
         self.inner.exists(id, mode).await
     }
@@ -200,7 +211,11 @@ impl OplogArchiveService for RecordingArchiveService {
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await
     }
-    async fn get_last_index(&self, id: &OwnedAgentId, mode: AgentMode) -> OplogIndex {
+    async fn get_last_index(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> OplogArchiveResult<OplogIndex> {
         self.calls.get_last_index.fetch_add(1, Ordering::Relaxed);
         self.inner.get_last_index(id, mode).await
     }
@@ -212,7 +227,7 @@ impl OplogArchive for RecordingArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, String> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.calls.archive_read.fetch_add(1, Ordering::Relaxed);
         self.inner.read_source(idx, n).await
     }
@@ -369,13 +384,17 @@ impl OplogArchiveService for BlockingArchiveService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.inner
             .read_source(owned_agent_id, agent_mode, idx, n)
             .await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogArchiveResult<bool> {
         self.inner.exists(owned_agent_id, agent_mode).await
     }
 
@@ -396,7 +415,7 @@ impl OplogArchiveService for BlockingArchiveService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex {
+    ) -> OplogArchiveResult<OplogIndex> {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 }
@@ -435,7 +454,7 @@ impl OplogArchive for BlockingArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.inner.read_source(idx, n).await
     }
 
@@ -510,7 +529,7 @@ impl OplogArchive for TransferTestArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.record("read");
         if n == 0 {
             return Ok(BTreeMap::new());
@@ -1588,7 +1607,12 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
         )
         .await;
 
-    assert!(!primary.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    assert!(
+        !primary
+            .exists(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+            .unwrap()
+    );
     assert_eq!(calls.exists.load(Ordering::Relaxed), 0);
     assert_eq!(calls.get_last_index.load(Ordering::Relaxed), 0);
     assert_eq!(calls.read.load(Ordering::Relaxed), 0);
@@ -1597,7 +1621,12 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
     assert!(calls.append.load(Ordering::Relaxed) >= 1);
     assert!(calls.length.load(Ordering::Relaxed) >= 1);
 
-    assert!(service.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    assert!(
+        service
+            .exists(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+            .unwrap()
+    );
     assert!(calls.exists.load(Ordering::Relaxed) >= 1);
     let entries = service
         .read_exact(
@@ -1606,12 +1635,13 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
             OplogIndex::INITIAL,
             1,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
     assert_eq!(calls.read.load(Ordering::Relaxed), 1);
 
     let archive_reads = calls.archive_read.load(Ordering::Relaxed);
-    assert_panics(oplog.read_exact(OplogIndex::INITIAL, 2)).await;
+    assert_unreadable(oplog.read_exact(OplogIndex::INITIAL, 2)).await;
     assert_eq!(calls.archive_read.load(Ordering::Relaxed), archive_reads);
 
     drop(oplog);
@@ -1682,7 +1712,12 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
         )
         .await;
 
-    assert!(!primary.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    assert!(
+        !primary
+            .exists(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+            .unwrap()
+    );
     assert_eq!(calls.open.load(Ordering::Relaxed), 0);
     assert_eq!(calls.open_fresh.load(Ordering::Relaxed), 2);
     assert_eq!(calls.exists.load(Ordering::Relaxed), 0);
@@ -1693,7 +1728,12 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
     assert_eq!(calls.archive_last_index.load(Ordering::Relaxed), 0);
     assert_eq!(calls.append.load(Ordering::Relaxed), 1);
 
-    assert!(service.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    assert!(
+        service
+            .exists(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+            .unwrap()
+    );
     let entries = service
         .read_exact(
             &owned_agent_id,
@@ -1701,7 +1741,8 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
             OplogIndex::INITIAL,
             1,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
     assert_eq!(calls.read.load(Ordering::Relaxed), 1);
 
@@ -1725,6 +1766,7 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
                 1
             )
             .await
+            .unwrap()
             .get(&OplogIndex::INITIAL),
         Some(&create_entry)
     );
@@ -1802,7 +1844,8 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
             OplogIndex::INITIAL,
             1,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
     assert!(indexed_storage.reads() > 0);
 
@@ -1863,7 +1906,8 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
             OplogIndex::INITIAL,
             1,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
     assert!(indexed_storage.reads() > 0);
 
@@ -1960,9 +2004,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
                 .await
                 .unwrap()
         );
-        assert!(!service.exists(&owned, AgentMode::Durable).await);
+        assert!(!service.exists(&owned, AgentMode::Durable).await.unwrap());
         assert_eq!(
-            service.get_last_index(&owned, AgentMode::Durable).await,
+            service
+                .get_last_index(&owned, AgentMode::Durable)
+                .await
+                .unwrap(),
             OplogIndex::NONE
         );
         assert!(
@@ -1984,6 +2031,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         stage
             .read_exact(OplogIndex::INITIAL, 3)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>(),
         entries
@@ -2018,6 +2066,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         service
             .read_exact(&owned, AgentMode::Durable, OplogIndex::INITIAL, 3)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>(),
         entries
@@ -2078,7 +2127,10 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         .await
         .unwrap();
     assert_eq!(
-        primary.get_last_index(&owned, AgentMode::Durable).await,
+        primary
+            .get_last_index(&owned, AgentMode::Durable)
+            .await
+            .unwrap(),
         OplogIndex::NONE
     );
     assert!(
@@ -2107,6 +2159,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         service
             .read_exact(&owned, AgentMode::Durable, OplogIndex::INITIAL, 3)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>(),
         entries
@@ -2195,8 +2248,8 @@ async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
         oplog.add(OplogEntry::exited().rounded()).await.unwrap();
     }
 
-    assert_eq!(durable.length().await, 0);
-    assert_eq!(ephemeral.length().await, 2);
+    assert_eq!(durable.length().await.unwrap(), 0);
+    assert_eq!(ephemeral.length().await.unwrap(), 2);
 }
 
 /// Storage-level zero-read contract for the blob archive backend, whose fresh
@@ -2274,7 +2327,8 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
             OplogIndex::INITIAL,
             1,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
     assert!(blob_storage.reads() > 0);
 
@@ -2405,12 +2459,12 @@ async fn lifecycle_reader_blocks_delete_and_late_drop_cannot_remove_replacement(
         }
     });
     entered_rx.await.unwrap();
-    assert_eq!(stale.read(OplogIndex::INITIAL).await, original);
+    assert_eq!(stale.read(OplogIndex::INITIAL).await.unwrap(), original);
     drop(read_guard);
     delete.await.unwrap();
 
     let mut guard = service.lock_lifecycle(&agent_id).await;
-    assert!(!service.exists(&id, AgentMode::Durable).await);
+    assert!(!service.exists(&id, AgentMode::Durable).await.unwrap());
     let replacement_entry = OplogEntry::jump(
         None,
         OplogRegion {
@@ -2445,7 +2499,10 @@ async fn lifecycle_reader_blocks_delete_and_late_drop_cannot_remove_replacement(
         )
         .await;
     assert!(Arc::ptr_eq(&replacement, &reopened));
-    assert_eq!(reopened.read(OplogIndex::INITIAL).await, replacement_entry);
+    assert_eq!(
+        reopened.read(OplogIndex::INITIAL).await.unwrap(),
+        replacement_entry
+    );
     assert_eq!(
         reopened.add(OplogEntry::no_op(None)).await.unwrap(),
         OplogIndex::from_u64(2)
@@ -2505,7 +2562,7 @@ async fn stopped_actor_failure_does_not_poison_reopen(_tracing: &Tracing) {
         )
         .await;
     assert!(!Arc::ptr_eq(&old, &reopened));
-    assert_eq!(reopened.read(OplogIndex::INITIAL).await, initial);
+    assert_eq!(reopened.read(OplogIndex::INITIAL).await.unwrap(), initial);
     assert_eq!(
         reopened.add(OplogEntry::no_op(None)).await.unwrap(),
         OplogIndex::from_u64(2)
@@ -2606,7 +2663,7 @@ async fn reopened_oplog_joins_old_root_children_before_stopping_its_writer(_trac
         release.send(()).unwrap();
         stop.await.unwrap();
         assert_eq!(
-            service.get_last_index(&id, mode).await,
+            service.get_last_index(&id, mode).await.unwrap(),
             OplogIndex::from_u64(2)
         );
         assert!(
@@ -2750,6 +2807,7 @@ async fn synchronously_enqueued_pair_is_atomic_ordered_and_independent_of_receip
     let entries = oplog
         .read_exact(OplogIndex::INITIAL.next(), 3)
         .await
+        .unwrap()
         .into_iter()
         .collect::<Vec<_>>();
     assert_eq!(
@@ -2942,7 +3000,7 @@ async fn indeterminate_append_before_write_retries_after_empty_read_back(_tracin
     assert_eq!(indexed_storage.append_many_attempts(), 2);
     assert_eq!(indexed_storage.reads(), 1);
     assert!(indexed_storage.append_many_reused_batch());
-    assert_eq!(oplog.read(OplogIndex::from_u64(2)).await, entry);
+    assert_eq!(oplog.read(OplogIndex::from_u64(2)).await.unwrap(), entry);
 }
 
 #[test]
@@ -3247,13 +3305,17 @@ async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tra
         other => panic!("expected the delete to be fenced, got {other:?}"),
     }
     assert!(
-        service.exists(&owned_agent_id, AgentMode::Durable).await,
+        service
+            .exists(&owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap(),
         "a refused delete removes nothing"
     );
     assert_eq!(
         primary
             .get_last_index(&owned_agent_id, AgentMode::Durable)
-            .await,
+            .await
+            .unwrap(),
         last
     );
 }
@@ -3308,9 +3370,12 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     oplog.add(entry3.clone()).await.unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
 
-    let r1 = oplog.read(last_oplog_idx.next()).await;
-    let r2 = oplog.read(last_oplog_idx.next().next()).await;
-    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
+    let r1 = oplog.read(last_oplog_idx.next()).await.unwrap();
+    let r2 = oplog.read(last_oplog_idx.next().next()).await.unwrap();
+    let r3 = oplog
+        .read(last_oplog_idx.next().next().next())
+        .await
+        .unwrap();
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
@@ -3323,16 +3388,17 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
             last_oplog_idx.next(),
             3,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![entry1, entry2, entry3]
     );
-    assert_panics(oplog.read_exact(last_oplog_idx.next(), 4)).await;
+    assert_unreadable(oplog.read_exact(last_oplog_idx.next(), 4)).await;
 }
 
 #[test]
-async fn primary_read_range_overflow_panics_without_storage_io(_tracing: &Tracing) {
+async fn primary_read_range_overflow_fails_without_storage_io(_tracing: &Tracing) {
     let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
     let oplog_service = PrimaryOplogService::new(
         indexed_storage.clone(),
@@ -3352,7 +3418,8 @@ async fn primary_read_range_overflow_panics_without_storage_io(_tracing: &Tracin
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let start = OplogIndex::from_u64(u64::MAX);
 
-    assert_panics(oplog_service.read_exact(&owned_agent_id, AgentMode::Durable, start, 2)).await;
+    assert_unreadable(oplog_service.read_exact(&owned_agent_id, AgentMode::Durable, start, 2))
+        .await;
 
     let oplog = oplog_service
         .open(
@@ -3366,7 +3433,7 @@ async fn primary_read_range_overflow_panics_without_storage_io(_tracing: &Tracin
             None,
         )
         .await;
-    assert_panics(oplog.read_exact(start, 2)).await;
+    assert_unreadable(oplog.read_exact(start, 2)).await;
     assert_eq!(indexed_storage.reads(), 0);
 }
 
@@ -3739,7 +3806,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     assert_eq!(added.len(), 2);
     assert_eq!(added[1].0, added[0].0.next());
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
-    let resident = oplog.read_exact(added[0].0, 2).await;
+    let resident = oplog.read_exact(added[0].0, 2).await.unwrap();
     assert_eq!(resident, added.iter().cloned().collect());
     // Threshold handoff is asynchronous; protocol publication uses an explicit barrier.
     oplog.commit(CommitLevel::Always).await.unwrap();
@@ -3750,7 +3817,8 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             OplogIndex::INITIAL,
             3,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(persisted.len(), 3);
     assert!(matches!(
         persisted[&OplogIndex::INITIAL],
@@ -3889,6 +3957,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
         service
             .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 3)
             .await
+            .unwrap()
             .is_empty(),
         "the blocked first upload must not expose a partial reference"
     );
@@ -3922,7 +3991,8 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
     ));
     let committed = service
         .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 4)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(committed.len(), 4);
     assert!(matches!(
         committed[&competing_index],
@@ -4168,19 +4238,27 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let buffered_entries = oplog
         .read_exact(OplogIndex::from_u64(4), 2)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
 
     assert_eq!(buffered_entries, vec![entry4.clone(), entry5.clone()]);
     assert_eq!(indexed_storage.read_count(), read_count);
 
-    assert_eq!(oplog.read(OplogIndex::from_u64(4)).await, entry4.clone());
-    assert_eq!(oplog.read(OplogIndex::from_u64(5)).await, entry5.clone());
+    assert_eq!(
+        oplog.read(OplogIndex::from_u64(4)).await.unwrap(),
+        entry4.clone()
+    );
+    assert_eq!(
+        oplog.read(OplogIndex::from_u64(5)).await.unwrap(),
+        entry5.clone()
+    );
     assert_eq!(indexed_storage.read_count(), read_count);
 
     let entries = oplog
         .read_exact(OplogIndex::INITIAL, 5)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
 
@@ -4193,6 +4271,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let entry = oplog
         .read_exact(OplogIndex::from_u64(5), 1)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
 
@@ -4204,6 +4283,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
         oplog
             .read_exact(OplogIndex::from_u64(5), 0)
             .await
+            .unwrap()
             .is_empty()
     );
     assert_eq!(indexed_storage.read_count(), read_count);
@@ -4277,9 +4357,12 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     oplog.add(entry3.clone()).await.unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
 
-    let r1 = oplog.read(last_oplog_idx.next()).await;
-    let r2 = oplog.read(last_oplog_idx.next().next()).await;
-    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
+    let r1 = oplog.read(last_oplog_idx.next()).await.unwrap();
+    let r2 = oplog.read(last_oplog_idx.next().next()).await.unwrap();
+    let r3 = oplog
+        .read(last_oplog_idx.next().next().next())
+        .await
+        .unwrap();
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
@@ -4292,12 +4375,13 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
             last_oplog_idx.next(),
             3,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
         vec![entry1, entry2, entry3]
     );
-    assert_panics(oplog_service.read_exact(
+    assert_unreadable(oplog_service.read_exact(
         &owned_agent_id,
         AgentMode::Durable,
         last_oplog_idx.next(),
@@ -4378,6 +4462,7 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
     let entries = oplog
         .read_exact(OplogIndex::INITIAL, 4)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
 
@@ -4448,6 +4533,7 @@ async fn ephemeral_read_exact_committed_only(_tracing: &Tracing) {
     let entries = oplog
         .read_exact(OplogIndex::INITIAL, 3)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
 
@@ -4515,6 +4601,7 @@ async fn ephemeral_read_exact_uncommitted_only(_tracing: &Tracing) {
     let entries = oplog
         .read_exact(OplogIndex::INITIAL, 2)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
 
@@ -4602,6 +4689,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
     let mid_entries = oplog
         .read_exact(OplogIndex::from_u64(8), 4)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
     assert_eq!(mid_entries, entries[7..11].to_vec());
@@ -4610,6 +4698,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
     let first3 = oplog
         .read_exact(OplogIndex::INITIAL, 3)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
     assert_eq!(first3, entries[0..3].to_vec());
@@ -4618,6 +4707,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
     let last2 = oplog
         .read_exact(OplogIndex::from_u64(11), 2)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
     assert_eq!(last2, entries[10..12].to_vec());
@@ -4626,6 +4716,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
     let all = oplog
         .read_exact(OplogIndex::INITIAL, 12)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
     assert_eq!(all, entries);
@@ -4734,6 +4825,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
     let first10 = oplog
         .read_exact(initial_oplog_idx.next(), 10)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
     assert_eq!(first10, entries[..10].to_vec());
@@ -4742,6 +4834,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
     let last10 = oplog
         .read_exact(oplog.current_oplog_index().await.subtract(10).next(), 10)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
     let original_last10 = entries
@@ -4757,6 +4850,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
     let all = oplog
         .read_exact(initial_oplog_idx.next(), entries.len() as u64)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
     assert_eq!(all, entries);
@@ -4815,7 +4909,7 @@ async fn ephemeral_read_exact_zero_returns_empty(_tracing: &Tracing) {
 
     oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
 
-    let entries = oplog.read_exact(OplogIndex::INITIAL, 0).await;
+    let entries = oplog.read_exact(OplogIndex::INITIAL, 0).await.unwrap();
     assert!(entries.is_empty());
 }
 
@@ -4864,8 +4958,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         )
         .await
         .unwrap();
-    let entry_start = oplog.read(start_idx).await.rounded();
-    let entry_end = oplog.read(end_idx).await.rounded();
+    let entry_start = oplog.read(start_idx).await.unwrap().rounded();
+    let entry_end = oplog.read(end_idx).await.unwrap().rounded();
     let entry2 = oplog
         .add_agent_invocation_started(
             AgentInvocation::AgentMethod {
@@ -4897,7 +4991,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         )
         .await
         .unwrap();
-    let entry3 = oplog.read(entry3).await.rounded();
+    let entry3 = oplog.read(entry3).await.unwrap().rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(
@@ -4918,19 +5012,26 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await.unwrap();
 
-    let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
-    let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r_start = oplog.read(last_oplog_idx.next()).await.unwrap().rounded();
+    let r_end = oplog
+        .read(last_oplog_idx.next().next())
+        .await
+        .unwrap()
+        .rounded();
     let r2 = oplog
         .read(last_oplog_idx.next().next().next())
         .await
+        .unwrap()
         .rounded();
     let r3 = oplog
         .read(last_oplog_idx.next().next().next().next())
         .await
+        .unwrap()
         .rounded();
     let r4 = oplog
         .read(last_oplog_idx.next().next().next().next().next())
         .await
+        .unwrap()
         .rounded();
 
     assert_eq!(r_start, entry_start);
@@ -4946,7 +5047,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             last_oplog_idx.next(),
             5,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries
             .into_values()
@@ -5074,8 +5176,13 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
 
     assert!(result.is_err());
     assert_eq!(oplog.current_oplog_index().await, before);
-    assert_panics(oplog_service.read_exact(&owned_agent_id, AgentMode::Durable, before.next(), 10))
-        .await;
+    assert_unreadable(oplog_service.read_exact(
+        &owned_agent_id,
+        AgentMode::Durable,
+        before.next(),
+        10,
+    ))
+    .await;
 
     let parent = OplogIndex::INITIAL;
     let function_name = HostFunctionName::Custom("completed-call".to_string());
@@ -5093,7 +5200,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
     assert_eq!(start_index, before.next());
     assert_eq!(end_index, start_index.next());
     assert!(matches!(
-        oplog.read(start_index).await,
+        oplog.read(start_index).await.unwrap(),
         OplogEntry::Start {
             parent_start_index: Some(entry_parent),
             function_name: entry_function_name,
@@ -5101,7 +5208,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
         } if entry_parent == parent && entry_function_name == function_name
     ));
     assert!(matches!(
-        oplog.read(end_index).await,
+        oplog.read(end_index).await.unwrap(),
         OplogEntry::End {
             start_index: entry_start_index,
             ..
@@ -5190,7 +5297,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
             trace_states,
             invocation_context,
             ..
-        } = oplog.read(start_index).await
+        } = oplog.read(start_index).await.unwrap()
         else {
             panic!("expected AgentInvocationStarted");
         };
@@ -5349,6 +5456,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let OplogEntry::PendingAgentInvocation { payload, .. } = service
             .read_exact(&owned, AgentMode::Durable, pending, 1)
             .await
+            .unwrap()
             .remove(&pending)
             .unwrap()
         else {
@@ -5383,6 +5491,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         } = service
             .read_exact(&owned, AgentMode::Durable, started, 1)
             .await
+            .unwrap()
             .remove(&started)
             .unwrap()
         else {
@@ -5411,7 +5520,10 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
             Err(OplogError::Fenced(_))
         ));
         assert_eq!(
-            service.get_last_index(&owned, AgentMode::Durable).await,
+            service
+                .get_last_index(&owned, AgentMode::Durable)
+                .await
+                .unwrap(),
             started
         );
         assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
@@ -5471,8 +5583,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         )
         .await
         .unwrap();
-    let entry_start = oplog.read(start_idx).await.rounded();
-    let entry_end = oplog.read(end_idx).await.rounded();
+    let entry_start = oplog.read(start_idx).await.unwrap().rounded();
+    let entry_end = oplog.read(end_idx).await.unwrap().rounded();
     let entry2 = oplog
         .add_agent_invocation_started(
             AgentInvocation::AgentMethod {
@@ -5510,7 +5622,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         )
         .await
         .unwrap();
-    let entry3 = oplog.read(entry3).await.rounded();
+    let entry3 = oplog.read(entry3).await.unwrap().rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(
@@ -5531,19 +5643,26 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await.unwrap();
 
-    let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
-    let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r_start = oplog.read(last_oplog_idx.next()).await.unwrap().rounded();
+    let r_end = oplog
+        .read(last_oplog_idx.next().next())
+        .await
+        .unwrap()
+        .rounded();
     let r2 = oplog
         .read(last_oplog_idx.next().next().next())
         .await
+        .unwrap()
         .rounded();
     let r3 = oplog
         .read(last_oplog_idx.next().next().next().next())
         .await
+        .unwrap()
         .rounded();
     let r4 = oplog
         .read(last_oplog_idx.next().next().next().next().next())
         .await
+        .unwrap()
         .rounded();
 
     assert_eq!(r_start, entry_start);
@@ -5559,7 +5678,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             last_oplog_idx.next(),
             5,
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries
             .into_values()
@@ -5797,7 +5917,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
             )
             .await
             .length()
-            .await;
+            .await
+            .unwrap();
 
         let secondary_length = secondary_layer
             .open(&owned_agent_id, AgentMode::Durable, None)
@@ -5832,7 +5953,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
         )
         .await
         .length()
-        .await;
+        .await
+        .unwrap();
     let secondary_length = secondary_layer
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
@@ -5846,7 +5968,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
 
     let all_entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, n)
-        .await;
+        .await
+        .unwrap();
 
     assert_eq!(all_entries.len(), entries.len());
     assert_eq!(primary_length, expected_1);
@@ -5985,7 +6108,8 @@ async fn read_from_archive_impl(use_blob: bool) {
         )
         .await
         .length()
-        .await;
+        .await
+        .unwrap();
     let secondary_length = secondary_layer
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
@@ -6008,7 +6132,8 @@ async fn read_from_archive_impl(use_blob: bool) {
             initial_oplog_idx.next(),
             10,
         )
-        .await;
+        .await
+        .unwrap();
     let original_first10 = entries.iter().take(10).cloned().collect::<Vec<_>>();
 
     assert_eq!(first10.into_values().collect::<Vec<_>>(), original_first10);
@@ -6016,6 +6141,7 @@ async fn read_from_archive_impl(use_blob: bool) {
     let last10 = oplog
         .read_exact(oplog.current_oplog_index().await.subtract(10).next(), 10)
         .await
+        .unwrap()
         .into_values()
         .collect::<Vec<_>>();
 
@@ -6151,11 +6277,13 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let read1 = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
+        .unwrap()
         .into_iter()
         .next();
     let last_index_1 = oplog_service
         .get_last_index(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(secondary_calls.read.load(Ordering::Relaxed), 0);
     assert_eq!(tertiary_calls.read.load(Ordering::Relaxed), 0);
 
@@ -6166,11 +6294,13 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let read2 = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
+        .unwrap()
         .into_iter()
         .next();
     let last_index_2 = oplog_service
         .get_last_index(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(secondary_calls.read.load(Ordering::Relaxed), 1);
     assert_eq!(tertiary_calls.read.load(Ordering::Relaxed), 0);
 
@@ -6181,11 +6311,13 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let read3 = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
+        .unwrap()
         .into_iter()
         .next();
     let last_index_3 = oplog_service
         .get_last_index(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(secondary_calls.read.load(Ordering::Relaxed), 2);
     assert_eq!(tertiary_calls.read.load(Ordering::Relaxed), 1);
 
@@ -6313,6 +6445,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             1,
         )
         .await
+        .unwrap()
         .into_iter()
         .next();
     let more = EphemeralOplog::try_archive_blocking(&oplog).await;
@@ -6324,6 +6457,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             1,
         )
         .await
+        .unwrap()
         .into_iter()
         .next();
 
@@ -6820,7 +6954,7 @@ async fn background_archive_failure_isolated_from_other_open_agent_oplogs(_traci
         Ok(Some(false))
     );
     assert!(matches!(
-        healthy.read(OplogIndex::INITIAL).await,
+        healthy.read(OplogIndex::INITIAL).await.unwrap(),
         OplogEntry::Create { .. }
     ));
 }
@@ -7108,6 +7242,7 @@ async fn missing_listed_blob_chunk_is_reported_as_corruption(_tracing: &Tracing)
             .read_source(OplogIndex::INITIAL, 2)
             .await
             .unwrap_err()
+            .to_string()
             .contains("is missing"),
         "a listed chunk whose object is gone must be reported as corruption"
     );
@@ -7830,7 +7965,7 @@ async fn check_that_an_unlisted_blob_object_is_never_read<B: BlobStorageBackend 
     let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     assert!(
         !service
-            .try_exists(&owned_agent_id, AgentMode::Durable)
+            .exists(&owned_agent_id, AgentMode::Durable)
             .await
             .unwrap()
     );
@@ -7960,7 +8095,129 @@ async fn required_archive_read_reports_storage_failure(_tracing: &Tracing) {
         .read_source(OplogIndex::INITIAL, 1)
         .await
         .unwrap_err();
-    assert!(error.contains("injected required read failure"));
+    assert!(error.to_string().contains("injected required read failure"));
+}
+
+/// Stores, as the chunk ending at `last_idx` of the compressed archive `level` of the agent, a
+/// truncated encoding of `entries`: the chunk decompresses, but its entries do not deserialize.
+async fn store_truncated_compressed_chunk(
+    storage: &Arc<dyn IndexedStorage + Send + Sync>,
+    owned_agent_id: &OwnedAgentId,
+    level: usize,
+    last_idx: OplogIndex,
+    entries: Vec<OplogEntry>,
+) {
+    let encoded = golem_common::serialization::serialize(&entries).unwrap();
+    let truncated = &encoded[..encoded.len() / 2];
+    let chunk = CompressedOplogChunk {
+        count: entries.len() as u64,
+        compressed_data: zstd::encode_all(truncated, 0).unwrap(),
+    };
+    crate::storage::indexed::IndexedStorageLabelledApi::with_entity(
+        &**storage,
+        "compressed_oplog",
+        "append",
+        "compressed_entry",
+    )
+    .append(
+        IndexedStorageNamespace::CompressedOpLog {
+            agent_id: owned_agent_id.agent_id(),
+            agent_mode: AgentMode::Durable,
+            level,
+        },
+        &owned_agent_id.agent_id().to_redis_key(),
+        last_idx.into(),
+        &chunk,
+        None,
+    )
+    .await
+    .unwrap();
+}
+
+#[test]
+async fn corrupt_compressed_chunk_fails_the_read_without_a_panic(_tracing: &Tracing) {
+    let storage: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(InMemoryIndexedStorage::new());
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "corrupt-compressed-chunk".to_string(),
+        },
+    );
+    store_truncated_compressed_chunk(
+        &storage,
+        &owned_agent_id,
+        1,
+        OplogIndex::from_u64(2),
+        transfer_test_entries().into_values().collect(),
+    )
+    .await;
+    let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        storage.clone(),
+        1,
+        RetryConfig::default(),
+    ));
+
+    let error = compressed
+        .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 2)
+        .await
+        .unwrap_err();
+    let OplogReadError::Corruption { source, detail } = &error else {
+        panic!("a chunk that does not decode is corruption, got {error:?}");
+    };
+    assert_eq!(*source, OplogReadSource::Archive(1));
+    assert!(
+        detail.contains("failed to decode compressed oplog chunk ending at 2")
+            && detail.contains("Input ended unexpectedly"),
+        "{detail}"
+    );
+
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            16,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let multilayer = MultiLayerOplogService::new(primary, nev![compressed.clone()], 10, 10);
+    let unreadable = multilayer
+        .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 2)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unreadable,
+        UnreadableOplog {
+            agent_id: owned_agent_id.agent_id(),
+            error: error.clone(),
+        }
+    );
+    assert_eq!(
+        multilayer
+            .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 2)
+            .await
+            .unwrap_err(),
+        unreadable
+    );
+    let rendered = WorkerExecutorError::from(unreadable).to_string();
+    assert!(
+        rendered.contains(&owned_agent_id.agent_id().to_string())
+            && rendered.contains("archive layer 1")
+            && rendered.contains("Input ended unexpectedly"),
+        "{rendered}"
+    );
+
+    // The failed read leaves the chunk as it is.
+    assert_eq!(
+        compressed
+            .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 2)
+            .await
+            .unwrap_err(),
+        error
+    );
 }
 
 #[test]
@@ -8120,18 +8377,20 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
         .unwrap();
 
     assert_eq!(oplog.current_oplog_index().await, current);
-    assert!(!service.exists(&owned_agent_id, AgentMode::Durable).await);
-    let panic = AssertUnwindSafe(oplog.read_exact(OplogIndex::INITIAL, current.as_u64()))
-        .catch_unwind()
-        .await
-        .expect_err("exact read from the deleted storage must panic");
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied());
+    assert!(
+        !service
+            .exists(&owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap()
+    );
+    let unreadable =
+        assert_unreadable(oplog.read_exact(OplogIndex::INITIAL, current.as_u64())).await;
     assert_eq!(
-        message,
-        Some("Oplog read failed: missing oplog entries in range [1..=2]")
+        unreadable.error,
+        OplogReadError::Gap {
+            start: OplogIndex::INITIAL,
+            end: current,
+        }
     );
 
     oplog.stop_and_wait().await.unwrap();
@@ -8157,7 +8416,10 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
     assert!(!Arc::ptr_eq(&oplog, &replacement));
     assert_eq!(replacement.current_oplog_index().await, OplogIndex::INITIAL);
     assert_eq!(
-        replacement.read_exact(OplogIndex::INITIAL, 1).await,
+        replacement
+            .read_exact(OplogIndex::INITIAL, 1)
+            .await
+            .unwrap(),
         BTreeMap::from([(OplogIndex::INITIAL, initial_entry.rounded())])
     );
 
@@ -8323,7 +8585,7 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
     );
 
     assert!(
-        !service.exists(&owned_agent_id, agent_mode).await,
+        !service.exists(&owned_agent_id, agent_mode).await.unwrap(),
         "an in-flight archive transfer recreated a deleted oplog"
     );
 }
@@ -8559,7 +8821,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         )
         .await
         .length()
-        .await;
+        .await
+        .unwrap();
     let secondary_length = secondary_layer
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
@@ -8664,7 +8927,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         )
         .await
         .length()
-        .await;
+        .await
+        .unwrap();
     let secondary_length = secondary_layer
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
@@ -8750,7 +9014,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
 
     let entry1 = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-        .await;
+        .await
+        .unwrap();
     let entry2 = oplog_service
         .read_exact(
             &owned_agent_id,
@@ -8758,7 +9023,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             OplogIndex::from_u64(100),
             1,
         )
-        .await;
+        .await
+        .unwrap();
     let entry3 = oplog_service
         .read_exact(
             &owned_agent_id,
@@ -8766,7 +9032,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             OplogIndex::from_u64(1000),
             1,
         )
-        .await;
+        .await
+        .unwrap();
     let entry4 = oplog_service
         .read_exact(
             &owned_agent_id,
@@ -8774,7 +9041,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             OplogIndex::from_u64(1001),
             1,
         )
-        .await;
+        .await
+        .unwrap();
 
     assert_eq!(entry1.len(), 1);
     assert_eq!(entry2.len(), 1);
@@ -8946,13 +9214,16 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
 
     let primary_exists = primary_oplog_service
         .exists(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     let secondary_exists = secondary_layer
         .exists(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     let tertiary_exists = tertiary_layer
         .exists(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
 
     let primary_length = primary_oplog_service
         .open(
@@ -8969,7 +9240,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         )
         .await
         .length()
-        .await;
+        .await
+        .unwrap();
     let secondary_length = secondary_layer
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
@@ -9122,7 +9394,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         )
         .await
         .length()
-        .await;
+        .await
+        .unwrap();
     let secondary_length = secondary_layer
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
@@ -9185,7 +9458,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         )
         .await
         .length()
-        .await;
+        .await
+        .unwrap();
     let secondary_length = secondary_layer
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
@@ -9998,17 +10272,20 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         oplog_service
             .exists(&owned_agent_id, AgentMode::Durable)
             .await
+            .unwrap()
     );
     assert!(
         oplog_service
             .exists(&owned_agent_id, AgentMode::Ephemeral)
             .await
+            .unwrap()
     );
 
     // Each namespace returns its own initial entry, not the other's.
     let durable_first = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
+        .unwrap()
         .into_values()
         .next()
         .expect("expected one durable entry");
@@ -10020,6 +10297,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             1,
         )
         .await
+        .unwrap()
         .into_values()
         .next()
         .expect("expected one ephemeral entry");
@@ -10041,11 +10319,13 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         !oplog_service
             .exists(&owned_agent_id, AgentMode::Durable)
             .await
+            .unwrap()
     );
     assert!(
         oplog_service
             .exists(&owned_agent_id, AgentMode::Ephemeral)
             .await
+            .unwrap()
     );
 }
 
@@ -10511,7 +10791,8 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
 
     let persisted = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, inline_index, 2)
-        .await;
+        .await
+        .unwrap();
     let inline_description = match persisted.get(&inline_index).unwrap() {
         OplogEntry::PendingUpdate {
             description:
@@ -10616,7 +10897,8 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
     // the download must hit blob storage.
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, start_idx, 1)
-        .await;
+        .await
+        .unwrap();
     let entry = entries.into_values().next().expect("Start entry present");
     let payload = match entry {
         OplogEntry::Start {
@@ -10703,7 +10985,8 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
 
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, start_idx, 1)
-        .await;
+        .await
+        .unwrap();
     let entry = entries.into_values().next().expect("Start entry present");
     let payload = match entry {
         OplogEntry::Start {
@@ -10840,7 +11123,8 @@ async fn multilayer_reserved_start_delegates_to_primary_and_tracks_last_index(_t
 
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, first_idx, 2)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries
             .values()
@@ -10925,7 +11209,7 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
     // Without any commit, the entry is visible through the uncommitted buffer and the payload
     // blob is already durable: download the raw bytes directly from storage (bypassing the
     // in-memory cache embedded in the returned payload reference).
-    let entry = oplog.read(start_idx).await;
+    let entry = oplog.read(start_idx).await.unwrap();
     let (payload_id, md5_hash) = match &entry {
         OplogEntry::Start {
             request:
@@ -11165,7 +11449,8 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     // Read back through the service stack (no in-memory cache).
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, large_idx, 2)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries
             .values()
@@ -11275,7 +11560,7 @@ async fn an_oplog_opened_at_the_owning_epoch_can_be_written(_tracing: &Tracing) 
     // Opening records the epoch, so the writes that follow are accepted.
     oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(oplog.length().await, 1);
+    assert_eq!(oplog.length().await.unwrap(), 1);
 }
 
 #[test]
@@ -11356,7 +11641,7 @@ async fn an_oplog_opened_at_a_stale_epoch_refuses_every_write(_tracing: &Tracing
         Err(OplogError::Fenced(_))
     ));
     assert_eq!(
-        owner.length().await,
+        owner.length().await.unwrap(),
         1,
         "the losing executor must not have appended to the owner's oplog"
     );
@@ -11390,7 +11675,7 @@ async fn an_oplog_opened_without_an_epoch_asserts_nothing(_tracing: &Tracing) {
         .await;
     oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(oplog.length().await, 1);
+    assert_eq!(oplog.length().await.unwrap(), 1);
 }
 
 #[test]
@@ -11451,7 +11736,10 @@ async fn deleting_an_oplog_fences_a_writer_that_still_holds_it(_tracing: &Tracin
         other => panic!("expected the write to be fenced, got {other:?}"),
     }
     assert!(
-        !service.exists(&owned_agent_id, AgentMode::Durable).await,
+        !service
+            .exists(&owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap(),
         "the refused write must not have brought the deleted oplog back"
     );
 }
@@ -11511,7 +11799,7 @@ async fn a_fenced_oplog_is_not_handed_out_again_while_it_is_still_held(_tracing:
     );
     regained.add(OplogEntry::exited().rounded()).await.unwrap();
     regained.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(regained.length().await, 2);
+    assert_eq!(regained.length().await.unwrap(), 2);
 
     // Dropping the fenced handle runs its remover; it must not evict the fresh handle, or the
     // next open would construct a third, and two live writers would share one oplog.
@@ -11633,7 +11921,11 @@ async fn an_executor_that_loses_the_shard_mid_flight_is_refused_at_its_next_writ
         .await;
     loser.add(OplogEntry::suspend().rounded()).await.unwrap();
     loser.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(loser.length().await, 1, "it owned the shard at this point");
+    assert_eq!(
+        loser.length().await.unwrap(),
+        1,
+        "it owned the shard at this point"
+    );
 
     // The shard is re-granted to another executor, which opens the oplog at the new epoch.
     let _gainer = gaining_executor
@@ -11667,7 +11959,7 @@ async fn an_executor_that_loses_the_shard_mid_flight_is_refused_at_its_next_writ
         other => panic!("expected the in-flight write to be fenced, got {other:?}"),
     }
     assert_eq!(
-        loser.length().await,
+        loser.length().await.unwrap(),
         1,
         "the refused entry must not be there"
     );
@@ -11737,7 +12029,7 @@ async fn wait_for_replicas_does_not_report_a_fenced_flush_as_durable(_tracing: &
         None => panic!("the refused flush must latch the fence"),
     }
     assert_eq!(
-        owner.length().await,
+        owner.length().await.unwrap(),
         1,
         "the losing executor must not have appended to the owner's oplog"
     );
@@ -11852,7 +12144,8 @@ async fn a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_rea
     ));
     let entries = loser
         .read_exact(first, horizon.as_u64() - first.as_u64() + 1)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries.len(),
         2,
@@ -11884,7 +12177,7 @@ async fn a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_rea
         Err(OplogError::Fenced(_))
     ));
     assert_eq!(
-        owner.length().await,
+        owner.length().await.unwrap(),
         1,
         "the losing executor must not have appended to the owner's oplog"
     );
@@ -12034,7 +12327,7 @@ async fn an_ephemeral_handle_is_replaced_for_a_newer_epoch_and_its_writes_are_fe
         first.add(OplogEntry::exited().rounded()).await,
         Err(OplogError::Fenced(_))
     ));
-    assert_eq!(second.length().await, 1);
+    assert_eq!(second.length().await.unwrap(), 1);
 
     // An equal or older request is handed the current handle.
     let again = open(7).await;
@@ -12197,7 +12490,8 @@ async fn an_owner_opening_on_a_stale_last_index_starts_after_the_losers_last_wri
     // still says 5, so the write is accepted.
     let stale_last_index = owning_executor
         .get_last_index(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     assert_eq!(stale_last_index, OplogIndex::from_u64(1));
     loser.add(OplogEntry::suspend().rounded()).await.unwrap();
     loser.commit(CommitLevel::Always).await.unwrap();
@@ -12220,7 +12514,7 @@ async fn an_owner_opening_on_a_stale_last_index_starts_after_the_losers_last_wri
     // executor that owns the shard.
     owner.add(OplogEntry::exited().rounded()).await.unwrap();
     owner.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(owner.length().await, 3);
+    assert_eq!(owner.length().await.unwrap(), 3);
     assert_eq!(owner.current_oplog_index().await, OplogIndex::from_u64(3));
 
     let write = async {
@@ -12323,7 +12617,7 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
         "expected the stale create's write to be fenced, got {write:?}"
     );
     assert_eq!(
-        owner.length().await,
+        owner.length().await.unwrap(),
         2,
         "the stale create must not have appended to the owner's oplog"
     );
@@ -12470,6 +12764,7 @@ impl ArchivingExecutor {
         self.primary
             .read_source(owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 100)
             .await
+            .unwrap()
             .into_keys()
             .collect()
     }
@@ -12605,6 +12900,7 @@ async fn created_instance(
         .service
         .read_source(owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
+        .unwrap()
         .remove(&OplogIndex::INITIAL)
     {
         Some(OplogEntry::Create { parameters, .. }) => Some(parameters.instance_id),
@@ -12774,7 +13070,8 @@ async fn an_agent_deleted_by_its_new_owner_gets_no_archive_chunks_back(_tracing:
             !owning_executor
                 .service
                 .exists(&owned_agent_id, AgentMode::Durable)
-                .await,
+                .await
+                .unwrap(),
             "{backend}: the superseded owner's transfer brought the deleted agent's archive back"
         );
     }
@@ -12920,7 +13217,8 @@ async fn an_agent_deleted_by_its_new_owner_gets_no_blob_chunks_back(_tracing: &T
             !owning_executor
                 .service
                 .exists(&owned_agent_id, AgentMode::Durable)
-                .await,
+                .await
+                .unwrap(),
             "{backend}: the superseded owner's transfer brought the deleted agent's blob chunk back"
         );
         assert_eq!(
@@ -12940,6 +13238,7 @@ async fn an_agent_deleted_by_its_new_owner_gets_no_blob_chunks_back(_tracing: &T
                     100
                 )
                 .await
+                .unwrap()
                 .is_empty(),
             "{backend}"
         );
@@ -13018,7 +13317,8 @@ async fn an_agent_created_again_reads_nothing_of_the_one_deleted_under_a_late_bl
             let history = restarted_executor
                 .service
                 .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, n)
-                .await;
+                .await
+                .unwrap();
             assert_eq!(history.len() as u64, n, "{backend}: reading 1..={n}");
             assert!(
                 history
@@ -13055,6 +13355,7 @@ async fn a_stale_blob_level_handle_can_neither_list_nor_drop_chunks(_tracing: &T
                         n,
                     )
                     .await
+                    .unwrap()
                     .into_keys()
                     .map(|idx| idx.as_u64())
                     .collect::<Vec<_>>()
@@ -13084,7 +13385,8 @@ async fn a_stale_blob_level_handle_can_neither_list_nor_drop_chunks(_tracing: &T
         assert_eq!(
             level
                 .get_last_index(&owned_agent_id, AgentMode::Durable)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(3),
             "{backend}"
         );
@@ -13309,6 +13611,7 @@ async fn a_stale_archive_level_handle_cannot_trim_the_owners_level(_tracing: &Tr
                         n,
                     )
                     .await
+                    .unwrap()
                     .into_keys()
                     .map(|idx| idx.as_u64())
                     .collect::<Vec<_>>()
@@ -13345,7 +13648,10 @@ async fn a_stale_archive_level_handle_cannot_trim_the_owners_level(_tracing: &Tr
         // one is still refused at open, and the owner keeps writing the level.
         owner.drop_prefix(OplogIndex::from_u64(3)).await.unwrap();
         assert!(
-            !level.exists(&owned_agent_id, AgentMode::Durable).await,
+            !level
+                .exists(&owned_agent_id, AgentMode::Durable)
+                .await
+                .unwrap(),
             "{backend}"
         );
         assert!(
@@ -13381,7 +13687,8 @@ async fn an_older_ephemeral_handle_stays_fenced_after_a_newer_owner_archives(_tr
         assert!(
             !CompressedOplogArchiveService::new(storage.clone(), 1, RetryConfig::default())
                 .exists(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             "{backend}"
         );
         assert!(

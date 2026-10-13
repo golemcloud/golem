@@ -806,7 +806,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .replay_state
                 .lookup_oplog_entry(begin_index, OplogEntry::is_end_atomic_region)
-                .await
+                .await?
             {
                 Some(end_index) => {
                     debug!(

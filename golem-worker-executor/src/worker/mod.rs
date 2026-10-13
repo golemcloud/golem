@@ -86,7 +86,7 @@ use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_E
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{
     ArchiveWait, CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogOps, downcast_oplog,
+    OplogLifecycleGuard, OplogOps, UnreadableOplog, downcast_oplog,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
@@ -963,7 +963,7 @@ impl DurableTopologyRecoveryCache {
         }
         'suffix: while self.covered_through < current {
             let count = (current.as_u64() - self.covered_through.as_u64()).min(1024);
-            let entries = oplog.read_exact(self.covered_through.next(), count).await;
+            let entries = oplog.read_exact(self.covered_through.next(), count).await?;
             for (index, entry) in &entries {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
@@ -3689,7 +3689,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             for (_, entry) in self
                 .oplog
                 .read_exact(OplogIndex::INITIAL, current.as_u64())
-                .await
+                .await?
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
@@ -3985,7 +3985,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         index: OplogIndex,
     ) -> Result<golem_common::model::durable_stream::StreamExportForkCandidate, WorkerExecutorError>
     {
-        if let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await
+        if let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await?
             && let StreamSessionRecord::ExportForkAdmitted(record) = self
                 .oplog
                 .download_payload(record)
@@ -4570,7 +4570,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 idempotency_key: accepted_key,
                 payload,
                 ..
-            } = self.oplog.read(index).await
+            } = self.oplog.read(index).await?
             else {
                 return Err(WorkerExecutorError::runtime(
                     "native session does not reference a pending invocation",
@@ -5221,7 +5221,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingInvocationRef,
     ) -> Result<HydratedInvocation, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await;
+        let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingAgentInvocation {
                 idempotency_key,
@@ -5263,7 +5263,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingUpdateRef,
     ) -> Result<HydratedUpdate, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await;
+        let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingUpdate { description, .. } => Ok(HydratedUpdate {
                 reference: pending.clone(),
@@ -7034,7 +7034,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 || attached.attempt_id != prepared.attempt.attempt_id
                 || attached.epoch == 0
                 || !matches!(
-                    self.oplog.read(attached.pending_invocation_oplog_index).await,
+                    self.oplog.read(attached.pending_invocation_oplog_index).await?,
                     OplogEntry::PendingAgentInvocation { idempotency_key, .. }
                         if idempotency_key == prepared.attempt.session_key.idempotency_key
                 ))
@@ -7565,7 +7565,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     metadata.covered_through().next(),
                     (current.as_u64() - metadata.covered_through().as_u64()).min(1024),
                 )
-                .await;
+                .await?;
             for (index, entry) in entries {
                 if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self
@@ -8288,7 +8288,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     || attached.attempt_id != prepared.attempt.attempt_id
                     || attached.epoch == 0
                     || attached.attachment_id != prepared.attempt.attachment_id
-                    || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await,
+                    || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
                         OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == key.idempotency_key)
                 {
                     return Err(WorkerExecutorError::runtime(
@@ -9314,7 +9314,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let entries = self
             .oplog
             .read_exact(OplogIndex::INITIAL, region_end.as_u64())
-            .await;
+            .await?;
 
         {
             cut_point::validate_snapshot_update_boundaries(
@@ -9338,18 +9338,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
                 |idx| {
-                    std::future::ready(
+                    std::future::ready(Ok::<_, std::convert::Infallible>(
                         entries
                             .get(&idx)
                             .expect("read_exact must return every requested oplog entry")
                             .clone(),
-                    )
+                    ))
                 },
                 last_oplog_index,
                 region_end,
                 &validation_regions,
             )
             .await
+            .unwrap_or_else(|never| match never {})
             {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
@@ -9550,7 +9551,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         snapshot_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        match self.oplog.read(snapshot_index).await {
+        match self.oplog.read(snapshot_index).await? {
             OplogEntry::PendingUpdate {
                 description: UpdateDescription::SnapshotBased { payload, .. },
                 ..
@@ -9703,20 +9704,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             crate::metrics::workers::record_invocation_result_resolution("bloom_negative");
             None
         } else {
-            self.resolve_old_invocation_result_index(&status, key)
-                .await
-                .map(|oplog_idx| (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx))
+            // An oplog that does not read is not a miss: the key may well have a result there.
+            match self.resolve_old_invocation_result_index(&status, key).await {
+                Ok(oplog_idx) => oplog_idx
+                    .map(|oplog_idx| (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx)),
+                Err(error) => return LookupResult::Complete(Err(error.into())),
+            }
         };
         if let Some((mut result, result_oplog_idx)) = maybe_result {
-            if matches!(result.as_ref(), InvocationResult::Lazy { .. }) {
-                Arc::make_mut(&mut result)
+            if matches!(result.as_ref(), InvocationResult::Lazy { .. })
+                && let Err(error) = Arc::make_mut(&mut result)
                     .cache(
                         &self.owned_agent_id,
                         self.agent_mode(),
                         self.initial_worker_metadata.fingerprint,
                         self,
                     )
-                    .await;
+                    .await
+            {
+                return LookupResult::Complete(Err(error.into()));
             }
             self.hydrated_invocation_results.write().await.insert(
                 key.clone(),
@@ -9743,7 +9749,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         status: &AgentStatusRecord,
         key: &IdempotencyKey,
-    ) -> Option<OplogIndex> {
+    ) -> Result<Option<OplogIndex>, UnreadableOplog> {
         let worker_service = self.deps.worker_service();
         let lookup = worker_service
             .lookup_invocation_result_index(
@@ -9756,11 +9762,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match lookup {
             Ok(InvocationResultIndexLookup::Found(index)) => {
                 crate::metrics::workers::record_invocation_result_resolution("physical_hit");
-                return Some(index);
+                return Ok(Some(index));
             }
             Ok(InvocationResultIndexLookup::DefinitiveMiss) => {
                 crate::metrics::workers::record_invocation_result_resolution("physical_miss");
-                return None;
+                return Ok(None);
             }
             Ok(InvocationResultIndexLookup::Incomplete) | Err(_) => {
                 crate::metrics::workers::record_invocation_result_resolution("physical_incomplete");
@@ -9788,11 +9794,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 Ok(InvocationResultIndexLookup::Found(index)) => {
                     crate::metrics::workers::record_invocation_result_resolution("physical_hit");
-                    return Some(index);
+                    return Ok(Some(index));
                 }
                 Ok(InvocationResultIndexLookup::DefinitiveMiss) => {
                     crate::metrics::workers::record_invocation_result_resolution("physical_miss");
-                    return None;
+                    return Ok(None);
                 }
                 Ok(InvocationResultIndexLookup::Incomplete) | Err(_) => {}
             }
@@ -9815,7 +9821,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .deps
                 .oplog_service()
                 .read_exact(&self.owned_agent_id, self.agent_mode(), first, count)
-                .await;
+                .await?;
             if entries.is_empty() {
                 break;
             }
@@ -9832,7 +9838,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
             first = entries.keys().max().unwrap().next();
         }
-        result
+        Ok(result)
     }
 
     async fn stop_internal(
@@ -11425,6 +11431,12 @@ enum StartFilesystemError {
     Other(WorkerExecutorError),
 }
 
+impl From<UnreadableOplog> for StartFilesystemError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Other(error.into())
+    }
+}
+
 /// A materialization of a start baseline that failed, with the filesystem to clean up, the error
 /// of the agent filesystem and the replay inputs of the start.
 struct StartFilesystemFailure {
@@ -11461,7 +11473,7 @@ impl StartFilesystem {
                 }
             }
             snapshot_selection::SelectedBaseline::ManualPromoted { index } => {
-                match parent.oplog.read(*index).await {
+                match parent.oplog.read(*index).await? {
                     OplogEntry::PendingUpdate {
                         description:
                             UpdateDescription::SnapshotBased {
@@ -11505,7 +11517,7 @@ impl StartFilesystem {
                 let source_revision = match source {
                     filesystem_snapshots::SourceRevision::Current => status.component_revision,
                     filesystem_snapshots::SourceRevision::Before(index) => {
-                        RunningWorker::revision_before(parent, status, *index).await
+                        RunningWorker::revision_before(parent, status, *index).await?
                     }
                 };
                 let source_files = RunningWorker::initial_files_of(parent, source_revision)
@@ -11737,14 +11749,16 @@ impl RunningWorker {
         parent: &Arc<Worker<Ctx>>,
         status: &AgentStatusRecord,
         before: OplogIndex,
-    ) -> ComponentRevision {
-        match filesystem_snapshots::revision_before(&status.successful_updates, before) {
-            Some(revision) => revision,
-            None => match parent.oplog.read(OplogIndex::INITIAL).await {
-                OplogEntry::Create { parameters, .. } => parameters.component_revision,
-                _ => status.component_revision_for_replay,
+    ) -> Result<ComponentRevision, UnreadableOplog> {
+        Ok(
+            match filesystem_snapshots::revision_before(&status.successful_updates, before) {
+                Some(revision) => revision,
+                None => match parent.oplog.read(OplogIndex::INITIAL).await? {
+                    OplogEntry::Create { parameters, .. } => parameters.component_revision,
+                    _ => status.component_revision_for_replay,
+                },
             },
-        }
+        )
     }
 
     /// Gives the initial files of the agent in the component revision `revision`.
@@ -13035,10 +13049,10 @@ impl InvocationResult {
         agent_mode: AgentMode,
         agent_fingerprint: AgentFingerprint,
         services: &T,
-    ) {
+    ) -> Result<(), UnreadableOplog> {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
-            let entry = services.oplog().read(oplog_idx).await;
+            let entry = services.oplog().read(oplog_idx).await?;
 
             let result = match entry {
                 OplogEntry::AgentInvocationFinished {
@@ -13106,6 +13120,7 @@ impl InvocationResult {
 
             *self = Self::Cached { result }
         }
+        Ok(())
     }
 }
 

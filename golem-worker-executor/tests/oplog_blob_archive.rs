@@ -751,7 +751,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
     );
 
     let exists = service
-        .try_exists(&owned_agent_id, AgentMode::Durable)
+        .exists(&owned_agent_id, AgentMode::Durable)
         .await
         .unwrap();
     let archive = service

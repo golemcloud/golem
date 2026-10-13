@@ -1,4 +1,4 @@
-use crate::services::oplog::{CommitLevel, Oplog, OplogService, OplogServiceOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogService, OplogServiceOps, UnreadableOplog};
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::durable_stream::StreamSessionRecord;
@@ -18,7 +18,9 @@ use golem_common::model::{
     RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 pub(crate) mod regions;
@@ -28,6 +30,59 @@ pub(crate) use regions::{
     RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };
 use update_queue::{UpdateStep, manual_update_target_revision_of};
+
+/// Why the status of an agent could not be folded from its oplog.
+#[derive(Clone, Debug)]
+pub enum StatusError {
+    /// The oplog of the agent does not read, so the agent cannot be recovered from it.
+    Unreadable(UnreadableOplog),
+    /// Any other failure, as text.
+    Other(String),
+}
+
+impl Display for StatusError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(error) => write!(f, "{error}"),
+            Self::Other(error) => f.write_str(error),
+        }
+    }
+}
+
+impl From<UnreadableOplog> for StatusError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Unreadable(error)
+    }
+}
+
+impl From<String> for StatusError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<&str> for StatusError {
+    fn from(error: &str) -> Self {
+        Self::Other(error.to_string())
+    }
+}
+
+impl From<StatusError> for String {
+    fn from(error: StatusError) -> Self {
+        error.to_string()
+    }
+}
+
+/// An unreadable oplog keeps its type, so the agent fails with it; any other failure is a
+/// runtime error.
+impl From<StatusError> for WorkerExecutorError {
+    fn from(error: StatusError) -> Self {
+        match error {
+            StatusError::Unreadable(error) => error.into(),
+            StatusError::Other(error) => WorkerExecutorError::runtime(error),
+        }
+    }
+}
 
 /// One immutable projection boundary, shared by region discovery and every baseline attempt.
 pub(super) struct StatusOplogReader<'a> {
@@ -55,9 +110,13 @@ impl<'a> StatusOplogReader<'a> {
         }
     }
 
-    async fn read_exact(&self, first: OplogIndex, count: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_exact(
+        &self,
+        first: OplogIndex,
+        count: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         if first > self.horizon || count == 0 {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         }
         let count = count.min(self.horizon.as_u64() - first.as_u64() + 1);
         match self.opened {
@@ -77,7 +136,7 @@ pub async fn calculate_last_known_status_for_existing_worker<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Result<AgentStatusRecord, String>
+) -> Result<AgentStatusRecord, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -100,7 +159,7 @@ pub async fn calculate_last_known_status<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Result<Option<AgentStatusRecord>, String>
+) -> Result<Option<AgentStatusRecord>, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -129,7 +188,7 @@ pub async fn calculate_last_known_status_with_checkpoint<T>(
     fingerprint: AgentFingerprint,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Result<Option<AgentStatusRecord>, String>
+) -> Result<Option<AgentStatusRecord>, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + HasWorkerService + Sync,
 {
@@ -178,7 +237,7 @@ pub async fn calculate_last_known_status_with_checkpoint_reader<T, Fut>(
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
     read_checkpoint: impl FnOnce() -> Fut,
-) -> Result<Option<AgentStatusRecord>, String>
+) -> Result<Option<AgentStatusRecord>, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
@@ -186,7 +245,7 @@ where
     let horizon = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, None, horizon);
     calculate_status_with_reader(this, &reader, last_known, read_checkpoint).await
 }
@@ -196,7 +255,7 @@ pub(super) async fn calculate_status_with_reader<T, Fut>(
     reader: &StatusOplogReader<'_>,
     last_known: Option<AgentStatusRecord>,
     read_checkpoint: impl FnOnce() -> Fut,
-) -> Result<Option<AgentStatusRecord>, String>
+) -> Result<Option<AgentStatusRecord>, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
@@ -237,7 +296,11 @@ pub(super) async fn fold_committed_status<T>(
     appended_through: OplogIndex,
     baseline: AgentStatusRecord,
     mut entries: BTreeMap<OplogIndex, OplogEntry>,
-) -> (Result<Option<AgentStatusRecord>, String>, bool, OplogIndex)
+) -> (
+    Result<Option<AgentStatusRecord>, StatusError>,
+    bool,
+    OplogIndex,
+)
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -268,7 +331,8 @@ where
     };
     if contiguous {
         (
-            update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry),
+            update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry)
+                .map_err(StatusError::from),
             false,
             horizon,
         )
@@ -300,14 +364,14 @@ pub async fn try_fold_status_from<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     baseline: AgentStatusRecord,
-) -> Result<Option<AgentStatusRecord>, String>
+) -> Result<Option<AgentStatusRecord>, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
     let horizon = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, None, horizon);
     try_fold_status_from_reader(this, &reader, baseline).await
 }
@@ -316,7 +380,7 @@ pub(super) async fn try_fold_status_from_reader<T>(
     this: &T,
     reader: &StatusOplogReader<'_>,
     mut baseline: AgentStatusRecord,
-) -> Result<Option<AgentStatusRecord>, String>
+) -> Result<Option<AgentStatusRecord>, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -359,7 +423,7 @@ where
     let mut first = baseline.oplog_idx.next();
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = reader.read_exact(first, count).await;
+        let mut entries = reader.read_exact(first, count).await?;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -410,7 +474,7 @@ async fn fold_status_with_precomputed_regions<T>(
     reader: &StatusOplogReader<'_>,
     mut baseline: AgentStatusRecord,
     chunk_size: u64,
-) -> Result<Option<AgentStatusRecord>, String>
+) -> Result<Option<AgentStatusRecord>, StatusError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -418,7 +482,7 @@ where
     let agent_mode = reader.agent_mode;
     let last_oplog_index = reader.horizon;
     let start = baseline.oplog_idx.next();
-    let Some(region_entries) = read_region_entries(reader, start, chunk_size, true).await else {
+    let Some(region_entries) = read_region_entries(reader, start, chunk_size, true).await? else {
         return Ok(None);
     };
     let pending_updates = std::mem::take(&mut baseline.pending_updates);
@@ -436,7 +500,7 @@ where
     let mut first = start;
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = reader.read_exact(first, count).await;
+        let mut entries = reader.read_exact(first, count).await?;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -480,7 +544,7 @@ async fn hydrate_stream_session_payloads<T>(
     agent_mode: AgentMode,
     deleted_regions: &DeletedRegions,
     entries: &mut BTreeMap<OplogIndex, OplogEntry>,
-) -> Result<(), String>
+) -> Result<(), StatusError>
 where
     T: HasOplogService + Sync,
 {
@@ -506,7 +570,7 @@ async fn hydrate_initial_pending_evidence(
     reader: &StatusOplogReader<'_>,
     baseline: &mut AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Result<(), String> {
+) -> Result<(), StatusError> {
     let deleted = deleted_regions(baseline.deleted_regions.clone(), entries);
     for (attached_idx, entry) in entries {
         if deleted.is_in_deleted_region(*attached_idx) {
@@ -546,7 +610,7 @@ async fn hydrate_initial_pending_evidence(
         } else {
             persisted_referent = reader
                 .read_exact(attached.pending_invocation_oplog_index, 1)
-                .await;
+                .await?;
             persisted_referent.get(&attached.pending_invocation_oplog_index)
         };
         match referent {
@@ -1134,12 +1198,12 @@ pub(crate) async fn skipped_regions_at(
     this: &(impl HasOplogService + Sync),
     owned_agent_id: &OwnedAgentId,
     horizon: OplogIndex,
-) -> Result<DeletedRegions, String> {
+) -> Result<DeletedRegions, StatusError> {
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
     // depends on, so the read does not decode the invocation payloads.
     let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
-        .await
+        .await?
         .ok_or("Missing fork source history")?;
     Ok(skipped_regions(&entries))
 }
@@ -1152,13 +1216,16 @@ async fn read_region_entries(
     mut first: OplogIndex,
     chunk_size: u64,
     manual_admissions: bool,
-) -> Option<BTreeMap<OplogIndex, OplogEntry>> {
+) -> Result<Option<BTreeMap<OplogIndex, OplogEntry>>, UnreadableOplog> {
     let mut regions = BTreeMap::new();
     let horizon = reader.horizon;
     while first <= horizon {
         let count = (horizon.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let entries = reader.read_exact(first, count).await;
-        first = entries.keys().next_back()?.next();
+        let entries = reader.read_exact(first, count).await?;
+        let Some(last) = entries.keys().next_back() else {
+            return Ok(None);
+        };
+        first = last.next();
         regions.extend(entries.into_iter().filter(|(_, entry)| {
             matches!(
                 entry,
@@ -1175,7 +1242,7 @@ async fn read_region_entries(
                 )
         }));
     }
-    Some(regions)
+    Ok(Some(regions))
 }
 
 /// The pending invocations after `entries`. The update entries act through their `steps`, which
