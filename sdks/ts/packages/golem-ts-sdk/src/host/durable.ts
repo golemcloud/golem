@@ -64,8 +64,8 @@ interface DurableFallibleSpec<Req, Ok, Err> extends DurableSpec<Req, Ok> {
   readonly error: StandardSchemaV1<Err>;
 }
 
-// Infallible — body returns the success value directly; a throw is an uncaught
-// defect (the worker is retried, the region left open).
+// Infallible — body returns the success value directly; a throw leaves the
+// custom invocation unfinished. It does not itself trigger a retry.
 export function durable<Req, Ok>(
   spec: DurableSpec<Req, Ok>,
   request: Req,
@@ -124,7 +124,8 @@ export function durable(
   }
 
   // Live: run the body, persist the typed response, then finish the invocation.
-  // A thrown/rejected body drops the unfinished resource so recovery re-runs it.
+  // A thrown/rejected body drops the unfinished resource. If later recovery replays
+  // this incomplete invocation, it re-runs the body.
   const liveInvocation = invocation.val;
   let consumed = false;
   const dropUnfinished = () => {

@@ -20,8 +20,8 @@ ZIO-Golem provides transaction helpers under `golem.Transactions`.
 Transactions group a sequence of operations where:
 
 1. Each operation has an **execute** step and a **compensate** step
-2. When an operation fails, all previous compensations run in reverse order
-3. The oplog index resets, enabling automatic retry
+2. When an operation returns a domain error, previous compensations run in reverse order
+3. An infallible transaction resets the oplog index and retries; a fallible transaction returns the error with rollback status
 
 ### Transaction Types
 
@@ -34,8 +34,12 @@ Transactions group a sequence of operations where:
 
 ## Infallible Transactions
 
-Use `infallibleTransaction` when operations must eventually succeed. On failure, compensations execute and the entire
-transaction retries automatically.
+Use `infallibleTransaction` when operations must eventually succeed. When an operation returns `Left`, compensations
+execute and the entire transaction retries automatically.
+
+Both transaction runners create an atomic region. An unexpected failed `Future` traps without running compensations;
+the region is retried according to the applicable retry policy. If the policy gives up, the agent becomes failed.
+Outside an atomic region, an uncaught exception or failed `Future` fails the agent without retry.
 
 ```scala
 import golem.Transactions
