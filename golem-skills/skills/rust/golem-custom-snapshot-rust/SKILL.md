@@ -180,6 +180,16 @@ async fn load_snapshot(
 
 Do not initialize an ordinary instance and mutate it after loading. Construct and return the complete restored `Self`; the SDK installs it only after the factory succeeds.
 
+## Agent Files
+
+A snapshot holds only the agent's in-memory state: the serde form of the agent, or the bytes that `save_snapshot` returns. It does not hold the files that the agent wrote.
+
+- On an executor with filesystem snapshots, Golem captures the agent's files at the same point as the snapshot and restores them before `load_snapshot` runs, so `load_snapshot` can read them. The snapshot and the files form one restore point.
+- Do not write files in `save_snapshot` or `load_snapshot`, and do not copy file contents into the snapshot to keep them. Golem does not run `save_snapshot` again in a replay, and `load_snapshot` runs in read-only mode.
+- On an executor without filesystem snapshots, Golem takes a snapshot only while the agent's files are its initial files. After the agent changes its files, Golem takes no automatic snapshot: a start uses an older restore point or replays the full oplog, which writes the files again without data loss. A snapshot-based manual update fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`.
+
+Filesystem snapshots are off by default on standalone executors and on local servers, except `golem server run` on macOS. See [Agent files and snapshots](https://learn.golem.cloud/next/develop/snapshotting#agent-files-and-snapshots).
+
 ## Best Practices
 
 1. **Prefer automatic (serde) snapshotting** unless you need a compact binary format or cross-version migration logic.
