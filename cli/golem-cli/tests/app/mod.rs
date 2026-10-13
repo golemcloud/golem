@@ -329,6 +329,7 @@ pub(crate) const CLOSED_OUTPUT_EXIT: i32 = 141;
 #[derive(Clone, Copy)]
 enum CloseWhen {
     AtSpawn,
+    #[cfg_attr(not(unix), allow(dead_code))]
     Quiet,
     AfterBytes(usize),
 }
@@ -863,6 +864,7 @@ impl TestContext {
 
     /// Closes the read end of stdout once the CLI has printed nothing for a while, as `head`
     /// does after it has read enough.
+    #[cfg_attr(not(unix), allow(dead_code))]
     async fn cli_closing_stdout_when_quiet<I, S>(&self, command_args: I) -> RawOutput
     where
         I: IntoIterator<Item = S>,

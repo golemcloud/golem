@@ -278,7 +278,7 @@ async fn test_agent_stream_ends_when_stdout_is_closed() {
 #[test]
 #[tag(agents_streaming)]
 #[timeout("15 minutes")]
-async fn test_reader_that_leaves_after_the_first_output_ends_the_command_with_the_exit_code_of_sigpipe()
+async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_with_the_exit_code_of_sigpipe()
  {
     let ctx = streaming_invocation_context().await;
 
@@ -321,8 +321,18 @@ async fn test_reader_that_leaves_after_the_first_output_ends_the_command_with_th
     );
     assert!(!oplog.stderr_text().contains("panicked"));
     assert!(!oplog.stderr_text().contains("Broken pipe"));
+}
 
-    // The invocation delivers its first byte and then waits for more.
+/// The invocation writes its first byte and then waits. Only the watch of stdout can end it
+/// after the reader has left, because the command writes nothing more.
+#[cfg(unix)]
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
+ {
+    let ctx = streaming_invocation_context().await;
+
     let invoke_agent = streaming_agent(&Uuid::new_v4().to_string());
     let invoked = tokio::time::timeout(
         Duration::from_secs(120),
@@ -350,6 +360,7 @@ async fn test_reader_that_leaves_after_the_first_output_ends_the_command_with_th
     assert!(!invoked.stderr_text().contains("Broken pipe"));
 }
 
+#[cfg(unix)]
 #[test]
 #[tag(agents_streaming)]
 #[timeout("15 minutes")]
