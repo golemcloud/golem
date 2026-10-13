@@ -704,6 +704,8 @@ pub trait ToolStreamingCaller {
     async fn native_config(&self, key: String) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
+    async fn retain_tool_output(&self, cancel_read: bool);
+    async fn consume_retained_tool_output(&self) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
     async fn hold_open_stdin(&self, calls: u32);
@@ -751,7 +753,9 @@ pub trait ToolStreamingCaller {
     async fn matrix_core_observation(&self) -> MatrixObservation;
 }
 
-struct ToolStreamingCallerImpl;
+struct ToolStreamingCallerImpl {
+    retained_output: std::cell::RefCell<Option<InputStream>>,
+}
 
 #[agent_definition]
 pub trait RustResourceToolStreamingCaller {
@@ -1363,7 +1367,9 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
             "component-baseline owners must not construct an agent"
         );
-        Self
+        Self {
+            retained_output: std::cell::RefCell::new(None),
+        }
     }
 
     fn record_native_order(&self, marker: String) -> String {
@@ -1996,7 +2002,9 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
             poll_fn(|cx| match pending_read.as_mut().poll(cx) {
                 Poll::Pending => Poll::Ready(()),
-                Poll::Ready(result) => panic!("stdout read completed before cancellation: {result:?}"),
+                Poll::Ready(result) => {
+                    panic!("stdout read completed before cancellation: {result:?}")
+                }
             })
             .await;
             let (reader_cancelled, buffer) = pending_read.as_mut().cancel();
@@ -3477,6 +3485,58 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         );
         drop(source);
         output
+    }
+
+    async fn retain_tool_output(&self, cancel_read: bool) {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        assert!(self.retained_output.borrow().is_none());
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (mut source, stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("marker-echo"),
+            Some(pump_tool_stdin(stdin)),
+            Some(target),
+            None,
+        );
+        assert_eq!(raw_chunk(&mut stdout).await, b"marker:");
+        if cancel_read {
+            for _ in 0..2 {
+                let mut pending = Box::pin(stdout.read(Vec::with_capacity(1)));
+                poll_fn(|cx| {
+                    assert!(pending.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                let (status, bytes) = pending.as_mut().cancel();
+                assert_eq!(format!("{status:?}"), "Cancelled");
+                assert!(bytes.is_empty());
+            }
+        }
+        assert!(
+            source
+                .write_all(vec![Ok(vec![0, 255, 19]), Ok(b"retained-tail".to_vec())])
+                .await
+                .is_empty()
+        );
+        drop(source);
+        raw_result(&invocation)
+            .await
+            .expect("complete producer before retaining its output");
+        *self.retained_output.borrow_mut() = Some(stdout);
+    }
+
+    async fn consume_retained_tool_output(&self) -> Vec<u8> {
+        let stdout = self
+            .retained_output
+            .borrow_mut()
+            .take()
+            .expect("output retained by an earlier invocation");
+        read_all(stdout).await
     }
 
     async fn raw_handle_lifecycles(&self) -> Vec<String> {

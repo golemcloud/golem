@@ -672,6 +672,7 @@ impl ByteAttachment {
                 state.terminal = Some(ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled));
                 state.terminal_pending = false;
                 state.terminal_end = None;
+                state.host_resource_exhausted = false;
             }
             (state.reader_waker.take(), selected_terminal)
         };
@@ -724,14 +725,6 @@ impl ByteAttachment {
         result.map(|()| true)
     }
 
-    fn select_resource_exhausted(&self) -> StreamWriteError {
-        let cause = ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted);
-        match self.select_terminal_with_origin(cause.clone(), true) {
-            Ok(()) => StreamWriteError::Closed(cause),
-            Err(error) => error,
-        }
-    }
-
     async fn write(
         self: &Arc<Self>,
         bytes: Vec<u8>,
@@ -748,6 +741,12 @@ impl ByteAttachment {
                 AttachmentWriteAcceptance::Accepted(publication) => {
                     publication.publish(source_end);
                     return Ok(());
+                }
+                AttachmentWriteAcceptance::ResourceExhausted(prepared) => {
+                    prepared.publish_local()?;
+                    return Err(StreamWriteError::Closed(ByteStreamCloseCause::Failed(
+                        ByteStreamFailure::ResourceExhausted,
+                    )));
                 }
                 AttachmentWriteAcceptance::Discarded => return Ok(()),
                 AttachmentWriteAcceptance::Retry => notified.as_mut().await,
@@ -775,7 +774,10 @@ impl ByteAttachment {
                     return Ok(None);
                 }
             }
-            return Err(self.select_resource_exhausted());
+            return Ok(Some(PreparedAttachmentWrite {
+                operation: Some(operation),
+                content: Some(PreparedWriteContent::ResourceExhausted),
+            }));
         }
         let bytes = bytes.into_boxed_slice().into_vec();
         let allocation_bytes = bytes.capacity();
@@ -811,7 +813,10 @@ impl ByteAttachment {
             match plan {
                 WritePlan::Discard => return Ok(None),
                 WritePlan::ResourceExhausted => {
-                    return Err(self.select_resource_exhausted());
+                    return Ok(Some(PreparedAttachmentWrite {
+                        operation: Some(operation),
+                        content: Some(PreparedWriteContent::ResourceExhausted),
+                    }));
                 }
                 WritePlan::Accept => {}
                 WritePlan::Wait => {
@@ -830,7 +835,10 @@ impl ByteAttachment {
                 AttachmentReservationOutcome::Reserved(reservation) => reservation,
                 AttachmentReservationOutcome::Pending => continue,
                 AttachmentReservationOutcome::Rejected => {
-                    return Err(self.select_resource_exhausted());
+                    return Ok(Some(PreparedAttachmentWrite {
+                        operation: Some(operation),
+                        content: Some(PreparedWriteContent::ResourceExhausted),
+                    }));
                 }
             };
             break AttachmentCharge::new(reservation, self.charged_bytes.clone());
@@ -838,8 +846,7 @@ impl ByteAttachment {
 
         Ok(Some(PreparedAttachmentWrite {
             operation: Some(operation),
-            bytes: Some(bytes),
-            charge: Some(charge),
+            content: Some(PreparedWriteContent::Bytes { bytes, charge }),
         }))
     }
 
@@ -957,15 +964,23 @@ enum WritePlan {
 
 struct ProducerOperation(Arc<ByteAttachment>);
 
-/// A nonempty write with memory reserved, but no accepted stream effect yet.
+/// A nonempty write with an admission decision, but no accepted stream effect yet.
 pub(crate) struct PreparedAttachmentWrite {
     operation: Option<ProducerOperation>,
-    bytes: Option<Vec<u8>>,
-    charge: Option<AttachmentCharge>,
+    content: Option<PreparedWriteContent>,
+}
+
+enum PreparedWriteContent {
+    Bytes {
+        bytes: Vec<u8>,
+        charge: AttachmentCharge,
+    },
+    ResourceExhausted,
 }
 
 pub(crate) enum AttachmentWriteAcceptance<R = AttachmentWritePublication> {
     Accepted(R),
+    ResourceExhausted(PreparedAttachmentTerminal),
     Discarded,
     Retry,
 }
@@ -984,11 +999,17 @@ impl PreparedAttachmentWrite {
             .expect("write already accepted")
             .0
             .clone();
-        let len = self.bytes.as_ref().expect("write already accepted").len();
         let mut state = attachment.state.lock().unwrap();
         if let Some(cause) = &state.terminal {
             return Err(StreamWriteError::Closed(cause.clone()));
         }
+        if state.mode == AttachmentMode::Discard {
+            return Ok(AttachmentWriteAcceptance::Discarded);
+        }
+        let len = match self.content.as_ref().expect("write already accepted") {
+            PreparedWriteContent::Bytes { bytes, .. } => bytes.len(),
+            PreparedWriteContent::ResourceExhausted => return Ok(self.exhausted()),
+        };
         if attachment.memory.tracking_pending() {
             return Ok(AttachmentWriteAcceptance::Retry);
         }
@@ -1005,8 +1026,7 @@ impl PreparedAttachmentWrite {
                         .limit
                         .saturating_sub(state.accepted_completion_bytes)
                 {
-                    drop(state);
-                    return Err(attachment.select_resource_exhausted());
+                    return Ok(self.exhausted());
                 }
             }
             AttachmentMode::TerminalOnly => {
@@ -1014,9 +1034,12 @@ impl PreparedAttachmentWrite {
             }
         }
         let published = Arc::new(AtomicBool::new(false));
+        let PreparedWriteContent::Bytes { bytes, charge } = self.content.take().unwrap() else {
+            unreachable!("exhausted writes cannot accept bytes")
+        };
         state.chunks.push_back(BufferedChunk {
-            bytes: self.bytes.take().unwrap(),
-            charge: self.charge.take().unwrap(),
+            bytes,
+            charge,
             published: published.clone(),
             source_end: None,
         });
@@ -1036,11 +1059,23 @@ impl PreparedAttachmentWrite {
         Ok(AttachmentWriteAcceptance::Accepted(accepted))
     }
 
+    fn exhausted<R>(&mut self) -> AttachmentWriteAcceptance<R> {
+        self.content.take();
+        AttachmentWriteAcceptance::ResourceExhausted(PreparedAttachmentTerminal {
+            operation: self.operation.take().expect("write already accepted"),
+            cause: ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted),
+            host_resource_exhausted: true,
+        })
+    }
+
     /// Waits for a possible acceptance outcome without accepting the write. `accept` must
     /// still revalidate after this wait.
     pub(crate) async fn wait_ready(&self) {
         let attachment = &self.operation.as_ref().expect("write already accepted").0;
-        let len = self.bytes.as_ref().expect("write already accepted").len();
+        let len = match self.content.as_ref().expect("write already accepted") {
+            PreparedWriteContent::Bytes { bytes, .. } => bytes.len(),
+            PreparedWriteContent::ResourceExhausted => return,
+        };
         loop {
             let notified = attachment.changed.notified();
             tokio::pin!(notified);
@@ -1110,11 +1145,14 @@ impl Drop for AttachmentWritePublication {
 pub(crate) struct PreparedAttachmentTerminal {
     operation: ProducerOperation,
     cause: ByteStreamCloseCause,
+    host_resource_exhausted: bool,
 }
 
 impl PreparedAttachmentTerminal {
     pub(crate) fn publish_local(self) -> Result<(), StreamWriteError> {
-        self.operation.0.select_terminal(self.cause)
+        self.operation
+            .0
+            .select_terminal_with_origin(self.cause, self.host_resource_exhausted)
     }
 
     pub(crate) fn accept<R>(
@@ -1131,6 +1169,7 @@ impl PreparedAttachmentTerminal {
             };
         }
         state.terminal = Some(self.cause);
+        state.host_resource_exhausted = self.host_resource_exhausted;
         state.terminal_pending = true;
         let result = enqueue(AttachmentTerminalPublication {
             operation: self.operation,
@@ -1303,7 +1342,11 @@ impl AttachmentWriter {
             };
         }
         drop(state);
-        Ok(Ok(PreparedAttachmentTerminal { operation, cause }))
+        Ok(Ok(PreparedAttachmentTerminal {
+            operation,
+            cause,
+            host_resource_exhausted: false,
+        }))
     }
 
     pub(crate) fn restore_terminal(
@@ -2084,28 +2127,45 @@ mod tests {
     #[test]
     #[test_r::timeout("30s")]
     async fn prepared_terminal_failure_fences_without_publishing_selected_cause() {
-        let (producer, consumer, observer) = pair(4);
-        producer.configure_live();
-        let publication = producer
-            .writer()
-            .prepare_terminal(ByteStreamCloseCause::Finished)
-            .unwrap()
-            .ok()
-            .unwrap()
-            .accept(std::convert::identity)
-            .unwrap()
-            .unwrap();
-        producer.controller().fence_owner();
-        drop(publication);
-        assert!(matches!(
-            observer.wait_terminal().await,
-            ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled)
-        ));
-        assert!(matches!(
-            consumer.read_next().await,
-            AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
-        ));
-        assert_eq!(observer.attachment.state.lock().unwrap().terminal_end, None);
+        for exhaustion in [false, true] {
+            let (producer, consumer, observer) = pair(4);
+            producer.configure_live();
+            let writer = producer.writer();
+            let prepared = if exhaustion {
+                let mut write = writer.prepare_write(vec![1; 5]).await.unwrap().unwrap();
+                let AttachmentWriteAcceptance::ResourceExhausted(prepared) =
+                    write.accept(std::convert::identity).unwrap()
+                else {
+                    panic!("oversized write must prepare exhaustion")
+                };
+                prepared
+            } else {
+                writer
+                    .prepare_terminal(ByteStreamCloseCause::Finished)
+                    .unwrap()
+                    .ok()
+                    .unwrap()
+            };
+            let publication = prepared.accept(std::convert::identity).unwrap().unwrap();
+            assert!(observer.terminal_snapshot().is_none());
+            producer.controller().fence_owner();
+            publication.publish(golem_common::model::OplogIndex::from_u64(42));
+            assert!(matches!(
+                observer.wait_terminal().await,
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled)
+            ));
+            assert!(
+                !observer
+                    .terminal_snapshot()
+                    .unwrap()
+                    .host_resource_exhausted
+            );
+            assert!(matches!(
+                consumer.read_next().await,
+                AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+            ));
+            assert_eq!(observer.attachment.state.lock().unwrap().terminal_end, None);
+        }
     }
 
     #[test]

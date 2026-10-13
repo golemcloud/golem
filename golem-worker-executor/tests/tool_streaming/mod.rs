@@ -6844,6 +6844,205 @@ async fn detached_and_fire_and_forget_traps_fail_the_owner_without_entity_termin
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn large_tool_output_reconstructs_with_one_chunk_capacity(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.limits.max_tool_attachment_bytes = 4096;
+            config.retry.max_attempts = 0;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "one-chunk-capacity");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let result: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "collect",
+            data_value!("large", Vec::<u8>::new(), 1_u32),
+        )
+        .await?
+        .into_typed()?;
+    let expected: Vec<u8> = (0..512_u32)
+        .flat_map(|index| std::iter::repeat_n((index % 251) as u8, 4096))
+        .collect();
+    assert_eq!(result.output, expected);
+    assert_eq!(result.completion, "ok");
+    assert!(!result.output_closed);
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(executor.instance_load_count(&worker), 0);
+    let _: String = executor
+        .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert!(executor.instance_load_count(&worker) > 0);
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::tool::streams::tool-output-writer::write"
+            ))
+            .count(),
+        512,
+        "reconstruction must not append replacement output writes"
+    );
+    executor.delete_worker(&worker).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn tool_output_retained_across_invocations_survives_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| config.retry.max_attempts = 0)),
+        ..Default::default()
+    };
+    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    for cancel_read in [false, true] {
+        for crash_before_read in [false, true] {
+            let agent = agent_id!(
+                "ToolStreamingCaller",
+                format!("retained-output-{cancel_read}-{crash_before_read}")
+            );
+            let worker = executor
+                .start_agent(&caller_component.id, agent.clone())
+                .await?;
+            executor
+                .invoke_and_await_agent(
+                    &caller_component,
+                    &agent,
+                    "retain_tool_output",
+                    data_value!(cancel_read),
+                )
+                .await?;
+            if crash_before_read {
+                drop(executor);
+                executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+                assert_eq!(executor.instance_load_count(&worker), 0);
+            }
+            let bytes: Vec<u8> = executor
+                .invoke_and_await_agent(
+                    &caller_component,
+                    &agent,
+                    "consume_retained_tool_output",
+                    data_value!(),
+                )
+                .await?
+                .into_typed()?;
+            assert_eq!(
+                bytes,
+                [vec![0, 255, 19], b"retained-tail".to_vec()].concat()
+            );
+            if crash_before_read {
+                assert!(executor.instance_load_count(&worker) > 0);
+            }
+            drop(executor);
+            executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+            assert_eq!(executor.instance_load_count(&worker), 0);
+            let _: String = executor
+                .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+                .await?
+                .into_typed()?;
+            assert!(executor.instance_load_count(&worker) > 0);
+            let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert_eq!(oplog.iter().filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::tool::streams::tool-output-writer::write"
+            )).count(), 3, "reconstruction must retain the original output writes");
+            executor.delete_worker(&worker).await?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn capable_streams_enforce_completion_limits_without_leaks(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -6928,6 +7127,46 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     assert!(
         stdout_over.completion.contains("ResourceExhausted"),
         "stdout overflow must stay operation-fatal even when the provider catches the write error: {stdout_over:#?}"
+    );
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let writes: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::streams::tool-output-writer::write" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    let outcomes: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if writes.contains(&end.start_index) => Some(
+                golem_common::model::oplog::HostResponseToolAttachmentWrite::from_value(
+                    end.response.as_ref().expect("write response").value(),
+                )
+                .expect("decode output write outcome")
+                .outcome,
+            ),
+            _ => None,
+        })
+        .collect();
+    use golem_common::model::oplog::attachment as attachment_model;
+    use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome;
+    assert_eq!(
+        outcomes,
+        vec![
+            ToolAttachmentWriteOutcome::Accepted,
+            ToolAttachmentWriteOutcome::HostResourceExhausted,
+            ToolAttachmentWriteOutcome::Rejected(attachment_model::StreamWriteError::Closed(
+                attachment_model::ByteStreamCloseCause::Failed(
+                    attachment_model::ByteStreamFailure::ResourceExhausted,
+                ),
+            )),
+        ],
+        "only the first rejection selects the exhaustion terminal"
     );
 
     let stdin_over: StreamEvidence = executor

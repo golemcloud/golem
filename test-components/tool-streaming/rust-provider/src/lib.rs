@@ -2022,6 +2022,19 @@ impl CapableStreaming for CapableStreamingImpl {
             bytes.clone()
         };
         let output_closed = stdout.write(output).await.is_err();
+        if path.starts_with("stdout-over:") {
+            assert!(output_closed);
+            assert!(matches!(
+                stdout.write(vec![b'y']).await,
+                Err(
+                    golem_rust::golem_agentic::golem::tool::host::StreamWriteError::Closed(
+                        golem_rust::golem_agentic::golem::tool::host::ByteStreamCloseCause::Failed(
+                            ByteStreamFailure::ResourceExhausted
+                        )
+                    )
+                )
+            ));
+        }
         let _ = stdout.finish().await;
         Ok(StreamSummary {
             chunks_read,

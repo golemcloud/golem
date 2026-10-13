@@ -4,7 +4,9 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
-use super::attachment::{AttachmentController, AttachmentWriteAcceptance, AttachmentWriter};
+use super::attachment::{
+    AttachmentController, AttachmentWriteAcceptance, AttachmentWriter, PreparedAttachmentTerminal,
+};
 use crate::durable_host::concurrent::{Cancellable, DeferredCallReplayOutcome, DurableCallSession};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::tool::host::{
@@ -101,6 +103,23 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
                             .replay_state
                             .complete_tool_attachment_reconstruction(start)
                     });
+                } else if response.outcome == ToolAttachmentWriteOutcome::HostResourceExhausted {
+                    let end = accessor.with(|mut access| {
+                        access
+                            .get()
+                            .state
+                            .replay_state
+                            .selected_tool_attachment_terminal_end(
+                                start,
+                                identity,
+                                &model::ToolAttachmentTerminal::HostResourceExhausted,
+                            )
+                    })?;
+                    writer.restore_terminal(
+                        ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted),
+                        true,
+                        end,
+                    )?;
                 }
                 let result = response.outcome.result().map_err(write_error_from_model);
                 if delivery.is_replay_discarded() {
@@ -114,7 +133,7 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
     }
     if !call.is_persisted() {
         let result = writer.write(bytes).await;
-        let outcome = outcome_for_result(&result, request.length == 0, &controller);
+        let outcome = outcome_for_result(&result, request.length == 0);
         let (_, delivery) = call
             .complete_access_deferred(
                 accessor,
@@ -129,7 +148,7 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
         Ok(Some(prepared)) => prepared,
         result => {
             let result = result.map(|_| ());
-            let outcome = outcome_for_result(&result, request.length == 0, &controller);
+            let outcome = outcome_for_result(&result, request.length == 0);
             let (_, delivery) = call
                 .complete_access_deferred(
                     accessor,
@@ -183,13 +202,16 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
         }
         let result = match selected.expect("acceptance callback must select an outcome") {
             Ok(AttachmentWriteAcceptance::Retry) => continue,
+            Ok(AttachmentWriteAcceptance::ResourceExhausted(prepared)) => {
+                return complete_resource_exhaustion(accessor, call, prepared, controller).await;
+            }
             Ok(AttachmentWriteAcceptance::Discarded) => Ok(()),
             Err(error) => Err(error),
             Ok(AttachmentWriteAcceptance::Accepted(())) => {
                 unreachable!("accepted write owns its End")
             }
         };
-        let outcome = outcome_for_result(&result, false, &controller);
+        let outcome = outcome_for_result(&result, false);
         let (_, delivery) = call
             .complete_access_deferred(
                 accessor,
@@ -200,6 +222,57 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
         delivery.deliver_at_accessor_terminal(accessor).await?;
         return Ok(result);
     }
+}
+
+async fn complete_resource_exhaustion<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    mut call: DurableCallSession<GolemToolOutputWrite, Cancellable>,
+    prepared: PreparedAttachmentTerminal,
+    controller: AttachmentController,
+) -> anyhow::Result<Result<(), StreamWriteError>> {
+    let failed = publication_failure(accessor, controller)?;
+    let mut selection = None;
+    let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
+    let completing = call.complete_access_deferred_with_effect(
+        accessor,
+        accessor.getter(),
+        HostResponseToolAttachmentWrite {
+            outcome: ToolAttachmentWriteOutcome::HostResourceExhausted,
+        },
+        |_, enqueue| selection = Some(prepared.accept(enqueue)),
+        |publication, end| publication.publish(end),
+        failed,
+    );
+    let completed = tokio::select! {
+        completed = completing => completed?,
+        interruption = interrupt => return Err(interruption.into()),
+    };
+    let exhausted = StreamWriteError::Closed(ByteStreamCloseCause::Failed(
+        ByteStreamFailure::ResourceExhausted,
+    ));
+    match completed {
+        Ok((_, delivery)) => {
+            delivery.deliver_at_accessor_terminal(accessor).await?;
+            return Ok(Err(exhausted));
+        }
+        Err((unfinished, _)) => call = unfinished,
+    }
+    let error = match selection.expect("exhaustion acceptance must select an outcome") {
+        Ok(None) => exhausted,
+        Err(error) => error,
+        Ok(Some(())) => unreachable!("selected exhaustion owns its End"),
+    };
+    let (_, delivery) = call
+        .complete_access_deferred(
+            accessor,
+            accessor.getter(),
+            HostResponseToolAttachmentWrite {
+                outcome: ToolAttachmentWriteOutcome::Rejected(error_to_model(&error)),
+            },
+        )
+        .await?;
+    delivery.deliver_at_accessor_terminal(accessor).await?;
+    Ok(Err(error))
 }
 
 pub(super) async fn finish<U: Send + 'static, Ctx: WorkerCtx>(
@@ -473,37 +546,11 @@ fn publication_failure<U: Send + 'static, Ctx: WorkerCtx>(
 fn outcome_for_result(
     result: &Result<(), StreamWriteError>,
     empty: bool,
-    controller: &AttachmentController,
 ) -> ToolAttachmentWriteOutcome {
     match result {
         Ok(()) if empty => ToolAttachmentWriteOutcome::Empty,
         Ok(()) => ToolAttachmentWriteOutcome::Discarded,
-        Err(StreamWriteError::Closed(ByteStreamCloseCause::Failed(
-            ByteStreamFailure::ResourceExhausted,
-        ))) if controller.metadata().host_resource_exhausted => {
-            ToolAttachmentWriteOutcome::HostResourceExhausted
-        }
-        Err(error) => ToolAttachmentWriteOutcome::Rejected(match error {
-            StreamWriteError::ConcurrentOperation => model::StreamWriteError::ConcurrentOperation,
-            StreamWriteError::Closed(cause) => model::StreamWriteError::Closed(match cause {
-                ByteStreamCloseCause::Finished => model::ByteStreamCloseCause::Finished,
-                ByteStreamCloseCause::ConsumerCancelled => {
-                    model::ByteStreamCloseCause::ConsumerCancelled
-                }
-                ByteStreamCloseCause::Failed(failure) => {
-                    model::ByteStreamCloseCause::Failed(match failure {
-                        ByteStreamFailure::Cancelled => model::ByteStreamFailure::Cancelled,
-                        ByteStreamFailure::Abandoned => model::ByteStreamFailure::Abandoned,
-                        ByteStreamFailure::ResourceExhausted => {
-                            model::ByteStreamFailure::ResourceExhausted
-                        }
-                        ByteStreamFailure::Failed(message) => {
-                            model::ByteStreamFailure::Failed(message.clone())
-                        }
-                    })
-                }
-            }),
-        }),
+        Err(error) => ToolAttachmentWriteOutcome::Rejected(error_to_model(error)),
     }
 }
 
