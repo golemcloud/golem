@@ -4592,6 +4592,8 @@ dependencies = [
  "sqlx",
  "sqlx-core",
  "stacker",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
  "sysinfo",
  "system-interface",
  "tempfile",

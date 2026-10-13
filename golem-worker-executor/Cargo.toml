@@ -106,6 +106,8 @@ sqlparser = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
 stacker = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

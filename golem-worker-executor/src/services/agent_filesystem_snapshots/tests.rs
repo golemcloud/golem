@@ -3433,6 +3433,7 @@ async fn reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
 #[cfg(target_os = "macos")]
 #[test]
 #[test_r::timeout("60s")]
+#[test_r::tag(native_apfs)]
 async fn apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
     let root = tempfile::tempdir().unwrap();
     a_volume_below_the_pressure_target_admits_no_periodic_upload(

@@ -1535,9 +1535,9 @@ mod tests {
     }
 
     /// The snapshot service gets the storage mode of the agent filesystems: on storage without
-    /// copy-on-write copies it refuses managed snapshots.
+    /// copy-on-write copies it refuses enabled snapshots.
     #[test]
-    async fn the_snapshot_service_refuses_managed_snapshots_on_storage_without_copy_on_write() {
+    async fn the_snapshot_service_refuses_enabled_snapshots_on_storage_without_copy_on_write() {
         let root = tempfile::tempdir().unwrap();
         let key: Box<str> = "00".repeat(64).into_boxed_str();
         let mut golem_config = GolemConfig::default();
@@ -1545,7 +1545,7 @@ mod tests {
             root: root.path().into(),
         };
         golem_config.filesystem_snapshots =
-            services::golem_config::FilesystemSnapshotsConfig::Managed(Box::new(
+            services::golem_config::FilesystemSnapshotsConfig::Enabled(Box::new(
                 services::golem_config::FilesystemSnapshotStoreConfig::new(
                     &key,
                     std::time::Duration::from_secs(60),
@@ -1578,7 +1578,7 @@ mod tests {
 
         let error = bound
             .err()
-            .expect("managed snapshots on storage without copy-on-write must be refused");
+            .expect("enabled snapshots on storage without copy-on-write must be refused");
         assert!(
             format!("{error:#}").contains(
                 "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"

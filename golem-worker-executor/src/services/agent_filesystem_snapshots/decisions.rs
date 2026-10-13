@@ -177,10 +177,10 @@ pub(super) enum Binding<'a> {
     /// The service keeps no filesystem snapshots.
     Disabled,
     /// The service keeps filesystem snapshots with the store and settings of `config`.
-    Managed(&'a FilesystemSnapshotStoreConfig),
+    Enabled(&'a FilesystemSnapshotStoreConfig),
 }
 
-/// What `config` binds to. `Managed` needs storage whose volume makes copy-on-write copies, and
+/// What `config` binds to. `Enabled` needs storage whose volume makes copy-on-write copies, and
 /// `copy_on_write` tells whether the executor has it. Project quotas are not needed.
 pub(super) fn binding(
     config: &FilesystemSnapshotsConfig,
@@ -188,11 +188,11 @@ pub(super) fn binding(
 ) -> Result<Binding<'_>, String> {
     match config {
         FilesystemSnapshotsConfig::Disabled(_) => Ok(Binding::Disabled),
-        FilesystemSnapshotsConfig::Managed(_) if !copy_on_write => Err(
+        FilesystemSnapshotsConfig::Enabled(_) if !copy_on_write => Err(
             "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
                 .to_string(),
         ),
-        FilesystemSnapshotsConfig::Managed(config) => Ok(Binding::Managed(config)),
+        FilesystemSnapshotsConfig::Enabled(config) => Ok(Binding::Enabled(config)),
     }
 }
 
@@ -402,8 +402,8 @@ mod tests {
     }
 
     #[test]
-    fn managed_snapshots_bind_only_to_copy_on_write_storage() {
-        let managed = FilesystemSnapshotsConfig::Managed(Box::new(
+    fn enabled_snapshots_bind_only_to_copy_on_write_storage() {
+        let enabled = FilesystemSnapshotsConfig::Enabled(Box::new(
             FilesystemSnapshotStoreConfig::new(&"0".repeat(128), Duration::from_secs(30), 4, 3)
                 .unwrap(),
         ));
@@ -411,9 +411,9 @@ mod tests {
 
         assert!(matches!(binding(&disabled, false), Ok(Binding::Disabled)));
         assert!(matches!(binding(&disabled, true), Ok(Binding::Disabled)));
-        assert!(matches!(binding(&managed, true), Ok(Binding::Managed(_))));
+        assert!(matches!(binding(&enabled, true), Ok(Binding::Enabled(_))));
         assert_eq!(
-            binding(&managed, false).err(),
+            binding(&enabled, false).err(),
             Some(
                 "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
                     .to_string()

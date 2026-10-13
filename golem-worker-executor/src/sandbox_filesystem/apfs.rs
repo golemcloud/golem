@@ -133,6 +133,88 @@ mod tests {
     use test_r::test;
 
     #[test]
+    #[test_r::tag(native_apfs)]
+    #[ignore = "requires the native APFS runner's non-cloning filesystem fixture"]
+    fn apfs_constructor_refuses_a_root_on_a_non_cloning_filesystem() {
+        let parent = std::env::var_os("GOLEM_APFS_NON_CLONE_ROOT")
+            .expect("the native APFS runner supplies the non-cloning filesystem root");
+        let root = tempfile::tempdir_in(parent).unwrap();
+        let error = SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Apfs {
+                root: Box::from(root.path()),
+            },
+            RetryConfig::default(),
+        )
+        .err()
+        .expect("a non-cloning filesystem cannot provide APFS storage");
+        assert!(
+            error
+                .to_string()
+                .contains("probe APFS clone for local development")
+        );
+        assert!(error.to_string().contains(root.path().to_str().unwrap()));
+        assert_eq!(
+            error.inner.source.as_ref().unwrap().raw_os_error(),
+            Some(libc::ENOTSUP),
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn apfs_temporary_clone_open_failure_removes_the_native_clone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source_root = tempfile::tempdir().unwrap();
+        let mut source = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(source_root.path().join("source"))
+            .unwrap();
+        source.write_all(&[b'Z'; 4096]).unwrap();
+        source
+            .set_permissions(std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let directory = cap_std::fs::Dir::from_std_file(File::open(destination.path()).unwrap());
+        let name = temporary_copy_name();
+
+        clone_file(&source, &directory, &name).unwrap();
+        assert_eq!(directory.read(&name).unwrap().as_slice(), &[b'Z'; 4096]);
+        std::fs::set_permissions(
+            destination.path().join(&name),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+        let control_error = directory.open(&name).unwrap_err();
+        assert_eq!(control_error.kind(), std::io::ErrorKind::PermissionDenied);
+
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).follow(cap_fs_ext::FollowSymlinks::No);
+        let error = open_cloned_file(
+            || directory.open_with(&name, &options),
+            || directory.remove_file(&name),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(error.raw_os_error(), control_error.raw_os_error());
+        assert_eq!(directory.entries().unwrap().count(), 0);
+        assert_eq!(
+            source.metadata().unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(source.metadata().unwrap().len(), 4096);
+        assert_eq!(
+            std::fs::read(source_root.path().join("source"))
+                .unwrap()
+                .as_slice(),
+            &[b'Z'; 4096],
+        );
+    }
+
+    #[test]
+    #[test_r::tag(native_apfs)]
     fn apfs_failed_clone_probe_reports_the_root_and_removes_its_files() {
         let root = tempfile::tempdir().unwrap();
         let error = probe_clone(
@@ -155,11 +237,13 @@ mod tests {
     }
 
     #[test]
+    #[test_r::tag(native_apfs)]
     fn apfs_bind_enotsup_clone_failure_precedes_cleanup_failure() {
         assert_bind_clone_failure_precedes_cleanup_failure(libc::ENOTSUP);
     }
 
     #[test]
+    #[test_r::tag(native_apfs)]
     fn apfs_bind_exdev_clone_failure_precedes_cleanup_failure() {
         assert_bind_clone_failure_precedes_cleanup_failure(libc::EXDEV);
     }
@@ -221,6 +305,7 @@ mod tests {
     }
 
     #[test]
+    #[test_r::tag(native_apfs)]
     fn apfs_clone_across_system_and_data_volumes_fails() {
         let source = File::open("/System/Library/CoreServices/SystemVersion.plist").unwrap();
         let target = tempfile::tempdir().unwrap();
@@ -232,6 +317,7 @@ mod tests {
 
     #[test]
     #[test_r::timeout("60s")]
+    #[test_r::tag(native_apfs)]
     async fn apfs_seed_does_not_scan_an_unrelated_directory() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -296,6 +382,7 @@ mod tests {
 
     #[test]
     #[test_r::timeout("120s")]
+    #[test_r::tag(native_apfs)]
     async fn apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes() {
         const FILE_BYTES: usize = 64 * 1024 * 1024;
         let root = tempfile::tempdir().unwrap();

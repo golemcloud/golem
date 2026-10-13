@@ -28,7 +28,7 @@ Choose the backend with `[filesystem_storage.mode]`:
 
 ## Local development on macOS
 
-The local `golem server run` command on macOS uses `Apfs` at `<data_dir>/agents` and enables `Managed` filesystem snapshots by default. It uses local file system blob storage at `<data_dir>/blobs` and supplies the repository key. No TOML file or environment settings are needed:
+The local `golem server run` command on macOS uses `Apfs` at `<data_dir>/agents` and enables `Enabled` filesystem snapshots by default. It uses local file system blob storage at `<data_dir>/blobs` and supplies the repository key. No TOML file or environment settings are needed:
 
 ```shell
 golem server run --data-dir .golem/data
@@ -50,7 +50,7 @@ type = "Apfs"
 root = ".golem/agents"
 
 [filesystem_snapshots]
-type = "Managed"
+type = "Enabled"
 ```
 
 The local server reads the filesystem settings from this optional file, relative to the working directory. It does not search parent directories. An existing file with invalid TOML prevents startup. Then it applies the `GOLEM__` environment variables, which override the file. You can use these variables instead of the file:
@@ -58,11 +58,11 @@ The local server reads the filesystem settings from this optional file, relative
 ```shell
 export GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=Apfs
 export GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT="$PWD/.golem/agents"
-export GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Managed
+export GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
 golem server run --data-dir .golem/data
 ```
 
-There is no second switch for local filesystem snapshots. The macOS local server enables `Managed` by default. A standalone executor must configure it. Setting `Managed` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
+There is no second switch for local filesystem snapshots. The macOS local server enables `Enabled` by default. A standalone executor must configure it. Setting `Enabled` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
 
 When no `repository_key` is configured, the local server generates a 64-byte repository key and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`. On Unix, it creates the file with permissions `0600`. It uses the retained repository key on later starts. A configured `repository_key` takes precedence over this file. Without a configured key, a corrupt file makes startup fail; the server does not replace it. Keep the retained repository key with the local data. Replacing or deleting it prevents the server from reading snapshots made with it.
 
@@ -94,7 +94,7 @@ Filesystem snapshots need storage that makes copy-on-write copies. Both producti
 
 Use `ManagedXfs` when the executor must limit or meter the disk space of each agent. Use `ReflinkXfs` when per-agent disk limits are not needed or are enforced another way.
 
-#### Managed XFS storage (`ManagedXfs`)
+#### XFS storage with project quotas (`ManagedXfs`)
 
 Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
 
@@ -257,11 +257,11 @@ The executor makes these S3 calls on the bucket. Give its credentials the permis
 
 With file system blob storage, the snapshots go below the `root` of the `[blob_storage.config]` section. The whole tree below `root` must be on one volume. With SQLite blob storage, they go into the same database as the other blobs. These backends need no extra setting. See [Where the snapshots are](#where-the-snapshots-are).
 
-### Set the type to `Managed`
+### Set the type to `Enabled`
 
 ```toml
 [filesystem_snapshots]
-type = "Managed"
+type = "Enabled"
 
 [filesystem_snapshots.config]
 repository_key = "<128 hex characters>"
@@ -270,7 +270,7 @@ repository_key = "<128 hex characters>"
 You can give the type and the key as environment variables instead:
 
 ```shell
-GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Managed
+GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
 GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY=<128 hex characters>
 ```
 
@@ -288,7 +288,7 @@ A snapshot record without a filesystem snapshot name means that the agent's file
 
 ### Check that it works
 
-- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `mode: reflink XFS at /var/lib/golem/agents`.
+- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `enabled:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `mode: reflink XFS at /var/lib/golem/agents`.
 - Make an agent that writes a file take snapshots. Without filesystem snapshots, such an agent takes no automatic snapshot. An agent that has only its untouched read-only initial files and no provisioned files, and that did not rename or hard link any file, and did not set a given modification time on a file or directory, uploads nothing, and its snapshot records have no filesystem snapshot name. Snapshots are off by default: the agent definition enables them with a snapshotting policy (see [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery)). An agent whose policy is `enabled` uses the executor setting `[oplog.default_snapshotting]`, which is `type = "Disabled"` by default.
 - After the agent takes a snapshot, `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` grows.
 - `golem agent oplog <agent_id>` shows a `SNAPSHOT` entry with a `filesystem:` name, and a `SNAPSHOT CONFIRMED` entry with the same name.
@@ -307,11 +307,11 @@ filesystem snapshots require storage with copy-on-write copies (XFS with reflink
 
 ## Configuration
 
-All settings except `type` are in the `[filesystem_snapshots.config]` section. The executor reads them only when `type = "Managed"`. This is the full set with the default values:
+All settings except `type` are in the `[filesystem_snapshots.config]` section. The executor reads them only when `type = "Enabled"`. This is the full set with the default values:
 
 ```toml
 [filesystem_snapshots]
-type = "Managed"
+type = "Enabled"
 
 [filesystem_snapshots.config]
 repository_key = "<128 hex characters>"

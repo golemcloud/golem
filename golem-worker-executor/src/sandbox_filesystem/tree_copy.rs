@@ -204,8 +204,8 @@ fn tree_entry(
 /// error, another kind of object gives a `NotADirectory` error, and a directory with an entry
 /// gives a `DirectoryNotEmpty` error. Directories and symlinks are made again. Permissions and
 /// modification times are copied, and `destination` gets the permissions and the modification
-/// time of `source` after all entries are copied. Each regular file is transferred with
-/// `copy_mode`.
+/// time of `source` after all entries are copied. Each regular file uses the selected
+/// `transfer` action.
 ///
 /// A regular file or a symlink with more than one name is copied once, at the first name that the
 /// listing gives. The result gives the names of each such object as a [`LinkGroup`].
@@ -214,7 +214,7 @@ pub(super) fn copy_contents(
     source: &Path,
     excluded: &TreeExclusions,
     destination: &Path,
-    copy_mode: FileCopyMode,
+    transfer: FileTransfer,
 ) -> std::io::Result<Box<[LinkGroup]>> {
     verify_empty_directory(destination)?;
     let opened;
@@ -230,7 +230,7 @@ pub(super) fn copy_contents(
         .iter()
         .enumerate()
         .filter(|(position, _)| plan.copies(*position))
-        .try_for_each(|(_, entry)| copy_out_entry(source, destination, entry, copy_mode))?;
+        .try_for_each(|(_, entry)| copy_out_entry(source, destination, entry, transfer))?;
     entries
         .iter()
         .rev()
@@ -323,20 +323,20 @@ fn verify_empty_directory(path: &Path) -> std::io::Result<()> {
 /// Makes one listed entry again under the host directory `destination`.
 ///
 /// For a directory entry, this function makes an empty directory. A regular file is transferred
-/// with `copy_mode` and gets the permissions and the modification time of the entry. A symlink is
+/// with `transfer` and gets the permissions and the modification time of the entry. A symlink is
 /// made with the same target and gets the modification time of the entry.
 fn copy_out_entry(
     source: &cap_std::fs::Dir,
     destination: &Path,
     entry: &TreeEntry,
-    copy_mode: FileCopyMode,
+    transfer: FileTransfer,
 ) -> std::io::Result<()> {
     let target = destination.join(&entry.relative);
     match &entry.kind {
         TreeEntryKind::Directory => std::fs::create_dir(&target),
         TreeEntryKind::File => {
             let source_file = open_file_nofollow(source, &entry.relative)?;
-            let target_file = copy_new_file(copy_mode, &source_file, &target)?;
+            let target_file = copy_new_file(transfer, &source_file, &target)?;
             target_file.set_permissions(host_permissions(&entry.permissions, &target_file)?)?;
             if let Some(modified) = entry.modified {
                 target_file.set_modified(modified)?;
@@ -357,27 +357,38 @@ fn copy_out_entry(
     }
 }
 
-fn copy_new_file(copy_mode: FileCopyMode, source: &File, target: &Path) -> std::io::Result<File> {
-    #[cfg(target_os = "macos")]
-    if copy_mode == FileCopyMode::Reflink {
-        let parent = File::open(
-            target
-                .parent()
-                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?,
-        )?;
-        apfs::clone_file(
-            source,
-            &parent,
-            target
-                .file_name()
-                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?
-                .as_ref(),
-        )?;
-        return File::open(target);
+fn copy_new_file(transfer: FileTransfer, source: &File, target: &Path) -> std::io::Result<File> {
+    match transfer {
+        FileTransfer::Clone => clone_copied_file(source, target),
+        _ => {
+            let file = File::options().write(true).create_new(true).open(target)?;
+            transfer_file(transfer, source, &file)?;
+            Ok(file)
+        }
     }
-    let file = File::options().write(true).create_new(true).open(target)?;
-    transfer_file(copy_mode, source, &file)?;
-    Ok(file)
+}
+
+#[cfg(target_os = "macos")]
+fn clone_copied_file(source: &File, target: &Path) -> std::io::Result<File> {
+    let parent = File::open(
+        target
+            .parent()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?,
+    )?;
+    apfs::clone_file(
+        source,
+        &parent,
+        target
+            .file_name()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?
+            .as_ref(),
+    )?;
+    File::open(target)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clone_copied_file(_source: &File, _target: &Path) -> std::io::Result<File> {
+    Err(macos_clone_unavailable())
 }
 
 /// Gives a directory under the host directory `destination` the permissions and the modification
@@ -466,7 +477,7 @@ fn seed_file(
             sync_seed_directories(
                 context.policy.directory_action(SeedDirectoryStage::Entry),
                 || Ok(()),
-                || sync_seed_directory(parent.as_dir()),
+                || sync_ordinary_descriptor(parent.as_dir()),
             )
         },
     )
@@ -482,7 +493,7 @@ fn seed_file_resolved(
     let source_file = open_file_nofollow(source_directory, &source.relative)?;
     let temporary = create_seed_file(context.policy.transfer, parent, &source_file)?;
     temporary.finish(|temporary| {
-        let action = context.policy.file_action();
+        let action = context.policy.file;
         let temporary_file = match temporary.as_file().try_clone() {
             Ok(file) => file.into_std(),
             Err(error) => {
@@ -542,7 +553,7 @@ fn seed_symlink(
             sync_seed_directories(
                 context.policy.directory_action(SeedDirectoryStage::Entry),
                 || Ok(()),
-                || sync_seed_directory(parent.as_dir()),
+                || sync_ordinary_descriptor(parent.as_dir()),
             )
         },
     )
@@ -759,9 +770,9 @@ fn seed_directory_at(
                 || {
                     directory
                         .open_dir_nofollow(path)
-                        .and_then(|child| sync_seed_directory(&child))
+                        .and_then(|child| sync_ordinary_descriptor(&child))
                 },
-                || sync_seed_directory(directory),
+                || sync_ordinary_descriptor(directory),
             )
         },
     )
@@ -860,7 +871,7 @@ fn set_seeded_directory_attributes(
                     .modified
                     .map_or(Ok(()), |modified| file.set_modified(modified))
             },
-            || sync_seed_directories(action, || sync_seed_directory(&opened), || Ok(())),
+            || sync_seed_directories(action, || sync_ordinary_descriptor(&opened), || Ok(())),
         );
     }
     directory.set_permissions(path, source.permissions.clone())?;
@@ -944,44 +955,32 @@ enum SeedFileSyncAction {
     Ordinary,
 }
 
-fn seed_file_sync_action(platform: SeedSyncPlatform, transfer: SeedTransfer) -> SeedFileSyncAction {
+fn seed_file_sync_action(platform: SeedSyncPlatform, transfer: FileTransfer) -> SeedFileSyncAction {
     match (platform, transfer) {
-        (SeedSyncPlatform::MacOs, SeedTransfer::Bytes | SeedTransfer::Reflink) => {
+        (SeedSyncPlatform::MacOs, FileTransfer::Bytes | FileTransfer::Clone) => {
             SeedFileSyncAction::Ordinary
         }
         _ => SeedFileSyncAction::Standard,
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SeedFileTransferAction {
-    Bytes,
-    Clone,
-    Reflink,
-    ReflinkIntoProject(NonZeroU32),
-}
-
-fn seed_file_transfer_action(
+pub(super) fn file_transfer_action(
     platform: SeedSyncPlatform,
-    transfer: SeedTransfer,
-) -> SeedFileTransferAction {
+    transfer: FileTransfer,
+) -> FileTransfer {
     match (platform, transfer) {
-        (_, SeedTransfer::Bytes) => SeedFileTransferAction::Bytes,
-        (SeedSyncPlatform::MacOs, SeedTransfer::Reflink) => SeedFileTransferAction::Clone,
-        (_, SeedTransfer::Reflink) => SeedFileTransferAction::Reflink,
-        (_, SeedTransfer::ReflinkIntoProject(project)) => {
-            SeedFileTransferAction::ReflinkIntoProject(project)
-        }
+        (SeedSyncPlatform::MacOs, FileTransfer::Reflink) => FileTransfer::Clone,
+        _ => transfer,
     }
 }
 
 fn create_seed_file<'a>(
-    action: SeedFileTransferAction,
+    transfer: FileTransfer,
     parent: &'a cap_std::fs::Dir,
     source: &File,
 ) -> std::io::Result<CapabilityTempFile<'a>> {
-    match action {
-        SeedFileTransferAction::Clone => clone_seed_file(parent, source),
+    match transfer {
+        FileTransfer::Clone => clone_seed_file(parent, source),
         _ => CapabilityTempFile::new(parent),
     }
 }
@@ -999,75 +998,76 @@ fn clone_seed_file<'a>(
     _parent: &'a cap_std::fs::Dir,
     _source: &File,
 ) -> std::io::Result<CapabilityTempFile<'a>> {
-    Err(std::io::Error::new(
+    Err(macos_clone_unavailable())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_clone_unavailable() -> std::io::Error {
+    std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "macOS file clone is unavailable on this platform",
-    ))
+    )
 }
 
 fn transfer_seed_file(
-    action: SeedFileTransferAction,
+    transfer: FileTransfer,
     source: &File,
     target: &File,
     temporary: &mut cap_std::fs::File,
 ) -> std::io::Result<()> {
-    match action {
-        SeedFileTransferAction::Bytes => std::io::copy(&mut &*source, temporary).map(|_| ()),
-        SeedFileTransferAction::Clone => Ok(()),
-        SeedFileTransferAction::Reflink => transfer_file(FileCopyMode::Reflink, source, target),
-        SeedFileTransferAction::ReflinkIntoProject(project) => {
-            reflink_into_project(project, target, source)
-        }
+    match transfer {
+        FileTransfer::Bytes => std::io::copy(&mut &*source, temporary).map(|_| ()),
+        _ => transfer_file(transfer, source, target),
     }
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct SeedSyncPolicy {
-    transfer: SeedFileTransferAction,
+    transfer: FileTransfer,
     file: SeedFileSyncAction,
     batch: SeedBatchAction,
 }
 
 impl SeedSyncPolicy {
-    pub(super) fn new(platform: SeedSyncPlatform, transfer: SeedTransfer) -> Self {
+    pub(super) fn new(platform: SeedSyncPlatform, transfer: FileTransfer) -> Self {
+        let transfer = file_transfer_action(platform, transfer);
+        let file = seed_file_sync_action(platform, transfer);
         Self {
-            transfer: seed_file_transfer_action(platform, transfer),
-            file: seed_file_sync_action(platform, transfer),
-            batch: seed_batch_action(platform, transfer),
+            transfer,
+            file,
+            batch: seed_batch_action(platform, transfer, file),
         }
-    }
-
-    fn file_action(self) -> SeedFileSyncAction {
-        self.file
     }
 
     fn directory_action(self, stage: SeedDirectoryStage) -> SeedDirectoryAction {
         seed_directory_action(self.file, stage)
     }
 
-    pub(super) fn batch_action(self) -> SeedBatchAction {
-        self.batch
+    pub(super) fn requires_batch_root(self) -> bool {
+        self.batch == SeedBatchAction::MacFullFlush
     }
 }
 
 fn sync_seed_file(action: SeedFileSyncAction, file: &File) -> std::io::Result<()> {
     match action {
         SeedFileSyncAction::Standard => file.sync_all(),
-        SeedFileSyncAction::Ordinary => {
-            #[cfg(unix)]
-            {
-                rustix::fs::fsync(file).map_err(std::io::Error::from)
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = file;
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "ordinary seed file sync is unavailable on this platform",
-                ))
-            }
-        }
+        SeedFileSyncAction::Ordinary => sync_ordinary_descriptor(file),
     }
+}
+
+#[cfg(unix)]
+pub(super) fn sync_ordinary_descriptor<F: std::os::fd::AsFd + ?Sized>(
+    file: &F,
+) -> std::io::Result<()> {
+    rustix::fs::fsync(file).map_err(std::io::Error::from)
+}
+
+#[cfg(not(unix))]
+pub(super) fn sync_ordinary_descriptor<F: ?Sized>(_file: &F) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "ordinary filesystem sync is unavailable on this platform",
+    ))
 }
 
 fn prepare_seed_file(
@@ -1093,22 +1093,26 @@ fn prepare_seed_file(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SeedBatchAction {
+enum SeedBatchAction {
     None,
     LinuxVolume,
     MacFullFlush,
     Unavailable,
 }
 
-fn seed_batch_action(platform: SeedSyncPlatform, transfer: SeedTransfer) -> SeedBatchAction {
-    if seed_file_sync_action(platform, transfer) == SeedFileSyncAction::Ordinary {
+fn seed_batch_action(
+    platform: SeedSyncPlatform,
+    transfer: FileTransfer,
+    file: SeedFileSyncAction,
+) -> SeedBatchAction {
+    if file == SeedFileSyncAction::Ordinary {
         return SeedBatchAction::MacFullFlush;
     }
     match (platform, transfer) {
-        (SeedSyncPlatform::Linux, SeedTransfer::Reflink | SeedTransfer::ReflinkIntoProject(_)) => {
+        (SeedSyncPlatform::Linux, FileTransfer::Reflink | FileTransfer::ReflinkIntoProject(_)) => {
             SeedBatchAction::LinuxVolume
         }
-        (SeedSyncPlatform::Other, SeedTransfer::Reflink | SeedTransfer::ReflinkIntoProject(_)) => {
+        (SeedSyncPlatform::Other, FileTransfer::Reflink | FileTransfer::ReflinkIntoProject(_)) => {
             SeedBatchAction::Unavailable
         }
         _ => SeedBatchAction::None,
@@ -1233,25 +1237,12 @@ pub(super) fn finish_seed_ancestor(
                 opened: matches!(child, Ok(Ok(_))),
             }),
             || match child {
-                Ok(Ok(child)) => sync_seed_directory(child),
+                Ok(Ok(child)) => sync_ordinary_descriptor(child),
                 _ => Ok(()),
             },
-            || sync_seed_directory(parent),
+            || sync_ordinary_descriptor(parent),
         )
     })
-}
-
-fn sync_seed_directory(directory: &cap_std::fs::Dir) -> std::io::Result<()> {
-    #[cfg(unix)]
-    return rustix::fs::fsync(directory).map_err(std::io::Error::from);
-    #[cfg(not(unix))]
-    {
-        let _ = directory;
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "ordinary seed directory sync is unavailable on this platform",
-        ))
-    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1265,14 +1256,22 @@ fn sync_seed_batch_submissions(
 
 /// Executes the selected batch action after all entry finalizers, including on failure or unwind.
 pub(super) fn sync_seed_batch(
-    action: SeedBatchAction,
-    root: &NativeRootHandles,
-    materialization_root: &Path,
+    policy: SeedSyncPolicy,
+    admitted: Option<&NativeRootHandles>,
+    root_path: &Path,
 ) -> std::io::Result<()> {
-    match action {
+    match policy.batch {
         SeedBatchAction::None => Ok(()),
-        SeedBatchAction::LinuxVolume => sync_seed_linux_volume(materialization_root),
-        SeedBatchAction::MacFullFlush => sync_seed_mac_full_flush(root),
+        SeedBatchAction::LinuxVolume => sync_seed_linux_volume(root_path),
+        SeedBatchAction::MacFullFlush => {
+            let root = admitted.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "macOS seed batch root was not admitted",
+                )
+            })?;
+            sync_seed_mac_full_flush(root)
+        }
         SeedBatchAction::Unavailable => Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "copy-on-write storage is unavailable on this platform",
@@ -1296,9 +1295,9 @@ fn sync_seed_linux_volume(_path: &Path) -> std::io::Result<()> {
 #[cfg(target_os = "macos")]
 fn sync_seed_mac_full_flush(root: &NativeRootHandles) -> std::io::Result<()> {
     sync_seed_batch_submissions(
-        || rustix::fs::fsync(&root.pair.seed_flusher).map_err(std::io::Error::from),
-        || sync_seed_directory(&root.pair.directory),
-        || rustix::fs::fcntl_fullfsync(&root.pair.seed_flusher).map_err(std::io::Error::from),
+        || sync_ordinary_descriptor(root.seed_flusher.as_ref()),
+        || sync_ordinary_descriptor(root.directory.as_ref()),
+        || rustix::fs::fcntl_fullfsync(root.seed_flusher.as_ref()).map_err(std::io::Error::from),
     )
 }
 
@@ -1310,27 +1309,27 @@ fn sync_seed_mac_full_flush(_root: &NativeRootHandles) -> std::io::Result<()> {
     ))
 }
 
-fn transfer_file(copy_mode: FileCopyMode, source: &File, target: &File) -> std::io::Result<()> {
-    match copy_mode {
-        FileCopyMode::Buffered => {
-            std::io::copy(&mut &*source, &mut &*target)?;
-            Ok(())
-        }
-        FileCopyMode::Reflink => {
-            #[cfg(target_os = "linux")]
-            {
-                xfs::clone_file(target, source)
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = (source, target);
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "Linux file-descriptor reflink is unavailable on this platform",
-                ))
-            }
-        }
+/// Transfers contents into a file whose clone, if selected, has already been created.
+fn transfer_file(transfer: FileTransfer, source: &File, target: &File) -> std::io::Result<()> {
+    match transfer {
+        FileTransfer::Bytes => std::io::copy(&mut &*source, &mut &*target).map(|_| ()),
+        FileTransfer::Clone => Ok(()),
+        FileTransfer::Reflink => reflink_file(source, target),
+        FileTransfer::ReflinkIntoProject(project) => reflink_into_project(project, target, source),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn reflink_file(source: &File, target: &File) -> std::io::Result<()> {
+    xfs::clone_file(target, source)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn reflink_file(_source: &File, _target: &File) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Linux file-descriptor reflink is unavailable on this platform",
+    ))
 }
 
 fn capability_time(time: SystemTime) -> cap_fs_ext::SystemTimeSpec {
@@ -1504,14 +1503,86 @@ mod tests {
         });
     }
 
+    #[test]
+    fn seed_file_sync_failure_stops_standard_attributes_and_keeps_ordinary_attribute_errors() {
+        use SeedFileSyncAction::{Ordinary, Standard};
+        [
+            (Standard, false, &["transfer", "sync"][..], "sync failed"),
+            (
+                Ordinary,
+                false,
+                &["transfer", "attributes", "sync"][..],
+                "sync failed",
+            ),
+            (
+                Ordinary,
+                true,
+                &["transfer", "attributes", "sync"][..],
+                "attributes failed",
+            ),
+        ]
+        .into_iter()
+        .for_each(
+            |(action, attributes_fail, expected_calls, expected_error)| {
+                let calls = std::cell::RefCell::new(Vec::new());
+                let result = prepare_seed_file(
+                    action,
+                    || {
+                        calls.borrow_mut().push("transfer");
+                        Ok(())
+                    },
+                    || {
+                        calls.borrow_mut().push("attributes");
+                        if attributes_fail {
+                            Err(std::io::Error::other("attributes failed"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    || {
+                        calls.borrow_mut().push("sync");
+                        Err(std::io::Error::other("sync failed"))
+                    },
+                );
+                assert_eq!(calls.borrow().as_slice(), expected_calls, "{action:?}");
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    expected_error,
+                    "{action:?}"
+                );
+            },
+        );
+    }
+
     #[cfg(unix)]
     #[test]
+    #[test_r::tag(native_apfs)]
     fn ordinary_seed_file_sync_executes_the_selected_native_action() {
         use std::io::Write as _;
         let mut file = tempfile::tempfile().unwrap();
         file.write_all(b"ordinary seed synchronization").unwrap();
         sync_seed_file(SeedFileSyncAction::Ordinary, &file).unwrap();
+        let capability_file = cap_std::fs::File::from_std(file.try_clone().unwrap());
+        sync_ordinary_descriptor(&capability_file).unwrap();
         assert_eq!(file.metadata().unwrap().len(), 29);
+        assert_eq!(capability_file.metadata().unwrap().len(), 29);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn ordinary_file_sync_is_unavailable_without_a_unix_descriptor() {
+        let file = tempfile::tempfile().unwrap();
+        assert_eq!(
+            sync_ordinary_descriptor(&file).unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
+        let capability_file = cap_std::fs::File::from_std(file);
+        assert_eq!(
+            sync_ordinary_descriptor(&capability_file)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::Unsupported
+        );
     }
 
     #[cfg(unix)]
@@ -1521,43 +1592,100 @@ mod tests {
         let root = NativeRoot::new(
             directory.path().to_path_buf(),
             File::open(directory.path()).unwrap(),
-        );
-        #[cfg(target_os = "macos")]
-        let root = root.unwrap();
+        )
+        .unwrap();
         let admitted = root.directory.lock().unwrap().as_ref().unwrap().clone();
-        let unavailable =
-            sync_seed_batch(SeedBatchAction::Unavailable, &admitted, directory.path());
-        assert_eq!(
-            unavailable.unwrap_err().kind(),
-            std::io::ErrorKind::Unsupported
-        );
+        let unavailable = SeedSyncPolicy::new(SeedSyncPlatform::Other, FileTransfer::Reflink);
+        assert!(!unavailable.requires_batch_root());
+        let error = sync_seed_batch(unavailable, None, Path::new("\0")).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
         #[cfg(target_os = "macos")]
-        let wrong_platform = SeedBatchAction::LinuxVolume;
+        let wrong_platform = SeedSyncPolicy::new(SeedSyncPlatform::Linux, FileTransfer::Reflink);
         #[cfg(not(target_os = "macos"))]
-        let wrong_platform = SeedBatchAction::MacFullFlush;
-        let result = sync_seed_batch(wrong_platform, &admitted, directory.path());
+        let wrong_platform = SeedSyncPolicy::new(SeedSyncPlatform::MacOs, FileTransfer::Bytes);
+        let result = sync_seed_batch(wrong_platform, Some(&admitted), directory.path());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn seed_batch_requires_an_admitted_root_only_for_macos_fullflush() {
+        let no_sync = SeedSyncPolicy::new(SeedSyncPlatform::Other, FileTransfer::Bytes);
+        assert!(!no_sync.requires_batch_root());
+        sync_seed_batch(no_sync, None, Path::new("\0")).unwrap();
+        let full_flush = SeedSyncPolicy::new(SeedSyncPlatform::MacOs, FileTransfer::Bytes);
+        assert!(full_flush.requires_batch_root());
+        let error = sync_seed_batch(full_flush, None, Path::new("\0")).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotConnected);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_volume_seed_batch_uses_the_root_path_without_root_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = SeedSyncPolicy::new(SeedSyncPlatform::Linux, FileTransfer::Reflink);
+        assert!(!policy.requires_batch_root());
+        sync_seed_batch(policy, None, directory.path()).unwrap();
+        let error = sync_seed_batch(policy, None, &directory.path().join("missing")).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn seed_transfer_actions_convert_only_captured_macos_reflinks_to_clones() {
+        use FileTransfer::{Bytes, Clone, Reflink, ReflinkIntoProject};
+        use SeedSyncPlatform::{Linux, MacOs, Other};
+        let project = ReflinkIntoProject(NonZeroU32::new(7).unwrap());
+        [
+            (MacOs, Bytes, Bytes),
+            (MacOs, Clone, Clone),
+            (MacOs, Reflink, Clone),
+            (MacOs, project, project),
+            (Linux, Bytes, Bytes),
+            (Linux, Clone, Clone),
+            (Linux, Reflink, Reflink),
+            (Linux, project, project),
+            (Other, Bytes, Bytes),
+            (Other, Clone, Clone),
+            (Other, Reflink, Reflink),
+            (Other, project, project),
+        ]
+        .into_iter()
+        .for_each(|(platform, transfer, expected)| {
+            assert_eq!(
+                SeedSyncPolicy::new(platform, transfer).transfer,
+                expected,
+                "{platform:?} {transfer:?}"
+            );
+            assert_eq!(
+                file_transfer_action(platform, transfer),
+                expected,
+                "{platform:?} {transfer:?}"
+            );
+        });
     }
 
     #[test]
     fn seed_file_sync_actions_use_ordinary_fsync_on_macos_and_standard_sync_elsewhere() {
         use SeedFileSyncAction::{Ordinary, Standard};
         use SeedSyncPlatform::{Linux, MacOs, Other};
-        let project = SeedTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
+        let project = FileTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
         [
-            (MacOs, SeedTransfer::Bytes, Ordinary),
-            (MacOs, SeedTransfer::Reflink, Ordinary),
-            (Linux, SeedTransfer::Bytes, Standard),
-            (Linux, SeedTransfer::Reflink, Standard),
+            (MacOs, FileTransfer::Bytes, Ordinary),
+            (MacOs, FileTransfer::Clone, Ordinary),
+            (MacOs, FileTransfer::Reflink, Ordinary),
+            (MacOs, project, Standard),
+            (Linux, FileTransfer::Bytes, Standard),
+            (Linux, FileTransfer::Clone, Standard),
+            (Linux, FileTransfer::Reflink, Standard),
             (Linux, project, Standard),
-            (Other, SeedTransfer::Bytes, Standard),
-            (Other, SeedTransfer::Reflink, Standard),
+            (Other, FileTransfer::Bytes, Standard),
+            (Other, FileTransfer::Clone, Standard),
+            (Other, FileTransfer::Reflink, Standard),
             (Other, project, Standard),
         ]
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
             assert_eq!(
-                seed_file_sync_action(platform, transfer),
+                SeedSyncPolicy::new(platform, transfer).file,
                 expected,
                 "{platform:?} {transfer:?}"
             );
@@ -1568,23 +1696,28 @@ mod tests {
     fn seed_batch_actions_fullflush_macos_and_preserve_other_platform_policies() {
         use SeedBatchAction::{LinuxVolume, MacFullFlush, None as NoSync, Unavailable};
         use SeedSyncPlatform::{Linux, MacOs, Other};
-        let project = SeedTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
+        let project = FileTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
         [
-            (MacOs, SeedTransfer::Bytes, MacFullFlush),
-            (MacOs, SeedTransfer::Reflink, MacFullFlush),
+            (MacOs, FileTransfer::Bytes, MacFullFlush),
+            (MacOs, FileTransfer::Clone, MacFullFlush),
+            (MacOs, FileTransfer::Reflink, MacFullFlush),
             (MacOs, project, NoSync),
-            (Linux, SeedTransfer::Bytes, NoSync),
-            (Linux, SeedTransfer::Reflink, LinuxVolume),
+            (Linux, FileTransfer::Bytes, NoSync),
+            (Linux, FileTransfer::Clone, NoSync),
+            (Linux, FileTransfer::Reflink, LinuxVolume),
             (Linux, project, LinuxVolume),
-            (Other, SeedTransfer::Bytes, NoSync),
-            (Other, SeedTransfer::Reflink, Unavailable),
+            (Other, FileTransfer::Bytes, NoSync),
+            (Other, FileTransfer::Clone, NoSync),
+            (Other, FileTransfer::Reflink, Unavailable),
             (Other, project, Unavailable),
         ]
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
+            let policy = SeedSyncPolicy::new(platform, transfer);
+            assert_eq!(policy.batch, expected, "{platform:?} {transfer:?}");
             assert_eq!(
-                seed_batch_action(platform, transfer),
-                expected,
+                policy.requires_batch_root(),
+                expected == MacFullFlush,
                 "{platform:?} {transfer:?}"
             );
         });
@@ -1596,7 +1729,7 @@ mod tests {
         use SeedDirectoryAction::{ChildThenParent, None as NoSync, OpenedDirectory, Parent};
         use SeedDirectoryStage::{Ancestor, DirectoryAttributes, DirectoryPlacement, Entry};
         use SeedSyncPlatform::{Linux, MacOs, Other};
-        let project = SeedTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
+        let project = FileTransfer::ReflinkIntoProject(NonZeroU32::new(7).unwrap());
         let stages = [
             Entry,
             DirectoryPlacement(Made),
@@ -1610,7 +1743,7 @@ mod tests {
         [
             (
                 MacOs,
-                SeedTransfer::Reflink,
+                FileTransfer::Reflink,
                 [
                     Parent,
                     ChildThenParent,
@@ -1624,7 +1757,21 @@ mod tests {
             ),
             (
                 MacOs,
-                SeedTransfer::Bytes,
+                FileTransfer::Bytes,
+                [
+                    Parent,
+                    ChildThenParent,
+                    NoSync,
+                    Parent,
+                    ChildThenParent,
+                    Parent,
+                    OpenedDirectory,
+                    Parent,
+                ],
+            ),
+            (
+                MacOs,
+                FileTransfer::Clone,
                 [
                     Parent,
                     ChildThenParent,
@@ -1637,17 +1784,20 @@ mod tests {
                 ],
             ),
             (MacOs, project, [NoSync; 8]),
-            (Linux, SeedTransfer::Reflink, [NoSync; 8]),
+            (Linux, FileTransfer::Reflink, [NoSync; 8]),
+            (Linux, FileTransfer::Clone, [NoSync; 8]),
             (Linux, project, [NoSync; 8]),
-            (Linux, SeedTransfer::Bytes, [NoSync; 8]),
-            (Other, SeedTransfer::Bytes, [NoSync; 8]),
-            (Other, SeedTransfer::Reflink, [NoSync; 8]),
+            (Linux, FileTransfer::Bytes, [NoSync; 8]),
+            (Other, FileTransfer::Bytes, [NoSync; 8]),
+            (Other, FileTransfer::Clone, [NoSync; 8]),
+            (Other, FileTransfer::Reflink, [NoSync; 8]),
             (Other, project, [NoSync; 8]),
         ]
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
+            let policy = SeedSyncPolicy::new(platform, transfer);
             assert_eq!(
-                stages.map(|stage| SeedSyncPolicy::new(platform, transfer).directory_action(stage)),
+                stages.map(|stage| policy.directory_action(stage)),
                 expected,
                 "{platform:?} {transfer:?}"
             );
@@ -2024,7 +2174,7 @@ mod tests {
 
     fn buffered_seed(placement: SeedPlacement) -> SeedContext {
         SeedContext {
-            policy: SeedSyncPolicy::new(native_seed_sync_platform(), SeedTransfer::Bytes),
+            policy: SeedSyncPolicy::new(native_seed_sync_platform(), FileTransfer::Bytes),
             access: SeedAccess::FromSource,
             placement,
         }
@@ -2032,15 +2182,16 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    #[test_r::tag(native_apfs)]
     fn a_supplied_linux_reflink_policy_does_not_execute_a_macos_clone() {
         let source = tempfile::tempdir().unwrap();
         let target = tempfile::tempdir().unwrap();
-        let file = source.path().join("file");
+        let file = source.path().join("file").into_boxed_path();
         std::fs::write(&file, b"selected transfer").unwrap();
         let directory = open(target.path());
         let result = seed_entry(
             SeedContext {
-                policy: SeedSyncPolicy::new(SeedSyncPlatform::Linux, SeedTransfer::Reflink),
+                policy: SeedSyncPolicy::new(SeedSyncPlatform::Linux, FileTransfer::Reflink),
                 access: SeedAccess::FromSource,
                 placement: SeedPlacement::CreateNew,
             },
@@ -2051,6 +2202,22 @@ mod tests {
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
         assert!(!target.path().join("file").exists());
         assert_eq!(directory.entries().unwrap().count(), 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn a_supplied_linux_capture_reflink_action_does_not_execute_a_macos_clone() {
+        let source = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut &source, b"selected capture transfer").unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let target = destination.path().join("file").into_boxed_path();
+        let transfer = file_transfer_action(SeedSyncPlatform::Linux, FileTransfer::Reflink);
+        assert_eq!(transfer, FileTransfer::Reflink);
+        let error = copy_new_file(transfer, &source, &target).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(std::fs::metadata(&target).unwrap().len(), 0);
+        assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 1);
     }
 
     /// The rules of the `SeedPlacement` and `SeedEntry` docs, written as a table: the source, what
@@ -2332,7 +2499,7 @@ mod tests {
             Path::new(""),
             &TreeExclusions::default(),
             destination.path(),
-            FileCopyMode::Buffered,
+            FileTransfer::Bytes,
         )
         .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
@@ -2383,7 +2550,7 @@ mod tests {
             Path::new(""),
             &exclusions(&["static/asset.bin", "data/nested"]),
             destination.path(),
-            FileCopyMode::Buffered,
+            FileTransfer::Bytes,
         )
         .unwrap();
 
@@ -2530,9 +2697,9 @@ mod tests {
     #[test]
     fn seed_files_preserve_attributes_and_cleanup_after_placement_failure() {
         [
-            SeedTransfer::Bytes,
+            FileTransfer::Bytes,
             #[cfg(target_os = "macos")]
-            SeedTransfer::Reflink,
+            FileTransfer::Reflink,
         ]
         .into_iter()
         .for_each(|transfer| {
@@ -2578,9 +2745,9 @@ mod tests {
     #[test]
     fn seed_symlinks_preserve_times_and_cleanup_after_placement_failure() {
         [
-            SeedTransfer::Bytes,
+            FileTransfer::Bytes,
             #[cfg(target_os = "macos")]
-            SeedTransfer::Reflink,
+            FileTransfer::Reflink,
         ]
         .into_iter()
         .for_each(|transfer| {
@@ -2634,9 +2801,9 @@ mod tests {
     #[test]
     fn seed_merges_an_empty_directory_without_opening_it_for_sync() {
         [
-            SeedTransfer::Bytes,
+            FileTransfer::Bytes,
             #[cfg(target_os = "macos")]
-            SeedTransfer::Reflink,
+            FileTransfer::Reflink,
         ]
         .into_iter()
         .for_each(|transfer| {
@@ -2671,8 +2838,9 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    #[test_r::tag(native_apfs)]
     fn macos_seed_syncs_directory_attributes_through_restrictive_permissions() {
-        [SeedTransfer::Bytes, SeedTransfer::Reflink]
+        [FileTransfer::Bytes, FileTransfer::Reflink]
             .into_iter()
             .for_each(|transfer| {
                 let destination = tempfile::tempdir().unwrap();
@@ -2751,7 +2919,7 @@ mod tests {
             Path::new(""),
             &exclusions(&[]),
             destination.path(),
-            FileCopyMode::Buffered,
+            FileTransfer::Bytes,
         )
         .unwrap();
 
@@ -2790,7 +2958,7 @@ mod tests {
             Path::new(""),
             &exclusions(&["excluded"]),
             destination.path(),
-            FileCopyMode::Buffered,
+            FileTransfer::Bytes,
         )
         .unwrap();
 

@@ -557,6 +557,20 @@ fn keep_append_coordinator(strong_count: usize) -> bool {
     strong_count != 0
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppendCoordinatorAction {
+    Reuse,
+    Allocate,
+}
+
+fn decide_append_coordinator(existing: bool) -> AppendCoordinatorAction {
+    if existing {
+        AppendCoordinatorAction::Reuse
+    } else {
+        AppendCoordinatorAction::Allocate
+    }
+}
+
 #[cfg(test)]
 fn live_append_coordinators(strong_counts: impl Iterator<Item = usize>) -> usize {
     strong_counts
@@ -586,14 +600,17 @@ impl AppendCoordinatorRegistry {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         coordinators.retain(|_, coordinator| keep_append_coordinator(coordinator.strong_count()));
         let observed = coordinators.get(&identity).and_then(Weak::upgrade);
-        observed.unwrap_or_else(|| {
-            let coordinator = Arc::new(AsyncMutex::new(()));
-            coordinators.insert(identity, Arc::downgrade(&coordinator));
-            #[cfg(test)]
-            self.allocations
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            coordinator
-        })
+        match decide_append_coordinator(observed.is_some()) {
+            AppendCoordinatorAction::Reuse => observed.expect("a live coordinator was observed"),
+            AppendCoordinatorAction::Allocate => {
+                let coordinator = Arc::new(AsyncMutex::new(()));
+                coordinators.insert(identity, Arc::downgrade(&coordinator));
+                #[cfg(test)]
+                self.allocations
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                coordinator
+            }
+        }
     }
 
     #[cfg(test)]
@@ -635,58 +652,72 @@ struct NativeRoot {
     directory: Arc<Mutex<Option<NativeRootHandles>>>,
 }
 
+/// One admission keeps the directory and its unlinked regular seed_flusher alive together.
 #[derive(Clone)]
 struct NativeRootHandles {
+    directory: Arc<cap_std::fs::Dir>,
     #[cfg(target_os = "macos")]
-    pair: Arc<MacRootHandles>,
-    #[cfg(not(target_os = "macos"))]
-    directory: Arc<cap_std::fs::Dir>,
-}
-
-/// One admission keeps the directory and its unlinked regular flush descriptor alive together.
-#[cfg(target_os = "macos")]
-struct MacRootHandles {
-    directory: Arc<cap_std::fs::Dir>,
-    seed_flusher: cap_std::fs::File,
+    seed_flusher: Arc<cap_std::fs::File>,
 }
 
 impl NativeRootHandles {
     fn directory(&self) -> Arc<cap_std::fs::Dir> {
-        #[cfg(target_os = "macos")]
-        let directory = &self.pair.directory;
-        #[cfg(not(target_os = "macos"))]
-        let directory = &self.directory;
-        Arc::clone(directory)
+        Arc::clone(&self.directory)
     }
 }
 
 impl NativeRoot {
-    #[cfg(target_os = "macos")]
     fn new(path: PathBuf, directory: File) -> std::io::Result<Self> {
         let directory = Arc::new(cap_std::fs::Dir::from_std_file(directory));
-        let seed_flusher = tree_copy::finalize_operation(
-            || CapabilityTempFile::new(&directory)?.into_unlinked(),
-            || rustix::fs::fsync(directory.as_ref()).map_err(std::io::Error::from),
-        )?;
-        Ok(Self::from_handles(
-            path,
-            NativeRootHandles {
-                pair: Arc::new(MacRootHandles {
+        #[cfg(target_os = "macos")]
+        {
+            let seed_flusher = Arc::new(tree_copy::finalize_operation(
+                || CapabilityTempFile::new(&directory)?.into_unlinked(),
+                || tree_copy::sync_ordinary_descriptor(directory.as_ref()),
+            )?);
+            Ok(Self::from_handles(
+                path,
+                NativeRootHandles {
                     directory,
                     seed_flusher,
-                }),
-            },
-        ))
+                },
+            ))
+        }
+        #[cfg(not(target_os = "macos"))]
+        Ok(Self::from_directory(path, directory))
+    }
+
+    async fn initialize(
+        path: PathBuf,
+        directory: File,
+        profile: NativeStorageProfile,
+    ) -> Result<Self, FilesystemStorageError> {
+        let error_path = path.clone().into_boxed_path();
+        #[cfg(target_os = "macos")]
+        let result = execute_native(profile, NativeOperation::Flush, move || {
+            Self::new(path, directory)
+        })
+        .await
+        .map_err(|error| {
+            FilesystemStorageError::task_failure(
+                "initialize fresh runtime directory",
+                &error_path,
+                error,
+            )
+        })?;
+        #[cfg(not(target_os = "macos"))]
+        let result = {
+            let _ = profile;
+            Self::new(path, directory)
+        };
+        result.map_err(|error| {
+            FilesystemStorageError::io("initialize fresh runtime directory", &error_path, error)
+        })
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn new(path: PathBuf, directory: File) -> Self {
-        Self::from_handles(
-            path,
-            NativeRootHandles {
-                directory: Arc::new(cap_std::fs::Dir::from_std_file(directory)),
-            },
-        )
+    fn from_directory(path: PathBuf, directory: Arc<cap_std::fs::Dir>) -> Self {
+        Self::from_handles(path, NativeRootHandles { directory })
     }
 
     fn from_handles(path: PathBuf, handles: NativeRootHandles) -> Self {
@@ -847,11 +878,13 @@ fn file_copy_mode(volume: &FilesystemVolume) -> FileCopyMode {
     volume_facts(&volume.mode).file_copy_mode
 }
 
-/// How one seeded file gets its contents.
+/// How one file gets its contents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SeedTransfer {
+enum FileTransfer {
     /// The bytes are copied.
     Bytes,
+    /// A native macOS clone shares the extents of the source.
+    Clone,
     /// The file shares the extents of the source.
     Reflink,
     /// The file shares the extents of the source and must belong to this project, which is then
@@ -862,12 +895,12 @@ enum SeedTransfer {
 /// Gives how a seeded file gets its contents. `mode` is how the sandbox copies files, and
 /// `authority` tells whether the sandbox has a project. A copy-on-write sandbox makes a reflink.
 /// The reflink goes into the project of the sandbox when it has one.
-fn seed_transfer(mode: FileCopyMode, authority: QuotaAuthority) -> SeedTransfer {
+fn file_transfer(mode: FileCopyMode, authority: QuotaAuthority) -> FileTransfer {
     match (mode, authority) {
-        (FileCopyMode::Buffered, _) => SeedTransfer::Bytes,
-        (FileCopyMode::Reflink, QuotaAuthority::Unsupported) => SeedTransfer::Reflink,
+        (FileCopyMode::Buffered, _) => FileTransfer::Bytes,
+        (FileCopyMode::Reflink, QuotaAuthority::Unsupported) => FileTransfer::Reflink,
         (FileCopyMode::Reflink, QuotaAuthority::Project { project_id, .. }) => {
-            SeedTransfer::ReflinkIntoProject(project_id)
+            FileTransfer::ReflinkIntoProject(project_id)
         }
     }
 }
@@ -1671,17 +1704,7 @@ impl<'a> CapabilityTempFile<'a> {
     }
 
     fn sync_ordinary(&self) -> std::io::Result<()> {
-        #[cfg(unix)]
-        {
-            rustix::fs::fsync(&self.file).map_err(std::io::Error::from)
-        }
-        #[cfg(not(unix))]
-        {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "ordinary seed file sync is unavailable on this platform",
-            ))
-        }
+        tree_copy::sync_ordinary_descriptor(&self.file)
     }
 
     fn cleanup(&mut self) -> std::io::Result<()> {
@@ -1710,7 +1733,7 @@ impl<'a> CapabilityTempFile<'a> {
                     "seed flush descriptor is not a regular file",
                 ));
             }
-            rustix::fs::fsync(&self.file).map_err(std::io::Error::from)
+            tree_copy::sync_ordinary_descriptor(&self.file)
         }));
         tree_copy::finish_unwinding(prepared, || self.cleanup())?;
         Ok(self.file)
@@ -1920,6 +1943,17 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn append_coordinator_decision_reuses_only_an_observed_live_coordinator() {
+        let cases = &[
+            (false, AppendCoordinatorAction::Allocate),
+            (true, AppendCoordinatorAction::Reuse),
+        ];
+        for &(existing, expected) in cases {
+            assert_eq!(decide_append_coordinator(existing), expected);
+        }
+    }
+
+    #[test]
     fn a_panicking_temporary_write_removes_its_name_before_resuming_unwind() {
         let root = tempfile::tempdir().unwrap();
         let directory =
@@ -2111,6 +2145,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    #[test_r::tag(native_apfs)]
     fn apfs_startup_refuses_a_file_as_its_root_with_a_clear_error() {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("agents").into_boxed_path();
@@ -2126,6 +2161,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    #[test_r::tag(native_apfs)]
     fn apfs_startup_makes_and_probes_a_development_root() {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("agents").into_boxed_path();
@@ -2249,16 +2285,16 @@ mod tests {
         };
         assert_eq!(
             [
-                seed_transfer(FileCopyMode::Buffered, QuotaAuthority::Unsupported),
-                seed_transfer(FileCopyMode::Buffered, project),
-                seed_transfer(FileCopyMode::Reflink, QuotaAuthority::Unsupported),
-                seed_transfer(FileCopyMode::Reflink, project),
+                file_transfer(FileCopyMode::Buffered, QuotaAuthority::Unsupported),
+                file_transfer(FileCopyMode::Buffered, project),
+                file_transfer(FileCopyMode::Reflink, QuotaAuthority::Unsupported),
+                file_transfer(FileCopyMode::Reflink, project),
             ],
             [
-                SeedTransfer::Bytes,
-                SeedTransfer::Bytes,
-                SeedTransfer::Reflink,
-                SeedTransfer::ReflinkIntoProject(project_id),
+                FileTransfer::Bytes,
+                FileTransfer::Bytes,
+                FileTransfer::Reflink,
+                FileTransfer::ReflinkIntoProject(project_id),
             ]
         );
     }

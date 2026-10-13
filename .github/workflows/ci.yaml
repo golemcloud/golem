@@ -364,16 +364,12 @@ jobs:
           cp "$(command -v cargo-test-r)" "${GOLEM_MANAGED_XFS_CARGO_TEST_R}"
           integration-tests/scripts/managed-filesystem/run-lima.sh
 
-  apfs-tests:
-    name: apfs-tests
+  build-apfs-test-bin:
+    name: build-apfs-test-bin
     runs-on: blacksmith-6vcpu-macos-latest
-    needs:
-      - builtin-artifacts
-      - merge-test-components
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 4
-      RUST_MIN_STACK: 33554432
     steps:
       - uses: actions/checkout@v5
         with:
@@ -383,34 +379,47 @@ jobs:
           cache-shared-key: 'apfs-dev-ci'
           cache-save-if: 'true'
           install-cargo-make: 'false'
-          install-protoc: 'true'
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.49.0
+      # A separate successful build saves the dependency cache even if a native test fails.
+      - name: Build the native APFS test binary
+        run: |
+          mkdir -p tmp/apfs-test-bin
+          cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor \
+            --features test-utils --lib --no-run --message-format=json \
+            > tmp/apfs-cargo-messages.jsonl
+          python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py \
+            tmp/apfs-cargo-messages.jsonl "$PWD" lib > tmp/apfs-test-executable.tsv
+          IFS=$'\t' read -r target executable < tmp/apfs-test-executable.tsv
+          test "$target" = lib
+          cp "$executable" tmp/apfs-test-bin/golem-worker-executor-apfs-tests
+          tar -czf tmp/apfs-test-bin.tar.gz -C tmp/apfs-test-bin golem-worker-executor-apfs-tests
+      - uses: actions/upload-artifact@v4
         with:
-          redis-version: latest
-          auto-start: false
-      - uses: ./.github/actions/restore-test-components
+          name: apfs-test-bin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/apfs-test-bin.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  apfs-tests:
+    name: apfs-tests
+    runs-on: blacksmith-6vcpu-macos-latest
+    needs: build-apfs-test-bin
+    timeout-minutes: 60
+    env:
+      RUST_MIN_STACK: 33554432
+    steps:
+      - uses: actions/checkout@v5
         with:
-          run-id: ${{ github.run_id }}
-      - uses: ./.github/actions/restore-builtin-artifacts
-      # The WASMs are portable. Build the test binaries on macOS, not from the Linux cache.
-      - name: Run APFS storage and snapshot admission tests
-        run: >-
-          cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor
-          --features test-utils --lib --
-          sandbox_filesystem:: services::agent_filesystem::lifecycle::
-          services::agent_filesystem_snapshots::
-          --test-threads 1 --report-time
-      - name: Run APFS snapshot restart and development storage refusal tests
-        run: >-
-          cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor
-          --features test-utils --test integration --
-          :tag:local_filesystem --test-threads 1 --report-time
-      - name: Run local filesystem configuration and argument wiring tests
-        run: >-
-          cargo test --locked -j 4 --profile dev-ci -p golem --lib --
-          filesystem_config:: command_handler:: launch::
-          --test-threads 1 --report-time
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: apfs-test-bin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/apfs-test-bin
+      - name: Run native APFS tests
+        run: |
+          tar -xzf tmp/apfs-test-bin/apfs-test-bin.tar.gz -C tmp/apfs-test-bin
+          bash integration-tests/scripts/apfs/run-native-tests.sh \
+            tmp/apfs-test-bin/golem-worker-executor-apfs-tests \
+            :tag:native_apfs --include-ignored --test-threads 1 --report-time
 
   build-cli-test-bins:
     env:

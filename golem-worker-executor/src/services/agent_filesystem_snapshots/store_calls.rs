@@ -50,13 +50,13 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-/// The permission to make the managed filesystem snapshot store. Only this module can make one.
+/// The permission to make the filesystem snapshot store. Only this module can make one.
 pub(crate) struct StoreKey(());
 
 /// The store that the calls go to.
 pub(super) enum StoreOf<'a> {
-    /// The managed store on the blob storage, with the key and the settings of the configuration.
-    Managed(
+    /// The store on the blob storage, with the key and the settings of the configuration.
+    Enabled(
         Arc<dyn golem_service_base::storage::blob::BlobStorage>,
         &'a FilesystemSnapshotStoreConfig,
     ),
@@ -400,8 +400,8 @@ impl StoreCalls {
         jobs: TaskTracker,
     ) -> Self {
         let store = match store {
-            StoreOf::Managed(storage, config) => {
-                crate::filesystem_snapshot::managed_store(storage, config, StoreKey(()))
+            StoreOf::Enabled(storage, config) => {
+                crate::filesystem_snapshot::store(storage, config, StoreKey(()))
             }
             #[cfg(any(test, feature = "test-utils"))]
             StoreOf::Given(store) => store,

@@ -240,12 +240,16 @@ admitted batch error while preserving the first error. Keep Linux seed
 synchronization and explicit guest flush behavior unchanged. These are correctness checks,
 not performance or workload-suitability claims.
 
-The `apfs-tests` CI job builds the executor test binaries on a macOS runner and runs them on the
-runner's existing volume. It restores portable test-component and built-in artifact WASMs, not
-Linux binaries. It needs no Lima VM, disk image or special volume. The tests use normal registration, not
-`#[ignore]`. The framework supplies the Redis process for the restart test.
+The `build-apfs-test-bin` CI job compiles the executor library test binary on macOS. It selects
+that executable from Cargo JSON output and uploads it for the same workflow run. The `apfs-tests`
+job runs its `:tag:native_apfs` cases on macOS. The host script creates and attaches one 32MiB HFS+
+image outside the test binary, then uses `--include-ignored` to run the constructor-refusal case.
+The other native cases use the runner's existing volume. The script detaches and removes the
+fixture after the run. A failed detach retains the fixture and fails the job. Worker tests spawn
+no fixture processes. Native CI needs no Lima VM, WASM, built-in artifact or Redis dependency.
 
-The focused commands are:
+For broader local verification, use these commands. They also select portable helpers and the
+shared executor integration cases that ordinary or Linux CI covers:
 
 ```shell
 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- sandbox_filesystem:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
@@ -277,10 +281,13 @@ a positive lookup proof from a canonical coordination label, even when the label
 `apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes` checks copy-on-write
 copies, unflushed writes, exclusions and hard-link groups through the sandbox operations.
 `apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload` checks capture admission.
-The executor integration tag selects the native APFS restart case on macOS and the portable
-case that checks `Managed` refuses storage without copy-on-write at startup.
+The native CI selection covers APFS cloning and lookup, the shared macOS seed effects, the
+permission regression, capture pressure, and capture and restore with native spelling.
+Compilation runs in a separate job, so a failed test does not prevent the successful build from
+saving its dependency cache. The ordinary unit suite keeps portable decisions and configuration
+coverage; the Linux runner keeps the shared managed and reflink XFS recovery cases.
 
-The same library run covers hard-link behavior and the fixed-seed restore property. A directory hard link
+The ordinary unit suite covers hard-link behavior and the fixed-seed restore property. A directory hard link
 must give `not-permitted` even when the destination exists. The scripted collision test programs
 `AlreadyExists` followed by a fresh directory observation. The preservation tests cover files,
 symlinks, stale directory hints and nonterminal proof failures. A terminal proof failure invalidates
@@ -293,10 +300,11 @@ ancestor and missing-source precedence and do not follow source symlinks.
 The native APFS restart test needs the `test-components/it_initial_file_system_release.wasm` fixture.
 It takes a periodic snapshot, drops the executor, starts a new one over the same storage and
 compares the files with a full replay. It includes hard links. Build the fixture before a local run with the
-`modifying-test-components` skill. The CI job restores it from `merge-test-components` and compiles
-it to native code on macOS. A Linux precompiled component cannot replace that step.
+`modifying-test-components` skill. This optional native integration uses the same recovery helper
+as the managed and reflink XFS cases in the Linux managed-filesystem runner. CI keeps those cases
+and the native backend proofs without compiling the duplicate macOS integration target.
 
-The same job runs the `golem` library's configuration, command-handler and launch modules.
+The ordinary unit suite runs the `golem` library's configuration, command-handler and launch modules.
 The focused wiring test parses the real `server run` command, forwards the argument or manifest
 root through the production launch builder, and applies filesystem settings through the same
 function as startup. It checks defaults, the root argument, TOML over that argument, and
@@ -304,7 +312,7 @@ environment over TOML. Two preparations check retained repository key reuse and 
 These tests do not start services or provision built-in tools. Existing configuration cases also
 cover optional TOML, validation before key effects and corrupt or concurrent retained keys.
 The launch module checks that local blob storage remains at `<data_dir>/blobs`.
-Managed enables the snapshot service, but an agent still needs a snapshotting policy to save and
+`Enabled` enables the snapshot service, but an agent still needs a snapshotting policy to save and
 restore snapshots. The executor restart test supplies that policy.
 
 ## Anti-patterns

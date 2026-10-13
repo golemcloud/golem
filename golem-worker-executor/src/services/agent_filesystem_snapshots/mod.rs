@@ -504,8 +504,8 @@ impl AgentFilesystemSnapshots {
             Source::Configured(blob_storage, room) => {
                 match decisions::binding(config, copy_on_write)? {
                     decisions::Binding::Disabled => Self::disabled(),
-                    decisions::Binding::Managed(config) => Self::enabled(
-                        StoreOf::Managed(blob_storage, config),
+                    decisions::Binding::Enabled(config) => Self::enabled(
+                        StoreOf::Enabled(blob_storage, config),
                         config.uploads().clone(),
                         room,
                         shutdown.token(),

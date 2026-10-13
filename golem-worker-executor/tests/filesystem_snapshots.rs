@@ -1724,7 +1724,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
 #[test]
 #[test_r::tag(local_filesystem)]
 #[timeout("2m")]
-async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
+async fn enabled_snapshots_on_storage_without_copy_on_write_fail_at_startup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1737,7 +1737,7 @@ async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_snapshots = FilesystemSnapshotsConfig::Managed(Box::new(
+                config.filesystem_snapshots = FilesystemSnapshotsConfig::Enabled(Box::new(
                     FilesystemSnapshotStoreConfig::new(&key, Duration::from_secs(60), 1, 1)
                         .expect("valid store settings"),
                 ));
@@ -1749,7 +1749,7 @@ async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
 
     match started {
         Ok(_) => Err(anyhow!(
-            "the executor started with managed snapshots on storage without copy-on-write"
+            "the executor started with enabled snapshots on storage without copy-on-write"
         )),
         Err(error) => {
             let message = format!("{error:#}");
@@ -2320,8 +2320,8 @@ fn managed_xfs_test_root() -> PathBuf {
 
 /// The settings of the store over the blob storage of the executor.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn managed_snapshots() -> FilesystemSnapshotsConfig {
-    FilesystemSnapshotsConfig::Managed(Box::new(
+fn enabled_snapshots() -> FilesystemSnapshotsConfig {
+    FilesystemSnapshotsConfig::Enabled(Box::new(
         FilesystemSnapshotStoreConfig::new(&"5a".repeat(64), Duration::from_secs(60), 2, 2)
             .expect("valid store settings")
             .with_uploads(uploads(Duration::from_secs(30))),
@@ -2462,7 +2462,7 @@ async fn restart_from_a_snapshot_gives_the_tree_of_a_full_replay<F>(
 where
     F: std::future::Future<Output = anyhow::Result<TestWorkerExecutor>>,
 {
-    let executor = start(managed_snapshots()).await?;
+    let executor = start(enabled_snapshots()).await?;
     let agent = Agent::start(
         &executor,
         context,
@@ -2518,7 +2518,7 @@ where
     let live = agent.describe(&executor).await?;
     executor.release().await?;
 
-    let restarted = start(managed_snapshots()).await?;
+    let restarted = start(enabled_snapshots()).await?;
     let mut events = restarted.capture_output(&agent.worker_id).await?;
     let restored = agent.describe(&restarted).await?;
     assert_snapshot_recovery_loaded(&mut events).await;
@@ -2558,7 +2558,7 @@ async fn managed_xfs_manual_update_brings_the_files_into_the_target_revision(
             &context,
             MANAGED_XFS_DISK_SPACE,
             managed_xfs_test_root(),
-            managed_snapshots(),
+            enabled_snapshots(),
         )
     };
     let executor = start().await?;

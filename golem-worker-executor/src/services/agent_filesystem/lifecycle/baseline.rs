@@ -785,17 +785,17 @@ struct PathSpellingReader {
 
 impl PathSpellingReader {
     async fn agrees<Adapter: SandboxFilesystemAdapter>(
-        &mut self,
+        self,
         sandbox: &Adapter,
         path: &Path,
-    ) -> Result<bool, FilesystemStorageError> {
+    ) -> Result<(Self, bool), FilesystemStorageError> {
         let components = path
             .ancestors()
             .filter(|path| !path.as_os_str().is_empty())
             .collect::<Box<[&Path]>>();
         futures::stream::iter(components.iter().rev().copied())
             .map(Ok)
-            .try_fold((self, true), |(reader, agrees), component| async move {
+            .try_fold((self, true), |(mut reader, agrees), component| async move {
                 if !agrees {
                     return Ok((reader, false));
                 }
@@ -835,7 +835,6 @@ impl PathSpellingReader {
                 Ok((reader, agrees))
             })
             .await
-            .map(|(_, agrees)| agrees)
     }
 }
 
@@ -858,9 +857,9 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
                 PathSpellingReader::default(),
                 Vec::new(),
             ),
-            |(reader, mut spellings, mut paths), (path, declared)| async move {
+            |(reader, spellings, mut paths), (path, declared)| async move {
                 let (reader, lookup) = reader.read(sandbox, path).await?;
-                let agrees = if let PathLookup::Found(attributes) = lookup
+                let (spellings, agrees) = if let PathLookup::Found(attributes) = lookup
                     && attributes.link_count == 1
                     && holds_initial_file(
                         sandbox,
@@ -873,7 +872,7 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
                 {
                     spellings.agrees(sandbox, path).await?
                 } else {
-                    false
+                    (spellings, false)
                 };
                 if agrees {
                     paths.push(Box::from(path));
@@ -1394,12 +1393,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut reader = PathSpellingReader::default();
-        let first = reader.agrees(&sandbox, Path::new("a/f")).await.unwrap();
+        let reader = PathSpellingReader::default();
+        let (reader, first) = reader.agrees(&sandbox, Path::new("a/f")).await.unwrap();
         assert!(first);
-        let second = reader.agrees(&sandbox, Path::new("a/g")).await.unwrap();
+        let (reader, second) = reader.agrees(&sandbox, Path::new("a/g")).await.unwrap();
         assert!(second);
-        let missing = reader
+        let (reader, missing) = reader
             .agrees(&sandbox, Path::new("a/absent"))
             .await
             .unwrap();

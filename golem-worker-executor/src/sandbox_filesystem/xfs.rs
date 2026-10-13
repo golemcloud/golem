@@ -1519,7 +1519,8 @@ impl ManagedProvisioning {
         let assignment_result = assign_project(&root_fd, project_id).map_err(|error| {
             FilesystemStorageError::io("assign managed XFS project", &root, error)
         });
-        let native_root = NativeRoot::new(root, root_fd);
+        let native_root =
+            NativeRoot::from_directory(root, Arc::new(cap_std::fs::Dir::from_std_file(root_fd)));
         let lease = LeaseState {
             lifecycle: lifecycle.expect("managed XFS lifecycle owner must exist"),
             cleanup: NativeCleanup::Managed(Box::new(ManagedProjectCleanup {

@@ -149,36 +149,13 @@ impl DirectoryProvisioning {
                 .await);
             }
         };
-        #[cfg(target_os = "macos")]
-        let native_root = {
-            let native_path = root.clone();
-            let native_root = execute_native(
-                storage_profile(&volume),
-                NativeOperation::Flush,
-                move || NativeRoot::new(native_path, directory),
-            )
-            .await
-            .map_err(|error| {
-                FilesystemStorageError::task_failure(
-                    "initialize fresh runtime directory",
-                    &root,
-                    error,
-                )
-            })
-            .and_then(|result| {
-                result.map_err(|error| {
-                    FilesystemStorageError::io("initialize fresh runtime directory", &root, error)
-                })
-            });
-            match native_root {
+        let native_root =
+            match NativeRoot::initialize(root.clone(), directory, storage_profile(&volume)).await {
                 Ok(native_root) => native_root,
                 Err(error) => {
                     return Err(rollback_creation(&root, error, &self.cleanup_retry).await);
                 }
-            }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let native_root = NativeRoot::new(root.clone(), directory);
+            };
         let filesystem = SandboxFilesystem::new(
             native_root,
             LeaseState {

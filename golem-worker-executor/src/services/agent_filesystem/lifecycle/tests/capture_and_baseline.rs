@@ -2021,6 +2021,7 @@ fn list_entries(
 #[cfg(target_os = "macos")]
 #[test]
 #[timeout("60s")]
+#[test_r::tag(native_apfs)]
 async fn apfs_alias_renamed_initial_file_is_captured_and_restores_with_native_spelling() {
     assert_apfs_alias_capture_restores(
         "caf\u{e9}.txt",
@@ -2034,6 +2035,7 @@ async fn apfs_alias_renamed_initial_file_is_captured_and_restores_with_native_sp
 #[cfg(target_os = "macos")]
 #[test]
 #[timeout("60s")]
+#[test_r::tag(native_apfs)]
 async fn apfs_alias_renamed_initial_file_parent_keeps_the_stored_ancestor_spelling() {
     assert_apfs_alias_capture_restores(
         "outer/caf\u{e9}/file.txt",
@@ -2047,6 +2049,7 @@ async fn apfs_alias_renamed_initial_file_parent_keeps_the_stored_ancestor_spelli
 #[cfg(target_os = "macos")]
 #[test]
 #[timeout("60s")]
+#[test_r::tag(native_apfs)]
 async fn apfs_case_alias_renamed_initial_file_restores_on_a_case_insensitive_volume() {
     let observation = tempfile::tempdir().unwrap();
     std::fs::write(observation.path().join("case-probe"), b"case mode").unwrap();

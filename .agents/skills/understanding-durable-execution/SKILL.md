@@ -1125,7 +1125,7 @@ retaining the underlying cause.
 `AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
 uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development
 and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `Temporary` and
-`Directory` make byte copies, so binding `Managed` on them fails at startup. The sandbox reports
+`Directory` make byte copies, so binding `Enabled` on them fails at startup. The sandbox reports
 `copies_on_write`; the snapshot service owns this rule.
 
 `seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other
@@ -1141,21 +1141,25 @@ privilege is required. The mode logs that it is for local development and tests 
 On macOS, the shared `seed` path for `Apfs`, `Directory` and `Temporary` explicitly uses plain
 native `fsync` for each seeded regular file, rather than `File::sync_all` for each file. The
 directory scopes attempt the required namespace `fsync` calls before the final batch flush.
-Each fresh macOS filesystem has one precreated, unlinked regular-file descriptor owned by
-`NativeRoot`. Seed admission pins the root descriptor and the flusher descriptor atomically.
-Every admitted batch attempts one final `F_FULLFSYNC` through the pinned flusher. This includes
-empty, symlink-only and directory-only batches, and batches that fail early. The flusher creates
-no per-batch directory entry, so flush finalization does not change the root's modification time
-or require a writable root. A later pathname replacement cannot redirect the pinned flush.
-A setup or admission failure before obtaining the pair has no pinned flusher to flush.
-The namespace and batch finalizers still run when an admitted batch fails. They attempt every
-required synchronization and return the first error instead of replacing it with a later
-finalization error.
+Each fresh macOS filesystem has one precreated, unlinked regular `seed_flusher` owned by
+`NativeRoot`. Seed admission pins the root and `seed_flusher` atomically. Batch completion
+attempts ordinary `fsync` on `seed_flusher`, ordinary `fsync` on the root, then `F_FULLFSYNC`
+on `seed_flusher`. This includes empty, symlink-only and directory-only batches, and batches
+that fail early. The finalizers attempt every required submission and keep the first error.
+In unwind-capable builds, later required finalizers also run after a panic. The original panic
+or an earlier error retains priority. Production panic-abort profiles do not run unwind cleanup.
+
+`seed_flusher` creates no per-batch directory entry, so batch completion does not change the
+root's modification time or require a writable root. A pathname replacement cannot redirect
+the admitted descriptors. A setup or admission failure before pinning them has no admitted
+`seed_flusher` to flush.
 
 This policy applies only to macOS seed synchronization. Native cloning and byte copying are
 unchanged. Linux seed synchronization and explicit guest flush operations keep their existing
-behavior. XFS remains the validated, supported production copy-on-write path. The policy does
-not guarantee seed, snapshot capture, blob upload or worker recovery time. See
+behavior. XFS remains the validated, supported production copy-on-write path. Initial-file
+installation still calls `seed` once per file. A seed batch does not combine separate install
+operations. The policy does not guarantee seed, snapshot capture, blob upload or worker recovery
+time. See
 [macOS seed synchronization](../../../golem-worker-executor/worker-executor-walkthrough.html#macos-seed-synchronization)
 for the internal policy.
 
@@ -1167,7 +1171,7 @@ so byte targets are approximate. Object counts are synthetic and very large, so 
 always pass. `Temporary` and `Directory` do not use this pressure recovery.
 
 On macOS, the local `golem server run` command defaults to `Apfs` at `<data_dir>/agents` and
-`Managed` filesystem snapshots. No filesystem TOML or environment settings are needed. The
+`Enabled` filesystem snapshots. No filesystem TOML or environment settings are needed. The
 `--agent-filesystem-root` option changes the default root. The server reads filesystem settings
 from the optional exact `config/worker-executor.toml` in the working directory, without searching
 parent directories, then applies `GOLEM__` environment variables. These settings override the
@@ -1183,7 +1187,7 @@ is no separate snapshot destination.
 See `docs/src/content/next/operate/filesystem_snapshots.mdx` for the local setup and
 `reference/testing-patterns.md` for the native APFS checks.
 
-With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
+With `filesystem_snapshots` set to `Enabled`, a snapshot record also names a filesystem snapshot
 (`services/agent_filesystem_snapshots`). The snapshots belong to one agent incarnation: they are
 keyed by `AgentSnapshots::agent(agent, fingerprint)`, and a fork target uses its stage id as its
 fingerprint. `invocation_loop.rs::take_guest_snapshot` calls one function,

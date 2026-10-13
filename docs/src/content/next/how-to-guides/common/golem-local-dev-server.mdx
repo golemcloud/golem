@@ -26,7 +26,13 @@ golem server run
 | `--data-dir <PATH>` | Directory to store data in | Platform-specific (see below) |
 | `--system-memory-override <SIZE>` | Override detected system memory, e.g. `2GiB`; not a hard RSS limit | Environment variable, manifest, then host/cgroup detection |
 | `--clean` | Clean the data directory before starting | `false` |
-| `--agent-filesystem-root <PATH>` | Use deterministic agent filesystem directories rooted at the given path instead of random temp directories. Layout: `<root>/<environment_id>/<component_id>/<agent_segment>/`; the agent segment is the agent name with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters, then `-` and the BLAKE3 hash of the agent id | _(none)_ |
+| `--agent-filesystem-root <PATH>` | Override the default root of the agent filesystems. Layout: `<root>/<environment_id>/<component_id>/<agent_segment>/`; the agent segment is the agent name with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters, then `-` and the BLAKE3 hash of the agent id | `<data_dir>/agents` on macOS; temporary directories on other platforms |
+
+On macOS, the local server defaults to `Apfs` storage at `<data_dir>/agents` and enables filesystem snapshots. APFS is for local development and tests only. It provides no per-agent disk limits or filesystem usage metering. Snapshots use blob storage at `<data_dir>/blobs`. The server generates and retains a repository key in `<data_dir>/filesystem-snapshots.repository-key` when no key is configured.
+
+On other platforms, the default storage is `Temporary` and filesystem snapshots are disabled. Supplying `--agent-filesystem-root` selects `Directory` storage there, with filesystem snapshots still disabled.
+
+The server reads filesystem settings from the optional exact `config/worker-executor.toml` in the working directory, then applies `GOLEM__` environment settings. These override the local defaults. It does not search parent directories. An unreadable or invalid configuration prevents startup. To use `Directory` or `Temporary` on macOS, also set `filesystem_snapshots.type = "Disabled"`.
 
 #### Examples
 
