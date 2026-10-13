@@ -1,4 +1,4 @@
-import { ok, s, toolDefinition } from '@golemcloud/golem-ts-sdk';
+import { ok, processExitStatusSchema, toolDefinition } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod/v4';
 import { runCli, validatedCwd } from '../../shared/cli-runtime.js';
 import { evaluateCommonJs, installPrivateReadOnlyFiles } from '../../shared/private-vfs.js';
@@ -10,7 +10,7 @@ const TYPESCRIPT_ROOT = '/toolchain/typescript/node_modules/typescript';
 const TSC_BUNDLED = '/toolchain/private/tsc.cjs';
 
 const tscTool = toolDefinition('tsc', { requiresFilesystem: true })
-  .version('5.9.2+golem.5')
+  .version('5.9.2+golem.6')
   .doc('Type-check and compile TypeScript files and projects.')
   .annotations({ openWorld: false })
   .body((body) =>
@@ -25,22 +25,23 @@ const tscTool = toolDefinition('tsc', { requiresFilesystem: true })
         doc: 'TypeScript compiler options and input files.',
       })
       .stdout({ required: true, doc: 'Compiler output and diagnostics.' })
-      .stderr({ required: true, doc: 'Compiler errors that cannot be reported normally.' })
-      .returns(s.s32(), { doc: 'Process exit code; zero indicates success.' }),
+      .stderr({
+        required: true,
+        doc: 'Compiler errors that cannot be reported normally.',
+      })
+      .returns(processExitStatusSchema, {
+        doc: 'Process exit status; exit_code zero indicates success.',
+      }),
   );
 
 tscTool.implement({
   tsc: async (input, context) => {
     const cwd = validatedCwd(input.cwd);
     const home = `${cwd}/.golem-home`;
-    return ok(
-      await runCli(
+    return ok({
+      exit_code: await runCli(
         {
-          argv: [
-            'node',
-            '/toolchain/typescript/node_modules/typescript/bin/tsc',
-            ...input.args,
-          ],
+          argv: ['node', '/toolchain/typescript/node_modules/typescript/bin/tsc', ...input.args],
           cwd,
           environment: {
             HOME: home,
@@ -58,6 +59,6 @@ tscTool.implement({
           }
         },
       ),
-    );
+    });
   },
 });

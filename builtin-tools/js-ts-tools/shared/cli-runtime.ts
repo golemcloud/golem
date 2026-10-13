@@ -26,15 +26,14 @@ function outputBridge(stream: WritableStream<Uint8Array>) {
   ) => {
     const done = callbackFromWriteArgs(encodingOrCallback, callback);
     const encoding = typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined;
-    const bytes =
-      typeof chunk === 'string' ? Buffer.from(chunk, encoding) : Uint8Array.from(chunk);
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : Uint8Array.from(chunk);
     const operation = pending.then(() => writer.write(bytes));
     pending = operation.then(
       () => done?.(null),
       (error) => {
         done?.(asError(error));
         throw error;
-      }
+      },
     );
     return true;
   };
@@ -117,7 +116,9 @@ export async function runCli(
       await execute(facade);
       if (options.waitForRuntimeIdle) {
         const awaitRuntimeIdle = (
-          process as NodeJS.Process & { _awaitRuntimeIdle?: () => Promise<void> }
+          process as NodeJS.Process & {
+            _awaitRuntimeIdle?: () => Promise<void>;
+          }
         )._awaitRuntimeIdle;
         if (typeof awaitRuntimeIdle !== 'function') {
           throw new Error('the JavaScript runtime does not provide an idle boundary');
@@ -132,8 +133,13 @@ export async function runCli(
         );
       }
     }
+    let status = Number(process.exitCode ?? 0);
+    if (!Number.isFinite(status) || !Number.isInteger(status)) {
+      process.stderr.write('Process exit status must be a finite integer\n');
+      status = 1;
+    }
     await Promise.all([stdout.drain(), stderr.drain()]);
-    return Number(process.exitCode ?? 0);
+    return ((status % 256) + 256) % 256;
   } finally {
     stdout.release();
     stderr.release();

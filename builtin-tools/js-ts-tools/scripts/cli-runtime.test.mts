@@ -156,6 +156,77 @@ function validatesCwd() {
   assert.throws(() => validatedCwd('relative'), /absolute path/);
 }
 
+async function normalizesStatuses() {
+  for (const [status, expected] of [
+    [0, 0],
+    [255, 255],
+    [-1, 255],
+    [-257, 255],
+    [256, 0],
+    [513, 1],
+  ]) {
+    for (const useExit of [false, true]) {
+      const stdout = capture();
+      const stderr = capture();
+      const actual = await runCli(
+        { argv: ['node'], cwd: '/', stopOnExit: true },
+        { stdout: stdout.stream, stderr: stderr.stream },
+        (facade) => {
+          if (useExit) facade.exit(status);
+          else facade.exitCode = status;
+        },
+      );
+      assert.equal(actual, expected);
+    }
+  }
+  const original = process.exitCode;
+  for (const status of [0.5, NaN, Infinity, -Infinity]) {
+    for (const useExit of [false, true]) {
+      const stdout = capture();
+      const stderr = capture();
+      const actual = await runCli(
+        { argv: ['node'], cwd: '/' },
+        { stdout: stdout.stream, stderr: stderr.stream },
+        (facade) => {
+          if (useExit) facade.exit(status);
+          else facade.exitCode = status;
+        },
+      );
+      assert.equal(actual, 1);
+      assert.match(stderr.text(), /TypeError|RangeError/);
+      assert.equal(process.exitCode, original);
+    }
+  }
+  // QuickJS exposes exitCode as a writable property, unlike Node's validating setter.
+  const originalProcess = process;
+  const permissiveProcess = Object.create(process) as NodeJS.Process;
+  Object.defineProperty(permissiveProcess, 'exitCode', {
+    value: original,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.process = permissiveProcess;
+  try {
+    for (const status of [0.5, NaN, Infinity, -Infinity]) {
+      const stdout = capture();
+      const stderr = capture();
+      const actual = await runCli(
+        { argv: ['node'], cwd: '/' },
+        { stdout: stdout.stream, stderr: stderr.stream },
+        (facade) => {
+          facade.exitCode = status;
+        },
+      );
+      assert.equal(actual, 1);
+      assert.match(stderr.text(), /finite integer/);
+      assert.equal(process.exitCode, original);
+    }
+  } finally {
+    globalThis.process = originalProcess;
+  }
+}
+
+await normalizesStatuses();
 await isolatesProcessStateAndForwardsOutput();
 await capturesExit();
 await capturesErrors();

@@ -38,6 +38,13 @@ The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly,
 container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
+The Python tool source is implemented under `builtin-tools/python/` and built into
+`builtin-tools/python.wasm` with `cargo make build-python-tool`. It embeds RustPython and its
+frozen standard library, streams invocation I/O, and uses the explicitly granted owner
+filesystem. See [its CLI contract and limitations](python/README.md). Its descriptor and artifact
+pin use the same registry provisioning path as the other built-ins. The new releases remain
+unpublished during team review; CI artifact downloads stay red until publication.
+
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.11` supports local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
