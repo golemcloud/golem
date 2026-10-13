@@ -327,8 +327,8 @@ impl Endpoint for HostRouter {
 mod tests {
     use super::*;
     use golem_registry_service::startup::BuiltinArtifactKind;
-    use poem::{Body, http};
     use poem::test::TestClient;
+    use poem::{Body, http};
     use test_r::test;
 
     #[test]

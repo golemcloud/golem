@@ -1254,6 +1254,14 @@ impl From<DomainRegistrationError> for ApiError {
                 Self::bad_request(api::error_code::DOMAIN_RESERVED, error)
             }
 
+            DomainRegistrationError::InvalidDomain(_) => {
+                Self::bad_request(api::error_code::INVALID_DOMAIN, error)
+            }
+
+            DomainRegistrationError::DomainNotCanonical { .. } => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_CANONICAL, error)
+            }
+
             DomainRegistrationError::DomainNotValidForHttpApi { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
             }

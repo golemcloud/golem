@@ -885,22 +885,19 @@ mod tests {
     #[test]
     async fn oauth_routes_reject_requests_without_a_resolved_deployment() {
         let db = tempfile::NamedTempFile::new().unwrap();
-        let pool = golem_service_base::db::sqlite::SqlitePool::configured(
-            &golem_common::config::DbSqliteConfig {
-                database: db.path().to_string_lossy().into_owned(),
-                max_connections: 1,
-                foreign_keys: false,
-            },
-        )
-        .await
-        .unwrap();
         let routes = oauth_proxy_routes(
             Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
             Arc::new(
-                crate::custom_api::oidc::session_store::SqliteSessionStore::new(
-                    pool,
-                    60,
-                    Duration::from_secs(60),
+                crate::custom_api::oidc::session_store::SqliteSessionStore::configured(
+                    &crate::config::SqliteSessionStoreConfig {
+                        pending_login_expiration: std::time::Duration::from_secs(60),
+                        cleanup_interval: std::time::Duration::from_secs(60),
+                        sqlite_config: golem_common::config::DbSqliteConfig {
+                            database: db.path().to_string_lossy().into_owned(),
+                            max_connections: 1,
+                            foreign_keys: false,
+                        },
+                    },
                 )
                 .await
                 .unwrap(),

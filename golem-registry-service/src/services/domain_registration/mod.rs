@@ -93,6 +93,17 @@ impl DomainRegistrationService {
             EnvironmentDomainRegistrationVerb::Create,
         )?;
 
+        let canonical = data
+            .domain
+            .canonical()
+            .map_err(|_| DomainRegistrationError::InvalidDomain(data.domain.clone()))?;
+        if canonical != data.domain {
+            return Err(DomainRegistrationError::DomainNotCanonical {
+                domain: data.domain,
+                canonical,
+            });
+        }
+
         if !self
             .domain_matcher
             .domain_available_to_provision(&data.domain)

@@ -96,7 +96,7 @@ fn actual_envelope_corpus_cases() {
         .iter()
         .filter(|case| case["suite"] == "envelope")
         .collect();
-    assert_eq!(cases.len(), 15);
+    assert_eq!(cases.len(), 16);
     for case in cases {
         let id = case["id"].as_str().unwrap();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

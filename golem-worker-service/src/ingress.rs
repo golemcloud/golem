@@ -34,7 +34,8 @@ pub struct InvalidOrigin;
 /// Decides which peers may set the public origin of a request with `X-Forwarded-*` headers.
 ///
 /// Requests from other peers use the `Host` header, or the `:authority` of an HTTP/2 request,
-/// and ignore every forwarded header.
+/// and ignore every forwarded header. Addresses are compared in canonical form, so an IPv4
+/// ingress that reaches a dual-stack listener as `::ffff:a.b.c.d` matches `a.b.c.d`.
 #[derive(Clone, Debug, Default)]
 pub struct TrustedIngress {
     addresses: Arc<[IpAddr]>,
@@ -43,7 +44,7 @@ pub struct TrustedIngress {
 impl TrustedIngress {
     pub fn new(addresses: &[IpAddr]) -> Self {
         Self {
-            addresses: addresses.into(),
+            addresses: addresses.iter().map(IpAddr::to_canonical).collect(),
         }
     }
 
@@ -51,7 +52,7 @@ impl TrustedIngress {
         request
             .remote_addr()
             .as_socket_addr()
-            .is_some_and(|address| self.addresses.contains(&address.ip()))
+            .is_some_and(|address| self.addresses.contains(&address.ip().to_canonical()))
     }
 
     pub fn public_origin(&self, request: &poem::Request) -> Result<PublicOrigin, InvalidOrigin> {
@@ -132,6 +133,39 @@ pub(crate) mod tests {
                 authority: "tools.example.com".to_string(),
                 forwarded: true,
             }
+        );
+    }
+
+    #[test]
+    fn ipv4_ingress_is_trusted_through_a_dual_stack_listener() {
+        let headers = || {
+            poem::http::Request::builder()
+                .header("Host", "worker-service:9006")
+                .header("X-Forwarded-Host", "tools.example.com")
+                .header("X-Forwarded-Proto", "https")
+        };
+        let mapped_peer = "[::ffff:10.0.0.1]:5000";
+
+        let configured_ipv4 = TrustedIngress::new(&["10.0.0.1".parse().unwrap()]);
+        assert!(
+            configured_ipv4
+                .public_origin(&from_peer(mapped_peer, headers()))
+                .unwrap()
+                .forwarded
+        );
+
+        let configured_mapped = TrustedIngress::new(&["::ffff:10.0.0.1".parse().unwrap()]);
+        assert!(
+            configured_mapped
+                .public_origin(&from_peer("10.0.0.1:5000", headers()))
+                .unwrap()
+                .forwarded
+        );
+        assert!(
+            !configured_mapped
+                .public_origin(&from_peer("[::ffff:10.0.0.2]:5000", headers()))
+                .unwrap()
+                .forwarded
         );
     }
 

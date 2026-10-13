@@ -4345,8 +4345,29 @@ mod app_builder {
     ) -> Option<Domain> {
         match (domain, subdomain) {
             (Some(domain), None) => {
-                let raw = domain.as_str();
-                Some(Domain(raw.to_string()))
+                let domain = Domain(domain.as_str().to_string());
+                match domain.canonical() {
+                    Ok(canonical) if canonical == domain => Some(domain),
+                    Ok(canonical) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} must be written in its canonical spelling: {}",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                            canonical.0.log_color_highlight(),
+                        ));
+                        None
+                    }
+                    Err(_) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} is not a valid domain",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                        ));
+                        None
+                    }
+                }
             }
             (None, Some(subdomain)) => {
                 let label = subdomain.as_str();
@@ -9363,6 +9384,47 @@ bridge:
             app.mcp_deployments(&EnvironmentName("local".to_string()))
                 .unwrap()
                 .contains_key(&Domain("mcp.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_domains_must_be_canonical() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: API.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: mcp.example.com.
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 2, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("API.example.com") && error.contains("api.example.com")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("mcp.example.com.")),
+            "\n{}",
+            errors.join("\n\n")
         );
     }
 

@@ -355,7 +355,11 @@ fn normalize_authority(value: &[u8]) -> Result<String, EnvelopeError> {
             None => (value, None),
         };
         validate_origin_host(host)?;
-        (host.to_ascii_lowercase(), port)
+        // A trailing dot names the same DNS host; domains are registered without it.
+        (
+            host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase(),
+            port,
+        )
     };
     if let Some(port) = port {
         if port.is_empty()

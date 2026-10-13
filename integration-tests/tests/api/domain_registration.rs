@@ -335,7 +335,6 @@ async fn reserved_domain_cannot_be_registered(
 
     for domain in [
         RESERVED_DOMAIN.to_string(),
-        RESERVED_DOMAIN.to_uppercase(),
         format!("{RESERVED_DOMAIN}:443"),
     ] {
         let error = client
@@ -360,6 +359,51 @@ async fn reserved_domain_cannot_be_registered(
             &env.id.0,
             &DomainRegistrationCreation {
                 domain: Domain(format!("{}.{RESERVED_DOMAIN}", env.id)),
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn domain_must_be_registered_in_its_canonical_spelling(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let canonical = format!("{}.golem.cloud", env.id);
+    for (domain, code) in [
+        (canonical.to_uppercase(), "DOMAIN_NOT_CANONICAL"),
+        (format!("{canonical}."), "DOMAIN_NOT_CANONICAL"),
+        (format!("https://{canonical}"), "INVALID_DOMAIN"),
+    ] {
+        let error = client
+            .create_domain_registration(
+                &env.id.0,
+                &DomainRegistrationCreation {
+                    domain: Domain(domain.clone()),
+                },
+            )
+            .await
+            .unwrap_err();
+        let golem_client::Error::Item(RegistryServiceCreateDomainRegistrationError::Error400(body)) =
+            error
+        else {
+            panic!("expected {code} for {domain}, got {error:?}")
+        };
+        assert_eq!(body.code, code, "{domain}");
+    }
+
+    client
+        .create_domain_registration(
+            &env.id.0,
+            &DomainRegistrationCreation {
+                domain: Domain(canonical),
             },
         )
         .await?;

@@ -71,51 +71,64 @@ impl Domain {
     /// returns it the way [`Domain::host`] does. The value is a DNS name, an IPv4 address or a
     /// bracketed IPv6 address, with an optional port; schemes, paths and user info are rejected.
     pub fn parse_host(value: &str) -> Result<String, String> {
-        let invalid = || format!("Invalid host: {value:?}");
-        let (host, port) = match value.strip_prefix('[') {
-            Some(rest) => {
-                let (literal, rest) = rest.split_once(']').ok_or_else(invalid)?;
-                literal
-                    .parse::<std::net::Ipv6Addr>()
-                    .map_err(|_| invalid())?;
-                (&value[..literal.len() + 2], rest)
-            }
-            None => match value.split_once(':') {
-                Some((host, _)) => (host, &value[host.len()..]),
-                None => (value, ""),
-            },
-        };
-        if !port.is_empty()
-            && port.strip_prefix(':').is_none_or(|port| {
-                !port.bytes().all(|b| b.is_ascii_digit()) || port.parse::<u16>().is_err()
-            })
-        {
-            return Err(invalid());
-        }
-        if !host.starts_with('[') {
-            let name = host.strip_suffix('.').unwrap_or(host);
-            if name.bytes().all(|b| b.is_ascii_digit() || b == b'.')
-                && name.parse::<std::net::Ipv4Addr>().is_err()
-            {
-                return Err(invalid());
-            }
-            let valid = !name.is_empty()
-                && name.len() <= 253
-                && name.split('.').all(|label| {
-                    !label.is_empty()
-                        && label.len() <= 63
-                        && !label.starts_with('-')
-                        && !label.ends_with('-')
-                        && label
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-                });
-            if !valid {
-                return Err(invalid());
-            }
-        }
+        let (host, _) = split_authority(value).ok_or_else(|| format!("Invalid host: {value:?}"))?;
         Ok(Domain(host.to_string()).host())
     }
+
+    /// The canonical spelling of the domain: the host lowercased and without a trailing dot, and
+    /// the port, if any, unchanged. Requests are routed by this spelling, so a domain is only
+    /// registered in it.
+    pub fn canonical(&self) -> Result<Domain, String> {
+        let (host, port) =
+            split_authority(&self.0).ok_or_else(|| format!("Invalid domain: {:?}", self.0))?;
+        let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+        Ok(Domain(format!("{host}{port}")))
+    }
+}
+
+/// Splits a valid authority into its host and its port suffix (empty or `:<port>`).
+fn split_authority(value: &str) -> Option<(&str, &str)> {
+    let (host, port) = match value.strip_prefix('[') {
+        Some(rest) => {
+            let (literal, rest) = rest.split_once(']')?;
+            literal.parse::<std::net::Ipv6Addr>().ok()?;
+            (&value[..literal.len() + 2], rest)
+        }
+        None => match value.split_once(':') {
+            Some((host, _)) => (host, &value[host.len()..]),
+            None => (value, ""),
+        },
+    };
+    if !port.is_empty()
+        && port.strip_prefix(':').is_none_or(|port| {
+            !port.bytes().all(|b| b.is_ascii_digit()) || port.parse::<u16>().is_err()
+        })
+    {
+        return None;
+    }
+    if !host.starts_with('[') {
+        let name = host.strip_suffix('.').unwrap_or(host);
+        if name.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+            && name.parse::<std::net::Ipv4Addr>().is_err()
+        {
+            return None;
+        }
+        let valid = !name.is_empty()
+            && name.len() <= 253
+            && name.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            });
+        if !valid {
+            return None;
+        }
+    }
+    Some((host, port))
 }
 
 #[cfg(test)]
@@ -155,6 +168,33 @@ mod tests {
             ("[::1]:9881", "[::1]"),
         ] {
             assert_eq!(Domain::parse_host(value).unwrap(), host, "{value}");
+        }
+    }
+
+    #[test]
+    fn canonical_lowercases_the_host_drops_a_trailing_dot_and_keeps_the_port() {
+        for (value, canonical) in [
+            ("api.example.com", "api.example.com"),
+            ("API.Example.com", "api.example.com"),
+            ("api.example.com.", "api.example.com"),
+            ("Api.Example.Com.:9006", "api.example.com:9006"),
+            ("api.example.com:443", "api.example.com:443"),
+            ("localhost:9006", "localhost:9006"),
+            ("[::1]:9006", "[::1]:9006"),
+        ] {
+            assert_eq!(
+                Domain(value.to_string()).canonical().unwrap(),
+                Domain(canonical.to_string()),
+                "{value}"
+            );
+        }
+        for value in [
+            "",
+            "https://api.example.com",
+            "api..example.com",
+            "api.example.com:",
+        ] {
+            assert!(Domain(value.to_string()).canonical().is_err(), "{value}");
         }
     }
 

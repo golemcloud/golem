@@ -328,15 +328,6 @@ async fn http2_request_routes_by_its_authority() {
 
 async fn real_mcp_endpoint() -> (BoxEndpoint<'static>, tempfile::NamedTempFile) {
     let db = tempfile::NamedTempFile::new().unwrap();
-    let pool = golem_service_base::db::sqlite::SqlitePool::configured(
-        &golem_common::config::DbSqliteConfig {
-            database: db.path().to_string_lossy().into_owned(),
-            max_connections: 1,
-            foreign_keys: false,
-        },
-    )
-    .await
-    .unwrap();
     let harness = crate::mcp::InvocationHarness::new(
         AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentMethod {
@@ -363,10 +354,16 @@ async fn real_mcp_endpoint() -> (BoxEndpoint<'static>, tempfile::NamedTempFile) 
         harness.worker_service.clone(),
         Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
         Arc::new(
-            crate::custom_api::oidc::session_store::SqliteSessionStore::new(
-                pool,
-                60,
-                std::time::Duration::from_secs(60),
+            crate::custom_api::oidc::session_store::SqliteSessionStore::configured(
+                &crate::config::SqliteSessionStoreConfig {
+                    pending_login_expiration: std::time::Duration::from_secs(60),
+                    cleanup_interval: std::time::Duration::from_secs(60),
+                    sqlite_config: golem_common::config::DbSqliteConfig {
+                        database: db.path().to_string_lossy().into_owned(),
+                        max_connections: 1,
+                        foreign_keys: false,
+                    },
+                },
             )
             .await
             .unwrap(),

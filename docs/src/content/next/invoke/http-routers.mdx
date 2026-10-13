@@ -922,7 +922,9 @@ the deployment by the request's host:
 - any other host gets `404`.
 
 A domain holds either an HTTP API deployment or an MCP deployment, not both; the registry
-rejects the second one. The MCP port (`mcp_port`, 9007 by default) still serves MCP
+rejects the second one. Domains are registered in their canonical spelling: a lowercase host
+without a trailing dot, with an optional port. Requests are matched against that spelling, so
+`Host: Shop.Example.com.` reaches `shop.example.com`. The MCP port (`mcp_port`, 9007 by default) still serves MCP
 deployments only, so an ingress can keep routing MCP domains to it.
 
 To serve the management API on the same public port, put a router in front that sends the

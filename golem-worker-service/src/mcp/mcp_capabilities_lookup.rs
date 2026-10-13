@@ -19,9 +19,9 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::mcp::CompiledMcp;
-use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -65,6 +65,8 @@ const MCP_CACHE_EVICTION_PERIOD: Duration = Duration::from_secs(60);
 // fails the lookup rather than serving a result from before an invalidation.
 const MAX_LOOKUP_ATTEMPTS: usize = 3;
 
+const DOMAIN_GENERATIONS: usize = 256;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct McpCacheKey {
     domain: Domain,
@@ -90,9 +92,10 @@ pub struct RegistryServiceMcpCapabilityLookup {
     negative_cache: CachedMcpCache,
     /// Fences lookups that started before `invalidate_all`.
     generation: AtomicU64,
-    /// Fences lookups of one domain that started before `invalidate` of that domain. Only
-    /// domains of MCP deployments are invalidated one by one, which bounds the map.
-    domain_generations: Mutex<HashMap<Domain, u64>>,
+    /// Fences lookups of one domain that started before `invalidate` of that domain. Domains
+    /// share a fixed number of generations by hash, which bounds the memory. An invalidation
+    /// also fences the other domains of its generation; their next lookups fetch again.
+    domain_generations: [AtomicU64; DOMAIN_GENERATIONS],
 }
 
 impl RegistryServiceMcpCapabilityLookup {
@@ -132,7 +135,7 @@ impl RegistryServiceMcpCapabilityLookup {
                 "mcp_capability_lookup_negative",
             ),
             generation: AtomicU64::new(0),
-            domain_generations: Mutex::new(HashMap::new()),
+            domain_generations: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 
@@ -140,18 +143,18 @@ impl RegistryServiceMcpCapabilityLookup {
         // A lookup compares its key before and after the fill, so a key that races an
         // invalidation only causes a retry.
         let generation = self.generation.load(Ordering::SeqCst);
-        let domain_generation = self
-            .domain_generations
-            .lock()
-            .unwrap()
-            .get(domain)
-            .copied()
-            .unwrap_or_default();
+        let domain_generation = self.domain_generation(domain).load(Ordering::SeqCst);
         McpCacheKey {
             domain: domain.clone(),
             generation,
             domain_generation,
         }
+    }
+
+    fn domain_generation(&self, domain: &Domain) -> &AtomicU64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        domain.hash(&mut hasher);
+        &self.domain_generations[(hasher.finish() % DOMAIN_GENERATIONS as u64) as usize]
     }
 
     async fn remove_cached(&self, predicate: impl Fn(&McpCacheKey) -> bool) {
@@ -211,12 +214,8 @@ impl RegistryServiceMcpCapabilityLookup {
 #[async_trait]
 impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
     async fn invalidate(&self, domain: &Domain) {
-        *self
-            .domain_generations
-            .lock()
-            .unwrap()
-            .entry(domain.clone())
-            .or_default() += 1;
+        self.domain_generation(domain)
+            .fetch_add(1, Ordering::SeqCst);
         self.remove_cached(|key| &key.domain == domain).await;
     }
 
@@ -268,6 +267,7 @@ mod tests {
     use golem_common::model::application::ApplicationName;
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
     use test_r::test;
     use tokio::sync::{mpsc, oneshot};
