@@ -14,6 +14,9 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
+/// The value of every quota of the local server's default plan.
+const LOCAL_PLAN_UNLIMITED: u64 = 1_000_000_000_000_000_000;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountUsageView {
@@ -261,10 +264,10 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits show produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
-    assert_eq!(limits.effective_value, u64::MAX);
-    assert_eq!(limits.plan_default, u64::MAX);
+    assert_eq!(limits.effective_value, LOCAL_PLAN_UNLIMITED);
+    assert_eq!(limits.plan_default, LOCAL_PLAN_UNLIMITED);
     assert_eq!(limits.override_value, None);
-    assert_eq!(limits.ceiling, u64::MAX);
+    assert_eq!(limits.ceiling, LOCAL_PLAN_UNLIMITED);
     assert!(limits.user_configurable);
 
     let output = ctx
@@ -297,7 +300,7 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits unset produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
-    assert_eq!(limits.effective_value, u64::MAX);
+    assert_eq!(limits.effective_value, LOCAL_PLAN_UNLIMITED);
     assert_eq!(limits.override_value, None);
 }
 
@@ -309,7 +312,10 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
     const BILLING_REPORT_TIMEOUT: Duration = Duration::from_secs(120);
 
     let mut ctx = TestContext::new();
-    ctx.add_env_var("GOLEM__RESOURCE_USAGE_METERING__MEMORY", "true");
+    ctx.add_env_var(
+        "GOLEM__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY",
+        "true",
+    );
     ctx.start_server().await;
 
     let app_name = "memory-billing";

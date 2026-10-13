@@ -119,7 +119,7 @@ impl StartingRouter {
         self.port
     }
 
-    pub fn serve(self, started_components: StartedComponents) {
+    pub fn serve(self, started_components: StartedComponents, cors_origin_regex: &str) {
         let StartedComponents {
             registry_service,
             worker_executor,
@@ -226,7 +226,11 @@ impl StartingRouter {
             // Everything else is routed to registry service
             .at("*", registry_service_api.clone())
             .with(CookieJarManager::new())
-            .with(Cors::new().allow_origin_regex(".*").allow_credentials(true))
+            .with(
+                Cors::new()
+                    .allow_origin_regex(cors_origin_regex)
+                    .allow_credentials(true),
+            )
             .with(CliClientInfoMiddleware::new())
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
