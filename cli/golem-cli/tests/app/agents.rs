@@ -23,45 +23,14 @@ inherit_test_dep!(Tracing);
 
 async fn streaming_invocation_context() -> TestContext {
     let mut ctx = TestContext::new();
-    let component_dir = ctx.cwd_path_join("component");
-    fs::create_dir_all(&component_dir).unwrap();
-
-    let fixture = workspace_path().join("test-components/agent-rpc/golem-it-agent-rpc-rust");
-    fs_extra::dir::copy(
-        fixture.join("src"),
-        &component_dir,
-        &fs_extra::dir::CopyOptions::new(),
-    )
-    .unwrap();
-
-    let sdk_path = workspace_path().join("sdks/rust/golem-rust");
-    fs::write_str(
-        component_dir.join("Cargo.toml"),
-        formatdoc! {r#"
-            [package]
-            name = "golem_it_agent_rpc_rust"
-            version = "0.0.1"
-            edition = "2024"
-
-            [profile.release]
-            opt-level = "s"
-            lto = true
-
-            [lib]
-            crate-type = ["cdylib"]
-            path = "src/lib.rs"
-
-            [dependencies]
-            bytes = "1.11.0"
-            log = {{ version = "0.4.29", features = ["kv"] }}
-            golem-rust = {{ path = "{sdk_path}", features = ["bytes", "export_golem_agentic"] }}
-            serde = {{ version = "1", features = ["derive"] }}
-            serde_json = "1"
-            wasi-fetch = "=0.2.0"
-        "#, sdk_path = sdk_path.display()},
-    )
-    .unwrap();
-
+    // Deploys the prebuilt component instead of building it: a release build with
+    // LTO from a cold target directory takes most of a test's time limit.
+    let fixture = workspace_path().join("test-components/golem_it_agent_rpc_rust_release.wasm");
+    assert!(
+        fixture.is_file(),
+        "build test-components/agent-rpc (golem-it:agent-rpc-rust) before running this test"
+    );
+    fs::copy(&fixture, ctx.cwd_path_join("agent-rpc-rust.wasm")).unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -69,30 +38,14 @@ async fn streaming_invocation_context() -> TestContext {
 
             app: streaming-invocation
 
-            componentTemplates:
-              rust-streaming-test:
-                guestLanguage: rust
-                build:
-                - command: cargo build --target wasm32-wasip2 --release
-                  sources:
-                  - "{{{{ componentDir }}}}/src"
-                  - "{{{{ componentDir }}}}/Cargo.toml"
-                  targets:
-                  - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
-                componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
-                outputWasm: "{{{{ golemTempDir }}}}/agents/golem_it_agent_rpc_rust.wasm"
-
             components:
               golem-it:agent-rpc-rust:
-                dir: component
-                templates: rust-streaming-test
-                presets:
-                  release: {{}}
+                componentWasm: agent-rpc-rust.wasm
+                outputWasm: agent-rpc-rust-final.wasm
 
             environments:
               local:
                 server: local
-                componentPresets: release
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
