@@ -3581,7 +3581,7 @@ async fn a_head_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
 
 /// Gives the failure of a listing, an existence check and a listing below a path of a storage
 /// that answers each `ListObjectsV2` with `answer` and each `HEAD` with a 404, and the number of
-/// requests that each call sends.
+/// `ListObjectsV2` requests that each call sends.
 async fn listing_failures(answer: fn() -> Answer) -> [(Option<BlobFailure>, usize); 3] {
     let script = move |request: &SentRequest, _: usize| {
         if request.method == "HEAD" {
@@ -3591,6 +3591,12 @@ async fn listing_failures(answer: fn() -> Answer) -> [(Option<BlobFailure>, usiz
         }
     };
     let failure = |error: anyhow::Error| BlobFailure::of(&error);
+    let listings = |requests: &SentRequests| {
+        sent(requests)
+            .iter()
+            .filter(|request| request.is_list_objects())
+            .count()
+    };
 
     let (storage, requests) = scripted_storage("", script);
     let list_dir = storage
@@ -3598,7 +3604,7 @@ async fn listing_failures(answer: fn() -> Answer) -> [(Option<BlobFailure>, usiz
         .await
         .err()
         .map(failure);
-    let list_dir = (list_dir, sent(&requests).len());
+    let list_dir = (list_dir, listings(&requests));
 
     let (storage, requests) = scripted_storage("", script);
     let exists = storage
@@ -3606,13 +3612,7 @@ async fn listing_failures(answer: fn() -> Answer) -> [(Option<BlobFailure>, usiz
         .await
         .err()
         .map(failure);
-    let exists = (
-        exists,
-        sent(&requests)
-            .iter()
-            .filter(|r| r.is_list_objects())
-            .count(),
-    );
+    let exists = (exists, listings(&requests));
 
     let (storage, requests) = scripted_storage("", script);
     let below = storage
@@ -3620,7 +3620,7 @@ async fn listing_failures(answer: fn() -> Answer) -> [(Option<BlobFailure>, usiz
         .await
         .err()
         .map(failure);
-    [list_dir, exists, (below, sent(&requests).len())]
+    [list_dir, exists, (below, listings(&requests))]
 }
 
 #[test]
