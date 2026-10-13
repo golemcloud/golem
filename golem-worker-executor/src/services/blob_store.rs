@@ -1043,6 +1043,7 @@ mod tests {
     /// A read that the storage refuses, here because the executor cannot search the blob root,
     /// is not an error of the input of the guest and not one that a retry can pass. The guest
     /// gets a permanent `PermissionDenied` that names the refusal.
+    #[cfg(unix)]
     #[test]
     async fn blob_store_error_makes_a_refusal_of_the_storage_a_permanent_permission_error() {
         use std::os::unix::fs::PermissionsExt;

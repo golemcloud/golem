@@ -18,9 +18,11 @@ use super::{
     directory_attempts, encoded_name, first_error, listed_entry, persist_with,
     remove_unless_dropped, staging_file_is_old, write_if_absent, write_staged,
 };
+#[cfg(unix)]
+use crate::storage::blob::{BlobFailure, BlobRefusal};
 use crate::storage::blob::{
-    BlobFailure, BlobRangeError, BlobRefusal, BlobStorage, BlobStorageNamespace, ListedBlob,
-    NormalizedBlobPath, PutIfAbsent, normalized_blob_path,
+    BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    normalized_blob_path,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -1272,6 +1274,7 @@ fn a_write_dropped_while_it_makes_its_directory_never_lands() {
     );
 }
 
+#[cfg(unix)]
 /// Gives the kind of the error of each read of the blob `ranges/blob` of `storage`: `get_raw`,
 /// `get_stream`, `get_range_stream` and `get_raw_slice`, and `None` for a read that passed.
 async fn read_failures(storage: &FileSystemBlobStorage) -> [Option<BlobFailure>; 4] {
@@ -1301,12 +1304,14 @@ async fn read_failures(storage: &FileSystemBlobStorage) -> [Option<BlobFailure>;
     ]
 }
 
+#[cfg(unix)]
 /// Sets the Unix permission bits of `path` to `mode`.
 fn set_mode(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 async fn a_read_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error() {
     // A directory on the path of the blob that the executor cannot search, or a blob that it
@@ -1339,6 +1344,7 @@ async fn a_read_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_err
     );
 }
 
+#[cfg(unix)]
 #[test]
 async fn an_existence_check_or_a_listing_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error()
  {
