@@ -244,7 +244,7 @@ consumer and deploy the import and binding with `golem deploy --yes`.
 ## Other supported languages
 
 Tool clients are internal guest bridges. The consumer's `rust`, `ts`, `effect`,
-`scala`, or `moonbit` language template selects its dependency client generator.
+`scala`, `moonbit`, or `go` language template selects its dependency client generator.
 With default paths, dependencies generate under
 `golem-temp/bridge-sdk/<language>/internal/<tool-name>-tool-guest-client/`.
 
@@ -255,10 +255,11 @@ With default paths, dependencies generate under
 | Rust | `Cargo.toml`, `src/lib.rs`; `bash_tool_guest_client::BashClient::new()` | Local Cargo path dependency |
 | Scala | sbt project; `golem.bridge.client.bash.BashClient()` | Include the generated Scala sources in the consumer build |
 | MoonBit | `moon.mod.json`, `client/moon.pkg`, `client/client.mbt`; `@bash.BashClient::new()` | Local module dependency and `bash-tool-guest-client/client` package import |
+| Go | Go module `golem.local/bridge/bash-tool-guest-client`; `bash.Run.Call(func(a *bash.RunArgs) { a.Script = ... })` | `require` and `replace` of the generated module in the consumer's `go.mod` |
 
 Use the language's call-tool guide for invocation and error handling:
 [`golem-call-tool-ts`](/next/how-to-guides/ts/golem-call-tool-ts), [`golem-tools-middleware-effect`](/next/how-to-guides/effect/golem-tools-middleware-effect), [`golem-call-tool-rust`](/next/how-to-guides/rust/golem-call-tool-rust),
-[`golem-call-tool-scala`](/next/how-to-guides/scala/golem-call-tool-scala), and [`golem-call-tool-moonbit`](/next/how-to-guides/moonbit/golem-call-tool-moonbit).
+[`golem-call-tool-scala`](/next/how-to-guides/scala/golem-call-tool-scala), [`golem-call-tool-moonbit`](/next/how-to-guides/moonbit/golem-call-tool-moonbit), and [`golem-call-tool-go`](/next/how-to-guides/go/golem-call-tool-go).
 
 ## Explicit bridge generation
 

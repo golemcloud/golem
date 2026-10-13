@@ -1,4 +1,7 @@
 name: "add-ignite-rdbms"
+# The Go SDK has no Ignite support.
+skip_if:
+  language: "go"
 semanticRequirements:
   effect:
     - The Effect implementation must resolve SqlClient.SqlClient from effect/unstable/sql and provide it with IgniteClient.layer; IgniteClient.make and adapter-specific service access are not substitutes.

@@ -9,7 +9,7 @@ The harness in `golem-skills/tests/harness/` runs coding agents against current-
 
 ## Skills and generated documentation
 
-Catalog skills live in `golem-skills/skills/{common,rust,ts,effect,scala,moonbit}/<skill>/SKILL.md`. Golem templates install common plus language-specific skills in the canonical `.agents/skills/` tree. Harness drivers also seed bootstrap skills there; Claude receives a `.claude -> .agents` symlink rather than a second catalog copy.
+Catalog skills live in `golem-skills/skills/{common,rust,ts,effect,scala,moonbit,go}/<skill>/SKILL.md`. Golem templates install common plus language-specific skills in the canonical `.agents/skills/` tree. Harness drivers also seed bootstrap skills there; Claude receives a `.claude -> .agents` symlink rather than a second catalog copy.
 
 After changing catalog skills:
 
@@ -63,7 +63,7 @@ Current options:
 | Option                      | Meaning                                                                     | Default                     |
 | --------------------------- | --------------------------------------------------------------------------- | --------------------------- |
 | `--agent <name>`            | `amp`, `claude-code`, `opencode`, `codex`, or `gemini`; `all` runs all      | `all`                       |
-| `--language <lang>`         | `ts`, `effect`, `rust`, `scala`, or `moonbit`; `all` runs all               | `all`                       |
+| `--language <lang>`         | `ts`, `effect`, `rust`, `scala`, `moonbit`, or `go`; `all` runs all        | `all`                       |
 | `--scenario <name>`         | Select one scenario                                                         | all                         |
 | `--model <id>`              | Model selection (currently sets `OPENCODE_MODEL`; also recorded in reports) | agent default               |
 | `--scenarios <dir>`         | Scenario directory, relative to cwd                                         | `./scenarios`               |
@@ -123,7 +123,7 @@ Every step has exactly one action:
 
 Common optional step fields are `id`, `timeout`, `expect`, `retry: { attempts, delay }`, `only_if`, `skip_if`, and `verify: { build?, deploy?, expectedFiles? }`. `allowedExtraSkills` or `strictSkillMatch` requires `expectedSkills`. Without an explicit extra-skill restriction, additional activations do not fail the step.
 
-Language-conditional values use `{ ts, effect, rust, scala, moonbit }` maps. Supported conditional fields include prompts, skill lists, `verify`, `expect`, project presets, shell args, HTTP body, and invocation/trigger agent, method and args. A missing selected-language entry resolves to absent and may fail later validation/execution; include every language the scenario runs. The default Effect agent is `Counter`, not `CounterAgent`.
+Language-conditional values use `{ ts, effect, rust, scala, moonbit, go }` maps. Supported conditional fields include prompts, skill lists, `verify`, `expect`, project presets, shell args, HTTP body, and invocation/trigger agent, method and args. A missing selected-language entry resolves to absent and may fail later validation/execution; include every language the scenario runs. The default Effect agent is `Counter`, not `CounterAgent`.
 
 Use source-language method names: snake_case for Rust/MoonBit and camelCase for TypeScript/Scala. Use language-specific argument syntax where composite values differ.
 

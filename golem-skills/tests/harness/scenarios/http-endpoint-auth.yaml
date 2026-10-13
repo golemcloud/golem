@@ -68,6 +68,7 @@ steps:
         routes after deployment; the harness must observe the untouched `"none"` state first.
       scala: *non-effect-add-secure-agent-prompt
       moonbit: *non-effect-add-secure-agent-prompt
+      go: *non-effect-add-secure-agent-prompt
     expectedSkills:
       rust:
         - "golem-add-http-auth-rust"
@@ -79,6 +80,8 @@ steps:
         - "golem-add-http-auth-scala"
       moonbit:
         - "golem-add-http-auth-moonbit"
+      go:
+        - "golem-add-http-auth-go"
     verify:
       build: true
       deploy: true

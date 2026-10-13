@@ -1,0 +1,143 @@
+{
+  "version": "1.0.0",
+  "roundtrip": [
+    { "id": "bool", "wire": { "kind": "bool", "value": true } },
+    { "id": "s8", "wire": { "kind": "s8", "value": -8 } },
+    { "id": "s16", "wire": { "kind": "s16", "value": -16 } },
+    { "id": "s32", "wire": { "kind": "s32", "value": -32 } },
+    { "id": "s64-min", "wire": { "kind": "s64", "value": "-9223372036854775808" } },
+    { "id": "s64-beyond-double", "wire": { "kind": "s64", "value": "9007199254740993" } },
+    { "id": "u8", "wire": { "kind": "u8", "value": 8 } },
+    { "id": "u16", "wire": { "kind": "u16", "value": 16 } },
+    { "id": "u32", "wire": { "kind": "u32", "value": 32 } },
+    { "id": "u64-max", "wire": { "kind": "u64", "value": "18446744073709551615" } },
+    { "id": "f32", "wire": { "kind": "f32", "value": 1.5 } },
+    { "id": "f64-negative-zero", "wire": { "kind": "f64", "value": -0.0 } },
+    { "id": "f32-nan", "wire": { "kind": "f32", "value": { "$float": "nan" } } },
+    { "id": "f64-positive-infinity", "wire": { "kind": "f64", "value": { "$float": "positive-infinity" } } },
+    { "id": "f64-negative-infinity", "wire": { "kind": "f64", "value": { "$float": "negative-infinity" } } },
+    { "id": "char", "wire": { "kind": "char", "value": "λ" } },
+    { "id": "string", "wire": { "kind": "string", "value": "Golem" } },
+    { "id": "uuid", "wire": { "kind": "uuid", "value": "dd00721b-3329-4621-a01d-c71f02cd78c6" } },
+    {
+      "id": "record",
+      "wire": { "kind": "record", "value": { "fields": [
+        { "kind": "u8", "value": 1 },
+        { "kind": "string", "value": "x" }
+      ] } }
+    },
+    {
+      "id": "variant-with-payload",
+      "wire": { "kind": "variant", "value": { "case": 2, "payload": { "kind": "string", "value": "payload" } } }
+    },
+    { "id": "variant-without-payload", "wire": { "kind": "variant", "value": { "case": 0 } } },
+    { "id": "enum", "wire": { "kind": "enum", "value": { "case": 3 } } },
+    { "id": "flags", "wire": { "kind": "flags", "value": { "bits": [true, false, true] } } },
+    {
+      "id": "tuple",
+      "wire": { "kind": "tuple", "value": { "elements": [
+        { "kind": "bool", "value": true },
+        { "kind": "u8", "value": 2 }
+      ] } }
+    },
+    {
+      "id": "list",
+      "wire": { "kind": "list", "value": { "elements": [
+        { "kind": "u8", "value": 1 },
+        { "kind": "u8", "value": 2 }
+      ] } }
+    },
+    { "id": "list-empty", "wire": { "kind": "list", "value": { "elements": [] } } },
+    {
+      "id": "fixed-list",
+      "wire": { "kind": "fixed-list", "value": { "elements": [
+        { "kind": "u8", "value": 1 },
+        { "kind": "u8", "value": 2 }
+      ] } }
+    },
+    {
+      "id": "map",
+      "wire": { "kind": "map", "value": { "entries": [[
+        { "kind": "string", "value": "key" },
+        { "kind": "u8", "value": 1 }
+      ]] } }
+    },
+    { "id": "option-none", "wire": { "kind": "option", "value": { "inner": null } } },
+    {
+      "id": "option-some-none",
+      "wire": { "kind": "option", "value": { "inner": { "kind": "option", "value": { "inner": null } } } }
+    },
+    { "id": "result-ok-unit", "wire": { "kind": "result", "value": { "tag": "ok", "value": null } } },
+    { "id": "result-err-unit", "wire": { "kind": "result", "value": { "tag": "err", "value": null } } },
+    {
+      "id": "result-err",
+      "wire": { "kind": "result", "value": { "tag": "err", "value": { "kind": "string", "value": "failed" } } }
+    },
+    { "id": "text-with-language", "wire": { "kind": "text", "value": { "text": "hello", "language": "en-GB" } } },
+    { "id": "text-without-language", "wire": { "kind": "text", "value": { "text": "hello" } } },
+    {
+      "id": "binary-with-mime-type",
+      "wire": { "kind": "binary", "value": { "bytes": [251, 255], "mimeType": "application/octet-stream" } }
+    },
+    { "id": "binary-empty", "wire": { "kind": "binary", "value": { "bytes": [] } } },
+    { "id": "path", "wire": { "kind": "path", "value": { "path": "/tmp/input.wav" } } },
+    { "id": "url", "wire": { "kind": "url", "value": { "url": "https://example.com/a" } } },
+    {
+      "id": "datetime-nanoseconds",
+      "wire": { "kind": "datetime", "value": { "value": "2024-09-01T11:34:56.123456789Z" } }
+    },
+    { "id": "duration-min", "wire": { "kind": "duration", "value": { "nanoseconds": "-9223372036854775808" } } },
+    {
+      "id": "quantity-wide-mantissa",
+      "wire": { "kind": "quantity", "value": { "mantissa": "9007199254740993", "scale": 3, "unit": "kg" } }
+    },
+    {
+      "id": "union",
+      "wire": { "kind": "union", "value": { "tag": "number", "body": { "kind": "string", "value": "number:7" } } }
+    }
+  ],
+  "reject": [
+    { "id": "u64-as-number", "wire": { "kind": "u64", "value": 42 } },
+    { "id": "u64-leading-zero", "wire": { "kind": "u64", "value": "042" } },
+    { "id": "u64-overflow", "wire": { "kind": "u64", "value": "18446744073709551616" } },
+    { "id": "s64-negative-zero", "wire": { "kind": "s64", "value": "-0" } },
+    { "id": "s64-overflow", "wire": { "kind": "s64", "value": "9223372036854775808" } },
+    { "id": "uuid-upper-case", "wire": { "kind": "uuid", "value": "DD00721B-3329-4621-A01D-C71F02CD78C6" } },
+    { "id": "uuid-without-hyphens", "wire": { "kind": "uuid", "value": "dd00721b33294621a01dc71f02cd78c6" } },
+    { "id": "uuid-malformed", "wire": { "kind": "uuid", "value": "not-a-uuid" } },
+    { "id": "float-unknown-exceptional", "wire": { "kind": "f64", "value": { "$float": "infinity" } } },
+    { "id": "f32-out-of-range", "wire": { "kind": "f32", "value": 3.5e38 } },
+    { "id": "u8-out-of-range", "wire": { "kind": "u8", "value": 256 } },
+    { "id": "unknown-envelope-field", "wire": { "kind": "u8", "value": 1, "extra": true } },
+    { "id": "unknown-payload-field", "wire": { "kind": "record", "value": { "fields": [], "extra": true } } },
+    {
+      "id": "nested-unknown-envelope-field",
+      "wire": { "kind": "record", "value": { "fields": [{ "kind": "u8", "value": 1, "extra": true }] } }
+    },
+    { "id": "binary-null-mime-type", "wire": { "kind": "binary", "value": { "bytes": [], "mimeType": null } } },
+    { "id": "binary-byte-out-of-range", "wire": { "kind": "binary", "value": { "bytes": [256] } } },
+    { "id": "binary-snake-case-mime-type", "wire": { "kind": "binary", "value": { "bytes": [], "mime_type": "text/plain" } } },
+    { "id": "variant-null-payload", "wire": { "kind": "variant", "value": { "case": 0, "payload": null } } },
+    { "id": "text-null-language", "wire": { "kind": "text", "value": { "text": "hello", "language": null } } },
+    { "id": "option-without-inner", "wire": { "kind": "option", "value": {} } },
+    { "id": "result-without-value", "wire": { "kind": "result", "value": { "tag": "ok" } } },
+    { "id": "result-unknown-tag", "wire": { "kind": "result", "value": { "tag": "unknown", "value": null } } },
+    { "id": "list-null-elements", "wire": { "kind": "list", "value": { "elements": null } } },
+    { "id": "map-entry-not-a-pair", "wire": { "kind": "map", "value": { "entries": [[{ "kind": "u8", "value": 1 }]] } } },
+    { "id": "union-null-tag", "wire": { "kind": "union", "value": { "tag": null, "body": { "kind": "u8", "value": 1 } } } },
+    { "id": "quantity-leading-zero", "wire": { "kind": "quantity", "value": { "mantissa": "01", "scale": 0, "unit": "m" } } },
+    { "id": "duration-as-number", "wire": { "kind": "duration", "value": { "nanoseconds": 1 } } },
+    { "id": "unknown-kind", "wire": { "kind": "decimal", "value": "1" } },
+    { "id": "secret", "wire": { "kind": "secret", "value": {} } },
+    { "id": "quota-token", "wire": { "kind": "quota-token", "value": {} } },
+    { "id": "permission-card", "wire": { "kind": "permission-card", "value": {} } },
+    { "id": "stream", "wire": { "kind": "stream", "value": {} } },
+    {
+      "id": "nested-host-managed",
+      "wire": { "kind": "record", "value": { "fields": [
+        { "kind": "string", "value": "valid sibling" },
+        { "kind": "option", "value": { "inner": { "kind": "secret", "value": {} } } }
+      ] } }
+    }
+  ]
+}
