@@ -992,6 +992,87 @@ async fn empty() {
 }
 
 #[test]
+fn a_status_error_converts_to_its_text() {
+    assert_eq!(
+        String::from(super::StatusError::Other("boom".to_string())),
+        "boom"
+    );
+}
+
+#[test]
+async fn the_status_reader_reads_nothing_past_its_horizon() {
+    let test_case = TestCase::builder(0)
+        .add(OplogEntry::no_op(None), |status| status)
+        .build();
+    let reader = super::StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(1),
+    );
+    assert!(
+        reader
+            .read_exact(OplogIndex::from_u64(2), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
+    let idempotency_key = IdempotencyKey::fresh();
+    let retry_from = OplogIndex::from_u64(2);
+    let test_case = TestCase::builder(0)
+        .agent_invocation_started("a", vec![], idempotency_key)
+        .add(
+            OplogEntry::log(
+                None,
+                golem_common::model::oplog::LogLevel::Stderr,
+                String::new(),
+                "boom\n".to_string(),
+                None,
+            ),
+            |status| status,
+        )
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                AgentError::TransientError("failed".to_string()),
+                retry_from,
+                false,
+                None,
+            ),
+            |mut status| {
+                status.status = AgentStatus::Failed;
+                status
+            },
+        )
+        .build();
+    let status = test_case.entries.last().unwrap().expected_status.clone();
+
+    let last_error = crate::durable_host::last_error(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        &status,
+    )
+    .await
+    .expect("a failed agent has a last error");
+
+    assert_eq!(
+        (last_error.error, last_error.stderr, last_error.retry_from),
+        (
+            AgentError::TransientError("failed".to_string()),
+            "boom\n".to_string(),
+            retry_from
+        )
+    );
+}
+
+#[test]
 async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
     let idempotency_key = IdempotencyKey::fresh();
     let retry_from = OplogIndex::from_u64(2);

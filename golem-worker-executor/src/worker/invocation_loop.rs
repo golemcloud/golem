@@ -3268,10 +3268,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &result,
         ) {
             self.parent.record_recovery_failure(error).await;
-            // An oplog that does not read fails the agent: it is not restarted.
-            if self.parent.retired_for_lost_shard()
-                || matches!(error, WorkerExecutorError::OplogUnreadable { .. })
-            {
+            if infrastructure_failure_stops_the_agent(self.parent.retired_for_lost_shard(), error) {
                 return CommandOutcome::BreakInnerLoop(RetryDecision::None);
             }
             return CommandOutcome::BreakInnerLoopForRecovery {
@@ -3935,6 +3932,15 @@ fn selected_infrastructure_recovery_error<'a>(
     }
 }
 
+/// Whether an infrastructure failure of an invocation stops the agent instead of reconstructing
+/// it: the shard is lost, or the oplog does not read, so a reconstruction would fail again.
+fn infrastructure_failure_stops_the_agent(
+    retired_for_lost_shard: bool,
+    error: &WorkerExecutorError,
+) -> bool {
+    retired_for_lost_shard || matches!(error, WorkerExecutorError::OplogUnreadable { .. })
+}
+
 fn is_recovery_required_error(error: &WorkerExecutorError) -> bool {
     match error {
         WorkerExecutorError::RecoveryRequired { .. } => true,
@@ -4255,12 +4261,12 @@ mod tests {
         PeriodicFailure, PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
         apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
         close_usage_before_delete, coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
-        failed_agent_invocation_outcome, finish_filesystem_limit_unload, measured_capture,
-        periodic_failure_outcome, periodic_snapshot_failure_outcome, publish_unload_outcome,
-        run_invocation_loop_task, selected_infrastructure_recovery_error, snapshot_action_at,
-        snapshot_baseline_timestamp, spawn_module_owned_unload,
-        successful_agent_invocation_outcome, unload_resident_agent_ownership,
-        wait_for_resident_wakeup, with_end,
+        failed_agent_invocation_outcome, finish_filesystem_limit_unload,
+        infrastructure_failure_stops_the_agent, measured_capture, periodic_failure_outcome,
+        periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
+        selected_infrastructure_recovery_error, snapshot_action_at, snapshot_baseline_timestamp,
+        spawn_module_owned_unload, successful_agent_invocation_outcome,
+        unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
     };
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
@@ -5313,6 +5319,21 @@ mod tests {
         assert!(held.load(Ordering::Acquire));
         state.release();
         assert_eq!(drops.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn an_unreadable_oplog_stops_the_agent_on_a_shard_it_still_owns() {
+        let unreadable = WorkerExecutorError::oplog_unreadable(
+            golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "unreadable".to_string(),
+            },
+            "corrupt oplog data from archive layer 1",
+        );
+        let recovery = WorkerExecutorError::recovery_required("payload backend unavailable");
+        assert!(infrastructure_failure_stops_the_agent(false, &unreadable));
+        assert!(infrastructure_failure_stops_the_agent(true, &recovery));
+        assert!(!infrastructure_failure_stops_the_agent(false, &recovery));
     }
 
     #[test]

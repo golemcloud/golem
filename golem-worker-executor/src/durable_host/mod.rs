@@ -10291,7 +10291,7 @@ fn backward_scan_window_start(end: OplogIndex) -> OplogIndex {
 ///
 /// A possible future optimization is to maintain the relevant indices (last error, last invocation
 /// start) directly in the [`AgentStatusRecord`] so that no backward oplog scan is needed at all.
-async fn last_error<T: HasOplogService + HasConfig>(
+pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,

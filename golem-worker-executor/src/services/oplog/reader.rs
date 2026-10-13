@@ -379,6 +379,24 @@ mod tests {
     use super::*;
     use test_r::test;
 
+    #[test]
+    fn an_unreadable_oplog_names_the_agent_and_the_read_error() {
+        let agent_id = golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "unreadable".to_string(),
+        };
+        let error = UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        );
+        let text = error.to_string();
+        assert_eq!(
+            text,
+            format!("oplog of {agent_id} is unreadable: {}", error.error)
+        );
+        assert_eq!(String::from(error), text);
+    }
+
     fn entries(start: u64, end: u64) -> BTreeMap<OplogIndex, u64> {
         (start..=end)
             .map(|index| (OplogIndex::from_u64(index), index))

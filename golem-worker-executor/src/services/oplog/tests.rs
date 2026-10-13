@@ -2202,6 +2202,87 @@ async fn missing_external_payload_is_classified_as_corrupt_history(_tracing: &Tr
 }
 
 #[test]
+async fn a_layered_oplog_length_counts_every_layer(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let lower: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary.clone(), nev![lower.clone()], 1000, 1000);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "layered-length".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = service
+        .open(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await;
+    for _ in 0..3 {
+        oplog
+            .add_and_commit(OplogEntry::no_op(None).rounded())
+            .await
+            .unwrap();
+    }
+    MultiLayerOplog::try_archive_blocking(&oplog).await.unwrap();
+    for _ in 0..2 {
+        oplog
+            .add_and_commit(OplogEntry::no_op(None).rounded())
+            .await
+            .unwrap();
+    }
+    let archived = lower
+        .open(&owned_agent_id, AgentMode::Durable, None)
+        .await
+        .length()
+        .await
+        .unwrap();
+    let primary_length = primary
+        .open(
+            &mut primary.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await
+        .length()
+        .await
+        .unwrap();
+    assert!(
+        archived > 0 && primary_length > 0,
+        "each layer must hold an entry"
+    );
+
+    assert_eq!(oplog.length().await.unwrap(), primary_length + archived);
+}
+
+#[test]
 async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let service = PrimaryOplogService::new(
@@ -12332,6 +12413,9 @@ async fn an_ephemeral_handle_is_replaced_for_a_newer_epoch_and_its_writes_are_fe
         Err(OplogError::Fenced(_))
     ));
     assert_eq!(second.length().await.unwrap(), 1);
+    second.add(OplogEntry::exited().rounded()).await.unwrap();
+    second.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(second.length().await.unwrap(), 2);
 
     // An equal or older request is handed the current handle.
     let again = open(7).await;
