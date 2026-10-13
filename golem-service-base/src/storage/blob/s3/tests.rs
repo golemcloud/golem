@@ -19,9 +19,9 @@ use super::{
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::replayable_stream::ReplayableStream;
 use crate::storage::blob::{
-    BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
-    ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment, join_blob_key, join_blob_path,
-    normalized_blob_path,
+    BlobFailure, BlobMissingError, BlobNameError, BlobRangeError, BlobRefusal, BlobStorage,
+    BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment, join_blob_key,
+    join_blob_path, normalized_blob_path,
 };
 use anyhow::anyhow;
 use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
@@ -555,6 +555,10 @@ const NO_SUCH_KEY: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>
 /// code is the one part of the error that a missing bucket and a missing source key do not
 /// share.
 const NO_SUCH_BUCKET: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>"#;
+
+/// The body of the error of a request that the credentials of the client cannot do. S3 and MinIO
+/// give the code `AccessDenied` with the status 403.
+const ACCESS_DENIED: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"#;
 
 /// The body of the response of a `CopyObject` that S3 did.
 const COPY_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>2015-10-21T07:28:00.000Z</LastModified><ETag>"9b2cf535f27731c974343645a3985328"</ETag></CopyObjectResult>"#;
@@ -3517,4 +3521,76 @@ fn range_response_requires_exact_selection_and_total_size() {
     ] {
         assert!(ranged_object_size(invalid, 7, 10).is_err(), "{invalid:?}");
     }
+}
+
+/// Gives the kind of the error of a read of `get_stream`, and the number of requests that the
+/// read sent, for the answer `answer` to each request.
+async fn get_stream_failure(answer: fn() -> Answer) -> (Option<BlobFailure>, usize) {
+    let (storage, requests) = scripted_storage("", move |_, _| answer());
+    let result = storage
+        .get_stream("test", "get-stream", namespace(), Path::new("blob"))
+        .await;
+    (
+        result.err().map(|error| BlobFailure::of(&error)),
+        sent(&requests).len(),
+    )
+}
+
+#[test]
+async fn a_read_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
+    // A 4xx answer to a `GetObject` of a key that the backend built tells that the storage
+    // refuses the executor, and only an operator of the storage can change that. The backend
+    // gives a `BlobRefusedError` and does not send the request again. `NoSuchKey` is not a
+    // refusal: the read gives `Ok(None)` for it.
+    assert_eq!(
+        [
+            get_stream_failure(|| Answer::new(403, ACCESS_DENIED)).await,
+            get_stream_failure(|| Answer::new(404, NO_SUCH_BUCKET)).await,
+            get_stream_failure(|| Answer::new(400, INVALID_REQUEST)).await,
+        ],
+        [
+            (Some(BlobFailure::Refused(BlobRefusal::AccessDenied)), 1),
+            (Some(BlobFailure::Refused(BlobRefusal::NoSuchBucket)), 1),
+            (
+                Some(BlobFailure::Refused(BlobRefusal::ClientError {
+                    status: 400
+                })),
+                1
+            ),
+        ]
+    );
+}
+
+#[test]
+async fn a_head_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
+    // A response to a `HEAD` has no body, so the SDK reads its status: a 403 is a refusal.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(403, ""));
+
+    let result = storage
+        .get_metadata("test", "get-metadata", namespace(), Path::new("blob"))
+        .await;
+
+    assert_eq!(
+        (
+            result.err().map(|error| BlobFailure::of(&error)),
+            sent(&requests).len()
+        ),
+        (Some(BlobFailure::Refused(BlobRefusal::AccessDenied)), 1)
+    );
+}
+
+#[test]
+async fn a_read_keeps_the_retry_of_an_answer_that_asks_for_one_more_attempt() {
+    // 408 and 429 ask the client to send the request again, and so does a code of
+    // `RETRIABLE_SERVICE_ERROR_CODES` with another 4xx. Each of them stays transient, and the
+    // storage sends 3 requests for it.
+    assert_eq!(
+        [
+            get_stream_failure(|| Answer::new(408, "")).await,
+            get_stream_failure(|| Answer::new(429, SLOW_DOWN)).await,
+            get_stream_failure(|| Answer::new(400, REQUEST_TIMEOUT)).await,
+            get_stream_failure(|| Answer::new(500, INTERNAL_ERROR)).await,
+        ],
+        [(Some(BlobFailure::Transient), 3); 4]
+    );
 }

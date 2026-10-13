@@ -14,9 +14,9 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorageBackend,
-    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
-    agent_path_segment, blob_positions, validate_range,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobRefusal, BlobRefusedError,
+    BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
+    PutIfAbsent, agent_path_segment, blob_positions, validate_range,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -323,9 +323,9 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let full_path = self.blob_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if async_fs::metadata(&full_path).await.is_ok() {
+        if read_metadata(&full_path).await?.is_some() {
             self.after_metadata();
-            Ok(absent_on_not_found(async_fs::read(&full_path).await)?)
+            absent_on_not_found(async_fs::read(&full_path).await).map_err(read_error)
         } else {
             Ok(None)
         }
@@ -341,8 +341,10 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let full_path = self.blob_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if async_fs::metadata(&full_path).await.is_ok() {
-            let file = tokio::fs::File::open(&full_path).await?;
+        if read_metadata(&full_path).await?.is_some() {
+            let file = tokio::fs::File::open(&full_path)
+                .await
+                .map_err(read_error)?;
             let stream = tokio_util::io::ReaderStream::new(file);
             Ok(Some(Box::pin(stream.map_err(|err| err.into()))))
         } else {
@@ -364,7 +366,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let mut file = match tokio::fs::File::open(full_path).await {
             Ok(file) => file,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(read_error(error)),
         };
         let metadata = file.metadata().await?;
         anyhow::ensure!(metadata.is_file(), "Blob is not a regular file");
@@ -395,11 +397,13 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let full_path = self.blob_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if async_fs::metadata(&full_path).await.is_err() {
+        if read_metadata(&full_path).await?.is_none() {
             return Ok(None);
         }
         self.after_metadata();
-        let Some(mut file) = absent_on_not_found(async_fs::File::open(&full_path).await)? else {
+        let Some(mut file) =
+            absent_on_not_found(async_fs::File::open(&full_path).await).map_err(read_error)?
+        else {
             return Ok(None);
         };
         // The length comes from the open file, so a change of the path after the open does not
@@ -426,9 +430,9 @@ impl BlobStorageBackend for FileSystemBlobStorage {
 
         // A blob wins over the directory that `create_dir` made at the same path, whose marker
         // is an empty file and so gives a size of zero.
-        let found = match async_fs::metadata(&blob).await {
-            Ok(metadata) => Some(metadata),
-            Err(_) => async_fs::metadata(&marker).await.ok(),
+        let found = match read_metadata(&blob).await? {
+            Some(metadata) => Some(metadata),
+            None => read_metadata(&marker).await?,
         };
         found
             .map(|metadata| {
@@ -710,6 +714,32 @@ fn first_error(steps: impl Iterator<Item = std::io::Result<()>>) -> std::io::Res
             first.or(step.err())
         })
         .map_or(Ok(()), Err)
+}
+
+/// Gives the error of a read that failed with `error`. A read that the permissions of the blob root
+/// refuse (`PermissionDenied`) gets a [`BlobRefusedError`] as its context: only an operator can
+/// change those permissions.
+fn read_error(error: std::io::Error) -> Error {
+    let refused = error.kind() == ErrorKind::PermissionDenied;
+    let error = Error::new(error);
+    if refused {
+        error.context(BlobRefusedError {
+            refusal: BlobRefusal::AccessDenied,
+        })
+    } else {
+        error
+    }
+}
+
+/// Gives the metadata of the entry at `path`, or `None` when the path has no entry that the read
+/// can see. A path that the permissions of the blob root hide gives the error of [`read_error`],
+/// because an entry can be there.
+async fn read_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, Error> {
+    match async_fs::metadata(path).await {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => Err(read_error(error)),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Gives `None` for a read that found nothing at its path, which a remove of the path after its

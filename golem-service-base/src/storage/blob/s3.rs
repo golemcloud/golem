@@ -16,9 +16,9 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobNameError, BlobRangeError, BlobRangeStream,
-    BlobStorageBackend, BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob,
-    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_positions, check_blob_name,
-    join_blob_key, validate_range,
+    BlobRefusal, BlobRefusedError, BlobStorageBackend, BlobStorageNamespace, DIR_MARKER,
+    ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_positions,
+    check_blob_name, join_blob_key, validate_range,
 };
 use anyhow::{Error, anyhow, ensure};
 use async_trait::async_trait;
@@ -29,7 +29,7 @@ use aws_sdk_s3::config::{
     BehaviorVersion, ConfigBag, Credentials, Intercept, Region, RequestChecksumCalculation,
     RuntimeComponents,
 };
-use aws_sdk_s3::error::{BoxError, SdkError};
+use aws_sdk_s3::error::{BoxError, ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::delete_objects::DeleteObjectsOutput;
 use aws_sdk_s3::operation::get_object::GetObjectError;
@@ -70,10 +70,13 @@ const RANGE_NOT_SATISFIABLE: u16 = 416;
 /// 15.5), and the first of a response that reports a fault of the server (section 15.6).
 ///
 /// A server tells a client with a 4xx that the request is the fault, so the same request gets
-/// the same answer. `is_permanent_put_object_error` reads the range between the two as
-/// permanent.
+/// the same answer. [`refusal_of`] reads the range between the two as permanent.
 const CLIENT_ERROR: u16 = 400;
 const SERVER_ERROR: u16 = 500;
+
+/// A response with this HTTP status tells the backend that the credentials of the client cannot do
+/// the request (RFC 9110, section 15.5.4). A read gives [`BlobRefusal::AccessDenied`] for it.
+const FORBIDDEN: u16 = 403;
 
 /// A response with this HTTP status tells the backend that the key already has an object. It is
 /// the answer to a write with `If-None-Match: *` for a key that has an object (RFC 9110, section
@@ -158,6 +161,67 @@ const RETRIABLE_SERVICE_ERROR_CODES: [&str; 20] = [
 /// names one error only, `ObjectNotInActiveTierError`, so `is_copy_source_missing` reads this
 /// code out of the metadata of a `CopyObjectError`.
 const NO_SUCH_KEY_CODE: &str = "NoSuchKey";
+
+/// The code that S3 and MinIO give with the status 404 for a bucket that does not exist. A read
+/// gives [`BlobRefusal::NoSuchBucket`] for it.
+const NO_SUCH_BUCKET_CODE: &str = "NoSuchBucket";
+
+/// Gives the refusal of an answer of the service with `status` and the code `code` of its body,
+/// or `None` for an answer that one more attempt can pass.
+///
+/// A 4xx reports a fault of the request (RFC 9110, section 15.5), so the same request gets the
+/// same answer, except for the statuses of [`RETRIABLE_CLIENT_ERROR_STATUSES`] and the codes of
+/// [`RETRIABLE_SERVICE_ERROR_CODES`], which ask for one more attempt. A 5xx reports a fault of the
+/// server and is not a refusal, and neither is any other status.
+fn refusal_of(status: u16, code: Option<&str>) -> Option<BlobRefusal> {
+    let refused = (CLIENT_ERROR..SERVER_ERROR).contains(&status)
+        && !RETRIABLE_CLIENT_ERROR_STATUSES.contains(&status)
+        && !RETRIABLE_SERVICE_ERROR_CODES.contains(&code.unwrap_or_default());
+    refused.then_some(match (status, code) {
+        (_, Some(NO_SUCH_BUCKET_CODE)) => BlobRefusal::NoSuchBucket,
+        (FORBIDDEN, _) => BlobRefusal::AccessDenied,
+        (status, _) => BlobRefusal::ClientError { status },
+    })
+}
+
+/// Gives the refusal of the error of a read, or `None` for an error that is not an answer of the
+/// service or that one more attempt can pass ([`refusal_of`]).
+///
+/// A read sends a key that the backend built, so a 4xx answer to it is not a fault of the caller:
+/// the storage refuses the executor. Two 4xx answers are not refusals: a 416 says that the range
+/// of the read is not in the object, and each read gives `Ok(None)` for a key that the bucket does
+/// not hold before it calls this.
+fn read_refusal<E: ProvideErrorMetadata>(error: &SdkError<E, HttpResponse>) -> Option<BlobRefusal> {
+    match error {
+        SdkError::ServiceError(service_error)
+            if service_error.raw().status().as_u16() != RANGE_NOT_SATISFIABLE =>
+        {
+            refusal_of(
+                service_error.raw().status().as_u16(),
+                service_error.err().code(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Gives the error of a read that failed with `error`: the error of the service, or the SDK error
+/// of a failure without an answer of the service. A refusal ([`read_refusal`]) gets a
+/// [`BlobRefusedError`] as its context.
+fn read_error<E>(error: SdkError<E, HttpResponse>) -> Error
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    let refusal = read_refusal(&error);
+    let error = match error {
+        SdkError::ServiceError(service_error) => Error::new(service_error.into_err()),
+        error => Error::new(error),
+    };
+    match refusal {
+        Some(refusal) => error.context(BlobRefusedError { refusal }),
+        None => error,
+    }
+}
 
 /// The largest number of bytes of UTF-8 that S3 accepts in an object key.
 ///
@@ -595,11 +659,12 @@ impl S3BlobStorage {
 
         match result {
             Ok(head) => Ok(Some(head)),
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                HeadObjectError::NotFound(_) => Ok(None),
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+            Err(SdkError::ServiceError(service_error))
+                if matches!(service_error.err(), HeadObjectError::NotFound(_)) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(read_error(err)),
         }
     }
 
@@ -909,6 +974,7 @@ impl S3BlobStorage {
         match error {
             SdkError::ServiceError(service_error) => {
                 !Self::is_final_get_object_error(service_error.err(), service_error.raw())
+                    && read_refusal(error).is_none()
             }
             _ => true,
         }
@@ -923,6 +989,7 @@ impl S3BlobStorage {
         match error {
             SdkError::ServiceError(service_error) => {
                 !matches!(service_error.err(), HeadObjectError::NotFound(_))
+                    && read_refusal(error).is_none()
             }
             _ => true,
         }
@@ -987,9 +1054,7 @@ impl S3BlobStorage {
             return true;
         }
 
-        (CLIENT_ERROR..SERVER_ERROR).contains(&status)
-            && !RETRIABLE_CLIENT_ERROR_STATUSES.contains(&status)
-            && !RETRIABLE_SERVICE_ERROR_CODES.contains(&error.meta().code().unwrap_or_default())
+        refusal_of(status, error.meta().code()).is_some()
     }
 
     /// Tells whether a response says that the key already has an object
@@ -1199,11 +1264,12 @@ impl BlobStorageBackend for S3BlobStorage {
                     .and_then(|length| u64::try_from(length).ok());
                 Ok(Some(read_body(body_chunks(response.body), expected).await?))
             }
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                NoSuchKey(_) => Ok(None),
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+            Err(SdkError::ServiceError(service_error))
+                if matches!(service_error.err(), NoSuchKey(_)) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(read_error(err)),
         }
     }
 
@@ -1246,11 +1312,12 @@ impl BlobStorageBackend for S3BlobStorage {
                 });
                 Ok(Some(Box::pin(stream)))
             }
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                NoSuchKey(_) => Ok(None),
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+            Err(SdkError::ServiceError(service_error))
+                if matches!(service_error.err(), NoSuchKey(_)) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(read_error(err)),
         }
     }
 
@@ -1303,7 +1370,6 @@ impl BlobStorageBackend for S3BlobStorage {
                 })
             },
             |error| {
-                use aws_sdk_s3::error::ProvideErrorMetadata;
                 !matches!(error, SdkError::ServiceError(service) if service.err().code() == Some("InvalidRange"))
                     && Self::is_get_object_error_retriable(error)
             },
@@ -1329,11 +1395,8 @@ impl BlobStorageBackend for S3BlobStorage {
                     stream: Box::pin(stream.map_err(Error::from)),
                 }))
             }
-            Err(SdkError::ServiceError(error)) => match error.into_err() {
-                NoSuchKey(_) => Ok(None),
-                error => Err(error.into()),
-            },
-            Err(error) => Err(error.into()),
+            Err(SdkError::ServiceError(error)) if matches!(error.err(), NoSuchKey(_)) => Ok(None),
+            Err(error) => Err(read_error(error)),
         }
     }
 
@@ -1414,11 +1477,12 @@ impl BlobStorageBackend for S3BlobStorage {
             {
                 Err(BlobRangeError { start, end }.into())
             }
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                NoSuchKey(_) => Ok(None),
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+            Err(SdkError::ServiceError(service_error))
+                if matches!(service_error.err(), NoSuchKey(_)) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(read_error(err)),
         }
     }
 
