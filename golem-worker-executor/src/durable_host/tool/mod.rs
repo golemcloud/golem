@@ -4490,6 +4490,21 @@ where
     .await
 }
 
+/// Counts a guest tool admission as tail work without depending on the guest scheduler to keep
+/// its task alive. Supported SDK runtimes retain or cancel pending imports before normal task
+/// exit; this guard also defends admission ordering for raw-ABI or custom-scheduler guests.
+/// Every guest admission entry point holds the returned activity until that handoff, and drops it
+/// before awaiting the execution result, which may wait for the parent's end.
+fn tool_admission_activity<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> crate::durable_host::tail_work::TailActivity
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    accessor.with(|mut access| access.get().tail_work_tracker().activity())
+}
+
 async fn release_capable_tool_cohort<U, D, Ctx>(
     accessor: &Accessor<U, D>,
     get_ctx: fn(&mut U) -> &mut DurableWorkerCtx<Ctx>,
@@ -5379,6 +5394,7 @@ where
     let stdin_rep = stdin.as_ref().map(Resource::rep);
     let stdout_rep = stdout.as_ref().map(Resource::rep);
     let stderr_rep = stderr.as_ref().map(Resource::rep);
+    let admission_activity = tool_admission_activity(accessor);
     let dispatch = dispatch_tool_call(
         accessor,
         ToolCallTarget::Ambient(rpc),
@@ -5405,6 +5421,7 @@ where
             }
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
+                drop(admission_activity);
                 let mut results =
                     await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
                 results.pop().expect("one tool invocation has one result")
@@ -6199,6 +6216,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             (None, None)
         };
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_attempt(
             accessor,
             attempt,
@@ -6228,6 +6246,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
                 spawn_tool_execution(accessor, *accepted, stdout, stderr).await?,
             ),
         };
+        drop(admission_activity);
         let result = accessor.with(|mut access| {
             access.get().table().push(UnderlyingInvokeResultEntry {
                 state,
@@ -6364,6 +6383,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let rpc = tool_rpc_resource(accessor, &self_)?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
@@ -6434,6 +6454,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         let stdin_rep = stdin.as_ref().map(Resource::rep);
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
