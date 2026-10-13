@@ -616,8 +616,12 @@ function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec 
             const val = (node as WireValueNode & { val: unknown }).val;
             if (
               !invocation &&
-              ((richTag === 'text' && (val as { language?: string }).language !== undefined) ||
-                (richTag === 'binary' && (val as { mimeType?: string }).mimeType !== undefined))
+              ((richTag === 'text' &&
+                (val as { language?: string }).language !== undefined &&
+                codec.graph.root.body.restrictions.languages === undefined) ||
+                (richTag === 'binary' &&
+                  (val as { mimeType?: string }).mimeType !== undefined &&
+                  codec.graph.root.body.restrictions.mimeTypes === undefined))
             )
               throw new TypeError('rich value is not canonical for its declared schema');
             if (richTag === 'uuid') return Uuid.from(val as Uuid);
