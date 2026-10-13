@@ -180,6 +180,16 @@ declare module 'golem:api/oplog@1.5.0' {
     originalPhantomId?: Uuid;
     instanceId: Uuid;
   };
+  /**
+   * Identifies a durable call by its place in a call order.
+   * `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+   * entity invocation or the parent custom durable invocation that made it. `ordinal` is the
+   * place of the call among the calls numbered under `anchor`, starting at 0.
+   */
+  export type DurableInvocationId = {
+    anchor: OplogIndex;
+    ordinal: bigint;
+  };
   export type SpanKind = "internal" | "client" | "server";
   export type SpanOutcome = "completed" | "failed" | "cancelled" | "abandoned" | "denied";
   export type SpanLink = {
@@ -213,7 +223,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
-    invocationId?: Uuid;
+    invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
@@ -813,7 +823,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
-    invocationId?: Uuid;
+    invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;

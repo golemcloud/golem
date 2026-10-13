@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::durability::reserve_invocation_id;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
 use crate::workerctx::ReplayAdmissionStage;
-use golem_common::model::entity::{
-    AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
-    ToolInvocationClaimIdentity,
-};
+use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
+use golem_common::model::oplog::DurableInvocationId;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::atomic::AtomicBool;
 
@@ -223,6 +222,9 @@ pub(super) struct BegunCallExecutionScope {
     /// Custom durable invocation whose physical execution this call observes. Captured once at
     /// initiation so asynchronous continuations never depend on ambient task context.
     pub(super) observational_owner: Option<OplogIndex>,
+    /// Invocation id of the guest call, recorded in every `Start` of the call; see
+    /// [`InvocationIdSource`].
+    pub(super) invocation_id: Option<DurableInvocationId>,
 }
 
 impl BegunCallExecutionScope {
@@ -240,6 +242,7 @@ impl BegunCallExecutionScope {
             durable_scope: self.parent_start_index,
             observational_owner: self.observational_owner,
             atomic_lease,
+            invocation_id: self.invocation_id,
         }
     }
 }
@@ -261,6 +264,8 @@ pub(super) struct CallExecutionScope {
     /// or detaches them, and a detached call must group at its own `retry_from` instead of
     /// retrying into the committed region.
     pub(super) atomic_lease: Option<Arc<AtomicRegionLease>>,
+    /// Invocation id of the guest call; see [`BegunCallExecutionScope::invocation_id`].
+    pub(super) invocation_id: Option<DurableInvocationId>,
 }
 
 impl CallExecutionScope {
@@ -608,37 +613,20 @@ where
         .require_live()
 }
 
-/// Options that make the durable records of a concurrent accessor call claim-safe on replay.
+/// Options of a concurrent accessor call that shape its durable records and their replay claim.
 ///
 /// Accessor host calls run concurrently, so their oplog `Start` entries are appended in
-/// scheduling order, which replay does not reproduce. Calls whose identity (function name +
-/// durable function type) is shared by concurrent siblings need extra identity to be paired with
-/// their own records instead of a sibling's:
-///
-/// - `scope_discriminator` is appended to the batched-write scope `Start`'s synthetic function
-///   name (`<scope:batched-write:DISCRIMINATOR>`), so the replayed call claims exactly its own
-///   scope. It must be a deterministic function of state that is identical on the live and replay
-///   paths (e.g. a hash of the recorded request, or the `Start` index of an already-claimed
-///   related call). Replay matches the discriminated name exactly — there is no plain-name
-///   fallback (P3 deploys on a clean database, so no oplog predates the discriminators).
-/// - `request_identity` is the [`HostRequest`] value the live path persists in the call's
-///   `Start` entry; when set, the replay claim also requires the recorded request payload to
-///   match it (by value, never by serialized bytes — payloads can contain `HashMap`s whose byte
-///   order is process-random), disambiguating concurrent top-level calls that differ only in
-///   their request.
-/// - `observational_owner` carries ownership from a resource created by an earlier observational
-///   call into an asynchronous continuation. When absent, initiation captures the current custom
-///   invocation from the guest-task context.
+/// scheduling order, which replay does not reproduce. Replay pairs each call with its own records
+/// by the invocation id the records carry (see [`InvocationIdSource`]).
 #[derive(Default)]
 pub(crate) struct AccessClaimOptions {
-    pub(crate) scope_discriminator: Option<String>,
-    pub(crate) request_identity: Option<HostRequest>,
-    /// Activation-independent identity for generic entity invocation replay. The full recorded
-    /// request is loaded after this identity claims its Start.
-    pub(crate) entity_invocation_identity: Option<EntityInvocationRequestIdentity>,
-    /// Atomic accepted-entity-or-predispatch-rejection replay identity. The tuple carries the
-    /// rejection record's function name; the accepted function is the call pair's own name.
-    pub(crate) tool_invocation_identity: Option<(HostFunctionName, ToolInvocationClaimIdentity)>,
+    /// The function of the `Start` a tool invocation records instead of its accepted entity
+    /// invocation `Start` when it rejects the call before dispatch. Replay claims either one, as a
+    /// historical reconstruction claim.
+    pub(crate) tool_rejection_function_name: Option<HostFunctionName>,
+    /// The function name of the batched-write scope `Start` that the call opens. Unset means
+    /// `<scope:batched-write>`.
+    pub(crate) scope_function_name: Option<HostFunctionName>,
     /// Explicit durable parent for runtimes whose invocation scope is established outside the
     /// calling Store, such as entity sidecar bodies. When an ambient durable parent also exists,
     /// both identities must agree.
@@ -649,6 +637,161 @@ pub(crate) struct AccessClaimOptions {
     pub(crate) scope_replay_recovery: ScopeReplayRecovery,
     pub(crate) host_internal_owner: Option<HostInternalCallOwner>,
     pub(crate) require_recorded_start: bool,
+    /// The invocation id this call records in its `Start`s and claims them by on replay.
+    pub(crate) invocation_id: InvocationIdSource,
+}
+
+/// Where an accessor call gets the invocation id it records in its `Start`s.
+///
+/// A guest call that reaches the durable call path through a concurrent guest import records the
+/// invocation id of that import (see [`reserve_invocation_id`]), and replay claims its `Start`s
+/// by that id. Calls observed inside a custom durable invocation record none: replay never claims
+/// them.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum InvocationIdSource {
+    /// The call reserves the id of its guest import when it starts. This is correct only when the
+    /// import has made no `await` that lets the guest make another import call first.
+    #[default]
+    AtStart,
+    /// The id reserved earlier by the guest import that issued this call, with
+    /// [`reserve_access_invocation_id`] or [`reserve_import_invocation_id`]. `None` means the
+    /// import is not identified by an invocation id.
+    Reserved(Option<DurableInvocationId>),
+}
+
+impl InvocationIdSource {
+    /// The reserved invocation id, or `None` when the call reserves its id at start.
+    pub(crate) fn reserved(self) -> Option<DurableInvocationId> {
+        match self {
+            Self::AtStart => None,
+            Self::Reserved(invocation_id) => invocation_id,
+        }
+    }
+}
+
+/// Reserves the invocation id of the concurrent guest import that `store` belongs to. Host
+/// functions call it before their first `await` when they `await` before starting their durable
+/// call, or when a task they spawn makes the durable call.
+pub(crate) fn reserve_access_invocation_id<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<InvocationIdSource, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let observed_by_custom_invocation = store
+        .guest_task_context::<CustomInvocationContext>()
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .as_deref()
+        .and_then(CustomInvocationContext::current)
+        .is_some();
+    reserve_guest_import_invocation_id(store, get_ctx, observed_by_custom_invocation)
+        .map(InvocationIdSource::Reserved)
+}
+
+/// Reserves the invocation id of the concurrent guest import that `store` belongs to, for a host
+/// function that `await`s before it starts its first durable call. The durable calls the import
+/// starts later use this id.
+pub(crate) fn reserve_invocation_id_before_await<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    reserve_access_invocation_id(store, get_ctx).map(|_| ())
+}
+
+/// Reserves the invocation id of a synchronous guest import, which runs to completion inside the
+/// guest's call and so needs no import order check. A task the import spawns passes the result to
+/// its durable call.
+pub(crate) fn reserve_import_invocation_id<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    observational_owner: Option<OplogIndex>,
+) -> Result<InvocationIdSource, WorkerExecutorError> {
+    if observational_owner.is_some() || ctx.state.snapshotting_mode {
+        return Ok(InvocationIdSource::Reserved(None));
+    }
+    let Some(anchor) = ctx.invocation_anchor() else {
+        return Ok(InvocationIdSource::Reserved(None));
+    };
+    reserve_invocation_id(ctx, None, anchor)
+        .map(|invocation_id| InvocationIdSource::Reserved(Some(invocation_id)))
+}
+
+fn reserve_guest_import_invocation_id<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    observed_by_custom_invocation: bool,
+) -> Result<Option<DurableInvocationId>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    if observed_by_custom_invocation || !store.has_guest_visible_subtask() {
+        return Ok(None);
+    }
+    let activity = store.runtime_activity();
+    store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        if ctx.state.snapshotting_mode {
+            return Ok(None);
+        }
+        let Some(anchor) = ctx.invocation_anchor() else {
+            return Ok(None);
+        };
+        reserve_invocation_id(ctx, activity, anchor).map(Some)
+    })
+}
+
+/// Resolves the invocation id of an accessor call from its claim options. Runs before the call's
+/// first `await`.
+///
+/// A host-internal child records the id of its owner, and a call made inside an open durable
+/// scope records the id of the call that opened the scope. Any other call records the id of the
+/// guest import that makes it.
+fn resolve_access_invocation_id<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    function_type: &DurableFunctionType,
+    claim_options: &AccessClaimOptions,
+    observed_by_custom_invocation: bool,
+) -> Result<Option<DurableInvocationId>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    if let InvocationIdSource::Reserved(invocation_id) = claim_options.invocation_id {
+        return Ok(invocation_id);
+    }
+    if let Some(owner) = &claim_options.host_internal_owner {
+        return Ok(owner.execution_scope.invocation_id);
+    }
+    let scope = match function_type {
+        DurableFunctionType::WriteRemoteBatched(Some(scope))
+        | DurableFunctionType::WriteRemoteTransaction(Some(scope)) => Some(*scope),
+        _ => claim_options.parent_start_index,
+    };
+    if let Some(scope) = scope
+        && let Some(invocation_id) = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .durable_scope_invocation_id(scope)
+        })
+    {
+        return Ok(invocation_id);
+    }
+    reserve_guest_import_invocation_id(
+        store,
+        get_ctx,
+        observed_by_custom_invocation || claim_options.observational_owner.is_some(),
+    )
 }
 
 /// An internal call belongs to the outer call, not to a guest completion. Keeping the outer
@@ -994,29 +1137,6 @@ impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> 
             .await
     }
 
-    async fn persist_durable_function_invocation(
-        &self,
-        function_name: HostFunctionName,
-        request: &HostRequest,
-        response: &HostResponse,
-        function_type: DurableFunctionType,
-    ) {
-        self.inner
-            .persist_durable_function_invocation(function_name, request, response, function_type)
-            .await;
-    }
-
-    async fn read_persisted_durable_function_invocation(
-        &mut self,
-    ) -> Result<
-        crate::durable_host::durability::PersistedDurableFunctionInvocation,
-        WorkerExecutorError,
-    > {
-        self.inner
-            .read_persisted_durable_function_invocation()
-            .await
-    }
-
     async fn try_trigger_retry(
         &mut self,
         failure: Error,
@@ -1317,6 +1437,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
+        let invocation_id = resolve_access_invocation_id(
+            store,
+            get_ctx,
+            &function_type,
+            &claim_options,
+            custom_invocation_scope.is_some(),
+        )?;
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
         if !is_live {
@@ -1331,7 +1458,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         let prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
+            Self::prepare_access_start(
+                ctx,
+                function_type,
+                claim_options,
+                custom_invocation_scope,
+                invocation_id,
+            )
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
@@ -1395,6 +1528,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
+        let invocation_id = resolve_access_invocation_id(
+            store,
+            get_ctx,
+            &function_type,
+            &claim_options,
+            custom_invocation_scope.is_some(),
+        )?;
         let (
             is_live,
             primary_runtime,
@@ -1474,7 +1614,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         drop(_boundary_guard);
         let mut prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
+            Self::prepare_access_start(
+                ctx,
+                function_type,
+                claim_options,
+                custom_invocation_scope,
+                invocation_id,
+            )
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
@@ -1690,16 +1836,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         custom_invocation_scope: Option<CustomInvocationScope>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<PreparedAccessStart<Pair, P, Ctx>, WorkerExecutorError> {
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
-        let identity_count = usize::from(claim_options.request_identity.is_some())
-            + usize::from(claim_options.entity_invocation_identity.is_some())
-            + usize::from(claim_options.tool_invocation_identity.is_some());
-        if identity_count > 1 {
-            return Err(WorkerExecutorError::runtime(
-                "durable call cannot use more than one replay request identity",
-            ));
-        }
         if !is_accessor_supported_function_type(&function_type) {
             return Err(WorkerExecutorError::runtime(format!(
                 "p3 accessor durable call path currently supports only ReadLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
@@ -1757,6 +1896,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             parent_start_index,
             atomic_region,
             observational_owner,
+            invocation_id,
         };
         let is_live = durable_execution_state.is_live;
         let unpersisted = durable_execution_state.snapshotting_mode;
@@ -1822,81 +1962,46 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Persistence-suppression model: only **snapshotting** is handled here (the live
     /// `persisted: false` branch). `PersistenceLevel::PersistNothing` deliberately is *not* — a
-    /// live call inside a persist-nothing zone still appends its `Start`/`End`, exactly like the
-    /// legacy P2 path (`persist_durable_function_invocation`), because the PersistNothing contract
+    /// live call inside a persist-nothing zone still appends its `Start`/`End`, exactly like a
+    /// direct call, because the PersistNothing contract
     /// is enforced elsewhere: `PrimaryOplog::commit` suppresses non-`Always` commits while the
     /// zone is open (so the call's own `DurableOnly` commits flush nothing), zone contents that do
     /// reach storage (via the zone-closing `Always` commit) are observability-only, and the replay
     /// cursor skips whole persist-nothing zones without claiming the entries inside them. The
     /// replay branch below guards against ever *replaying* a durable call inside a PersistNothing
-    /// block, mirroring `read_persisted_durable_function_invocation`.
+    /// block.
     fn replay_start_claim(
         claim_options: &AccessClaimOptions,
         execution_scope: &BegunCallExecutionScope,
         retry: &InFunctionRetryController,
     ) -> Result<StartClaim, WorkerExecutorError> {
-        if let Some((rejected_function_name, expected_request)) =
-            claim_options.tool_invocation_identity.as_ref()
-        {
-            let parent_start_index = execution_scope.parent_start_index.ok_or_else(|| {
-                WorkerExecutorError::runtime(
-                    "tool invocation replay claim requires an owner Start index",
-                )
-            })?;
-            return Ok(StartClaim::owned_tool_invocation(
-                &Pair::HOST_FUNCTION_NAME,
-                rejected_function_name,
-                retry.function_type(),
-                parent_start_index,
-                expected_request,
-            )
-            .with_observational_owner(execution_scope.observational_owner));
-        }
-
         let claim = match (
             execution_scope.parent_start_index,
-            claim_options.request_identity.as_ref(),
-            claim_options.entity_invocation_identity.as_ref(),
+            claim_options.tool_rejection_function_name.as_ref(),
         ) {
-            (Some(parent_start_index), Some(expected_request), None) => {
-                StartClaim::owned_matching_request(
+            (Some(parent_start_index), Some(rejected_function_name)) => {
+                StartClaim::tool_invocation(
                     &Pair::HOST_FUNCTION_NAME,
+                    rejected_function_name,
                     retry.function_type(),
                     parent_start_index,
-                    expected_request,
                 )
             }
-            (Some(parent_start_index), None, Some(expected_request)) => {
-                StartClaim::owned_matching_entity_invocation(
-                    &Pair::HOST_FUNCTION_NAME,
-                    retry.function_type(),
-                    parent_start_index,
-                    expected_request,
-                )
+            (None, Some(_)) => {
+                return Err(WorkerExecutorError::runtime(
+                    "tool invocation replay claim requires an owner Start index",
+                ));
             }
-            (Some(parent_start_index), None, None) => StartClaim::owned(
+            (Some(parent_start_index), None) => StartClaim::owned(
                 &Pair::HOST_FUNCTION_NAME,
                 retry.function_type(),
                 parent_start_index,
             ),
-            (None, Some(expected_request), None) => StartClaim::unowned_matching_request(
-                &Pair::HOST_FUNCTION_NAME,
-                retry.function_type(),
-                expected_request,
-            ),
-            (None, None, Some(expected_request)) => StartClaim::unowned_matching_entity_invocation(
-                &Pair::HOST_FUNCTION_NAME,
-                retry.function_type(),
-                expected_request,
-            ),
-            (None, None, None) => {
-                StartClaim::unowned(&Pair::HOST_FUNCTION_NAME, retry.function_type())
-            }
-            (_, Some(_), Some(_)) => unreachable!(
-                "exact and entity-logical request identities were rejected during preparation"
-            ),
+            (None, None) => StartClaim::unowned(&Pair::HOST_FUNCTION_NAME, retry.function_type()),
         };
-        Ok(claim.with_observational_owner(execution_scope.observational_owner))
+        Ok(claim
+            .with_observational_owner(execution_scope.observational_owner)
+            .with_invocation_id(execution_scope.invocation_id))
     }
 
     async fn execute_access_start<T, D, Ctx, F>(
@@ -2150,6 +2255,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         } else {
             None
         };
+        if replay.is_some()
+            && let Some(hook) = &admission_hook
+        {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::AfterStart)
+                .await;
+        }
 
         // Build the request between the scope open and the host-call `Start` write/claim. It runs
         // on replay too so positional side entries written by the builder are consumed in the same
@@ -2214,6 +2325,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let function_type = retry.function_type().clone();
                 let parent_start_index = execution_scope.parent_start_index;
                 let observational_owner = execution_scope.observational_owner;
+                let invocation_id = execution_scope.invocation_id;
                 let span_started = Arc::new(std::sync::Mutex::new((OplogIndex::INITIAL, None)));
                 let built_span = span_started.clone();
                 let span_activity = span_observer.as_ref().map(|_| {
@@ -2241,7 +2353,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 timestamp: Timestamp::now_utc(),
                                 parent_start_index,
                                 function_name: Pair::HOST_FUNCTION_NAME,
-                                invocation_id: None,
+                                invocation_id,
                                 observational_owner,
                                 request: Some(request_payload),
                                 durable_function_type: function_type,
@@ -2332,13 +2444,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
     {
         let function_type = prepared.retry.function_type().clone();
-        // A caller-supplied discriminator makes the synthetic scope name unique among concurrent
-        // siblings, so the replay claim below pairs the call with exactly its own recorded scope
-        // (and with it the correct incomplete-scope detection). Without one, concurrent scopes of
-        // the same durable function type are interchangeable at claim time.
-        let scope_name = crate::durable_host::batched_write_scope_name(
-            prepared.claim_options.scope_discriminator.as_deref(),
-        );
+        let scope_name = prepared
+            .claim_options
+            .scope_function_name
+            .clone()
+            .unwrap_or_else(crate::durable_host::batched_write_scope_name);
         if prepared.is_live {
             match &mut prepared.claim_options.scope_replay_recovery {
                 ScopeReplayRecovery::Forbidden => {
@@ -2387,6 +2497,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 &scope_name,
                                 &function_type,
                                 prepared.entity_parent_start_index,
+                                prepared.execution_scope.invocation_id,
                             )
                             .await
                             .map_err(|err| {
@@ -2477,10 +2588,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 switched_to_live: false,
             })
         } else {
-            // Replay requires exactly the name the live path recorded (including the
-            // discriminator suffix). There is no plain-name fallback: a discriminated claim must
-            // never steal a plain sibling scope, and P3 deploys on a clean database so every
-            // replayed oplog was recorded with the discriminators already in place.
+            // Replay claims the scope by the invocation id of the call that opened it, so a call
+            // never takes a concurrent sibling's scope.
             let can_recover_missing = matches!(
                 &prepared.claim_options.scope_replay_recovery,
                 ScopeReplayRecovery::Reexecute { .. }
@@ -2494,6 +2603,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         &scope_name,
                         &function_type,
                         prepared.entity_parent_start_index,
+                        prepared.execution_scope.invocation_id,
                         prepared
                             .claim_options
                             .scope_replay_recovery
@@ -2567,7 +2677,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             &function_type,
                             prepared.entity_parent_start_index,
                         )
-                        .with_observational_owner(prepared.execution_scope.observational_owner),
+                        .with_observational_owner(prepared.execution_scope.observational_owner)
+                        .with_invocation_id(prepared.execution_scope.invocation_id),
                         prepared.store_continued_live(),
                     )
                     .await
@@ -2882,7 +2993,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: prepared.entity_parent_start_index,
                 function_name: scope_name,
-                invocation_id: None,
+                invocation_id: prepared.execution_scope.invocation_id,
                 observational_owner: prepared.execution_scope.observational_owner,
                 request: None,
                 durable_function_type: function_type,
@@ -2905,8 +3016,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             } else {
                 DurableScopeKind::NonIdempotentWrite
             };
-            ctx.state
-                .push_durable_scope(scope.begin_index, kind, scope.replay_handle);
+            ctx.state.push_durable_scope(
+                scope.begin_index,
+                kind,
+                executed.execution_scope.invocation_id,
+                scope.replay_handle,
+            );
             ctx.state.current_retry_point = scope.begin_index;
         }
         let is_live = executed.replay.is_none();
@@ -2979,13 +3094,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .as_deref()
                 .and_then(CustomInvocationContext::current);
         let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
+        let invocation_id = ctx.direct_call_invocation_id(&function_type)?;
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(|err| err.source)?;
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
         let (boundary, captured) = DurableCallCoordinator::new(ctx)
             .admit_with_agent_authority_capture(
-                DurableCallAdmission::new(&function_type, Pair::FQFN),
+                DurableCallAdmission::new(&function_type, Pair::FQFN)
+                    .with_invocation_id(invocation_id),
                 capture,
             )
             .await?;
@@ -2997,6 +3114,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 false,
                 None,
                 observational_owner,
+                invocation_id,
             ),
             captured,
         ))
@@ -3015,6 +3133,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .as_deref()
                 .and_then(CustomInvocationContext::current);
         let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
+        // A direct call holds the Store, so it reserves its invocation id in guest call order.
+        let invocation_id = ctx.direct_call_invocation_id(&function_type)?;
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(|err| err.source)?;
@@ -3022,16 +3142,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
         // Read-only guard, pending replay events and durable-scope recovery all happen inside the
         // durable-call coordinator.
+        let admission =
+            DurableCallAdmission::new(&function_type, Pair::FQFN).with_invocation_id(invocation_id);
         let (boundary, agent_auth_ctx) = if requires_agent_authority {
             let (boundary, auth_ctx) = DurableCallCoordinator::new(ctx)
-                .admit_with_agent_authority(DurableCallAdmission::new(&function_type, Pair::FQFN))
+                .admit_with_agent_authority(admission)
                 .await?;
             (boundary, auth_ctx)
         } else {
             (
-                DurableCallCoordinator::new(ctx)
-                    .admit(DurableCallAdmission::new(&function_type, Pair::FQFN))
-                    .await?,
+                DurableCallCoordinator::new(ctx).admit(admission).await?,
                 None,
             )
         };
@@ -3042,6 +3162,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             requires_agent_authority,
             agent_auth_ctx,
             observational_owner,
+            invocation_id,
         ))
     }
 
@@ -3052,6 +3173,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         requires_agent_authority: bool,
         agent_auth_ctx: Option<AuthCtx>,
         observational_owner: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> BegunCall<Pair, P> {
         let begin_index = boundary.begin_index();
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
@@ -3064,6 +3186,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .last()
                 .map(|region| region.begin_index),
             observational_owner,
+            invocation_id,
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
@@ -3072,7 +3195,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             boundary,
             execution_scope,
             retry,
-            request_identity: None,
             requires_agent_authority,
             agent_auth_ctx,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
@@ -3087,6 +3209,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     pub fn start_index(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    /// The invocation id recorded in the `Start`s of this call.
+    pub(crate) fn invocation_id(&self) -> Option<DurableInvocationId> {
+        self.execution_scope.invocation_id
     }
 
     pub(crate) fn is_persisted(&self) -> bool {
@@ -5838,7 +5965,6 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
     boundary: DurableCallBoundary,
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
-    request_identity: Option<HostRequest>,
     requires_agent_authority: bool,
     agent_auth_ctx: Option<AuthCtx>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
@@ -5849,11 +5975,6 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
 impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     fn is_live(&self) -> bool {
         self.retry.durable_execution_state().is_live
-    }
-
-    pub(crate) fn matching_request(mut self, request: Pair::Req) -> Self {
-        self.request_identity = Some(request.into());
-        self
     }
 
     pub fn agent_auth_ctx(&self) -> &AuthCtx {
@@ -5943,6 +6064,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             let function_type = self.retry.function_type().clone();
             let oplog = ctx.state.oplog.clone();
             let observational_owner = self.execution_scope.observational_owner;
+            let invocation_id = self.execution_scope.invocation_id;
             let span_started = std::sync::Arc::new(std::sync::Mutex::new(None));
             let built_span = span_started.clone();
             // Reserve the request payload and append the `Start` in one guarded step: a big request
@@ -5963,7 +6085,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         timestamp: Timestamp::now_utc(),
                         parent_start_index,
                         function_name: Pair::HOST_FUNCTION_NAME,
-                        invocation_id: None,
+                        invocation_id,
                         observational_owner,
                         request: Some(request_payload),
                         durable_function_type: function_type,
@@ -6079,31 +6201,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     }
 
     fn replay_claim(&self) -> StartClaim {
-        let claim = match (
-            self.execution_scope.parent_start_index,
-            &self.request_identity,
-        ) {
-            (Some(parent_start_index), Some(request)) => StartClaim::owned_matching_request(
-                &Pair::HOST_FUNCTION_NAME,
-                self.retry.function_type(),
-                parent_start_index,
-                request,
-            ),
-            (None, Some(request)) => StartClaim::unowned_matching_request(
-                &Pair::HOST_FUNCTION_NAME,
-                self.retry.function_type(),
-                request,
-            ),
-            (Some(parent_start_index), None) => StartClaim::owned(
+        let claim = match self.execution_scope.parent_start_index {
+            Some(parent_start_index) => StartClaim::owned(
                 &Pair::HOST_FUNCTION_NAME,
                 self.retry.function_type(),
                 parent_start_index,
             ),
-            (None, None) => {
-                StartClaim::unowned(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
-            }
+            None => StartClaim::unowned(&Pair::HOST_FUNCTION_NAME, self.retry.function_type()),
         };
-        claim.with_observational_owner(self.execution_scope.observational_owner)
+        claim
+            .with_observational_owner(self.execution_scope.observational_owner)
+            .with_invocation_id(self.execution_scope.invocation_id)
     }
 
     fn finish_replay<Ctx: WorkerCtx>(
@@ -6207,11 +6315,12 @@ mod tests {
 
     #[test]
     #[test_r::timeout("10s")]
-    async fn direct_request_claim_rejects_wrong_resource_without_consuming_start() {
+    async fn direct_claim_rejects_wrong_invocation_id_without_consuming_start() {
         use super::super::tests::InMemoryOplog;
         use golem_common::model::oplog::HostRequestGolemRpcResource;
         use golem_common::model::oplog::host_functions::GolemRpcWasmRpcDrop;
 
+        let recorded_invocation_id = DurableInvocationId::new(OplogIndex::from_u64(1), 7);
         for parent_start_index in [None, Some(OplogIndex::from_u64(19))] {
             let request = HostRequestGolemRpcResource {
                 creation_index: OplogIndex::from_u64(7),
@@ -6229,7 +6338,7 @@ mod tests {
                     timestamp: Timestamp::now_utc(),
                     parent_start_index,
                     function_name: GolemRpcWasmRpcDrop::HOST_FUNCTION_NAME,
-                    invocation_id: None,
+                    invocation_id: Some(recorded_invocation_id),
                     observational_owner: None,
                     request: Some(OplogPayload::Inline(Box::new(request.clone().into()))),
                     durable_function_type: DurableFunctionType::ReadLocal,
@@ -6263,13 +6372,14 @@ mod tests {
             )
             .await
             .unwrap();
-            let begun = BegunCall::<GolemRpcWasmRpcDrop, NotCancellable> {
+            let begun = |invocation_id| BegunCall::<GolemRpcWasmRpcDrop, NotCancellable> {
                 boundary: DurableCallBoundary::from_begin_index(OplogIndex::from_u64(1)),
                 execution_scope: BegunCallExecutionScope {
                     entity_parent_start_index: parent_start_index,
                     parent_start_index,
                     atomic_region: None,
                     observational_owner: None,
+                    invocation_id: Some(invocation_id),
                 },
                 retry: InFunctionRetryController::new(
                     DurableFunctionType::ReadLocal,
@@ -6281,26 +6391,24 @@ mod tests {
                     },
                     GolemRpcWasmRpcDrop::FQFN,
                 ),
-                request_identity: None,
                 requires_agent_authority: false,
                 agent_auth_ctx: None,
                 drop_sink: None,
                 cleanup_sink: None,
                 _phantom: PhantomData,
-            }
-            .matching_request(HostRequestGolemRpcResource {
-                creation_index: OplogIndex::from_u64(8),
-            });
+            };
             assert!(
                 replay_state
-                    .claim_start_or_replay_end(begun.replay_claim())
+                    .claim_start_or_replay_end(
+                        begun(DurableInvocationId::new(OplogIndex::from_u64(1), 8)).replay_claim()
+                    )
                     .await
                     .is_err()
             );
             let claimed = replay_state
-                .claim_start_or_replay_end(begun.matching_request(request).replay_claim())
+                .claim_start_or_replay_end(begun(recorded_invocation_id).replay_claim())
                 .await
-                .expect("wrong resource claim must leave the recorded operation available");
+                .expect("a wrong invocation id must leave the recorded operation available");
             let ReplayStartClaimOutcome::Claimed { handle, .. } = claimed else {
                 panic!("expected the matching Start to remain available");
             };

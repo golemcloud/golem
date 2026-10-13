@@ -36,7 +36,8 @@ fn DurableFunctionType::to_raw(
 ///
 /// The body runs only for a live or incomplete invocation. A completed invocation returns its
 /// persisted response without evaluating the body. If the body raises, the unfinished invocation
-/// is dropped and normal recovery re-executes it.
+/// is dropped without triggering a retry. If recovery later replays the incomplete invocation,
+/// the body runs again.
 pub fn[
   Request : @schema.IntoSchema,
   Response : @schema.IntoSchema + @schema.FromSchema,

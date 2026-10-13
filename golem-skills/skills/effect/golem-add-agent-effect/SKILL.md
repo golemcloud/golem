@@ -143,8 +143,11 @@ getItem: method({
 Effect.fail({ _tag: "ItemNotFound" as const, id });
 ```
 
-Use defects such as `Effect.dieMessage(...)` only for unexpected failures that should fail and
-retry the invocation. Do not use defects to represent normal business outcomes.
+Use defects such as `Effect.dieMessage(...)` only for unexpected failures. Outside an atomic
+region, an unhandled defect fails the agent without retry. Inside `Durability.atomically`, an
+unsuccessful Effect traps and the region is retried according to the applicable retry policy;
+if the policy gives up, the agent becomes failed. Do not use defects to represent normal business
+outcomes.
 
 ## Key Constraints
 

@@ -16,8 +16,9 @@
 //!
 //! The interface is wired into the linker for every agent component. Tool
 //! discovery is implemented as a durable environment-state read. Tool
-//! invocation authorization is enforced here before the invocation backend,
-//! which is implemented separately on top of sidecar instances.
+//! invocation authorization is enforced here for every admission, including
+//! middleware underlying calls, before the invocation backend, which is
+//! implemented separately on top of sidecar instances.
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
@@ -36,12 +37,11 @@ pub use operation::{
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
     DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, StreamSession,
-    strip_typed_streams,
 };
 use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::entity::{
@@ -100,11 +100,9 @@ use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationVa
 use golem_common::model::component::ComponentName;
 use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole};
 use golem_common::model::entity::{
-    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationPlanReference, EntityInvocationRequestIdentity, InvocationExecutionMode,
-    NamedToolErrorSchema, ToolInputDecodeFailure, ToolInvocationClaimIdentity,
-    ToolInvocationDescriptor, ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity,
-    ToolOutputContract,
+    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
+    InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
+    ToolInvocationDescriptor, ToolOutputContract,
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{
@@ -1245,7 +1243,7 @@ fn caller_tool_owner(
 
 struct PreparedToolCall {
     stdin: Option<Resource<ToolStdinEntry>>,
-    permit: Option<LiveAuthorizationPermit>,
+    permit: LiveAuthorizationPermit,
     operation: operation::ProvisionalOwnerToolOperation,
     plan: EntityInvocationPlanReference,
 }
@@ -1312,81 +1310,6 @@ impl ToolCallTarget {
                 AgentEntity::ToolMiddleware(_) => {
                     Err(anyhow!("middleware plan has no terminal tool"))
                 }
-            },
-        }
-    }
-
-    fn accepted_identity(
-        &self,
-    ) -> anyhow::Result<(
-        AgentEntity,
-        Option<golem_common::model::entity::EntityInvocationPlanPositionIdentity>,
-    )> {
-        match self {
-            Self::Ambient(rpc) => Ok((AgentEntity::Tool(rpc.tool_name.clone()), None)),
-            Self::Underlying(underlying) => {
-                let position = underlying.position.position() + 1;
-                let entity = underlying
-                    .position
-                    .plan()
-                    .layer(position)
-                    .map_err(anyhow::Error::msg)?
-                    .activation()
-                    .entity();
-                Ok((
-                    entity,
-                    Some(
-                        golem_common::model::entity::EntityInvocationPlanPositionIdentity {
-                            root_start_index: underlying.position.root_start_index(),
-                            position,
-                        },
-                    ),
-                ))
-            }
-        }
-    }
-}
-
-impl ToolInvocationAttempt {
-    fn claim_identity(
-        &self,
-        command_path: &[String],
-        has_stdin: bool,
-        has_stdout: bool,
-        has_stderr: bool,
-        call_mode: EntityCallMode,
-    ) -> ToolInvocationClaimIdentity {
-        let (entity, plan_position) = self
-            .target
-            .accepted_identity()
-            .expect("validated tool call target");
-        let input = self.input.as_ref().ok().map(strip_typed_streams);
-        ToolInvocationClaimIdentity {
-            accepted: input.clone().map(|input| EntityInvocationRequestIdentity {
-                entity,
-                call_mode,
-                operation: EntityInvocationDescriptorIdentity::Tool(
-                    ToolInvocationDescriptorIdentity {
-                        attempt_ordinal: self.attempt_ordinal,
-                        command_path: command_path.to_vec(),
-                        has_stdin,
-                        has_stdout,
-                        has_stderr,
-                    },
-                ),
-                plan_position,
-                input,
-            }),
-            rejected: ToolInvocationRejectedIdentity {
-                attempt_ordinal: self.attempt_ordinal,
-                tool_name: self.target.tool_name().expect("validated tool call target"),
-                command_path: command_path.to_vec(),
-                input,
-                input_decode_failure: self.input.as_ref().err().copied(),
-                has_stdin,
-                has_stdout,
-                has_stderr,
-                call_mode,
             },
         }
     }
@@ -1870,71 +1793,89 @@ where
         }
     };
 
-    let permit = if let ToolCallTarget::Ambient(rpc) = &target {
-        let permission_target = accessor.with(|mut access| {
-            let component = access.get().owner_component_metadata();
-            let owner = caller_tool_owner(
-                &component.account_email,
-                &component.application_name,
-                &component.environment_name,
-                &component.component_name,
-                &rpc.tool_name,
-            );
-            let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
-            tool_target(
-                owner,
-                &command_path,
-                descriptor.args.clone(),
-                Some(&effective_definition),
-            )
-        });
-        let permission_target = match permission_target {
-            Ok(target) => target,
-            Err(error) => {
-                return Ok(rejected_tool_call(
-                    &tool_name,
-                    attempt_ordinal,
-                    &command_path,
-                    Some(input),
-                    None,
-                    has_stdin,
-                    stdout_requested,
-                    stderr_requested,
-                    call_mode,
-                    SerializableToolRpcError::ProtocolError(error.to_string()),
-                    stdin,
-                ));
-            }
-        };
-        Some(
-            match authorize_live_permissions_at_serialized_access(
-                accessor,
-                accessor.getter(),
-                &[permission_target],
-            )
-            .await?
-            {
-                Ok(permit) => permit,
-                Err(error) => {
-                    return Ok(rejected_tool_call(
-                        &tool_name,
-                        attempt_ordinal,
-                        &command_path,
-                        Some(input),
-                        None,
-                        has_stdin,
-                        stdout_requested,
-                        stderr_requested,
-                        call_mode,
-                        SerializableToolRpcError::Denied(error.to_string()),
-                        stdin,
-                    ));
-                }
-            },
+    // Every live admission is authorized, including middleware `Underlying` calls: the
+    // capability only makes the next layer reachable, so the command and arguments that layer
+    // receives after boundary projection must also be permitted under the logical tool name.
+    let permission_target = accessor.with(|mut access| {
+        let component = access.get().owner_component_metadata();
+        let owner = caller_tool_owner(
+            &component.account_email,
+            &component.application_name,
+            &component.environment_name,
+            &component.component_name,
+            &tool_name,
+        );
+        let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
+        tool_target(
+            owner,
+            &command_path,
+            descriptor.args.clone(),
+            Some(&effective_definition),
         )
-    } else {
-        None
+    });
+    let permission_target = match permission_target {
+        Ok(target) => target,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::ProtocolError(error.to_string()),
+                stdin,
+            ));
+        }
     };
+    let permit = match authorize_live_permissions_at_serialized_access(
+        accessor,
+        accessor.getter(),
+        &[permission_target],
+    )
+    .await?
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::Denied(error.to_string()),
+                stdin,
+            ));
+        }
+    };
+
+    // Authorization may await, and the middleware handler can return in the meantime. The
+    // capability must still be active when the child operation is registered, which is the
+    // admission point; a use that loses this race is rejected, never admitted after revocation.
+    if let ToolCallTarget::Underlying(underlying) = &target
+        && let Err(error) = underlying.admit()
+    {
+        return Ok(rejected_tool_call(
+            &tool_name,
+            attempt_ordinal,
+            &command_path,
+            Some(input),
+            None,
+            has_stdin,
+            stdout_requested,
+            stderr_requested,
+            call_mode,
+            SerializableToolRpcError::Denied(error.to_string()),
+            stdin,
+        ));
+    }
 
     let descriptor = EntityInvocationDescriptor::Tool(descriptor);
     let operation = accessor.with(|mut access| {
@@ -4333,16 +4274,12 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    let has_stdin = stdin.is_some();
     if accessor.with(|mut access| !access.get().state.durable_call_is_live()) {
-        let identity =
-            attempt.claim_identity(&command_path, has_stdin, has_stdout, has_stderr, call_mode);
         match EntityInvocationDurability::replay_tool_access(
             accessor,
             accessor.getter(),
             attempt.parent.clone(),
             &attempt.key_context,
-            identity,
         )
         .await?
         {
@@ -4469,6 +4406,21 @@ where
         ToolAttachmentCounterparty::Guest,
     )
     .await
+}
+
+/// Counts a guest tool admission as tail work without depending on the guest scheduler to keep
+/// its task alive. Supported SDK runtimes retain or cancel pending imports before normal task
+/// exit; this guard also defends admission ordering for raw-ABI or custom-scheduler guests.
+/// Every guest admission entry point holds the returned activity until that handoff, and drops it
+/// before awaiting the execution result, which may wait for the parent's end.
+fn tool_admission_activity<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> crate::durable_host::tail_work::TailActivity
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    accessor.with(|mut access| access.get().tail_work_tracker().activity())
 }
 
 async fn release_capable_tool_cohort<U, D, Ctx>(
@@ -5360,6 +5312,7 @@ where
     let stdin_rep = stdin.as_ref().map(Resource::rep);
     let stdout_rep = stdout.as_ref().map(Resource::rep);
     let stderr_rep = stderr.as_ref().map(Resource::rep);
+    let admission_activity = tool_admission_activity(accessor);
     let dispatch = dispatch_tool_call(
         accessor,
         ToolCallTarget::Ambient(rpc),
@@ -5386,6 +5339,7 @@ where
             }
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
+                drop(admission_activity);
                 let mut results =
                     await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
                 results.pop().expect("one tool invocation has one result")
@@ -6080,6 +6034,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         futures: Vec<Resource<FutureInvokeResultEntry>>,
     ) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6113,6 +6068,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
         Option<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
         Option<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
     )> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let accessor = accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(accessor.getter());
         let accessor = &accessor;
         let underlying = accessor
@@ -6180,6 +6136,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             (None, None)
         };
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_attempt(
             accessor,
             attempt,
@@ -6209,6 +6166,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
                 spawn_tool_execution(accessor, *accepted, stdout, stderr).await?,
             ),
         };
+        drop(admission_activity);
         let result = accessor.with(|mut access| {
             access.get().table().push(UnderlyingInvokeResultEntry {
                 state,
@@ -6254,6 +6212,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<UnderlyingInvokeResultEntry>,
     ) -> anyhow::Result<Result<Option<TypedSchemaValue>, UnderlyingError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let accessor = accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(accessor.getter());
         let (plan, response_edge) = accessor.with(|mut access| {
             let entry = access.get().table().get(&self_)?;
@@ -6338,6 +6297,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         input: TypedSchemaValue,
         stdin: Option<Resource<ToolStdinEntry>>,
     ) -> anyhow::Result<Result<(), ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6345,6 +6305,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let rpc = tool_rpc_resource(accessor, &self_)?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
@@ -6384,6 +6345,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6404,6 +6366,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Resource<FutureInvokeResultEntry>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6415,6 +6378,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         let stdin_rep = stdin.as_ref().map(Resource::rep);
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
@@ -6463,6 +6427,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()

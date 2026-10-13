@@ -16,6 +16,7 @@ use crate::durable_host::authorization::targets::{agent_worker_target, oplog_tar
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable, ResolvedCall,
     drain_dropped_call_events_access, drain_queued_dropped_call_events,
+    reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::suspendable_wait::{
@@ -1680,6 +1681,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &target_agent_id,
                         oplog_index_cut_off,
                         copied_scope_start,
+                        handle.invocation_id(),
                         forked_phantom_id,
                         handle.agent_auth_ctx(),
                     )
@@ -1888,6 +1890,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
         accessor: &Accessor<U, Self>,
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Vec<u8>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let resource_rep = resource.rep();
         let (entry, self_agent_id) = accessor.with(|mut access| {
             let ctx = access.get();

@@ -20,7 +20,8 @@ use golem_rust::schema::{
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
-    decode_schema_value, encode_schema_graph, tool_definition, tool_implementation,
+    agent_definition, agent_implementation, decode_schema_value, encode_schema_graph,
+    tool_definition, tool_implementation,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -42,6 +43,114 @@ async fn race_p3_sleeps(secs: Vec<u64>) -> u64 {
     waits.race().await
 }
 
+async fn sleep_ms(millis: u32) {
+    golem_rust::wasip3::clocks::monotonic_clock::wait_for(u64::from(millis) * 1_000_000).await;
+}
+
+async fn fetch_checkpoint(authority: &str) -> String {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::wit_future;
+
+    let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Get)
+        .expect("set checkpoint method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set checkpoint scheme");
+    request
+        .set_authority(Some(authority))
+        .expect("set checkpoint authority");
+    request
+        .set_path_with_query(Some("/checkpoint"))
+        .expect("set checkpoint path");
+    let send = async move {
+        client::send(request)
+            .await
+            .expect("send checkpoint request")
+    };
+    let finish = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish checkpoint request");
+        transmit.await.expect("transmit checkpoint request");
+    };
+    let (response, ()) = (send, finish).join().await;
+    let status = response.get_status_code();
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut body_bytes = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(len) => {
+                body_bytes.extend_from_slice(&buffer[..len]);
+                buffer.clear();
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("checkpoint response body read was cancelled"),
+        }
+    }
+    drop(body);
+    trailers.await.expect("checkpoint response trailers");
+    response_done_tx
+        .write(Ok(()))
+        .await
+        .expect("finish checkpoint response");
+    format!("{status} {}", String::from_utf8_lossy(&body_bytes))
+}
+
+/// Waits `nap_ms`, then GETs `http://{authority}/checkpoint`, both raced against a watchdog wait
+/// of `watchdog_ms`. A zero `watchdog_ms` runs without the watchdog.
+async fn nap_then_fetch(nap_ms: u32, authority: &str, watchdog_ms: u32) -> String {
+    let work = async {
+        if nap_ms > 0 {
+            sleep_ms(nap_ms).await;
+        }
+        fetch_checkpoint(authority).await
+    };
+    if watchdog_ms == 0 {
+        return work.await;
+    }
+    let watchdog = async {
+        sleep_ms(watchdog_ms).await;
+        "watchdog fired".to_string()
+    };
+    (work, watchdog).race().await
+}
+
+#[agent_definition]
+pub trait NapFetchOwner {
+    fn new(name: String) -> Self;
+
+    async fn nap_then_fetch(&self, nap_ms: u32, authority: String, watchdog_ms: u32) -> String;
+
+    async fn follow_up(&self) -> String;
+}
+
+struct NapFetchOwnerImpl;
+
+#[agent_implementation]
+impl NapFetchOwner for NapFetchOwnerImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+
+    async fn nap_then_fetch(&self, nap_ms: u32, authority: String, watchdog_ms: u32) -> String {
+        nap_then_fetch(nap_ms, &authority, watchdog_ms).await
+    }
+
+    async fn follow_up(&self) -> String {
+        "settled".to_string()
+    }
+}
+
 #[derive(Debug, Clone, ToolError)]
 pub enum ClockRaceError {
     #[tool_error(kind = "runtime-error", exit_code = 1)]
@@ -53,6 +162,12 @@ pub trait ClockRace {
     async fn race_p3_sleeps(&self, secs: Vec<u64>) -> Result<u64, ClockRaceError>;
     async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError>;
     async fn polling_loop_vs_watchdog(&self) -> Result<String, ClockRaceError>;
+    async fn nap_then_fetch(
+        &self,
+        nap_ms: u32,
+        authority: String,
+        watchdog_ms: u32,
+    ) -> Result<String, ClockRaceError>;
     async fn follow_up(&self) -> Result<String, ClockRaceError>;
     async fn read_clocks(&self) -> Result<u64, ClockRaceError>;
 }
@@ -107,6 +222,15 @@ impl ClockRace for ClockRaceImpl {
         };
         let (_, result) = (set_flag, (poll, watchdog).race()).join().await;
         Ok(result)
+    }
+
+    async fn nap_then_fetch(
+        &self,
+        nap_ms: u32,
+        authority: String,
+        watchdog_ms: u32,
+    ) -> Result<String, ClockRaceError> {
+        Ok(nap_then_fetch(nap_ms, &authority, watchdog_ms).await)
     }
 
     async fn follow_up(&self) -> Result<String, ClockRaceError> {

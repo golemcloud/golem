@@ -26,4 +26,4 @@ Set `expected="OtherTool"` for an adapter and translate its values and errors. U
 raw carriers are required. MoonBit async functions use no `await` keyword. The underlying tool is
 valid only during this middleware invocation and may be called zero, one, or multiple times. Raw
 input/result carriers and owned stream or permission-card handles are take-once: do not reuse a
-transferred carrier or let invocation-scoped resources escape.
+transferred carrier or let invocation-scoped resources escape. Golem checks each underlying call against the calling agent's tool permissions, using the command and arguments the next layer receives, so an adapter that changes them needs the agent to hold grants for both forms.

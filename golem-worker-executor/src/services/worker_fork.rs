@@ -74,7 +74,8 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex, OplogIndexRange,
+    DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex,
+    OplogIndexRange,
 };
 use golem_common::model::{
     AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
@@ -110,6 +111,7 @@ pub trait WorkerForkService: Send + Sync {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError>;
@@ -1038,7 +1040,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source: &OwnedAgentId,
         target_agent_id: &AgentId,
         cut: OplogIndex,
-        guest_result: Option<(Option<OplogIndex>, Uuid)>,
+        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
         self.validate_worker_forking(
@@ -1110,7 +1112,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         cut: OplogIndex,
         source_fingerprint: AgentFingerprint,
         hash: [u8; 32],
-        guest_result: Option<(Option<OplogIndex>, Uuid)>,
+        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
     ) -> Result<(), WorkerExecutorError> {
         let reconcile =
             || publication::existing_fork(self.oplog_service.as_ref(), target, cut, hash);
@@ -1130,8 +1132,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     None,
                 )
                 .await?;
-            if let Some((scope, phantom)) = guest_result {
-                publication::write_guest_result(oplog.as_ref(), scope, phantom).await?;
+            if let Some((scope, invocation_id, phantom)) = guest_result {
+                publication::write_guest_result(oplog.as_ref(), scope, invocation_id, phantom)
+                    .await?;
             }
             oplog.commit(CommitLevel::Always).await?;
             let last = oplog.current_oplog_index().await;
@@ -1305,6 +1308,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
@@ -1313,7 +1317,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             source_agent_id,
             target_agent_id,
             oplog_index_cut_off,
-            Some((copied_scope_start, forked_phantom_id)),
+            Some((copied_scope_start, invocation_id, forked_phantom_id)),
             auth_ctx,
         )
         .await

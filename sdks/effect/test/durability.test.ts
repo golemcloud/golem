@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Layer } from "effect"
 import * as Durability from "../src/Durability.js"
+import { AgentsHostError } from "../src/Agents.js"
+import { SecretsHostError } from "../src/Secrets.js"
 import { AgentHostLive } from "../src/host/AgentHostClient.js"
 import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
@@ -77,6 +79,21 @@ describe("Durability — atomic region", () => {
       expect(ApiHostMock.__getTrapReasons().length).toBe(1)
     }).pipe(Effect.provide(AtomicallyLive)),
   )
+
+  it.each([
+    new AgentsHostError(new Error("permission-denied")),
+    new SecretsHostError(new Error("permission-denied")),
+  ])("retains typed host diagnostics for $message", async (error) => {
+    for (const operation of [Effect.fail(error), Effect.die(error)]) {
+      const trapCount = ApiHostMock.__getTrapReasons().length
+      const exit = await Effect.runPromiseExit(
+        Durability.atomically(operation).pipe(Effect.provide(AtomicallyLive)),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(ApiHostMock.__getTrapReasons()).toHaveLength(trapCount + 1)
+      expect(ApiHostMock.__getTrapReasons().at(-1)).toBe(`atomic block failed: ${error.message}`)
+    }
+  })
 
   it.effect("calls trap on interrupt too", () =>
     Effect.gen(function* () {

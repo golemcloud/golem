@@ -1584,7 +1584,7 @@ impl TestWorkerExecutor {
         handle
     }
 
-    /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
+    /// Arms a one-shot gate immediately before the next p3 HTTP consume-body scope
     /// `Start` is appended for `agent_id`.
     pub async fn gate_next_consume_body_scope_start(
         &self,
@@ -1595,7 +1595,7 @@ impl TestWorkerExecutor {
             .await
     }
 
-    /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
+    /// Arms a one-shot gate immediately before the next p3 HTTP consume-body scope
     /// `End` is appended for `agent_id`. Must be armed before the invocation appends the scope's
     /// `Start` (the gate is consulted when tracking scope `Start` appends too).
     pub async fn gate_next_consume_body_scope_end(
@@ -4970,7 +4970,7 @@ struct TestOplog {
     /// chunk reads, so the gated append below can recognize their matching `End`
     /// appends (an `End` only carries its `start_index`).
     consume_body_chunk_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
-    /// Indices of discriminated consume-body scope `Start` entries this agent
+    /// Indices of consume-body scope `Start` entries this agent
     /// appended, so the scope `End` gate below can recognize their matching
     /// `End` appends (an `End` only carries its `start_index`).
     consume_body_scope_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
@@ -5198,7 +5198,7 @@ impl TestOplog {
         matches!(entry, OplogEntry::Start {
             function_name: HostFunctionName::Custom(function_name),
             ..
-        } if function_name.starts_with("<scope:batched-write:consume-body:"))
+        } if function_name == "<scope:batched-write:consume-body>")
     }
 
     async fn pause_before_consume_body_scope_start(&self) -> bool {
