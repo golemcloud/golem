@@ -213,16 +213,21 @@ async fn server_restarts_in_data_dir_after_start_interrupted_before_any_built_in
     let mut ctx = TestContext::new();
     let mut server = HoldingArtifactServer::start().await;
     let cache_dir = configure_held_artifact(&mut ctx, &HELD_PLUGIN, &server);
+    let registry_db = ctx.data_dir.path().join("registry.db");
 
     ctx.spawn_server();
     let requested = ctx.wait_for_request(&mut server).await;
     assert_eq!(requested, format!("/{}.wasm", HELD_PLUGIN.id));
+    assert_eq!(
+        registry_db_count(&registry_db, "SELECT COUNT(*) FROM plugins").await,
+        0,
+        "no built-in plugin is stored when the plugin artifact is requested"
+    );
     ctx.interrupt_server().await;
 
     make_available(&HELD_PLUGIN, &cache_dir);
     ctx.start_server().await;
 
-    let registry_db = ctx.data_dir.path().join("registry.db");
     assert_eq!(
         registry_db_count(
             &registry_db,
