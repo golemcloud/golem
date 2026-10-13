@@ -145,6 +145,17 @@ func pairsToMap(pairs []witTypes.Tuple2[string, string]) map[string]string {
 }
 
 // GetSelfMetadata returns the running agent's metadata.
+//
+// It requires view permission on the running agent
+// (agent(?agent) @ ?agent : view : *), admitted by the effective permission
+// card and permitted by the initialCard upper bound; a denial is an
+// [*AgentOperationError] of kind [AgentOperationPermissionDenied], and a host
+// failure one of kind [AgentOperationBackendError]. The SDK does not call it on
+// its own: initialization and snapshot loading read the agent's identity from
+// GOLEM_AGENT_ID through the environment, which needs environment-read
+// permission instead. The metadata holds the stored environment and
+// configuration in full, without the per-key filtering of environment and
+// configuration reads, so self-view is not an identity-only permission.
 func GetSelfMetadata() (AgentMetadata, error) {
 	w, err := hostOps.getSelfMetadata()
 	if err != nil {
