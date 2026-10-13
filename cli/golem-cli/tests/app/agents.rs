@@ -323,6 +323,28 @@ async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_w
     assert!(!oplog.stderr_text().contains("Broken pipe"));
 }
 
+/// Whether the oplog entry is a cancel of a stream with the given role and reason. The record is
+/// a schema value, so the names of the enum cases come from its graph.
+fn stream_cancel_is(entry: &serde_json::Value, role: &str, reason: &str) -> bool {
+    let record = &entry["entry"]["record"];
+    let case_name = |type_name: &str, case: &serde_json::Value| -> Option<String> {
+        let def = record["graph"]["defs"]
+            .as_array()?
+            .iter()
+            .find(|def| def["name"] == type_name)?;
+        def["body"]["value"]["cases"][case["value"]["case"].as_u64()? as usize]
+            .as_str()
+            .map(str::to_string)
+    };
+    let fields = &record["value"]["value"]["fields"];
+    let is_cancel = record["graph"]["root"]["value"]["id"]
+        .as_str()
+        .is_some_and(|id| id.ends_with("StreamCancelRecord"));
+    is_cancel
+        && case_name("StreamCancelRole", &fields[5]).as_deref() == Some(role)
+        && case_name("StreamCancelReason", &fields[6]).as_deref() == Some(reason)
+}
+
 /// The invocation writes its first byte and then waits. Only the watch of stdout can end it
 /// after the reader has left, because the command writes nothing more.
 #[cfg(unix)]
@@ -358,6 +380,30 @@ async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the
     );
     assert!(!invoked.stderr_text().contains("panicked"));
     assert!(!invoked.stderr_text().contains("Broken pipe"));
+
+    // The CLI told the server that nobody consumes the output stream any more.
+    let cancels = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            &invoke_agent,
+            "--query",
+            "stream-cancel",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(cancels.success_or_dump());
+    let entries = cancels
+        .stdout()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| stream_cancel_is(entry, "OutputConsumer", "GuestDrop")),
+        "the server received no cancel of the output stream for a consumer that dropped it: {entries:#?}"
+    );
 }
 
 #[cfg(unix)]

@@ -307,13 +307,103 @@ pub fn keep_running_on_closed_output() {
     KEEP_RUNNING_ON_CLOSED_OUTPUT.store(true, Ordering::Relaxed);
 }
 
+/// How long a command that holds work back (see [`ClosedOutputHold`]) has to finish that work
+/// after the reader of its output has gone. The work of `agent invoke` is to tell the server
+/// that nobody consumes the streams any more: it waits up to 3 s for the server to answer and
+/// up to 3 s more to close the session. The grace time is longer than both together, so that
+/// the work is never cut short by the end of the process.
+pub const CLOSED_OUTPUT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+static OUTPUT_HOLDS: AtomicUsize = AtomicUsize::new(0);
+static READER_GONE_RECORDED: AtomicBool = AtomicBool::new(false);
+static READER_GONE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// What to do once the reader of stdout or stderr has gone.
+#[derive(Debug, PartialEq, Eq)]
+enum EndAction {
+    KeepRunning,
+    EndNow,
+    /// Some command holds work back: let it run, and end the process after the grace time.
+    Defer {
+        start_backstop: bool,
+    },
+}
+
+fn decide_end(keep_running: bool, holds: usize, reader_gone_recorded: bool) -> EndAction {
+    if keep_running {
+        EndAction::KeepRunning
+    } else if holds > 0 {
+        EndAction::Defer {
+            start_backstop: !reader_gone_recorded,
+        }
+    } else {
+        EndAction::EndNow
+    }
+}
+
+fn end_process_for_closed_output() -> ! {
+    restore_terminal_settings();
+    std::process::exit(CLOSED_OUTPUT_EXIT_CODE.into())
+}
+
 /// Ends the process with [`CLOSED_OUTPUT_EXIT_CODE`], as SIGPIPE would, once the reader of
 /// stdout or stderr has gone. Puts the terminal back in the state that it had when the command
-/// started. Returns only for a command that keeps running.
+/// started. A command that holds work back gets [`CLOSED_OUTPUT_GRACE`] to finish it first: the
+/// call records that the reader has gone and returns, and the writers drop their text. Returns
+/// also for a command that keeps running.
 pub fn end_for_closed_output() {
-    if !KEEP_RUNNING_ON_CLOSED_OUTPUT.load(Ordering::Relaxed) {
-        restore_terminal_settings();
-        std::process::exit(CLOSED_OUTPUT_EXIT_CODE.into());
+    match decide_end(
+        KEEP_RUNNING_ON_CLOSED_OUTPUT.load(Ordering::Relaxed),
+        OUTPUT_HOLDS.load(Ordering::Relaxed),
+        READER_GONE_RECORDED.load(Ordering::Relaxed),
+    ) {
+        EndAction::KeepRunning => {}
+        EndAction::EndNow => end_process_for_closed_output(),
+        EndAction::Defer { start_backstop } => {
+            if start_backstop && !READER_GONE_RECORDED.swap(true, Ordering::Relaxed) {
+                std::thread::spawn(|| {
+                    std::thread::sleep(CLOSED_OUTPUT_GRACE);
+                    end_process_for_closed_output()
+                });
+                READER_GONE.notify_waiters();
+            }
+        }
+    }
+}
+
+/// Held by a command that has work to do when the reader of its output has gone, such as telling
+/// a server that nobody consumes a stream. While a hold exists, a closed output does not end the
+/// process at once: the command learns of it through [`ClosedOutputHold::reader_gone`] and
+/// ends itself, and the process ends after [`CLOSED_OUTPUT_GRACE`] at the latest.
+pub struct ClosedOutputHold(());
+
+impl ClosedOutputHold {
+    pub fn new() -> Self {
+        OUTPUT_HOLDS.fetch_add(1, Ordering::Relaxed);
+        Self(())
+    }
+
+    /// Completes once the reader of stdout or stderr has gone.
+    pub async fn reader_gone(&self) {
+        let notified = READER_GONE.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if READER_GONE_RECORDED.load(Ordering::Relaxed) {
+            return;
+        }
+        notified.await;
+    }
+}
+
+impl Default for ClosedOutputHold {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ClosedOutputHold {
+    fn drop(&mut self) {
+        OUTPUT_HOLDS.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -823,8 +913,8 @@ impl LogColorize for Utf8PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        Written, error_message_for_output, line_bytes, message_for_output, outcome_of,
-        write_and_flush,
+        EndAction, Written, decide_end, error_message_for_output, line_bytes, message_for_output,
+        outcome_of, write_and_flush,
     };
     use anyhow::anyhow;
     use std::io::{Error, ErrorKind, Write};
@@ -892,6 +982,48 @@ mod tests {
             Written::Done
         );
         assert_eq!(out.written, b"  indented line\n");
+    }
+
+    #[test]
+    fn a_closed_output_ends_the_process_when_no_command_holds_work_back() {
+        assert_eq!(decide_end(false, 0, false), EndAction::EndNow);
+    }
+
+    #[test]
+    fn a_closed_output_keeps_a_server_running() {
+        assert_eq!(decide_end(true, 0, false), EndAction::KeepRunning);
+        assert_eq!(decide_end(true, 2, false), EndAction::KeepRunning);
+    }
+
+    #[test]
+    fn a_closed_output_defers_the_end_while_a_command_holds_work_back() {
+        assert_eq!(
+            decide_end(false, 1, false),
+            EndAction::Defer {
+                start_backstop: true
+            }
+        );
+    }
+
+    #[test]
+    fn the_backstop_starts_once() {
+        assert_eq!(
+            decide_end(false, 1, true),
+            EndAction::Defer {
+                start_backstop: false
+            }
+        );
+        assert_eq!(
+            decide_end(false, 3, true),
+            EndAction::Defer {
+                start_backstop: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_closed_output_ends_the_process_once_the_last_hold_is_released() {
+        assert_eq!(decide_end(false, 0, true), EndAction::EndNow);
     }
 
     #[test]

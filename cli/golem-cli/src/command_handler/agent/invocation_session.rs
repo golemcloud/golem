@@ -18,7 +18,7 @@ use crate::command_handler::agent::parse_method_argument_schema_value;
 use crate::command_handler::log::render_command_output_document;
 use crate::context::Context;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
-use crate::log::{CLOSED_OUTPUT_EXIT_CODE, eprint_line, is_closed_pipe};
+use crate::log::{CLOSED_OUTPUT_EXIT_CODE, ClosedOutputHold, eprint_line, is_closed_pipe};
 use crate::model::agent::invocation_session::{
     AgentInvocationSessionEvent, AgentInvocationSessionEventKind,
 };
@@ -525,6 +525,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         agent_id: args.selected_agent_name.clone(),
     };
     let mut finished = false;
+    // The reader of the output may go while the session runs. The session then tells the server
+    // that nobody consumes its streams before the process ends.
+    let output_hold = ClosedOutputHold::new();
 
     'session: while !finished {
         let next_unsent_input = input_buffer.next_unsent();
@@ -554,6 +557,21 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         break 'session;
                     }
                 }
+            }
+            _ = output_hold.reader_gone() => {
+                input_cancelled.cancel();
+                input_rx.close();
+                let requests = cancel_open_streams(
+                    if accepted && !input_terminal {
+                        input_binding.as_ref().and_then(|binding| binding.channel)
+                    } else {
+                        None
+                    },
+                    &output_streams,
+                    PublicClientCancelReason::ConsumerDrop,
+                );
+                cancel_before_close(&mut session, requests).await;
+                bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE));
             }
             result = &mut output_result_rx => {
                 match result {
