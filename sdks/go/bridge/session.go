@@ -88,6 +88,11 @@ type session struct {
 	accepted     bool
 	everAccepted bool
 	sessionToken string
+	// resumeOp is the operation of the pending resume: "resume", or
+	// "takeover" once the server refused a resume because the old
+	// attachment is still live. It stays "takeover" until a resume is
+	// accepted.
+	resumeOp string
 
 	resultSent bool
 	result     chan sessionResult
@@ -204,6 +209,9 @@ func (s *session) prepareStart() error {
 
 // prepareResume freezes a new resume operation. Called with s.mu held.
 func (s *session) prepareResume() error {
+	if s.accepted || s.resumeOp == "" {
+		s.resumeOp = "resume"
+	}
 	cursors := make([]string, 0, len(s.cursors))
 	for _, c := range s.cursors {
 		cursors = append(cursors, c)
@@ -213,7 +221,7 @@ func (s *session) prepareResume() error {
 	var err error
 	s.descriptor, err = encodeMessage("resumeAttach", map[string]any{
 		"attemptId":     s.attempt,
-		"operation":     "resume",
+		"operation":     s.resumeOp,
 		"outputCursors": cursors,
 		"sessionToken":  s.sessionToken,
 	})
@@ -728,6 +736,28 @@ func (s *session) rejected(c *sessionConn, m message) error {
 	} else if s.everAccepted {
 		s.mu.Unlock()
 		return protocolErrorf("a rejection after acceptance must name its attempt")
+	}
+	// A resume the server refuses because the old attachment is still live
+	// is retried once as a takeover, which fences the old attachment; a
+	// refused takeover ends the session.
+	if code == "invalid-attachment-state" {
+		if !s.everAccepted || s.accepted || s.resumeOp != "resume" {
+			s.mu.Unlock()
+			return &SessionError{Code: code, Message: text}
+		}
+		s.resumeOp = "takeover"
+		if err := s.detach(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		if err := s.prepareResume(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		s.mu.Unlock()
+		c.shut()
+		go s.connect(firstRetryDelay)
+		return nil
 	}
 	if !retryable {
 		s.mu.Unlock()

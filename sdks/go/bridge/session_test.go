@@ -941,3 +941,99 @@ func TestAReplayedItemThatWaitedForSpaceBindsItsInnerStreamAgain(t *testing.T) {
 		}
 	}
 }
+
+// A resume refused because the old attachment is still live is retried once
+// as a takeover with the same cursors; the session then goes on.
+func TestARefusedResumeIsRetriedAsATakeover(t *testing.T) {
+	readFirst := make(chan struct{})
+	var key any
+	var takeover received
+	refuse := func(c *fakeConn, op received) {
+		c.send("invocationRejected", map[string]any{
+			"attemptId": op.m["attemptId"], "code": "invalid-attachment-state",
+			"message": "still attached", "retryable": false,
+		})
+		c.waitClose()
+	}
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", u32StreamGraph)
+			outputItem(c, 2, 0, "c0", 10)
+			<-readFirst
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			if resume.m["operation"] != "resume" {
+				t.Errorf("first reattach is %v", resume.m)
+			}
+			refuse(c, resume)
+		},
+		func(c *fakeConn) {
+			takeover = c.expect("resumeAttach")
+			acceptAs(c, takeover, key, "sess2", outputMapping(6, "out"))
+			outputItem(c, 6, 1, "c1", 20)
+			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "produce", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first, ok, err := out.Next(ctx); err != nil || !ok || first != 10 {
+		t.Fatalf("first item %v %v %v", first, ok, err)
+	}
+	close(readFirst)
+	rest, err := out.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(rest, []uint32{20}) {
+		t.Fatalf("rest %v, %v", rest, err)
+	}
+	if takeover.m["operation"] != "takeover" || !reflect.DeepEqual(takeover.m["outputCursors"], []any{"c0"}) {
+		t.Fatalf("took over with %v", takeover.m)
+	}
+}
+
+// A refused takeover ends the session: the fallback is tried once.
+func TestARefusedTakeoverEndsTheSession(t *testing.T) {
+	readFirst := make(chan struct{})
+	refuse := func(c *fakeConn) {
+		op := c.expect("resumeAttach")
+		c.send("invocationRejected", map[string]any{
+			"attemptId": op.m["attemptId"], "code": "invalid-attachment-state",
+			"message": "still attached", "retryable": false,
+		})
+		c.waitClose()
+	}
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", u32StreamGraph)
+			outputItem(c, 2, 0, "c0", 10)
+			<-readFirst
+			c.drop()
+		},
+		refuse,
+		refuse,
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "produce", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := out.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(readFirst)
+	_, err = out.Collect(ctx)
+	var refused *SessionError
+	if !errors.As(err, &refused) || refused.Code != "invalid-attachment-state" {
+		t.Fatalf("got %v", err)
+	}
+}
