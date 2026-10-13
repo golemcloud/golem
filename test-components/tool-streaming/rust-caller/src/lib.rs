@@ -1992,24 +1992,31 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             None,
         );
         assert_eq!(raw_chunk(&mut resumed_stdout).await, b"marker:");
-        let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
-        poll_fn(|cx| match pending_read.as_mut().poll(cx) {
-            Poll::Pending => Poll::Ready(()),
-            Poll::Ready(result) => panic!("stdout read completed before cancellation: {result:?}"),
-        })
-        .await;
-        let (reader_cancelled, buffer) = pending_read.as_mut().cancel();
-        assert_eq!(format!("{reader_cancelled:?}"), "Cancelled");
-        assert!(buffer.is_empty());
-        drop(pending_read);
+        for _ in 0..2 {
+            let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
+            poll_fn(|cx| match pending_read.as_mut().poll(cx) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(result) => panic!("stdout read completed before cancellation: {result:?}"),
+            })
+            .await;
+            let (reader_cancelled, buffer) = pending_read.as_mut().cancel();
+            assert_eq!(format!("{reader_cancelled:?}"), "Cancelled");
+            assert!(buffer.is_empty());
+            drop(pending_read);
+        }
         assert!(
             resumed_source
-                .write_all(vec![Ok(b"resumed".to_vec())])
+                .write_all(vec![Ok(b"res".to_vec()), Ok(b"umed".to_vec())])
                 .await
                 .is_empty()
         );
         drop(resumed_source);
-        let cancelled_reader_resumed_bytes = read_all(resumed_stdout).await;
+        let mut cancelled_reader_resumed_bytes = raw_chunk(&mut resumed_stdout).await;
+        assert_eq!(cancelled_reader_resumed_bytes, b"res");
+        let second_chunk = raw_chunk(&mut resumed_stdout).await;
+        assert_eq!(second_chunk, b"umed");
+        cancelled_reader_resumed_bytes.extend(second_chunk);
+        assert!(read_all(resumed_stdout).await.is_empty());
         let cancelled_reader_result = raw_result(&resumed_result).await.is_ok();
 
         let (detached_target, detached_stdout) = tool_host::create_output();

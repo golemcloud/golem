@@ -2622,6 +2622,26 @@ impl ReplayState {
         Ok((source, read, bytes))
     }
 
+    pub(crate) fn accepted_tool_attachment_write_end(
+        &self,
+        start: OplogIndex,
+    ) -> Result<golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd, WorkerExecutorError>
+    {
+        self.cursor
+            .tool_attachment_reconstruction
+            .lock()
+            .unwrap()
+            .accepted
+            .get(&start)
+            .copied()
+            .map(golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd)
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "tool attachment write at {start} has no retained acceptance"
+                ))
+            })
+    }
+
     /// Marks an accepted output write's regenerated arguments validated and its resident
     /// output restored. This must precede the write's acknowledgment delivery gate.
     pub fn complete_tool_attachment_reconstruction(&self, start: OplogIndex) {

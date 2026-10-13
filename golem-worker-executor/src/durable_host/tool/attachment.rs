@@ -724,7 +724,11 @@ impl ByteAttachment {
         }
     }
 
-    async fn write(self: &Arc<Self>, bytes: Vec<u8>) -> Result<(), StreamWriteError> {
+    async fn write(
+        self: &Arc<Self>,
+        bytes: Vec<u8>,
+        source_end: Option<AcceptedAttachmentWriteEnd>,
+    ) -> Result<(), StreamWriteError> {
         let Some(mut prepared) = self.prepare_write(bytes).await? else {
             return Ok(());
         };
@@ -734,7 +738,7 @@ impl ByteAttachment {
             notified.as_mut().enable();
             match prepared.accept(std::convert::identity)? {
                 AttachmentWriteAcceptance::Accepted(publication) => {
-                    publication.publish(None);
+                    publication.publish(source_end);
                     return Ok(());
                 }
                 AttachmentWriteAcceptance::Discarded => return Ok(()),
@@ -1136,7 +1140,7 @@ impl AttachmentProducer {
     }
 
     pub(crate) async fn write(&self, bytes: Vec<u8>) -> Result<(), StreamWriteError> {
-        self.attachment.write(bytes).await
+        self.attachment.write(bytes, None).await
     }
 
     pub(crate) fn finish(&self) -> Result<(), StreamWriteError> {
@@ -1220,7 +1224,15 @@ impl AttachmentWriter {
     }
 
     pub(crate) async fn write(&self, bytes: Vec<u8>) -> Result<(), StreamWriteError> {
-        self.attachment.write(bytes).await
+        self.attachment.write(bytes, None).await
+    }
+
+    pub(crate) async fn restore_write(
+        &self,
+        bytes: Vec<u8>,
+        source_end: AcceptedAttachmentWriteEnd,
+    ) -> Result<(), StreamWriteError> {
+        self.attachment.write(bytes, Some(source_end)).await
     }
 
     pub(crate) fn finish(&self) -> Result<(), StreamWriteError> {

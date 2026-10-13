@@ -75,7 +75,14 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
                     "invalid tool output write outcome at {start}"
                 );
                 if response.outcome == ToolAttachmentWriteOutcome::Accepted {
-                    writer.write(bytes).await.map_err(|error| {
+                    let source_end = accessor.with(|mut access| {
+                        access
+                            .get()
+                            .state
+                            .replay_state
+                            .accepted_tool_attachment_write_end(start)
+                    })?;
+                    writer.restore_write(bytes, source_end).await.map_err(|error| {
                         anyhow::anyhow!("cannot restore accepted tool output at {start}: {error:?}")
                     })?;
                     accessor.with(|mut access| {
