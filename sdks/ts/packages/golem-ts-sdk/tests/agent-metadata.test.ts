@@ -143,6 +143,38 @@ describe('agent metadata (Phase 3)', () => {
     expect(get('snapDisabled')!.snapshotting).toEqual({ tag: 'disabled' });
   });
 
+  it.each([
+    ['Default', 'default'],
+    ['Periodic', { periodicSeconds: 30 }],
+    ['EveryN', { everyNInvocations: 5 }],
+    ['State', { state: z.object({ count: z.number() }) }],
+    ['Multipart', { multipart: { state: z.null() } }],
+  ] as const)('rejects an ephemeral agent with %s snapshotting', (label, snapshotting) => {
+    const name = `EphemeralSnapshot${label}`;
+    defineAgent({
+      name,
+      mode: 'ephemeral',
+      snapshotting,
+      id: {},
+      methods: {},
+    });
+    expect(get(name)).toBeUndefined();
+    expect(AgentTypeRegistry.getRegistrationError(name)).toEqual([
+      `Definition failed: Agent "${name}" is ephemeral and declares snapshotting, but ephemeral ` +
+        'agents take no snapshots. Remove the snapshotting option or make the agent durable.',
+    ]);
+  });
+
+  it.each([undefined, 'disabled'] as const)(
+    'accepts an ephemeral agent with snapshotting %s',
+    (snapshotting) => {
+      const name = `EphemeralNoSnapshot${String(snapshotting)}`;
+      defineAgent({ name, mode: 'ephemeral', snapshotting, id: {}, methods: {} });
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeUndefined();
+      expect(get(name)!.snapshotting).toEqual({ tag: 'disabled' });
+    },
+  );
+
   it('requires a custom save/load pair when enabled snapshotting has no state schema', () => {
     defineAgent({
       name: 'SnapshotMissingLoader',
