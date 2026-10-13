@@ -14,11 +14,9 @@
 
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DurableCallSession,
-    HostInternalCallOwner, HostInternalReplay, NotCancellable,
+    Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
 };
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
-use crate::durable_host::replay_state::RecordedChildClaim;
 use crate::durable_host::suspendable_wait::{
     ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
 };
@@ -31,11 +29,10 @@ use golem_common::model::oplog::host_functions::{
 };
 use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestMonotonicClockDuration,
-    HostRequestMonotonicClockTimestamp, HostRequestNoInput, HostResponseMonotonicClockTimestamp,
-    HostResponseP3MonotonicClockUnit, HostResponseWallClock, OplogIndex,
+    DurableFunctionType, HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp,
+    HostRequestNoInput, HostResponseMonotonicClockTimestamp, HostResponseP3MonotonicClockUnit,
+    HostResponseWallClock,
 };
-use std::sync::Arc;
 use std::time::Duration;
 use wasmtime::component::Accessor;
 use wasmtime_wasi::clocks::WasiClocksView;
@@ -151,77 +148,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
-        let request = HostRequestMonotonicClockDuration {
-            duration_in_nanos: how_long,
-        };
-        // A guest can have several waits pending at once. Waits of one length record the same
-        // `Start`, so they start in turn, in the order in which the guest made them. Nothing
-        // may be awaited before this: the turn is taken while the guest makes the call.
-        let (start_order, never_live) = store.with(|mut access| {
-            let ctx = super::expect_ctx::<Ctx, U>(access.data_mut()).durable_ctx_mut();
-            (
-                ctx.state.replay_state.start_order(
-                    P3MonotonicClockWaitFor::FQFN,
-                    ctx.child_parent_start_index(
-                        &DurableFunctionType::ReadLocal,
-                        OplogIndex::INITIAL,
-                    ),
-                    how_long,
-                ),
-                ctx.rejects_live_continuation_at_replay_tail(),
-            )
-        });
-        let start_order = Arc::new(start_order.lock_owned().await);
-        // The first run reads the clock right after it starts the wait. When that read is in the
-        // record, replay makes it before it resolves the wait: a wait that the guest dropped has
-        // no terminal, and waiting for one would leave the recorded read unclaimed. The claim
-        // of the wait therefore takes the read's `Start` with it. It does so when the read has
-        // a recorded terminal, because replaying it then only reads the record, and when the
-        // read has none in a Store that never goes live, where it can only wait with the wait.
-        let recorded_read = RecordedChildClaim {
-            function_name: P3MonotonicClockNow::HOST_FUNCTION_NAME,
-            function_type: DurableFunctionType::ReadLocal,
-            claim_open: never_live,
-        };
         // The outer session owns cancellation throughout deadline reconstruction, including
         // after the internal read completed but before the timer started waiting.
-        let (mut wait, recorded_read) =
-            DurableCallSession::<P3MonotonicClockWaitFor, Cancellable>::start_access_with_recorded_child(
-                store,
-                super::durable_worker_ctx::<Ctx, U>,
-                DurableFunctionType::ReadLocal,
-                AccessClaimOptions {
-                    // On replay each wait claims the `Start` that recorded its own length.
-                    request_identity: Some(request.clone().into()),
-                    start_order: Some(start_order),
-                    ..Default::default()
-                },
-                Some(recorded_read),
-                async move |_| Ok(request),
-            )
-            .await?;
+        let wait = DurableCallSession::<P3MonotonicClockWaitFor, Cancellable>::start_access(
+            store,
+            super::durable_worker_ctx::<Ctx, U>,
+            HostRequestMonotonicClockDuration {
+                duration_in_nanos: how_long,
+            },
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
         let owner = wait.host_internal_owner();
-        let live = wait.is_live();
-        let (owner, recorded_now) = match recorded_read {
-            Some(read) => {
-                let replay = HostInternalReplay::Claimed(read);
-                match read_clock_for_wait::<U, Ctx>(store, owner, replay).await {
-                    Ok(now) => (None, Some(now)),
-                    Err(error) => {
-                        wait.abandon_for_trap();
-                        return Err(error);
-                    }
-                }
-            }
-            None => (Some(owner), None),
-        };
-        let (mut wait, replayed) = if live {
+        let (mut wait, replayed) = if wait.is_live() {
             (Some(wait), None)
         } else {
-            // Without a claimed read the outer call is resolved before the read is made. That
-            // is a record without a read, where the wait may have been cancelled before it, and
-            // a read without a terminal in a Store that can go live, where an incomplete replay
-            // must own a live cancellation guard before a child can park.
+            // Resolve the outer call first: cancellation can precede the internal read, and
+            // incomplete replay must own a live cancellation guard before a child can park.
             match wait
                 .replay_access_deferred(store, super::durable_worker_ctx::<Ctx, U>)
                 .await?
@@ -232,27 +175,30 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
                 DeferredCallReplayOutcome::Incomplete(wait) => (Some(wait), None),
             }
         };
-        let now = match recorded_now {
-            Some(now) => now,
-            None => {
-                let owner = owner.expect("a wait reads the clock once");
-                let replay = if replayed.is_some() {
-                    HostInternalReplay::Completed
-                } else {
-                    HostInternalReplay::Any
-                };
-                match read_clock_for_wait::<U, Ctx>(store, owner, replay).await {
-                    Ok(now) => now,
-                    Err(error) => {
-                        if let Some(wait) = &mut wait {
-                            wait.abandon_for_trap();
-                        }
-                        if let Some((_, delivery)) = replayed {
-                            delivery.suppress();
-                        }
-                        return Err(error);
-                    }
+        let now =
+            DurableCallSession::<P3MonotonicClockNow, Cancellable>::invoke_host_internal_access(
+                store,
+                super::durable_worker_ctx::<Ctx, U>,
+                owner,
+                replayed.is_some(),
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+                async || {
+                    let nanos = current_monotonic_now::<U, Ctx>(store)?;
+                    Ok::<_, wasmtime::Error>(HostResponseMonotonicClockTimestamp { nanos })
+                },
+            )
+            .await;
+        let now = match now {
+            Ok(now) => now,
+            Err(error) => {
+                if let Some(wait) = &mut wait {
+                    wait.abandon_for_trap();
                 }
+                if let Some((_, delivery)) = replayed {
+                    delivery.suppress();
+                }
+                return Err(error);
             }
         };
         let when = now.nanos.saturating_add(how_long);
@@ -275,27 +221,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
             .await
             .map(|_| ())
     }
-}
-
-/// The clock read that a `wait-for` makes under its own `Start`.
-async fn read_clock_for_wait<U: Send + 'static, Ctx: WorkerCtx>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    wait: HostInternalCallOwner,
-    replay: HostInternalReplay,
-) -> wasmtime::Result<HostResponseMonotonicClockTimestamp> {
-    DurableCallSession::<P3MonotonicClockNow, Cancellable>::invoke_host_internal_access(
-        store,
-        super::durable_worker_ctx::<Ctx, U>,
-        wait,
-        replay,
-        HostRequestNoInput {},
-        DurableFunctionType::ReadLocal,
-        async || {
-            let nanos = current_monotonic_now::<U, Ctx>(store)?;
-            Ok::<_, wasmtime::Error>(HostResponseMonotonicClockTimestamp { nanos })
-        },
-    )
-    .await
 }
 
 async fn wait_until_live<U: Send + 'static, Ctx: WorkerCtx>(

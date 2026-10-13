@@ -603,18 +603,11 @@ remain durable and identity-validated, but End returns the recorded result direc
 There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless
 replay-tail gate. A Store-holding reader must never wait for progress whose only producer needs
 that Store's event loop. P3 `monotonic-clock::wait-for` records its outer Start first and owns the
-internal `now` read as a child. On replay the claim of the outer Start also claims the recorded
-child, in the same cursor transaction or under the same hold of the cursor state for a retained
-outer Start, when the child has a recorded terminal, or has none in a Store that never goes live
-(a completed entity body); that child is then replayed before the outer
-call is resolved, so a wait that the guest dropped leaves no recorded read unclaimed. In every
-other case the outer replay is resolved before the child: a cancelled outer wait without a
-recorded child parks without issuing it, while an incomplete outer wait owns cancellation cleanup
-before reconstructing the deadline from recorded `now + duration`. The claim of a wait matches
-the recorded duration, and waits of one parent with one duration take a turn until their `Start`
-is appended or claimed, so that waits started together get their own records. A completed outer
-requires a recorded completed child. Cancelling after the child's End settles the outer wait
-without an internal delivery marker. Only the outer wait has a real guest-delivery boundary.
+internal `now` read as a child. It resolves the outer replay before the child: a cancelled outer
+wait parks without issuing the child, while an incomplete outer wait owns cancellation cleanup
+before reconstructing the deadline from recorded `now + duration`. A completed outer requires
+a recorded completed child. Cancelling after the child's End settles the outer wait without an
+internal delivery marker. Only the outer wait has a real guest-delivery boundary.
 
 P3 timers always return `STARTED` before successful guest delivery, even for zero-duration or
 expired waits. Both live execution and replay yield before completing the outer timer. `wait-for`
@@ -699,11 +692,6 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   `CursorTx`. On a retained miss the claim keeps the same waiter and rechecks retained state on
   progress; only a gated transaction may classify absence or enter missing-scope settlement.
   This preserves the cleanup fence's queue ordering.
-  A retained claim that takes a recorded inner call with it (`RetainedClaims::claim_recorded_child`,
-  for P3 `wait-for`) claims it under the same hold of the state mutex: from the retained records
-  when the reader has passed it, and by its index ahead of the reader when it has not. That is the
-  one `Start` ahead of the reader that this path marks claimed. It names its parent, the reader
-  does not move, and its terminal is routed when a gated transaction gets there.
   Resolution likewise prefers a ready gate and completes the ordinary drain, but can return an
   already-routed host result when the gate remains held. Host readiness is not guest delivery:
   the actual observer still waits for its exact marker. The marker-consuming owned operation

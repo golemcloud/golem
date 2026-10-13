@@ -40,7 +40,6 @@ use crate::durable_host::stream_session::{
 use crate::durable_host::stream_transport::{LiveStreamEndpoint, SourceLifecycle};
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, DurableWorkerCtxView};
-use crate::preview2::golem::tool::host::ByteStreamFailure;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::worker::suspension::{ExternalActivity, RuntimeSource, RuntimeStore};
@@ -86,7 +85,7 @@ use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -5863,21 +5862,6 @@ impl ForwardedDurableInput {
 }
 
 impl DurableInputEndpoint {
-    /// Whether a guest took a read of this reader at an oplog place that `stops_a_replay`
-    /// accepts. A replay stops at the record of such a read until the reader's guest asks for
-    /// the read again.
-    pub(crate) fn has_recorded_guest_read(
-        &self,
-        stops_a_replay: impl Fn(OplogIndex) -> bool,
-    ) -> bool {
-        self.observations.values().any(|observed| {
-            observed.boundaries.iter().any(|(index, observation)| {
-                matches!(observation, StreamConsumerObservation::Guest { .. })
-                    && stops_a_replay(*index)
-            })
-        })
-    }
-
     fn forwarded_handle(&self) -> Result<DurableStreamHandle, String> {
         if self.consumer_read_ordinal != 0 || !self.journal.is_empty() {
             return Err("cannot forward a durable input stream after reading from it".to_string());
@@ -6262,11 +6246,6 @@ pub struct DurableInputProducer {
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
-    /// Set when the stream ends because its producer cancelled it. A tool's stdin needs this
-    /// to end with `cancelled`; every other reader sees the end of the stream.
-    cancelled_by_producer: Option<Arc<AtomicBool>>,
-    /// See [`Self::with_pending_reads_past_a_completed_record`].
-    pending_past_a_completed_record: bool,
 }
 
 type StreamReadObserver =
@@ -6686,8 +6665,6 @@ impl DurableInputProducer {
             dropping: false,
             drop_event_sink: None,
             runtime_teardown: Arc::new(|| false),
-            cancelled_by_producer: None,
-            pending_past_a_completed_record: false,
         }
     }
 
@@ -6699,34 +6676,6 @@ impl DurableInputProducer {
     ) -> Self {
         self.drop_event_sink = Some(drop_event_sink);
         self.runtime_teardown = runtime_teardown;
-        self
-    }
-
-    /// Reports a cancel by the stream's producer through `flag`, set before the end is returned.
-    pub(crate) fn with_producer_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
-        self.cancelled_by_producer = Some(flag);
-        self
-    }
-
-    /// Tells the producer when its Store is torn down, without cleanup on drop: a producer that
-    /// is dropped unread then cancels nothing.
-    pub(crate) fn with_runtime_teardown(
-        mut self,
-        runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
-    ) -> Self {
-        self.runtime_teardown = runtime_teardown;
-        self
-    }
-
-    /// Lets a read past the recorded consumer journal stay pending in the replay of a completed
-    /// entity body, where every other reader reports a divergence.
-    ///
-    /// A body may give up a read that never got anything. A record's position is reserved when
-    /// the reader takes the item, and the body's result is recorded after that, so a read
-    /// without a record got nothing in the first run. In the replay it waits until the body
-    /// gives it up again; a request to finish is answered as in the first run.
-    pub(crate) fn with_pending_reads_past_a_completed_record(mut self) -> Self {
-        self.pending_past_a_completed_record = true;
         self
     }
 
@@ -6773,17 +6722,6 @@ impl DurableInputProducer {
             CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) => Err(
                 anyhow::anyhow!("durable stream ended with error context: {error:?}"),
             ),
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputProducer,
-                reason: StreamCancelReason::Cancelled,
-                ..
-            } => {
-                if let Some(flag) = &self.cancelled_by_producer {
-                    flag.store(true, Ordering::Release);
-                }
-                self.finished = true;
-                Ok(DurableInputEvent::End)
-            }
             CommittedProducerStreamEventPayload::Cancel {
                 role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
                 ..
@@ -7411,11 +7349,6 @@ impl DurableInputProducer {
                 let ctx = store.data().durable_ctx();
                 if !ctx.is_live() {
                     if ctx.rejects_live_continuation_at_replay_tail() {
-                        if self.pending_past_a_completed_record {
-                            // Nothing wakes this read: the body gives it up, as it did when it
-                            // was recorded.
-                            return Poll::Pending;
-                        }
                         self.finished = true;
                         return Poll::Ready(Err(WorkerExecutorError::unexpected_oplog_entry(
                             format!(
@@ -7502,14 +7435,6 @@ impl DurableInputProducer {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(result) => result,
         };
-        Poll::Ready(self.finish_receive_as_item(receive_result))
-    }
-
-    /// Completes a receive and returns what a stream reader gets for it.
-    fn finish_receive_as_item(
-        &mut self,
-        receive_result: Result<DurableInputRead, DurableReceiveError>,
-    ) -> wasmtime::Result<DurableInputItem> {
         let guest_bytes = receive_result
             .as_ref()
             .ok()
@@ -7517,20 +7442,20 @@ impl DurableInputProducer {
         let value = match self.finish_receive(receive_result) {
             Ok(DurableInputEvent::Item(value)) => value,
             Ok(DurableInputEvent::End) => {
-                return Ok(DurableInputItem::Terminal(StreamResult::Dropped));
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
             Ok(DurableInputEvent::Cancelled) => {
-                return Ok(DurableInputItem::Terminal(StreamResult::Cancelled));
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
             }
             Err(error) => {
                 self.finished = true;
-                return Err(wasmtime::Error::from_anyhow(error));
+                return Poll::Ready(Err(wasmtime::Error::from_anyhow(error)));
             }
         };
-        Ok(match guest_bytes {
+        Poll::Ready(Ok(match guest_bytes {
             Some(bytes) => DurableInputItem::Bytes(bytes),
             None => DurableInputItem::Value(value),
-        })
+        }))
     }
 }
 
@@ -7648,136 +7573,6 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableByteInputProducer {
                 )))
             }
             DurableInputItem::Terminal(result) => Poll::Ready(Ok(result)),
-        }
-    }
-}
-
-/// What the stdin of a tool body gets for one read of its durable input.
-#[derive(Debug)]
-enum ToolStdinDelivery {
-    Chunk(Vec<u8>),
-    /// The one item that says that the stdin was cancelled. The stream ends after it.
-    Cancelled,
-    End(StreamResult),
-}
-
-/// Maps one read of a durable byte input to the stdin of a tool body.
-///
-/// A cancel by the input's producer is not an error of the stream: the body reads it as one
-/// `cancelled` item, and then the stream ends. A clean end gives no item. `Cancelled` as a
-/// result answers only a reader that asked the read to finish, so an input that was cancelled
-/// in any other way is read as the `cancelled` item too.
-fn tool_stdin_delivery(
-    item: DurableInputItem,
-    cancelled_by_producer: bool,
-    asked_to_finish: bool,
-) -> wasmtime::Result<ToolStdinDelivery> {
-    Ok(match item {
-        DurableInputItem::Bytes(bytes) => ToolStdinDelivery::Chunk(bytes.to_vec()),
-        DurableInputItem::Value(SchemaValue::U8(byte)) => ToolStdinDelivery::Chunk(vec![byte]),
-        DurableInputItem::Value(_) => {
-            return Err(wasmtime::Error::msg("tool stdin contains a non-byte value"));
-        }
-        DurableInputItem::Terminal(StreamResult::Cancelled) if asked_to_finish => {
-            ToolStdinDelivery::End(StreamResult::Cancelled)
-        }
-        DurableInputItem::Terminal(StreamResult::Cancelled) => ToolStdinDelivery::Cancelled,
-        DurableInputItem::Terminal(StreamResult::Dropped) if cancelled_by_producer => {
-            ToolStdinDelivery::Cancelled
-        }
-        DurableInputItem::Terminal(result) => ToolStdinDelivery::End(result),
-    })
-}
-
-/// Adapts the durable stdin of a tool call that a client started to the stdin of the tool body.
-///
-/// The body reads the durable input itself. When its guest reads, each chunk and the terminal
-/// is a guest observation of the body, recorded where the guest takes it, so a replay hands it
-/// over at the same place among the body's other recorded calls. When the host reads, for a
-/// tool that the body forwards its stdin to, the reads are host records.
-///
-/// The records stay in the session of the call and keep its attribution, because one session
-/// has one attribution. The observation names the body as its parent, and that is what a
-/// replay reads.
-///
-/// A guest read asks for up to [`MAX_PACKED_U8_STREAM_ITEM_SIZE`] bytes. The size is fixed:
-/// a replay that asked for less would cut a recorded chunk in another place.
-///
-/// Dropping the reader cancels nothing. The end of the session cancels what nobody read, so a
-/// later attempt of the same call finds the stdin as the client left it.
-pub struct DurableToolStdinProducer {
-    input: DurableInputProducer,
-    cancelled_by_producer: Arc<AtomicBool>,
-    /// The `cancelled` item was handed over. The next read ends the stream.
-    ended: bool,
-}
-
-impl DurableToolStdinProducer {
-    pub(crate) fn new(
-        endpoint: DurableInputEndpoint,
-        runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
-    ) -> Self {
-        let cancelled_by_producer = Arc::new(AtomicBool::new(false));
-        Self {
-            input: DurableInputProducer::new(endpoint)
-                .with_runtime_teardown(runtime_teardown)
-                .with_producer_cancel_flag(cancelled_by_producer.clone())
-                .with_pending_reads_past_a_completed_record(),
-            cancelled_by_producer,
-            ended: false,
-        }
-    }
-}
-
-impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableToolStdinProducer {
-    type Item = Result<Vec<u8>, ByteStreamFailure>;
-    type Buffer = Option<Self::Item>;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, Ctx>,
-        mut destination: Destination<'a, Self::Item, Self::Buffer>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        if self.ended {
-            return Poll::Ready(Ok(StreamResult::Dropped));
-        }
-        let (item, observer) = match destination.remaining(&mut store) {
-            Some(0) if !finish => return Poll::Ready(Ok(StreamResult::Completed)),
-            Some(_) => std::task::ready!(self.input.poll_guest_value(
-                cx,
-                &mut store,
-                MAX_PACKED_U8_STREAM_ITEM_SIZE,
-                finish
-            ))?,
-            None => (
-                std::task::ready!(self.input.poll_value(cx, &mut store, finish, None))?,
-                None,
-            ),
-        };
-        if let Some(observer) = observer {
-            destination.register_read_observer(&mut store, move |consumption| {
-                // A mismatched replay consumption already poisons the shared cursor.
-                let _ = observer(consumption);
-            })?;
-        }
-        let cancelled_by_producer = self.cancelled_by_producer.load(Ordering::Acquire);
-        match tool_stdin_delivery(item, cancelled_by_producer, finish) {
-            Ok(ToolStdinDelivery::Chunk(bytes)) => {
-                destination.set_buffer(Some(Ok(bytes)));
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            Ok(ToolStdinDelivery::Cancelled) => {
-                self.ended = true;
-                destination.set_buffer(Some(Err(ByteStreamFailure::Cancelled)));
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            Ok(ToolStdinDelivery::End(result)) => Poll::Ready(Ok(result)),
-            Err(error) => {
-                self.input.finished = true;
-                Poll::Ready(Err(error))
-            }
         }
     }
 }

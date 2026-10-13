@@ -207,8 +207,6 @@ pub(super) struct CursorTx<'a> {
 
 /// Retained-record bookkeeping only. This capability cannot read or commit the physical head,
 /// acquire an advance gate, or publish live. Lookahead for resolver prefetch is non-consuming.
-/// The one `Start` ahead of the reader that it marks claimed is the recorded inner call of a
-/// `Start` it just claimed (see [`Self::claim_recorded_child`]).
 pub(super) struct RetainedClaims<'a> {
     pub(super) cursor: &'a ReplayCursor,
     pub(super) st: &'a mut CursorState,
@@ -1984,170 +1982,6 @@ impl RetainedClaims<'_> {
         *self.notify_progress = true;
         Ok(ReplayCallHandle::new(start_idx, receiver))
     }
-
-    /// Reports what the replay-visible oplog holds for the call named `function_name` that the
-    /// call started at `parent_start_index` made under its own `Start`, and the index of that
-    /// call's `Start` when it is recorded. `enclosing` is the parent's own parent. Nothing is
-    /// consumed.
-    ///
-    /// The scan respects the replay target and fork/revert deleted regions. It ends where the
-    /// record of the parent's call tree ends: at the parent's terminal while the child is not
-    /// found, at the terminal of the call that encloses the parent, or at the end of the
-    /// invocation when no call encloses it.
-    ///
-    /// It starts in the replay buffer. A claim that carries a request leaves its `Start` at the
-    /// head of the buffer with the entries that follow it, so a child that follows its parent
-    /// closely is classified without reading the oplog.
-    async fn recorded_child(
-        &self,
-        parent_start_index: OplogIndex,
-        enclosing: Option<OplogIndex>,
-        function_name: &HostFunctionName,
-    ) -> (RecordedChild, Option<OplogIndex>) {
-        let replay_target = self.cursor.replay_target();
-        let mut child = None;
-        let mut next = parent_start_index.next();
-        let mut classify = |index: OplogIndex, entry: &OplogEntry| {
-            if self.st.skipped_regions.is_in_deleted_region(index) {
-                return None;
-            }
-            let terminal_of = terminal_start_index(entry);
-            match child {
-                Some(child) if terminal_of == Some(child) => return Some(RecordedChild::Closed),
-                None if terminal_of == Some(parent_start_index) => {
-                    return Some(RecordedChild::Missing);
-                }
-                None if matches!(
-                    entry,
-                    OplogEntry::Start {
-                        parent_start_index: Some(parent),
-                        function_name: name,
-                        ..
-                    } if *parent == parent_start_index && name == function_name
-                ) =>
-                {
-                    child = Some(index);
-                    return None;
-                }
-                _ => {}
-            }
-            let record_ends = match enclosing {
-                Some(enclosing) => terminal_of == Some(enclosing),
-                None => matches!(entry, OplogEntry::AgentInvocationFinished { .. }),
-            };
-            record_ends.then(|| child.map_or(RecordedChild::Missing, |_| RecordedChild::Open))
-        };
-
-        let first = next;
-        for (index, entry) in self
-            .st
-            .replay_buffer
-            .iter()
-            .skip_while(|(index, _)| *index < first)
-        {
-            if *index != next || *index > replay_target {
-                break;
-            }
-            if let Some(recorded) = classify(*index, entry) {
-                return (recorded, child);
-            }
-            next = index.next();
-        }
-        // The child is recorded right after its parent unless other work came in between, so
-        // the first read is small.
-        let mut chunk = 8;
-        while next <= replay_target {
-            let available = u64::from(replay_target) - u64::from(next) + 1;
-            let entries = self
-                .cursor
-                .oplog
-                .read_exact(next, chunk.min(available))
-                .await;
-            let last_read = *entries.last_key_value().unwrap().0;
-            for (index, entry) in &entries {
-                if *index > replay_target {
-                    break;
-                }
-                if let Some(recorded) = classify(*index, entry) {
-                    return (recorded, child);
-                }
-            }
-            next = last_read.next();
-            chunk = (chunk * 8).min(CHUNK_SIZE);
-        }
-        (
-            child.map_or(RecordedChild::Missing, |_| RecordedChild::Open),
-            child,
-        )
-    }
-
-    /// The claim that takes the recorded inner call of the call claimed at `parent_start_index`,
-    /// and the index of that inner call's `Start`. `None` when the claim of the parent takes no
-    /// inner call with it (see [`CursorTx::claim_recorded_child`]). Nothing is consumed.
-    async fn recorded_child_claim(
-        &self,
-        parent_start_index: OplogIndex,
-        parent: &OplogEntry,
-        child: &RecordedChildClaim,
-        observational_owner: Option<OplogIndex>,
-    ) -> Option<(StartClaim, OplogIndex)> {
-        if parent_start_index >= self.cursor.replay_target() {
-            return None;
-        }
-        let (recorded, child_index) = self
-            .recorded_child(
-                parent_start_index,
-                start_parent(parent),
-                &child.function_name,
-            )
-            .await;
-        let child_index = match (recorded, child_index) {
-            (RecordedChild::Closed, Some(index)) => index,
-            (RecordedChild::Open, Some(index)) if child.claim_open => index,
-            _ => return None,
-        };
-        let claim = StartClaim::owned(
-            &child.function_name,
-            &child.function_type,
-            parent_start_index,
-        )
-        .with_observational_owner(observational_owner);
-        Some((claim, child_index))
-    }
-
-    /// [`CursorTx::claim_recorded_child`] for a parent that was claimed from the retained
-    /// records without the advance gate. The inner call is claimed under the same hold of the
-    /// cursor state as its parent, so nothing can see the parent claimed and the inner call not.
-    ///
-    /// An inner `Start` that the reader has passed is retained like its parent and is claimed
-    /// from there. One that the reader has not reached is claimed ahead of the cursor by its
-    /// index: it names its parent, so only the parent's own inner call can be it. The reader
-    /// does not move, and the terminal of the inner call is delivered when the reader gets to
-    /// it, after the owner of the gate let it go.
-    pub(super) async fn claim_recorded_child(
-        &mut self,
-        parent_start_index: OplogIndex,
-        parent: &OplogEntry,
-        child: &RecordedChildClaim,
-        observational_owner: Option<OplogIndex>,
-    ) -> Result<Option<ReplayCallHandle>, WorkerExecutorError> {
-        let Some((claim, child_index)) = self
-            .recorded_child_claim(parent_start_index, parent, child, observational_owner)
-            .await
-        else {
-            return Ok(None);
-        };
-        if let Some((handle, _)) = self.claim_start(&claim).await? {
-            return Ok(Some(handle));
-        }
-        if child_index <= self.cursor.last_replayed_index() {
-            return Ok(None);
-        }
-        self.st.claimed_starts.insert(child_index);
-        self.register_claimed_start(child_index, Some(parent_start_index))
-            .await
-            .map(Some)
-    }
 }
 
 impl CursorTx<'_> {
@@ -2283,51 +2117,6 @@ impl CursorTx<'_> {
             return Ok(StartClaimAttempt::Blocked(BlockedOn::CursorProgress));
         }
 
-        // The drain left the head in the replay buffer. When the head is the `Start` this claim
-        // wants, the scan below would read it from the oplog again and stop at it. It is
-        // claimed from the buffer instead, with the same result: claimed ahead of the cursor,
-        // which consumes it when it gets there. Calls that follow each other find their `Start`
-        // here and never scan.
-        let head = self.cursor.last_replayed_index().next();
-        let head_start = match self.st.replay_buffer.front() {
-            Some((index, entry))
-                if *index == head
-                    && head <= self.cursor.replay_target()
-                    && !self.st.claimed_starts.contains(&head)
-                    && !self.st.skipped_regions.is_in_deleted_region(head)
-                    && !self.is_stream_observation(head)
-                    && matches_identity(entry) =>
-            {
-                Some(entry)
-            }
-            _ => None,
-        };
-        if let Some(
-            entry @ OplogEntry::Start {
-                request: Some(recorded_request),
-                ..
-            },
-        ) = head_start
-            && recorded_request_payload_matches(
-                self.cursor.oplog.as_ref(),
-                recorded_request,
-                expected_request,
-            )
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to load durable call request payload at Start {head}: {err}"
-                ))
-            })?
-        {
-            let entry = Box::new(entry.clone());
-            self.st.claimed_starts.insert(head);
-            let handle = self
-                .register_claimed_start(head, start_parent(&entry))
-                .await?;
-            return Ok(StartClaimAttempt::Claimed(handle, entry));
-        }
-
         let already_claimed = self.st.claimed_starts.clone();
         let mut scan_start = self.cursor.last_replayed_index().next();
         let replay_target = self.cursor.replay_target();
@@ -2397,46 +2186,6 @@ impl CursorTx<'_> {
         }
 
         Ok(StartClaimAttempt::Missing)
-    }
-
-    /// Claims the recorded `Start` of the call that the call just claimed at
-    /// `parent_start_index` made under its own `Start`, when replay makes that inner call before
-    /// it resolves the outer one: when the inner call has a recorded terminal, or has none and
-    /// `child.claim_open` is set. Returns `None` in every other case; the caller then resolves
-    /// the outer call first, as it does for a record that ends before the inner call.
-    ///
-    /// This runs in the transaction that claimed the parent. A caller that waited for a second
-    /// operation to claim the inner call could be dropped by the guest in between, and a body
-    /// that returns then leaves a recorded `Start` unclaimed.
-    pub(super) async fn claim_recorded_child(
-        &mut self,
-        parent_start_index: OplogIndex,
-        parent: &OplogEntry,
-        child: &RecordedChildClaim,
-        observational_owner: Option<OplogIndex>,
-    ) -> Result<Option<ReplayCallHandle>, WorkerExecutorError> {
-        let Some((claim, child_index)) = self
-            .retained_claims()
-            .recorded_child_claim(parent_start_index, parent, child, observational_owner)
-            .await
-        else {
-            return Ok(None);
-        };
-        match self.claim_start(&claim).await? {
-            StartClaimAttempt::Claimed(handle, _) => Ok(Some(handle)),
-            StartClaimAttempt::Blocked(_) if child_index > self.cursor.last_replayed_index() => {
-                // A delivery marker of another call lies between the cursor and the inner call.
-                // The marker holds back claims that could belong to a call the guest makes after
-                // that delivery. This `Start` names its parent, and only the parent's own inner
-                // call can be it, so it is claimed ahead of the cursor like any other `Start`
-                // found by a scan.
-                self.st.claimed_starts.insert(child_index);
-                self.register_claimed_start(child_index, Some(parent_start_index))
-                    .await
-                    .map(Some)
-            }
-            _ => Ok(None),
-        }
     }
 
     /// Returns the latest `Start` matching this claim in a jump-deleted region. An incomplete
@@ -2821,7 +2570,6 @@ impl ReplayState {
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
-            start_order: std::sync::Mutex::new(HashMap::new()),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -3052,19 +2800,11 @@ impl ReplayState {
     /// Enqueue exactly one advance-gate waiter before inspecting retained history. A retained
     /// miss keeps that queue position while progress wakes the state-only recheck; it is never
     /// evidence of divergence or permission to execute live.
-    ///
-    /// `on_retained` runs under the hold of the cursor state that made the retained claim, with
-    /// the same retained-only capability, so what it claims next to the `Start` is claimed
-    /// before anything else can observe the claim.
     pub(super) async fn with_claim_tx<R>(
         &self,
         claim: &StartClaim,
         custom_invocation: Option<(uuid::Uuid, Option<OplogIndex>)>,
-        on_retained: impl AsyncFnOnce(
-            &mut RetainedClaims<'_>,
-            ReplayCallHandle,
-            Box<OplogEntry>,
-        ) -> Result<R, WorkerExecutorError>,
+        on_retained: impl FnOnce(ReplayCallHandle, Box<OplogEntry>) -> R,
         gated: impl AsyncFnOnce(&mut CursorTx<'_>) -> Result<R, WorkerExecutorError>,
     ) -> Result<R, WorkerExecutorError> {
         let mut on_retained = Some(on_retained);
@@ -3093,15 +2833,9 @@ impl ReplayState {
                 Some((id, parent)) => retained.claim_custom_start(claim, id, parent).await,
                 None => retained.claim_start(claim).await,
             };
-            let result = match result {
-                Ok(Some((handle, entry))) => {
-                    on_retained.take().unwrap()(&mut retained, handle, entry)
-                        .await
-                        .map(Some)
-                }
-                Ok(None) => Ok(None),
-                Err(error) => Err(error),
-            };
+            let result = result.map(|result| {
+                result.map(|(handle, entry)| on_retained.take().unwrap()(handle, entry))
+            });
             drop(st);
             if notify_progress {
                 self.cursor.progress.notify_waiters();
@@ -3518,65 +3252,6 @@ impl ReplayState {
         None
     }
 
-    /// The lock that orders the `Start`s of calls with one recorded identity.
-    ///
-    /// Calls of `function` that one parent starts together with equal requests leave the same
-    /// `Start` in the oplog, so replay can tell them apart only by the order of those `Start`s.
-    /// `request` is a number that is equal exactly when the requests are. Each such call takes
-    /// this lock as the first thing it does and holds it until its `Start` is appended or
-    /// claimed. The lock is fair and a host call first runs when the guest makes it, so the
-    /// `Start`s follow in the order in which the guest started the calls, in the first run and
-    /// in every replay.
-    pub(in crate::durable_host) fn start_order(
-        &self,
-        function: &'static str,
-        parent_start_index: Option<OplogIndex>,
-        request: u64,
-    ) -> Arc<Mutex<()>> {
-        let mut locks = self.cursor.start_order.lock().unwrap();
-        let key = (function, parent_start_index, request);
-        if let Some(lock) = locks.get(&key).and_then(std::sync::Weak::upgrade) {
-            return lock;
-        }
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        let lock = Arc::new(Mutex::new(()));
-        locks.insert(key, Arc::downgrade(&lock));
-        lock
-    }
-
-    /// [`RetainedClaims::recorded_child`] for a parent that is read from the oplog.
-    #[cfg(test)]
-    pub(crate) async fn recorded_child(
-        &self,
-        parent_start_index: OplogIndex,
-        function_name: &HostFunctionName,
-    ) -> Result<RecordedChild, WorkerExecutorError> {
-        let function_name = function_name.clone();
-        self.run_owned_cursor_op(move |state| async move {
-            state
-                .with_tx(async |tx| {
-                    let enclosing = match tx.cursor.oplog.read(parent_start_index).await {
-                        OplogEntry::Start {
-                            parent_start_index, ..
-                        } => parent_start_index,
-                        entry => {
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                format!("Start at {parent_start_index}"),
-                                format!("{entry:?}"),
-                            ));
-                        }
-                    };
-                    Ok(tx
-                        .retained_claims()
-                        .recorded_child(parent_start_index, enclosing, &function_name)
-                        .await
-                        .0)
-                })
-                .await
-        })
-        .await
-    }
-
     /// Waits until the replay cursor is blocked on a record in `root`'s call tree that no still
     /// running reconstructed entity body or live resolver awaiter can consume. This turns a body
     /// that returned before replaying its recorded subtree into permanent structural divergence
@@ -3915,15 +3590,6 @@ impl ReplayState {
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
         self.cursor.is_live()
-    }
-
-    /// Whether the replay-visible oplog holds a guest-consumed stream record at `index`.
-    pub(crate) fn has_stream_observation(&self, index: OplogIndex) -> bool {
-        self.cursor
-            .stream_observations
-            .lock()
-            .unwrap()
-            .contains_key(&index)
     }
 
     /// Returns whether the primary owner has published live admission after reconstruction

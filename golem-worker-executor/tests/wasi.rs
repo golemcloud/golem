@@ -7984,7 +7984,6 @@ async fn http_connection_pool_contention_with_restart(
 /// round-trip, repeats the timeout call in a loop to stress-test replay.
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
 async fn http_timeout_and_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

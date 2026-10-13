@@ -427,22 +427,6 @@ impl StartClaim {
     }
 }
 
-/// A call that a host function makes for itself under its own `Start`, right after that
-/// `Start` (see `DurableCallSession::invoke_host_internal_access`). The claim of the outer
-/// `Start` claims the recorded `Start` of this call under the same hold of the cursor state, so
-/// an outer call that is claimed never leaves its recorded inner call to a later step that the
-/// guest can cut off by dropping the outer call.
-#[derive(Debug, Clone)]
-pub(crate) struct RecordedChildClaim {
-    pub(crate) function_name: HostFunctionName,
-    pub(crate) function_type: DurableFunctionType,
-    /// Whether a recorded `Start` of the inner call that has no terminal is claimed too. A Store
-    /// that never goes live sets it: there the inner call can only wait with the outer one. A
-    /// Store that can go live leaves it unset, and completes such an inner call after the outer
-    /// call went live.
-    pub(crate) claim_open: bool,
-}
-
 pub(crate) enum ReplayStartClaimOutcome {
     Claimed {
         handle: ReplayCallHandle,
@@ -532,36 +516,15 @@ impl ReplayState {
             .await
     }
 
-    /// [`Self::claim_start_for_store`] that notifies `on_claim` of every accepted claim inside
-    /// the owned cursor operation.
+    /// Shared claim loop of the wrappers above: claims on behalf of a Store whose own liveness is
+    /// `store_live` and notifies `on_claim` of every accepted claim inside the owned cursor
+    /// operation.
     pub(crate) async fn claim_start_for_store_observed(
         &self,
         claim: StartClaim,
         store_live: bool,
         on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
-        self.claim_start_with_recorded_child_for_store(claim, store_live, None, on_claim)
-            .await
-            .map(|(outcome, _)| outcome)
-    }
-
-    /// Shared claim loop of the wrappers above: claims on behalf of a Store whose own liveness is
-    /// `store_live` and notifies `on_claim` of every accepted claim inside the owned cursor
-    /// operation.
-    ///
-    /// With `child`, the transaction that claims the `Start` also claims the recorded `Start` of
-    /// that inner call (see [`CursorTx::claim_recorded_child`]) and returns its handle next to the
-    /// outcome. A claim of a retained `Start` that runs without the advance gate does the same
-    /// under its hold of the cursor state (`RetainedClaims::claim_recorded_child`). The owned
-    /// operation finishes when the caller is dropped, so the inner call is claimed whenever the
-    /// outer one is.
-    pub(crate) async fn claim_start_with_recorded_child_for_store(
-        &self,
-        claim: StartClaim,
-        store_live: bool,
-        child: Option<RecordedChildClaim>,
-        on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
-    ) -> Result<(ReplayStartClaimOutcome, Option<ReplayCallHandle>), WorkerExecutorError> {
         enum Missing {
             ReplayEnded,
             DeletedRegion,
@@ -573,7 +536,6 @@ impl ReplayState {
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
-            let owned_child = child.clone();
             let on_claim = on_claim.clone();
             let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
@@ -581,19 +543,7 @@ impl ReplayState {
                         match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
                                 on_claim(handle.start_idx(), &entry);
-                                let child = match &owned_child {
-                                    Some(child) => {
-                                        tx.claim_recorded_child(
-                                            handle.start_idx(),
-                                            &entry,
-                                            child,
-                                            owned_claim.expected_observational_owner(),
-                                        )
-                                        .await?
-                                    }
-                                    None => None,
-                                };
-                                Ok((Some((handle, entry, child)), None, None))
+                                Ok((Some((handle, entry)), None, None))
                             }
                             Ok(StartClaimAttempt::Blocked(on)) => Ok((None, Some(on), None)),
                             Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
@@ -634,40 +584,26 @@ impl ReplayState {
                         .with_claim_tx(
                             &owned_claim,
                             None,
-                            async |retained, handle, entry| {
+                            |handle, entry| {
                                 on_claim(handle.start_idx(), &entry);
-                                let child = match &owned_child {
-                                    Some(child) => {
-                                        retained
-                                            .claim_recorded_child(
-                                                handle.start_idx(),
-                                                &entry,
-                                                child,
-                                                owned_claim.expected_observational_owner(),
-                                            )
-                                            .await?
-                                    }
-                                    None => None,
-                                };
-                                Ok((Some((handle, entry, child)), None, None))
+                                (Some((handle, entry)), None, None)
                             },
                             gated,
                         )
                         .await
                 })
                 .await?;
-            if let Some((handle, entry, child)) = claimed {
-                return Ok((ReplayStartClaimOutcome::Claimed { handle, entry }, child));
+            if let Some(claimed) = claimed {
+                return Ok(ReplayStartClaimOutcome::Claimed {
+                    handle: claimed.0,
+                    entry: claimed.1,
+                });
             }
             match missing {
-                Some(Missing::ReplayEnded) => {
-                    return Ok((ReplayStartClaimOutcome::ReplayEnded, None));
-                }
-                Some(Missing::DeletedRegion) => {
-                    return Ok((ReplayStartClaimOutcome::DeletedRegion, None));
-                }
+                Some(Missing::ReplayEnded) => return Ok(ReplayStartClaimOutcome::ReplayEnded),
+                Some(Missing::DeletedRegion) => return Ok(ReplayStartClaimOutcome::DeletedRegion),
                 Some(Missing::StoreAlreadyLive) => {
-                    return Ok((ReplayStartClaimOutcome::StoreAlreadyLive, None));
+                    return Ok(ReplayStartClaimOutcome::StoreAlreadyLive);
                 }
                 None => {}
             }
@@ -895,12 +831,7 @@ impl ReplayState {
                             .await
                     };
                     state
-                        .with_claim_tx(
-                            &owned_claim,
-                            None,
-                            async |_, handle, entry| Ok(StartClaimAttempt::Claimed(handle, entry)),
-                            gated,
-                        )
+                        .with_claim_tx(&owned_claim, None, StartClaimAttempt::Claimed, gated)
                         .await
                 })
                 .await?;
@@ -1149,7 +1080,7 @@ impl ReplayState {
                         .with_claim_tx(
                             &claim,
                             Some((expected_invocation_id, expected_parent_start_index)),
-                            async |_, handle, entry| Ok((Some((handle, entry)), None, None)),
+                            |handle, entry| (Some((handle, entry)), None, None),
                             gated,
                         )
                         .await

@@ -156,17 +156,6 @@ rather than replaced by a recorded result.
   `local_live_tail`, which for incomplete tool entities first requires
   `activate_live_attachment_memory_accounting` to admit them. Completed replays use historical
   memory charges, not current pressure.
-- The stdin of a tool call that a client started is read by the component body itself
-  (`DurableToolStdinProducer`): each chunk and the terminal its guest takes is a guest observation
-  whose parent is the entity `Start`, or the custom or batched scope that is open at the read. Do
-  not put a host task or a buffer between that durable input and the guest: what a host takes ahead
-  of the body has no place among the body's recorded calls, and a replay then hands it over too
-  early. In completed replay a read past the recorded journal stays pending. A guest that cancels a
-  pending read cancels nothing and keeps its receive for the next read, as every guest reader of a
-  durable input does. Unlike those, a reader of this stdin that is dropped cancels nothing either:
-  the end of the session cancels the unread input. The records keep the
-  session's attribution, so an incomplete body with a recorded read of this stdin has started
-  (`has_recorded_guest_read`): do not send it through the empty-scope shortcut.
 
 ## Snapshotting
 

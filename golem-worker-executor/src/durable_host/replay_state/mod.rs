@@ -179,9 +179,7 @@ mod resolution;
 mod rollback;
 
 use abandoned::AbandonedStarts;
-pub(crate) use claims::{
-    CustomStartClaimOutcome, RecordedChildClaim, ReplayStartClaimOutcome, StartClaim,
-};
+pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
 #[cfg(test)]
 use rollback::atomic_rollback_region;
 pub use rollback::suffix_rollback_region;
@@ -222,9 +220,6 @@ enum ReplayTransitionPhase {
 
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
-/// Keyed by what a `Start` records of a call: its function, its parent, and a number that
-/// stands for its request (for `wait-for`, the length of the wait).
-type StartOrderLocks = HashMap<(&'static str, Option<OplogIndex>, u64), std::sync::Weak<Mutex<()>>>;
 
 /// The shared replay cursor: the position reached in the oplog, the target it replays up to, and
 /// every piece of state mutated while advancing it.
@@ -256,11 +251,6 @@ struct ReplayCursor {
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
-    /// One fair lock for each group of calls that have the same recorded identity and that a
-    /// guest may start together. See [`ReplayState::start_order`]. The locks also act in the
-    /// first run, which writes the order that replay relies on. They are kept here because this
-    /// is the one object that every such call of an owner reaches in both modes.
-    start_order: std::sync::Mutex<StartOrderLocks>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
@@ -341,18 +331,6 @@ struct ReplayCursor {
 pub(super) enum CompletionMarker {
     Delivered(OplogIndex),
     Discarded(OplogIndex),
-}
-
-/// What the replay-visible oplog holds for a call that a host function makes under its own
-/// `Start`. See [`cursor::RetainedClaims::recorded_child`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RecordedChild {
-    /// No such `Start` is recorded.
-    Missing,
-    /// The `Start` is recorded and has no terminal.
-    Open,
-    /// The `Start` is recorded with its `End` or `Cancelled`.
-    Closed,
 }
 
 /// Ownership of the cursor gate after a guest observation record has been consumed. Only its
