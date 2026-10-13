@@ -1,0 +1,5 @@
+# Consumed by `componentize-go` in downstream agent projects: because this file
+# ships with the SDK module, an agent only needs to run `componentize-go build`
+# with no WIT flags.
+worlds = ["golem:agent-guest/agent-guest"]
+wit_paths = ["wit"]

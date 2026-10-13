@@ -1,0 +1,19 @@
+manifestVersion: 1.6.0
+
+app: agent-sdk-go
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:agent-sdk-go:
+    dir: "module"
+    templates: go, go-test-component
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+  cloud:
+    server: cloud
+    componentPresets: release

@@ -22,7 +22,7 @@ const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
 
-const SUPPORTED_LANG_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit"]);
+const SUPPORTED_LANG_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit", "go"]);
 
 /**
  * Checks if a value is a language-keyed map (e.g., { ts: "...", effect: "...", rust: "..." }).

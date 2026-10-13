@@ -51,6 +51,7 @@ steps:
         Make sure the project builds and deploys successfully.
       scala: *non-effect-add-config-cli-prompt
       moonbit: *non-effect-add-config-cli-prompt
+      go: *non-effect-add-config-cli-prompt
     expectedSkills:
       rust:
         - "golem-add-config-rust"
@@ -62,6 +63,8 @@ steps:
         - "golem-add-config-scala"
       moonbit:
         - "golem-add-config-moonbit"
+      go:
+        - "golem-add-config-go"
     verify:
       build: true
       deploy: true
@@ -92,6 +95,7 @@ steps:
         effect: "greet"
         scala: "greet"
         moonbit: "greet"
+        go: "greet"
       args: '"World"'
     expect:
       result_json:

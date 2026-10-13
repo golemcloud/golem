@@ -23,6 +23,7 @@ steps:
         existing methods or behavior. Build and deploy the project.
       scala: *non-effect-add-manual-snapshot-support
       moonbit: *non-effect-add-manual-snapshot-support
+      go: *non-effect-add-manual-snapshot-support
     expectedSkills:
       rust:
         - "golem-custom-snapshot-rust"
@@ -34,6 +35,8 @@ steps:
         - "golem-custom-snapshot-scala"
       moonbit:
         - "golem-custom-snapshot-moonbit"
+      go:
+        - "golem-custom-snapshot-go"
     verify:
       deploy: true
 
@@ -92,6 +95,12 @@ steps:
         the current counter value multiplied by 2. Keep the save/load snapshot
         functions unchanged so the counter value is still preserved across updates. Build
         and deploy, but do not update existing running agents.
+      go: >
+        In the test-app project, make a breaking change to CounterAgent: remove the
+        `increment` method entirely, and add a new method called `getDouble` that returns
+        the current counter value multiplied by 2. Keep the save/load snapshot
+        functions unchanged so the counter value is still preserved across updates. Build
+        and deploy, but do not update existing running agents.
     verify:
       deploy: true
 
@@ -113,6 +122,7 @@ steps:
         effect: "getDouble"
         scala: "getDouble"
         moonbit: "get_double"
+        go: "getDouble"
     expect:
       result_json:
         - path: "$"

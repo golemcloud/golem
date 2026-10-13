@@ -100,6 +100,16 @@ steps:
         4. Prints the result of the last increment to stdout
 
         Build and run the application to verify it works.
+      go: >
+        I want to call my CounterAgent from an external Go application that runs outside of
+        Golem — not from another agent, but from a regular standalone Go program.
+
+        Set up everything needed in the project, then write a small standalone Go CLI application
+        (outside the Golem component) that: 1. Connects to the local Golem server 2. Creates or
+        gets a CounterAgent instance named "ext-test" 3. Calls `increment` three times, waiting
+        for each result 4. Prints the result of the last increment to stdout
+
+        Build and run the application to verify it works.
     expectedSkills:
       rust:
         - "golem-call-from-external-rust"
@@ -111,6 +121,8 @@ steps:
         - "golem-call-from-external-scala"
       moonbit:
         - "golem-call-from-external-moonbit"
+      go:
+        - "golem-call-from-external-go"
     allowedExtraSkills:
       - "golem-edit-manifest"
       - "golem-build"

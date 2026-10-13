@@ -546,6 +546,42 @@ object Gol40RichMetadataRegistration {{
     )
 }
 
+fn go_fixture_source() -> String {
+    let source =
+        std::fs::read_to_string(workspace_path().join("sdks/go/golem/tool/gol40/fixture_test.go"))
+            .unwrap();
+    source
+        .split_once("// Native checks.")
+        .unwrap()
+        .0
+        .replace("package gol40_test", "package artifact")
+        .replace("\t\"strings\"\n\t\"testing\"\n", "")
+}
+
+fn write_go_fixture_source(ctx: &TestContext) {
+    let component = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .find(|path| path.join("go.mod").exists() && path.join("main.go").exists())
+        .expect("the Go fixture component has a go.mod");
+    let module = std::fs::read_to_string(component.join("go.mod"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .expect("the Go fixture's go.mod names its module");
+    let agents = component.join("agents");
+    if agents.exists() {
+        std::fs::remove_dir_all(agents).unwrap();
+    }
+    std::fs::create_dir_all(component.join("artifact")).unwrap();
+    std::fs::write(component.join("artifact/artifact.go"), go_fixture_source()).unwrap();
+    std::fs::write(
+        component.join("main.go"),
+        format!("package main\n\nimport _ \"{module}/artifact\"\n\nfunc main() {{}}\n"),
+    )
+    .unwrap();
+}
+
 fn write_fixture_sources(ctx: &TestContext) {
     std::fs::write(
         ctx.cwd_path_join("rust-fixture/src/counter_agent.rs"),
@@ -576,6 +612,8 @@ fn write_fixture_sources(ctx: &TestContext) {
         scala_fixture_source(),
     )
     .unwrap();
+    write_go_fixture_source(ctx);
+
     let capability_dir = scala_source.join("scala_fixture");
     std::fs::create_dir_all(&capability_dir).unwrap();
     std::fs::write(
@@ -618,7 +656,7 @@ async fn extracted_tool(ctx: &TestContext, component_name: &str, wasm_path: &str
 
 #[test]
 #[timeout("30 minutes")]
-async fn rich_tool_metadata_matches_across_rust_typescript_scala_and_moonbit() {
+async fn rich_tool_metadata_matches_across_sdks() {
     let mut ctx = TestContext::new();
     std::fs::create_dir_all(ctx.cwd_path_join(APP_NAME)).unwrap();
     ctx.cd(APP_NAME);
@@ -628,6 +666,7 @@ async fn rich_tool_metadata_matches_across_rust_typescript_scala_and_moonbit() {
         ("ts", "rich-tool-metadata:typescript-fixture"),
         ("scala", "rich-tool-metadata:scala-fixture"),
         ("moonbit", "rich-tool-metadata:moonbit-fixture"),
+        ("go", "rich-tool-metadata:go-fixture"),
     ] {
         let output = ctx
             .cli([
@@ -676,6 +715,11 @@ async fn rich_tool_metadata_matches_across_rust_typescript_scala_and_moonbit() {
             "MoonBit",
             "rich-tool-metadata:moonbit-fixture",
             "_build/wasm/debug/rich_tool_metadata_moonbit_fixture.agent.wasm",
+        ),
+        (
+            "Go",
+            "rich-tool-metadata:go-fixture",
+            "golem-temp/agents/rich_tool_metadata_go_fixture.wasm",
         ),
     ] {
         let mut actual = canonical_tool_json(

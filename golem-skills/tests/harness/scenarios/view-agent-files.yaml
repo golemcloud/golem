@@ -33,6 +33,7 @@ steps:
         it writes the current counter value to a file at /data/counter.txt using the filesystem
         API from @fs. Create the /data directory if it doesn't exist. The file should contain
         just the number as a string.
+      go: "In the test-app project, modify the CounterAgent so that every time increment is called, it writes the current counter value to a file at /data/counter.txt using the os package (os.MkdirAll and os.WriteFile). Create the /data directory if it doesn't exist. The file should contain just the number as a string."
     verify:
       build: true
       deploy: true
@@ -45,6 +46,7 @@ steps:
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
+        go: 'CounterAgent("c1")'
       method: "increment"
 
   - id: "list-files"
@@ -58,6 +60,7 @@ steps:
       ts: *list-counter-agent-files
       scala: *list-counter-agent-files
       moonbit: *list-counter-agent-files
+      go: *list-counter-agent-files
     expectedSkills:
       - "golem-view-agent-files"
 

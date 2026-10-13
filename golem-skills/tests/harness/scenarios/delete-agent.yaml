@@ -15,6 +15,7 @@ steps:
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
+        go: *non-effect-counter-agent
       method: "increment"
     expect:
       stdout_contains: "1"
@@ -28,6 +29,7 @@ steps:
         ts: *get-counter-agent-args
         scala: *get-counter-agent-args
         moonbit: *get-counter-agent-args
+        go: *get-counter-agent-args
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -40,6 +42,7 @@ steps:
       ts: *delete-counter-prompt
       scala: *delete-counter-prompt
       moonbit: *delete-counter-prompt
+      go: *delete-counter-prompt
     expectedSkills:
       - "golem-delete-agent"
 

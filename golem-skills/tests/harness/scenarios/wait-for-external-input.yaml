@@ -91,6 +91,7 @@ steps:
         the harness performs the state-changing flow after this prompt.
       scala: *non-effect-approval-workflow-prompt
       moonbit: *non-effect-approval-workflow-prompt
+      go: *non-effect-approval-workflow-prompt
     expectedSkills:
       rust:
         - "golem-wait-for-external-input-rust"
@@ -102,6 +103,8 @@ steps:
         - "golem-wait-for-external-input-scala"
       moonbit:
         - "golem-wait-for-external-input-moonbit"
+      go:
+        - "golem-wait-for-external-input-go"
     verify:
       build: true
       deploy: true

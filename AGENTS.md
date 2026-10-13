@@ -40,7 +40,7 @@ cargo make build-release  # Release build excluding integration-tests and the si
 cargo build -p <crate>    # Build a specific root-workspace crate
 ```
 
-**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
+**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and `golem-go-development` when working on the Go SDK; see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
 
 **Note:** The user-facing documentation site (deployed at [learn.golem.cloud](https://learn.golem.cloud)) lives under `docs/` and is a Next.js / Nextra project built with Bun — see `docs/AGENTS.md`. It is built and deployed by a dedicated workflow (`.github/workflows/docs.yaml`); the main `ci.yaml` skips runs on docs-only changes.
 
@@ -171,6 +171,7 @@ Load these skills for guided workflows on complex tasks:
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `migrate-ts-decorator-sdk` | Porting a TypeScript agent from the removed decorator/`BaseAgent` API to `defineAgent` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
+| `golem-go-development` | Build, test, lint, and release the Golem Go SDK modules in `sdks/go/` |
 | `golem-scala-integration-tests` | Running and debugging Scala SDK integration tests |
 | `golem-scala-base-image` | WIT folder structure and regenerating `agent_guest.wasm` for the Scala SDK |
 | `golem-scala-code-generation` | Writing Scala code generators for the Scala SDK |
