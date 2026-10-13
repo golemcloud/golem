@@ -242,12 +242,12 @@ pub async fn write_registry_db_compat(data_dir: &Path) -> anyhow::Result<()> {
     let registry_db_path = registry_db_path(data_dir);
     let pool = sqlite_pool(&registry_db_path).await?;
 
-    let result = write_db_compat_version(&pool).await;
+    let result = write_db_compat_version(&pool, CLI_CURRENT_DB_COMPAT_VERSION).await;
     pool.close().await;
     result
 }
 
-async fn write_db_compat_version(pool: &SqlitePool) -> anyhow::Result<()> {
+async fn write_db_compat_version(pool: &SqlitePool, db_compat_version: i64) -> anyhow::Result<()> {
     let mut tx = pool
         .with_rw("compat", "write_db_compat_version")
         .begin()
@@ -272,7 +272,7 @@ async fn write_db_compat_version(pool: &SqlitePool) -> anyhow::Result<()> {
                 SET db_compat_version = excluded.db_compat_version;
             "#,
         )
-        .bind(CLI_CURRENT_DB_COMPAT_VERSION),
+        .bind(db_compat_version),
     )
     .await?;
 
@@ -502,6 +502,73 @@ mod tests {
             result,
             Err(CompatCheckError::MissingCompatTable { .. })
         ));
+    }
+
+    #[test]
+    async fn failed_marker_write_leaves_no_compat_table() {
+        let data_dir = TestDataDir::new();
+        let db_path = registry_db_path(&data_dir.path);
+
+        let pool = sqlite_pool(&db_path)
+            .await
+            .expect("failed to initialize sqlite pool");
+        let result = write_db_compat_version(&pool, -1).await;
+        pool.close().await;
+        assert!(
+            result.is_err(),
+            "a version that the table refuses must fail the write"
+        );
+
+        let pool = sqlite_pool(&db_path)
+            .await
+            .expect("failed to reopen sqlite pool");
+        let table_count = pool
+            .with_ro("test", "count_compat_tables")
+            .fetch_all_as::<(i64,), _>(
+                sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE name = ?;")
+                    .bind(COMPAT_TABLE_NAME),
+            )
+            .await
+            .expect("failed to count compat tables");
+        pool.close().await;
+        assert_eq!(
+            table_count[0].0, 0,
+            "the table must not outlive the failed transaction"
+        );
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+    }
+
+    #[test]
+    async fn preflight_allows_database_with_only_internal_tables() {
+        let data_dir = TestDataDir::new();
+        let db_path = registry_db_path(&data_dir.path);
+        let pool = sqlite_pool(&db_path)
+            .await
+            .expect("failed to initialize sqlite pool");
+        for statement in [
+            "CREATE TABLE counted (id INTEGER PRIMARY KEY AUTOINCREMENT);",
+            "INSERT INTO counted DEFAULT VALUES;",
+            "DROP TABLE counted;",
+        ] {
+            pool.with_rw("test", "create_and_drop_autoincrement_table")
+                .execute(sqlx::query(statement))
+                .await
+                .expect("failed to prepare the internal table");
+        }
+        let internal_tables = pool
+            .with_ro("test", "list_tables")
+            .fetch_all_as::<(String,), _>(sqlx::query_as(
+                "SELECT name FROM sqlite_master WHERE type = 'table';",
+            ))
+            .await
+            .expect("failed to list tables");
+        pool.close().await;
+        assert_eq!(internal_tables, vec![("sqlite_sequence".to_string(),)]);
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
     }
 
     #[test]
