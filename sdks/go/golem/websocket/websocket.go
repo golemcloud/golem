@@ -93,6 +93,10 @@ const (
 	Closed
 	// Other is any error the host did not classify.
 	Other
+	// SessionLost means the session did not survive runtime reconstruction of a
+	// connection opened with [ReportConnectionLoss]. An earlier send may still
+	// have reached the peer.
+	SessionLost
 )
 
 // Error is a WebSocket host error.
@@ -129,6 +133,8 @@ func wsError(e client.Error) error {
 		return er
 	case client.ErrorOther:
 		return &Error{Kind: Other, Message: e.Other()}
+	case client.ErrorSessionLost:
+		return &Error{Kind: SessionLost, Message: "session lost"}
 	default:
 		panic(fmt.Sprintf("golem/websocket: unhandled error case %d", e.Tag()))
 	}
@@ -141,6 +147,25 @@ type ConnectOpt func(*connectOpts)
 
 type connectOpts struct {
 	headers []witTypes.Tuple2[string, string]
+	policy  witTypes.Option[client.ReconstructionPolicy]
+}
+
+// ReconstructionPolicy decides what a connection does after runtime
+// reconstruction (suspension, restart or crash), when its physical session is gone.
+type ReconstructionPolicy uint8
+
+const (
+	// ReconnectAutomatically opens a replacement connection on the first live
+	// access. It is the host default.
+	ReconnectAutomatically ReconstructionPolicy = ReconstructionPolicy(client.ReconstructionPolicyReconnectAutomatically)
+	// ReportConnectionLoss makes the first live access return a [SessionLost]
+	// error, and the connection stays lost.
+	ReportConnectionLoss ReconstructionPolicy = ReconstructionPolicy(client.ReconstructionPolicyReportConnectionLoss)
+)
+
+// WithReconstructionPolicy sets the [ReconstructionPolicy] of the connection.
+func WithReconstructionPolicy(p ReconstructionPolicy) ConnectOpt {
+	return func(o *connectOpts) { o.policy = witTypes.Some(client.ReconstructionPolicy(p)) }
 }
 
 // WithHeader adds a request header to the connection handshake.
@@ -163,7 +188,7 @@ func Connect(url string, opts ...ConnectOpt) (*Conn, error) {
 	if len(o.headers) > 0 {
 		headers = witTypes.Some(o.headers)
 	}
-	r := client.WebsocketConnectionConnect(url, headers)
+	r := client.WebsocketConnectionConnect(url, headers, o.policy)
 	if r.IsErr() {
 		return nil, wsError(r.Err())
 	}

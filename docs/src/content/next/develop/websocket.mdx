@@ -261,6 +261,15 @@ let ws = WebsocketConnection::connect(
 // Match WebSocketError::SessionLost from live access.
 ```
 
+Go takes the policy as a `websocket.WithReconstructionPolicy` option:
+
+```go
+conn, err := websocket.Connect("wss://example.com/chat",
+    websocket.WithReconstructionPolicy(websocket.ReportConnectionLoss))
+// A live Send, Receive, ReceiveWithTimeout or Close returns a *websocket.Error
+// whose Kind is websocket.SessionLost.
+```
+
 Effect accepts the same `reconstructionPolicy` option. `Websocket.isSessionLost(error)` recognizes structural tags, not class identity: a `SocketError` contains a `SocketReadError` or `SocketWriteError` in `reason`, with the plain payloadless `{ _tag: "SessionLost" }` in `reason.cause`. Explicit close through the writer propagates loss to the writer and fails the reader's deferred with the same error. The scope finalizer closes best-effort and does not surface close failures.
 
 ### Supervise one Effect session generation at a time

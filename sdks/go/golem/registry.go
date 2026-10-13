@@ -157,6 +157,9 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 	if spec.Snapshot.invalid != "" {
 		d.RecordErr(spec.Name, "", "%s", spec.Snapshot.invalid)
 	}
+	if spec.Mode == Ephemeral && spec.Snapshot.kind != snapDisabled {
+		d.RecordErr(spec.Name, "", "agent is ephemeral and declares snapshotting, but ephemeral agents take no snapshots; remove Snapshot or make the agent Durable")
+	}
 	e := &agentEntry{
 		name:     spec.Name,
 		deps:     dependencyNames(spec.Dependencies),

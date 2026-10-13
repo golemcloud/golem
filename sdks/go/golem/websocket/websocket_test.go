@@ -54,6 +54,7 @@ func TestErrorMapping(t *testing.T) {
 		{client.MakeErrorReceiveFailure("recv"), ReceiveFailure, "recv"},
 		{client.MakeErrorProtocolError("proto"), ProtocolError, "proto"},
 		{client.MakeErrorOther("other"), Other, "other"},
+		{client.MakeErrorSessionLost(), SessionLost, "session lost"},
 	}
 	for _, c := range cases {
 		err := wsError(c.raw).(*Error)

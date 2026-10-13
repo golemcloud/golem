@@ -248,3 +248,23 @@ func TestMisuseNonPositiveSnapshotInterval(t *testing.T) {
 		mustDefErr(t, d, "SnapshotPeriodic(-1s): the interval must be positive")
 	})
 }
+
+// An ephemeral agent takes no snapshots, so a snapshot policy on one is a
+// definition error.
+func TestMisuseEphemeralWithSnapshotting(t *testing.T) {
+	type Id struct{ Name string }
+	for _, p := range []SnapshotPolicy{SnapshotDefault, SnapshotPeriodic(time.Second), SnapshotEveryN(5)} {
+		withDefs(t, func(d *definitions) {
+			defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Mode: Ephemeral, Snapshot: p})
+			mustDefErr(t, d, "agent is ephemeral and declares snapshotting")
+		})
+	}
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Mode: Ephemeral})
+		m := def.Method[Unit, Unit]("m")
+		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		impl.Handle(m, func(*Context[St], Unit) Unit { return Unit{} })
+		noDefErrs(t, d)
+	})
+}

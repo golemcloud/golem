@@ -83,7 +83,7 @@ func TestWitTagSwitchesCoverEveryCase(t *testing.T) {
 		// oplog/oplog_wasm.go readErrorFromWit.
 		{"golem_api_oplog", "OplogReadError", "oplog readErrorFromWit", 2},
 		// websocket/websocket.go wsError.
-		{"golem_websocket_client", "Error", "websocket wsError", 6},
+		{"golem_websocket_client", "Error", "websocket wsError", 7},
 		// durablestreams/reader.go errorFromWire converts the kind by position.
 		{"golem_agent_durable_streams", "DurableStreamErrorKind", "durablestreams ErrorKind", 14},
 		// rdbms/postgres: pgError; tagName, and decodeFlat with decodeLazy.

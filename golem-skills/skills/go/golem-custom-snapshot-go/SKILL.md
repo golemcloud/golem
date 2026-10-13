@@ -39,6 +39,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 | `golem.SnapshotPeriodic(d time.Duration)` | Snapshot at most once per interval |
 | `golem.SnapshotEveryN(n uint16)` | Snapshot every `n` invocations (`SnapshotEveryN(1)` = every invocation) |
 
+Snapshots are for durable agents only. An ephemeral agent takes no snapshots, and the SDK refuses an ephemeral agent definition whose `Snapshot` is not `golem.SnapshotDisabled`, with an error that names the agent.
+
 ```go
 Snapshot: golem.SnapshotEveryN(1)                     // every invocation
 Snapshot: golem.SnapshotPeriodic(30 * time.Second)    // at most once per 30s
