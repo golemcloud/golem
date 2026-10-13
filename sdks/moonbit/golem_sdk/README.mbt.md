@@ -11,8 +11,8 @@ This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents
 `@api.get_self_metadata()` calls the host operation `get-self-metadata`. It requires
 the self-view permission in the effective permission card. The agent's
 `initialCard` is an upper bound on that authority; an invocation cannot grant a
-permission outside that bound. The SDK traps with an operation-specific diagnostic
-when the host returns permission-denied or backend-error.
+permission outside that bound. This convenience API unwraps the host result and
+traps on failure. It does not retry with broader permissions.
 
 Pure initialization does not implicitly read self metadata. Keep metadata reads out
 of an untrusted evaluator instead of granting self-view for bootstrap. Declare no

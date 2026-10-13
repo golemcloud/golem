@@ -121,7 +121,6 @@ Module._load = function (request) {
   if (request === "golem:api/host@1.5.0") {
     return {
       getSelfMetadata: missingHostImport("getSelfMetadata"),
-      getAgentMetadata: missingHostImport("getAgentMetadata"),
       generateIdempotencyKey: missingHostImport("generateIdempotencyKey"),
     };
   }

@@ -30,8 +30,8 @@ metadata unless application code calls an identity getter or a metadata operatio
 
 If metadata access is denied, check the effective permission card and the
 `initialCard` upper bound. The effective card must grant the required view permission;
-it cannot exceed that upper bound. Tagged host failures include the operation name
-in the exception message and preserve the original exception as the cause.
+it cannot exceed that upper bound. The SDK propagates the original host exception
+without replacing its tagged payload or retrying with broader permissions.
 
 **Self-view is not identity-only.** Metadata returns the stored environment and
 configuration without the per-key WASI environment or configuration filters.

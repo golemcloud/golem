@@ -18,7 +18,7 @@
  *
  * @since 1.5.0
  */
-import { Effect, Option, Predicate, Stream } from "effect"
+import { Effect, Option, Stream } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { PromiseClient } from "./host/PromiseClient.js"
@@ -84,36 +84,8 @@ type RawOplogIndex = ApiHost.OplogIndex
 export class AgentsHostError {
   readonly _tag = "AgentsHostError"
   readonly message: string
-  constructor(
-    readonly cause: unknown,
-    operation?: string,
-  ) {
-    const permissionDenied =
-      Predicate.hasProperty(cause, "tag") && cause.tag === "permission-denied"
-    const reason = permissionDenied
-      ? "permission-denied"
-      : Predicate.hasProperty(cause, "tag") &&
-          cause.tag === "backend-error" &&
-          Predicate.hasProperty(cause, "val") &&
-          Predicate.isString(cause.val)
-        ? `backend-error: ${cause.val}`
-        : cause instanceof Error
-          ? cause.message
-          : String(cause)
-    this.message = `AgentsHostError: ${operation === undefined ? "" : `${operation}: `}${reason}`
-    if (operation === "get-self-metadata" && permissionDenied) {
-      this.message +=
-        ". Reading self metadata requires view permission on the running agent. Check the effective permission card and the initialCard upper bound."
-    }
-  }
-
-  /**
-   * Preserve the diagnostic when a trap formatter converts the error to a string.
-   * @since 1.6.0
-   * @category formatting
-   */
-  toString(): string {
-    return this.message
+  constructor(readonly cause: unknown) {
+    this.message = `AgentsHostError: ${cause instanceof Error ? cause.message : String(cause)}`
   }
 }
 
@@ -355,7 +327,7 @@ export const getSelfMetadata: Effect.Effect<RawAgentMetadata, AgentsHostError, A
     const ah = yield* AgentHostClient
     return yield* Effect.try({
       try: () => ah.getSelfMetadata(),
-      catch: (e) => new AgentsHostError(e, "get-self-metadata"),
+      catch: (e) => new AgentsHostError(e),
     })
   })
 

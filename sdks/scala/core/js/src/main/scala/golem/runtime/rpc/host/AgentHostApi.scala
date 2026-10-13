@@ -116,36 +116,10 @@ object AgentHostApi {
     toOption(HostModule.resolveAgentIdStrict(componentReference, agentName))
 
   def getSelfMetadata(): AgentMetadata =
-    metadataOperation("get-self-metadata", "the running agent") {
-      HostModule.getSelfMetadata().asInstanceOf[AgentMetadata]
-    }
+    HostModule.getSelfMetadata().asInstanceOf[AgentMetadata]
 
   def getAgentMetadata(agentId: AgentIdLiteral): Option[AgentMetadata] =
-    metadataOperation("get-agent-metadata", "the target agent") {
-      toOption(HostModule.getAgentMetadata(agentId))
-    }
-
-  private def metadataOperation[A](operation: String, target: String)(call: => A): A =
-    try call
-    catch {
-      case cause @ js.JavaScriptException(error) =>
-        if (error != null && js.typeOf(error) == "object") {
-          val tagged = error.asInstanceOf[js.Dynamic]
-          tagged.selectDynamic("tag").asInstanceOf[Any] match {
-            case "permission-denied" =>
-              throw new RuntimeException(
-                s"$operation: permission denied; requires view permission on $target. " +
-                  "Check the effective permission card and the initialCard upper bound.",
-                cause
-              )
-            case "backend-error" =>
-              val detail  = tagged.selectDynamic("val")
-              val message = if (js.typeOf(detail) == "string") s": ${detail.asInstanceOf[String]}" else ""
-              throw new RuntimeException(s"$operation: backend error$message", cause)
-            case _ => throw cause
-          }
-        } else throw cause
-    }
+    toOption(HostModule.getAgentMetadata(agentId))
 
   private def toOption[A](value: js.Any): Option[A] =
     if (value == null || js.isUndefined(value)) None else Some(value.asInstanceOf[A])

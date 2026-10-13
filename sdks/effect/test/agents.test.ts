@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Layer, Exit, Fiber, Stream } from "effect"
-import { vi } from "vitest"
 import * as Agents from "../src/Agents.js"
-import * as Durability from "../src/Durability.js"
-import { SelfAgentId } from "../src/SelfAgentId.js"
 import { AgentHostClient, AgentHostLive } from "../src/host/AgentHostClient.js"
-import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { PromiseLive } from "../src/host/PromiseClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import { uuidToString } from "./mocks/golem-core-types.js"
@@ -37,64 +33,6 @@ describe("Agents — metadata", () => {
       expect(out.agentId.agentId).toBe("Test()")
     }).pipe(Effect.provide(HostLayer)),
   )
-
-  it.each([
-    {
-      cause: { tag: "permission-denied", privateData: "must-not-appear" },
-      message:
-        "AgentsHostError: get-self-metadata: permission-denied. Reading self metadata requires view permission on the running agent. Check the effective permission card and the initialCard upper bound.",
-    },
-    {
-      cause: { tag: "backend-error", val: "metadata service unavailable" },
-      message: "AgentsHostError: get-self-metadata: backend-error: metadata service unavailable",
-    },
-    {
-      cause: new Error("host trap"),
-      message: "AgentsHostError: get-self-metadata: host trap",
-    },
-    {
-      cause: "host unavailable",
-      message: "AgentsHostError: get-self-metadata: host unavailable",
-    },
-  ])("reports metadata and identity failures as $message", async ({ cause, message }) => {
-    const host = vi.spyOn(ApiHostMock, "getSelfMetadata").mockImplementation(() => {
-      throw cause
-    })
-    try {
-      const error = await Effect.runPromise(
-        Agents.getSelfMetadata.pipe(Effect.flip, Effect.provide(HostLayer)),
-      )
-      expect(error).toBeInstanceOf(Agents.AgentsHostError)
-      expect(error.cause).toBe(cause)
-      expect(error.message).toBe(message)
-
-      const exit = await Effect.runPromiseExit(SelfAgentId.pipe(Effect.provide(HostLayer)))
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        expect(Cause.hasDies(exit.cause)).toBe(true)
-        const defect = Cause.squash(exit.cause)
-        expect(defect).toBeInstanceOf(Agents.AgentsHostError)
-        expect((defect as Agents.AgentsHostError).message).toBe(message)
-      }
-
-      for (const operation of [
-        Agents.getSelfMetadata.pipe(Effect.asVoid),
-        SelfAgentId.pipe(Effect.asVoid),
-      ]) {
-        const trapCount = ApiHostMock.__getTrapReasons().length
-        const trapped = await Effect.runPromiseExit(
-          Durability.atomically(operation).pipe(
-            Effect.provide(Layer.merge(HostLayer, DurabilityModeLive)),
-          ),
-        )
-        expect(Exit.isFailure(trapped)).toBe(true)
-        expect(ApiHostMock.__getTrapReasons()).toHaveLength(trapCount + 1)
-        expect(ApiHostMock.__getTrapReasons().at(-1)).toBe(`atomic block failed: ${message}`)
-      }
-    } finally {
-      host.mockRestore()
-    }
-  })
 
   it.effect("getAgentMetadata returns undefined for an unknown agent", () =>
     Effect.gen(function* () {

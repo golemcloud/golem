@@ -16,10 +16,9 @@ npx pnpm run test # or per package: Ex: cd packages/golem-ts-sdk && pnpm run tes
 
 `getSelfMetadata()` requires view permission on the running agent:
 `agent(?agent) @ ?agent : view : *`. The effective permission card must admit that
-operation and the `initialCard` upper bound must permit it. Permission denials name
-`get-self-metadata`, explain the required permission, and retain the original host
-error in `Error.cause`. Backend errors also identify the operation and backend cause.
-These errors remain readable when atomic or Saga wrappers convert them to trap text.
+operation and the `initialCard` upper bound must permit it. The SDK propagates the
+original host failure without replacing its tagged payload or retrying with broader
+permissions.
 
 Pure initialization does not implicitly read self metadata. Keep metadata calls out
 of an untrusted evaluator's initialization and handler rather than adding self-view

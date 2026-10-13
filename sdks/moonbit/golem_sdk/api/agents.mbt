@@ -59,23 +59,10 @@ pub fn resolve_agent_id_strict(
 /// Requires self-view in the effective permission card, within the initialCard
 /// upper bound. Do not call during pure initialization. Stored environment and
 /// configuration fields are returned in full, without per-key WASI filtering.
-/// Traps with an operation-specific diagnostic on permission denial or backend
-/// failure. Snapshot restoration instead reads GOLEM_AGENT_ID through WASI and
+/// Snapshot restoration instead reads GOLEM_AGENT_ID through WASI and
 /// requires separate environment-read permission.
 pub fn get_self_metadata() -> AgentMetadata {
-  match @raw.get_self_metadata() {
-    Ok(metadata) => metadata
-    Err(@raw.AgentOperationError::PermissionDenied) => {
-      @raw.trap(
-        "get-self-metadata: permission-denied; requires self-view (agent(?agent) @ ?agent : view : *) in the effective permission card, within the initialCard upper bound",
-      )
-      panic()
-    }
-    Err(@raw.AgentOperationError::BackendError(detail)) => {
-      @raw.trap("get-self-metadata: backend-error: \{detail}")
-      panic()
-    }
-  }
+  @raw.get_self_metadata().unwrap()
 }
 
 ///|

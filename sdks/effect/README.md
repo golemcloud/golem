@@ -672,11 +672,11 @@ WASI reads. An empty or denied WASI environment/configuration read therefore doe
 that those fields are inaccessible through metadata. Keep self-view denied for untrusted code that
 must not read those fields; do not treat self-view as a harmless bootstrap permission.
 
-A denied metadata read reports `get-self-metadata: permission-denied` and identifies the required
-view permission. `Agents.getSelfMetadata` returns an `AgentsHostError` in the Effect error channel.
-`SelfAgentId.SelfAgentId` preserves its defect-based failure contract and reports the same diagnostic,
-including during restoration with an explicit snapshot strategy. Neither path changes the card or retries with broader
-permissions.
+`Agents.getSelfMetadata` returns an `AgentsHostError` in the Effect error channel and retains
+the host failure as its cause. `SelfAgentId.SelfAgentId` preserves its defect-based failure
+contract, including during restoration with an explicit snapshot strategy. Neither path changes
+the card or retries with broader permissions. Atomic and Saga traps preserve typed error
+messages as well as native error stacks, regardless of which host operation failed.
 
 ## Tool middleware
 

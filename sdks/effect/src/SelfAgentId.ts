@@ -3,8 +3,7 @@
  */
 import { Effect } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { getSelfMetadata } from "./Agents.js"
-import type { AgentHostClient } from "./host/AgentHostClient.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
 
 /**
  * Read the running agent's own structured
@@ -28,14 +27,14 @@ import type { AgentHostClient } from "./host/AgentHostClient.js"
  * does not execute this effect.
  *
  * Outside the dispatcher (e.g. unit tests), provide `AgentHostClient`
- * with a host implementation. Host failures become Effect defects
- * containing an `AgentsHostError` with the operation and cause.
+ * with a host implementation. Host failures become Effect defects.
  *
  * @since 1.5.0
  * @category host services
  */
-export const SelfAgentId: Effect.Effect<CoreTypes.AgentId, never, AgentHostClient> =
-  getSelfMetadata.pipe(
-    Effect.map((metadata) => metadata.agentId),
-    Effect.orDie,
-  )
+export const SelfAgentId: Effect.Effect<CoreTypes.AgentId, never, AgentHostClient> = Effect.gen(
+  function* () {
+    const host = yield* AgentHostClient
+    return yield* Effect.sync(() => host.getSelfMetadata().agentId)
+  },
+)
