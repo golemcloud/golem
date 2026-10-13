@@ -1221,10 +1221,11 @@ always pass. `Temporary` and `Directory` do not use this pressure recovery.
 
 On macOS, the local `golem server run` command defaults to `Apfs` at `<data_dir>/agents` and
 `Enabled` filesystem snapshots. No filesystem TOML or environment settings are needed. The
-`--agent-filesystem-root` option changes the default root. The server reads filesystem settings
-from the optional exact `config/worker-executor.toml` in the working directory, without searching
-parent directories, then applies `GOLEM__` environment variables. These settings override the
-defaults. An existing file with invalid TOML prevents startup. Standalone executors and local
+`--agent-filesystem-root` option changes the default root. The filesystem settings are part of
+the server configuration, as `worker_executor.filesystem_storage` and
+`worker_executor.filesystem_snapshots` in the `--config` file or in the
+`GOLEM__WORKER_EXECUTOR__` environment variables, and `cli/golem/src/config.rs` applies the platform
+defaults as the lowest layer above the defaults. Standalone executors and local
 servers on other platforms keep disabled snapshots by default. To choose `Directory` or `Temporary`
 on macOS, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting
 policy. Without a configured `repository_key`, the local server generates a 64-byte repository key

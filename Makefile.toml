@@ -1473,9 +1473,28 @@ script = { file = "./local-run/start.sh" }
 
 ## ** GENERATE CONFIGS **
 
+[tasks.build-golem-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+command = "cargo"
+args = ["build", "-p", "golem", "--bin", "golem"]
+
+[tasks.generate-golem-server-configs]
+private = true
+description = "Generates the default and example config files of `golem server run`"
+dependencies = ["build-golem-non-ci"]
+script_runner = "@duckscript"
+script = '''
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+toml = exec --fail-on-error ${golem} --dump-config-default-toml
+writefile cli/golem/config/golem-server.toml ${toml.stdout}
+env_var = exec --fail-on-error ${golem} --dump-config-default-env-var
+writefile cli/golem/config/golem-server.sample.env ${env_var.stdout}
+'''
+
 [tasks.generate-configs]
 description = "Generates default and example config files"
-dependencies = ["build-shard-manager-kubernetes"]
+dependencies = ["build-shard-manager-kubernetes", "generate-golem-server-configs"]
 
 script = '''
 export RUST_BACKTRACE=1
@@ -1514,7 +1533,9 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.toml \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
-    golem-worker-executor/config/worker-executor.sample.env
+    golem-worker-executor/config/worker-executor.sample.env \
+    cli/golem/config/golem-server.toml \
+    cli/golem/config/golem-server.sample.env
 '''
 
 ## ** CHECK UNUSED DEPS **
