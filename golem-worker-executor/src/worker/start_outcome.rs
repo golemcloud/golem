@@ -35,6 +35,7 @@ use golem_common::model::{AgentId, PendingUpdateKind, PendingUpdateRef, Timestam
 use golem_service_base::error::worker_executor::{
     ComponentServiceRefusal, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::storage::blob::BlobRefusal;
 use std::sync::Arc;
 
 /// The selected record of a snapshot-assisted update, or the record of a pending snapshot-based
@@ -55,6 +56,9 @@ pub(crate) const UPDATE_SNAPSHOT_RESTORE_FAILED: &str = "UPDATE_SNAPSHOT_RESTORE
 pub(crate) const UPDATE_TARGET_NOT_FOUND: &str = "UPDATE_TARGET_NOT_FOUND";
 /// The component service or this executor refused the target revision of an update.
 pub(crate) const UPDATE_TARGET_REFUSED: &str = "UPDATE_TARGET_REFUSED";
+/// The blob storage refused the executor a read of an initial-file source of the target revision
+/// at the update point.
+pub(crate) const UPDATE_BLOB_STORAGE_REFUSED: &str = "UPDATE_BLOB_STORAGE_REFUSED";
 
 /// The baseline of a start: the column of the outcome table, without the head of a plain
 /// automatic update, which [`decide`] takes on its own.
@@ -287,7 +291,9 @@ pub(crate) fn reconstruction_startup_error(error: &FilesystemError) -> WorkerExe
 
 /// The error of a failed initial-file rule at the update point: a full quota suspends, an
 /// unavailable initial-file source retries as a recovery, and every other error is a
-/// reconstruction error ([`reconstruction_startup_error`]).
+/// reconstruction error ([`reconstruction_startup_error`]). A refused initial-file source reaches
+/// this only in a column that fails no update, because every pending column fails the update
+/// for it.
 ///
 /// The update point can be inside a host call of a replayed invocation, where only a required
 /// recovery stays off the guest's failure path. An unavailable source is transient: the install
@@ -439,6 +445,9 @@ enum StartProblem {
     UpdateState(FetchProblem),
     /// The agent filesystem failed after the replay.
     AfterReplay,
+    /// The blob storage refused the executor a read of an initial-file source of the target at
+    /// the update point.
+    BlobStorageRefused(BlobRefusal),
 }
 
 impl StartProblem {
@@ -462,6 +471,7 @@ impl StartProblem {
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
                 | FilesystemError::InitialFileUnavailable(_)
+                | FilesystemError::InitialFileRefused { .. }
                 | FilesystemError::PhysicalCapacity(_)
                 | FilesystemError::RuntimeInvalidated => Self::Reconstruction,
             },
@@ -496,12 +506,16 @@ impl StartProblem {
             RawStartError::UpdateState(UpdateStateError::Metadata(error)) => {
                 Self::UpdateState(FetchProblem::of(error))
             }
-            // The initial-file rule at the update point fails the update only for a conflict;
-            // the other filesystem errors retry the start, as they do at the restore. The update
-            // point restores nothing, so a restore error counts as a reconstruction error.
-            // `update_point_filesystem_error` gives the error of each passed one.
+            // The initial-file rule at the update point fails the update for a conflict and for a
+            // source that the blob storage refuses; the other filesystem errors retry the start,
+            // as they do at the restore. The update point restores nothing, so a restore error
+            // counts as a reconstruction error. `update_point_filesystem_error` gives the error of
+            // each passed one.
             RawStartError::UpdateState(UpdateStateError::InitialFiles(error)) => match error {
                 FilesystemError::InitialFileConflict(_) => Self::UpdateState(FetchProblem::Other),
+                FilesystemError::InitialFileRefused { refusal, .. } => {
+                    Self::BlobStorageRefused(*refusal)
+                }
                 FilesystemError::AgentQuota(_) => Self::Quota,
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
@@ -536,6 +550,7 @@ enum Code {
     TargetNotFound,
     TargetRefused(ComponentServiceRefusal),
     TargetUnsupported,
+    BlobStorageRefused(BlobRefusal),
 }
 
 impl Code {
@@ -583,6 +598,10 @@ impl Code {
                  revision, then request the update again"
             ),
             Self::TargetUnsupported => UPDATE_TARGET_REFUSED.to_string(),
+            Self::BlobStorageRefused(refusal) => format!(
+                "{UPDATE_BLOB_STORAGE_REFUSED}: the executor cannot read blob storage \
+                 ({refusal}); request the update again after the storage is fixed"
+            ),
         }
     }
 }
@@ -662,6 +681,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         Column::ManualPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
             Problem::TargetUnsupported => coded(Code::TargetUnsupported),
+            Problem::BlobStorageRefused(refusal) => coded(Code::BlobStorageRefused(refusal)),
             Problem::ModeChange
             | Problem::RestoreConflict
             | Problem::ManualLoadFailed
@@ -690,6 +710,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         Column::AutomaticPending(base) => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
             Problem::TargetUnsupported => coded(Code::TargetUnsupported),
+            Problem::BlobStorageRefused(refusal) => coded(Code::BlobStorageRefused(refusal)),
             Problem::ModeChange => fail,
             Problem::Disabled
             | Problem::Restore(_)
@@ -708,6 +729,7 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         Column::AssistedPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
             Problem::TargetUnsupported => coded(Code::TargetUnsupported),
+            Problem::BlobStorageRefused(refusal) => coded(Code::BlobStorageRefused(refusal)),
             Problem::StaleSource
             | Problem::ModeChange
             | Problem::RestoreConflict
@@ -1240,6 +1262,13 @@ mod tests {
         }))
     }
 
+    fn refused_source() -> FilesystemError {
+        FilesystemError::InitialFileRefused {
+            refusal: BlobRefusal::AccessDenied,
+            source: storage(),
+        }
+    }
+
     fn conflict() -> InitialFileConflict {
         InitialFileConflict::occupied(Path::new("e/f"))
     }
@@ -1297,6 +1326,7 @@ mod tests {
                 ) => "Fx",
                 (Some(Code::TargetNotFound), None, false) => "Fn",
                 (Some(Code::TargetRefused(_) | Code::TargetUnsupported), None, false) => "Fz",
+                (Some(Code::BlobStorageRefused(_)), None, false) => "Fb",
                 _ => "?",
             },
             Cell::Visible => "V",
@@ -1313,7 +1343,8 @@ mod tests {
     ///
     /// Rows for causes that only some sites report: `Target(Other)` and `ManualLoadFailed` (both
     /// fail the update), `Restore(DiskFull)` (the cells of `Restore(Fixed)` with their own text),
-    /// `AfterReplay` (a filesystem failure after the replay, which passes in every column), and
+    /// `AfterReplay` (a filesystem failure after the replay, which passes in every column),
+    /// `BlobStorageRefused` (a refused initial-file source at the update point), and
     /// `LoadLost` (a lost payload of the selected record, which only a snapshot-assisted attempt
     /// reports).
     #[test]
@@ -1329,7 +1360,7 @@ mod tests {
             Column::AssistedPromoted,
         ];
         let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-        let table: [(Problem, [&str; 7]); 34] = [
+        let table: [(Problem, [&str; 7]); 35] = [
             (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
             (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
             (
@@ -1424,6 +1455,10 @@ mod tests {
                 ["P", "F", "P", "P", "F", "F", "P"],
             ),
             (Problem::AfterReplay, ["P", "P", "P", "P", "P", "P", "P"]),
+            (
+                Problem::BlobStorageRefused(BlobRefusal::AccessDenied),
+                ["P", "Fb", "P", "P", "Fb", "Fb", "P"],
+            ),
         ];
         table.iter().for_each(|(problem, expected)| {
             let actual = columns.map(|column| code(cell(column, *problem)));
@@ -1560,6 +1595,7 @@ mod tests {
                 FilesystemError::InitialFileUnavailable(storage()),
                 Problem::Reconstruction,
             ),
+            (refused_source(), Problem::Reconstruction),
             (
                 FilesystemError::InitialFileConflict(Box::new(conflict())),
                 Problem::RestoreConflict,
@@ -2209,12 +2245,14 @@ mod tests {
         });
     }
 
-    /// The initial-file rule at the update point fails the update only for a conflict. A full
-    /// quota suspends the start, an initial-file source that the blob storage cannot give now
-    /// retries as a recovery, and every other filesystem error, a failed download of an initial
-    /// file included, retries the start; none of them writes a failed update.
+    /// The initial-file rule at the update point fails the update for a conflict and for an
+    /// initial-file source that the blob storage refuses. A full quota suspends the start, an
+    /// initial-file source that the blob storage cannot give now retries as a recovery, and every
+    /// other filesystem error, a failed download of an initial file included, retries the start;
+    /// none of them writes a failed update.
     #[test]
-    fn the_initial_file_rule_at_the_update_point_fails_the_update_only_for_a_conflict() {
+    fn the_initial_file_rule_at_the_update_point_fails_the_update_for_a_conflict_or_a_refused_source()
+     {
         let assisted = assisted_head();
         let manual = manual_head();
         let automatic = automatic_head();
@@ -2240,11 +2278,12 @@ mod tests {
             _ => "other",
         };
         type MakeError = fn() -> FilesystemError;
-        let errors: [(MakeError, &str); 7] = [
+        let errors: [(MakeError, &str); 8] = [
             (
                 || FilesystemError::InitialFileConflict(Box::new(conflict())),
                 "fail",
             ),
+            (refused_source, "fail"),
             (|| FilesystemError::AgentQuota(storage()), "suspend"),
             (|| FilesystemError::Sandbox(storage()), "retry"),
             (
@@ -2270,6 +2309,39 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// An initial-file source that the blob storage refuses at the update point fails the update
+    /// with `UPDATE_BLOB_STORAGE_REFUSED`, the refusal and what to do next, then the cause. The
+    /// failed update carries the attempt index and no snapshot fault, and rejects no record: the
+    /// agent starts again on its source revision, as for a full local disk.
+    #[test]
+    fn a_refused_initial_file_source_at_the_update_point_fails_the_update_with_its_code() {
+        let error = UpdateStateError::InitialFiles(refused_source());
+        let head = automatic_head();
+
+        let (entry, reject) = failed_entry(decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&head),
+            RawStartError::UpdateState(&error),
+        ));
+        let (_, details, assisted, attempt, fault) = entry_fields(&entry);
+
+        assert_eq!(
+            (details, assisted, attempt, fault, reject),
+            (
+                format!(
+                    "UPDATE_BLOB_STORAGE_REFUSED: the executor cannot read blob storage (access \
+                     denied); request the update again after the storage is fixed: Applying \
+                     worker update failed: {}",
+                    error
+                ),
+                None,
+                Some(head.admission_index),
+                None,
+                None
+            )
+        );
     }
 
     /// A passed error at the update point: an unavailable component service and an unavailable
