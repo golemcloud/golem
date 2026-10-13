@@ -25,6 +25,11 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 |------|-------------|
 | `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query`. |
 | `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
+| `--serve` | Serve an interactive HTML viewer on a local port and open it in the default browser. The viewer loads the oplog page by page through the API, runs Lucene queries on the server and can follow a running agent, so it works for oplogs of any size. `--from` and `--query` set the initial position and query. Runs until interrupted. |
+| `--port <PORT>` | Port of the served viewer. A free port is chosen when omitted. Requires `--serve`. |
+| `--no-open` | Do not open the served viewer in a browser. Requires `--serve`. |
+| `--html <FILE>` | Write the selected entries into a self-contained interactive HTML viewer at `FILE` instead of printing them. Every entry is embedded, so prefer `--serve` for large oplogs. Can be combined with `--from` or `--query`. In structured formats the entries are still emitted on stdout. |
+| `--open` | Open the file written by `--html` in the default browser. |
 
 If neither `--from` nor `--query` is provided, the entire oplog is streamed.
 
@@ -81,4 +86,14 @@ golem agent oplog <AGENT_ID> --from 100
 Search for specific entries:
 ```shell
 golem agent oplog <AGENT_ID> --query "error"
+```
+
+Explore the oplog in an interactive viewer (grouped by invocation, with foldable host calls, filters, server-side queries, decoded payloads and a follow mode) served locally and opened in the browser:
+```shell
+golem agent oplog <AGENT_ID> --serve
+```
+
+Write the viewer into a self-contained HTML file with the entries embedded, and open it:
+```shell
+golem agent oplog <AGENT_ID> --html oplog.html --open
 ```

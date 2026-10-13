@@ -1,0 +1,5 @@
+error: agent `EphemeralSnapshotAgent` is ephemeral and enables snapshotting, but ephemeral agents take no snapshots. Remove the snapshotting option or make the agent durable.
+ --> tests/ui/fail/ephemeral_snapshotting.rs:4:7
+  |
+4 | trait EphemeralSnapshotAgent {
+  |       ^^^^^^^^^^^^^^^^^^^^^^

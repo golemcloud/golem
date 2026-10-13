@@ -27,4 +27,4 @@ final class EchoPolicy extends EchoMiddleware {
 For adapters, extend `PresentedMiddleware.Adapter[ExpectedUnderlying]` and translate values and
 custom errors. Use `@universalToolMiddleware` with `UniversalToolMiddleware` only for arbitrary tool
 metadata and raw `TypedSchemaValue` carriers. The underlying is invocation-scoped; never store or
-return it. Forward each stream or permission card at most once.
+return it. Forward each stream or permission card at most once. Golem checks each underlying call against the calling agent's tool permissions, using the command and arguments the next layer receives, so an adapter that changes them needs the agent to hold grants for both forms.

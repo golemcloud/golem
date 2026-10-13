@@ -244,6 +244,82 @@ async fn invalid_redirect_url_fails_with_bad_request(
 
 #[test]
 #[tracing::instrument]
+async fn localhost_subdomain_http_redirect_url_is_accepted(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let logins = [
+        cookie_login(),
+        SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec!["http://example.localhost:9006/app/callback".to_string()],
+            origins: vec!["http://example.localhost:9006".to_string()],
+        }),
+    ];
+
+    for (index, login) in logins.into_iter().enumerate() {
+        let security_scheme_creation = SecuritySchemeCreation {
+            name: SecuritySchemeName(format!("localhost-subdomain-{index}")),
+            provider_type: Provider::Google(Empty {}),
+            client_id: "client_id".to_string(),
+            client_secret: "client_secret".to_string(),
+            redirect_url: "http://example.localhost:9006/auth/callback".to_string(),
+            scopes: vec!["openid".to_string()],
+            login,
+        };
+
+        let security_scheme = client
+            .create_security_scheme(&env.id.0, &security_scheme_creation)
+            .await?;
+
+        assert_eq!(
+            security_scheme.redirect_url,
+            security_scheme_creation.redirect_url
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn localhost_lookalike_http_redirect_url_fails_with_bad_request(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let security_scheme_creation = SecuritySchemeCreation {
+        name: SecuritySchemeName("test-scheme".to_string()),
+        provider_type: Provider::Google(Empty {}),
+        client_id: "client_id".to_string(),
+        client_secret: "client_secret".to_string(),
+        redirect_url: "http://localhost.attacker.example/auth/callback".to_string(),
+        scopes: vec!["openid".to_string()],
+        login: cookie_login(),
+    };
+
+    let result = client
+        .create_security_scheme(&env.id.0, &security_scheme_creation)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceCreateSecuritySchemeError::Error400(_)
+        ))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn invalid_pkce_login_configuration_fails_with_bad_request(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {

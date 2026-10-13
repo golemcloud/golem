@@ -285,10 +285,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamReaderWithStore<U>
             accessor,
             accessor.getter(),
             DurableFunctionType::ReadRemote,
-            AccessClaimOptions {
-                request_identity: Some(recorded.clone().into()),
-                ..Default::default()
-            },
+                AccessClaimOptions::default(),
             async move |_| Ok(recorded),
         ).await?;
         if !call.is_live() {
@@ -363,10 +360,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamWriterWithStore<U>
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteRemote,
-            AccessClaimOptions {
-                request_identity: Some(recorded.clone().into()),
-                ..Default::default()
-            },
+                AccessClaimOptions::default(),
             async move |_| Ok(recorded),
         ).await?;
         if !call.is_live() {

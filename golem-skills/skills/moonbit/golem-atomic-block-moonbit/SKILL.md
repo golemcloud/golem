@@ -62,7 +62,7 @@ Bad use case — pure in-memory updates that already replay deterministically:
 
 The low-level `golem:durability@1.6.0` interface is intended for SDK and library authors, not as an application tuning knob. It lets a library represent several raw host effects as one custom durable invocation. `@api.durable` and `@api.durable_async` own the live invocation resource: they evaluate the body only on the live path, finish and persist its typed result, or return the recorded result on replay.
 
-A returned typed error is a normal result: the combinator finishes the invocation, persists the error, and returns the same error on replay. A raised error, trap, or cancellation before `finish` instead drops the unfinished resource without recording an `End`, so recovery retries the whole custom operation. Library authors must make repeated attempts safe with the correct operation classification, external idempotency keys, or transactions.
+A returned typed error is a normal result: the combinator finishes the invocation, persists the error, and returns the same error on replay. A raised error, trap, or cancellation before `finish` instead leaves the resource unfinished without recording an `End`. Dropping the resource does not trigger a retry: a deterministic trap outside an atomic region fails the agent. If recovery later replays the incomplete invocation, its whole body runs again. Library authors must make repeated attempts safe with the correct operation classification, external idempotency keys, or transactions.
 
 ## Idempotence Mode
 

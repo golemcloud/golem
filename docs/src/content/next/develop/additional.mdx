@@ -441,9 +441,9 @@ match invocation:
 
 Golem derives the UUID from the top-level idempotency key, the parent custom invocation when nested, and a deterministic ordinal in that logical parent's namespace. Child operations therefore do not shift later root identities when a completed parent is skipped during replay. The identity does not depend on the request payload.
 
-An unfinished live invocation is retried as a **whole operation**. Individual physical effects are not independently resumed, so the library must make a repeated attempt safe by selecting the correct function type and, where appropriate, using external idempotency keys or transactions.
+If recovery replays an unfinished live invocation, it runs the **whole operation** again. Individual physical effects are not independently resumed, so the library must make a repeated attempt safe by selecting the correct function type and, where appropriate, using external idempotency keys or transactions.
 
-The resource is affine: `finish` consumes it, and it cannot be completed twice. Dropping it unfinished removes observational ownership without recording an `End`, so recovery recognizes the operation as incomplete and retries its body.
+The resource is affine: `finish` consumes it, and it cannot be completed twice. Dropping it unfinished removes observational ownership without recording an `End`, but does not trigger a retry. A deterministic trap outside an atomic region fails the agent without retry; inside an atomic region, the region is retried according to the applicable retry policy.
 
 The request, response, operation name, and observational host calls are intended to support observability. They may appear in oplog inspection, logs, and metrics. Use useful schemas and names, but redact credentials and personal data, and avoid recording unnecessary or unbounded payloads.
 

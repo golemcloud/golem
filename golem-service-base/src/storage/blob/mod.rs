@@ -1357,6 +1357,44 @@ pub struct BlobMissingError {
     pub path: PathBuf,
 }
 
+/// Why the blob storage refuses the executor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobRefusal {
+    /// The credentials of the executor, or the permissions of the blob root, do not let it do
+    /// the request.
+    AccessDenied,
+    /// The bucket of the namespace does not exist.
+    NoSuchBucket,
+    /// The storage answered with another HTTP status that reports a fault of the request.
+    ClientError { status: u16 },
+}
+
+impl std::fmt::Display for BlobRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AccessDenied => formatter.write_str("access denied"),
+            Self::NoSuchBucket => formatter.write_str("the bucket does not exist"),
+            Self::ClientError { status } => write!(formatter, "HTTP status {status}"),
+        }
+    }
+}
+
+/// The blob storage refuses a read of the executor for a reason that only an operator of the
+/// storage can fix, such as credentials without access, a bucket that does not exist, or a blob
+/// root that the executor cannot read.
+///
+/// The backend attaches the error as a context to the error of the storage, so the cause stays in
+/// the chain. A retry gets the same answer until the operator fixes the storage, so the backend
+/// does not send the request again. The S3 backend gives it for a `GetObject`, a `HeadObject` or
+/// a `ListObjectsV2` answer with a 4xx status other than 408, 416 and 429 and without a code that asks for one more
+/// attempt, such as `RequestTimeout`. The filesystem backend gives it for a read, an existence
+/// check or a listing that fails with `PermissionDenied`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the blob storage refused the request ({refusal})")]
+pub struct BlobRefusedError {
+    pub refusal: BlobRefusal,
+}
+
 /// The name of the object that the S3 backend writes to record a directory, because S3 has no
 /// directories.
 ///
@@ -1476,18 +1514,23 @@ pub enum BlobNameError {
 ///
 /// This is the one list of the permanent errors of the blob storage. [`BlobRangeError`],
 /// [`BlobNameError`] and [`BlobMissingError`] are permanent, because a retry asks for the same
-/// byte, the same name or the same missing blob again. Each other error is of the backend, and is
-/// transient: the backend spent its retry budget on it, and a later request can pass.
+/// byte, the same name or the same missing blob again. A [`BlobRefusedError`] is refused: a
+/// retry gets the same answer until an operator fixes the storage. Each other error is of the
+/// backend, and is transient: the backend spent its retry budget on it, and a later request can
+/// pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlobFailure {
     Transient,
     Permanent,
+    Refused(BlobRefusal),
 }
 
 impl BlobFailure {
-    /// The kind of `error`. A context around a permanent error keeps it permanent.
+    /// The kind of `error`. A context around a permanent or a refused error keeps its kind.
     pub fn of(error: &Error) -> Self {
-        if error.is::<BlobRangeError>()
+        if let Some(refused) = error.downcast_ref::<BlobRefusedError>() {
+            Self::Refused(refused.refusal)
+        } else if error.is::<BlobRangeError>()
             || error.is::<BlobNameError>()
             || error.is::<BlobMissingError>()
         {
@@ -1923,9 +1966,9 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobFailure, BlobMissingError, BlobNameError, BlobRangeError, agent_path_segment,
-        blob_file_name_to_string, blob_path_to_string, blob_range, join_blob_path,
-        normalized_blob_path,
+        BlobFailure, BlobMissingError, BlobNameError, BlobRangeError, BlobRefusal,
+        BlobRefusedError, agent_path_segment, blob_file_name_to_string, blob_path_to_string,
+        blob_range, join_blob_path, normalized_blob_path,
     };
     use anyhow::{Context, anyhow};
     use golem_common::model::AgentId;
@@ -1934,10 +1977,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use test_r::test;
 
-    /// A range, a name and a missing blob are permanent, also under a context, and every other
-    /// error of the storage is transient.
+    /// A range, a name and a missing blob are permanent, a refusal of the storage is refused, also
+    /// under a context, and every other error of the storage is transient.
     #[test]
-    fn blob_failure_is_permanent_only_for_a_range_a_name_or_a_missing_blob() {
+    fn blob_failure_is_permanent_for_a_range_a_name_or_a_missing_blob_and_refused_for_a_refusal() {
         let permanent = || {
             [
                 anyhow::Error::from(BlobRangeError { start: 3, end: 2 }),
@@ -1954,6 +1997,20 @@ mod tests {
 
         assert_eq!(plain, [BlobFailure::Permanent; 3]);
         assert_eq!(wrapped, [BlobFailure::Permanent; 3]);
+        let refused = || {
+            Err::<(), _>(anyhow!("403 Forbidden"))
+                .context(BlobRefusedError {
+                    refusal: BlobRefusal::AccessDenied,
+                })
+                .unwrap_err()
+        };
+        assert_eq!(
+            [
+                BlobFailure::of(&refused()),
+                BlobFailure::of(&Err::<(), _>(refused()).context("wrapped").unwrap_err()),
+            ],
+            [BlobFailure::Refused(BlobRefusal::AccessDenied); 2]
+        );
         assert_eq!(
             [
                 BlobFailure::of(&anyhow!("service unavailable")),
@@ -1961,6 +2018,24 @@ mod tests {
                 BlobFailure::of(&anyhow::Error::from(std::io::Error::other("reset"))),
             ],
             [BlobFailure::Transient; 3]
+        );
+    }
+
+    #[test]
+    fn a_refused_error_names_its_refusal() {
+        // The details of a failed update put this text in the parentheses of its message.
+        let message = |refusal| BlobRefusedError { refusal }.to_string();
+        assert_eq!(
+            [
+                message(BlobRefusal::AccessDenied),
+                message(BlobRefusal::NoSuchBucket),
+                message(BlobRefusal::ClientError { status: 400 }),
+            ],
+            [
+                "the blob storage refused the request (access denied)",
+                "the blob storage refused the request (the bucket does not exist)",
+                "the blob storage refused the request (HTTP status 400)",
+            ]
         );
     }
 

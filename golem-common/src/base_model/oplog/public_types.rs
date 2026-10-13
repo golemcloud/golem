@@ -41,6 +41,99 @@ pub struct LogTraceContext {
     pub span_id: SpanId,
 }
 
+/// Identifies a durable call by its place in a call order.
+///
+/// `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+/// entity invocation or the parent custom durable invocation that made it. `ordinal` is the place
+/// of the call among the calls numbered under `anchor`, starting at 0. Replay makes the calls in
+/// the same order, so a call gets the same id in every run.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableInvocationId {
+    pub anchor: OplogIndex,
+    pub ordinal: u64,
+}
+
+impl DurableInvocationId {
+    pub fn new(anchor: OplogIndex, ordinal: u64) -> Self {
+        Self { anchor, ordinal }
+    }
+}
+
+impl Display for DurableInvocationId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}#{}", self.anchor, self.ordinal)
+    }
+}
+
+// The binary form writes both numbers as variable-length integers, so a typical id takes 3 to 5
+// bytes.
+#[cfg(feature = "full")]
+fn write_var_u64<Output: desert_rust::BinaryOutput>(output: &mut Output, mut value: u64) {
+    while value >= 0x80 {
+        output.write_u8((value as u8 & 0x7F) | 0x80);
+        value >>= 7;
+    }
+    output.write_u8(value as u8);
+}
+
+#[cfg(feature = "full")]
+fn read_var_u64(input: &mut impl desert_rust::BinaryInput) -> desert_rust::Result<u64> {
+    let mut value = 0u64;
+    for shift in (0..64).step_by(7) {
+        let byte = input.read_u8()?;
+        let bits = (byte & 0x7F) as u64;
+        if shift == 63 && bits > 1 {
+            break;
+        }
+        value |= bits << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(desert_rust::Error::DeserializationFailure(
+        "variable-length u64 is too long".to_string(),
+    ))
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for DurableInvocationId {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        write_var_u64(context, self.anchor.as_u64());
+        write_var_u64(context, self.ordinal);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for DurableInvocationId {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let anchor = OplogIndex::from_u64(read_var_u64(context)?);
+        let ordinal = read_var_u64(context)?;
+        Ok(Self { anchor, ordinal })
+    }
+}
+
 /// Public-oplog-local counterpart of `TypedAgentConfigEntry`. Both now carry a
 /// schema-native `TypedSchemaValue`; this type exists as the public-oplog DTO
 /// (poem/serde shape) and is produced at the public-oplog render edge.

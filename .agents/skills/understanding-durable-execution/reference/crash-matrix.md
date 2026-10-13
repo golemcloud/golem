@@ -103,9 +103,10 @@ concurrent-agent permit.
 | Automatic snapshot load fails, or its replay suffix diverges, with no pending update | Reject that exact index, return `RetryDecision::Immediate`, and select again: the other usable record, the authoritative baseline, or a full replay; never replay pre-migration history | Fingerprint-scoped set of rejected indexes, merged into storage only after successful preparation and before readiness |
 | Automatic snapshot payload download fails, or its filesystem snapshot does not restore | Retry while skipping that record for this startup attempt; successful preparation clears the skip | In-memory unavailable set; no persistent rejection |
 | After a `Snapshot` record with a filesystem snapshot name, before its `SnapshotConfirmed` | The record is not usable; the start confirms it when the store holds the whole snapshot, else it uses the previous usable record. A loaded agent that restarts in place for an automatic update without a strategy confirms it the same way before its generation ends | `Snapshot` and `SnapshotConfirmed` hints, the store |
-| The initial-file rule finds a conflict at the update point of an automatic update, plain or snapshot-assisted | `FailedUpdate` appended through `start_outcome::decide`, old revision reconstructed; another filesystem error at the update point retries the start | `FailedUpdate` |
+| The initial-file rule finds a conflict at the update point of an automatic update, plain or snapshot-assisted | `FailedUpdate` appended through `start_outcome::decide`, old revision reconstructed; a refused initial-file source (`InitialFileRefused`, below) fails the update too; another filesystem error at the update point retries the start | `FailedUpdate` |
 | The initial-file rule finds a conflict at the start of a pending manual update | `start_outcome::decide` gives `FailUpdate` with the message of the conflict, and the start writes it and restarts on the current revision; on a lost shard it writes nothing, and the update stays pending for the new owner; a write of `FailedUpdate` that fails ends the start with its error (a fenced write has already retired the agent) | `FailedUpdate` |
 | Manual-update snapshot load fails at the update | `FailedUpdate` appended, old revision reconstructed | `FailedUpdate` |
+| The blob storage refuses an initial-file source of the target at the update point (`InitialFileRefused`) | `FailedUpdate` with `UPDATE_BLOB_STORAGE_REFUSED`, no snapshot fault, no record rejected; old revision reconstructed. A transient blob error retries as a recovery with no `FailedUpdate` | The install changed no file before the failed load |
 | The filesystem snapshot of a pending manual update is lost, does not restore, or needs filesystem snapshots on this executor | `FailedUpdate` with `UPDATE_SNAPSHOT_UNAVAILABLE`, `UPDATE_SNAPSHOT_RESTORE_FAILED` or `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS`; old revision reconstructed | `FailedUpdate` |
 | The authoritative baseline (promoted manual or snapshot-assisted record) cannot be restored or loaded at a later start | Resume terminates and reports the failure with its underlying cause; a transient cause retries | The authoritative baseline cannot be skipped |
 | Replay under the new component diverges | `FailedUpdate` appended, `RetryDecision::Immediate`, old revision reconstructed | `FailedUpdate` |
@@ -199,6 +200,13 @@ stages do not.
 | Effect | Ambiguous window | What Golem provides | What the application must provide |
 |---|---|---|---|
 | HTTP request | Between send and `End` | Re-execution policy via `DurableFunctionType`; atomic regions to group calls; an `idempotency-key` header derived from the call's durable position (`http/policy.rs`, on unless the guest set one) or minted via `golem:api/host.generate-idempotency-key` | A peer that deduplicates on the key; otherwise a safe-to-retry design |
-| TCP / WebSocket connection | Any crash | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
+| TCP connection | Any reconstruction | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
+| WebSocket connection | Suspend, restart, or crash | Recorded outcomes replay unchanged; optional third connect parameter defaults to `reconnect-automatically`, or `report-connection-loss` terminalizes a reconstructed successful handle with `SessionLost` at live access without a handshake | Reconnect / resume protocol, or supervise a new guest session generation with explicit connect and initialization; loss is not proof an earlier send was undelivered |
 | Filesystem, stdio | Any crash | Recorded stream chunks replay; live tail continues | Nothing for replay; effects outside the worker filesystem are the app's problem |
 | Key-value / blob store | Between write and `End` | Same as HTTP; writes are re-executable when idempotent by construction | Value-level idempotency for non-idempotent writes |
+
+WebSocket reconstruction policy does not change ordinary live disconnect retries. `close` on a
+lost handle returns loss without reconnecting, and drop only releases the resource. Incomplete
+non-idempotent scopes trap through the central recovery guard before either policy; an `End`
+entry alone does not complete an unfinished scope. Atomic rollback can remove the recorded
+connect and legitimately execute a fresh handshake.

@@ -476,7 +476,7 @@ fn parse_quantity_opt_token(raw: Option<&str>, default_unit: &str) -> TokenStrea
 /// Parse a quantity literal of the form `<decimal><unit>` into `(mantissa,
 /// scale, unit)`. Permissive compile-time parser; runtime canonical parsing
 /// is the source of truth.
-fn parse_quantity_literal(text: &str, default_unit: &str) -> (i64, i32, String) {
+pub(super) fn parse_quantity_literal(text: &str, default_unit: &str) -> (i64, i32, String) {
     let trimmed = text.trim();
     let split_at = trimmed
         .find(|c: char| !(c.is_ascii_digit() || c == '-' || c == '+' || c == '.'))

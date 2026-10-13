@@ -80,7 +80,7 @@ pub struct MyData {
 
 Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
 
-- **Uncaught errors** (panics, unwrapped `Err`, etc.) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Panics** fail the agent without retry outside an atomic region. Inside an atomic region, a panic traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
 - **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Result<T, E>`. The error type `E` must derive `Schema` like any other custom type.
 
 ```rust
@@ -125,7 +125,7 @@ impl Wallet for WalletImpl {
 }
 ```
 
-Returning `Err(WithdrawError::...)` completes the invocation successfully — the caller receives the error as a value. Panicking with `unwrap()`, `expect()`, `panic!()`, or returning from `?` on an unrelated error type will instead trigger a retry and eventually fail the whole agent.
+Returning `Err(WithdrawError::...)` completes the invocation successfully — the caller receives the error as a value. The `?` operator propagates an error through the method's return type; it does not panic. Panicking with `unwrap()`, `expect()`, or `panic!()` outside an atomic region instead fails the whole agent without retry.
 
 ## Key Constraints
 

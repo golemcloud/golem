@@ -117,9 +117,9 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 ## Durability & Automatic Retries
 
-Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `while` retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter) applies when no user-defined policy matches.
+Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retried transparently: outgoing HTTP requests (`fetch`), RPC calls between agents, database / storage calls (`golem:rdbms/*`, keyvalue, blobstore), and thrown errors at the top of a handler (the worker is restarted and the invocation is replayed from the oplog, previously-recorded side effects skipped).
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise outside an atomic region fails the agent without retry. Inside `atomically(...)`, a thrown error traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 
@@ -288,7 +288,7 @@ Opt in with the `snapshotting` option on `defineAgent`. Give it `{ policy, state
 snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 5 } },
 ```
 
-Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. A bare policy without `state` falls back to reflective JSON serialization of the whole state. For full control over the bytes, supply a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it). See `golem-custom-snapshot-ts`.
+Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. An enabled policy without `state` needs a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it); without the block, the registration of the agent fails. With `state`, a `snapshot` block with both functions gives full control over the bytes. See `golem-custom-snapshot-ts`.
 
 ## Durability Primitives
 

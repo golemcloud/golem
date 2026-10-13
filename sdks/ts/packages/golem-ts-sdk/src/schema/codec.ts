@@ -66,7 +66,9 @@ import type {
   Secret as RawSecret,
 } from 'golem:core/types@2.0.0';
 import { Result } from '../host/result';
+import { Uuid } from '../uuid';
 import type { StandardSchemaV1 } from './standardSchema';
+import { schemaLeafValueMatches } from '../internal/tool/validation';
 
 /** An SDK codec rejected a value because its outer source shape does not match. */
 export class CodecShapeMismatchError extends TypeError {}
@@ -124,6 +126,8 @@ export interface SchemaCodec {
   /** Child codecs for a WIT `map`, when the source schema exposes them. */
   readonly mapKey?: SchemaCodec;
   readonly mapValue?: SchemaCodec;
+  readonly mapKind?: 'record' | 'map';
+  readonly tupleItems?: readonly SchemaCodec[];
   /** Arms for a WIT result. */
   readonly resultOk?: SchemaCodec;
   readonly resultErr?: SchemaCodec;
@@ -358,6 +362,81 @@ function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec 
       'record-value',
     );
   }
+  if (codec.tupleItems) {
+    if (invocation && codec.sourceSchema?.['~standard'].vendor !== 'zod') return undefined;
+    const items = codec.tupleItems.map(child);
+    if (items.some((item) => !item)) return undefined;
+    return finish(
+      {
+        write: (value, writer) => {
+          const values = value as unknown[];
+          assertDenseModelArray(values, 'tuple elements');
+          if (!invocation && values.length !== items.length)
+            throw new TypeError('tuple length does not match schema');
+          return writer.add({
+            tag: 'tuple-value',
+            val: values.map((v, i) => requiredIndex(items[i]!.write(v, writer), 'tuple item')),
+          });
+        },
+        read: (reader, index) =>
+          reader.node(index, 'tuple-value', (node) => {
+            const indices = (node as Extract<WireValueNode, { tag: 'tuple-value' }>).val;
+            assertDenseModelArray(indices, 'tuple elements');
+            if (!invocation && indices.length !== items.length)
+              throw new TypeError('tuple length does not match schema');
+            return indices.map((i, position) => items[position]!.read(reader, i));
+          }),
+      },
+      'tuple-value',
+    );
+  }
+  if (codec.mapKind && codec.mapKey && codec.mapValue) {
+    if (invocation && codec.sourceSchema?.['~standard'].vendor !== 'zod') return undefined;
+    const key = child(codec.mapKey);
+    const value = child(codec.mapValue);
+    if (!key || !value) return undefined;
+    return finish(
+      {
+        write: (input, writer) => {
+          const entries =
+            codec.mapKind === 'map'
+              ? Array.from((input as Map<unknown, unknown>).entries())
+              : Object.entries(input as Record<string, unknown>);
+          return writer.add({
+            tag: 'map-value',
+            val: entries.map(([k, v]) => ({
+              key: requiredIndex(key.write(k, writer), 'map key'),
+              value: requiredIndex(value.write(v, writer), 'map value'),
+            })),
+          });
+        },
+        read: (reader, index) =>
+          reader.node(index, 'map-value', (node) => {
+            const entries = (node as Extract<WireValueNode, { tag: 'map-value' }>).val;
+            assertDenseModelArray(entries, 'map entries');
+            if (codec.mapKind === 'map') {
+              const out = new Map(
+                entries.map((e) => [key.read(reader, e.key), value.read(reader, e.value)]),
+              );
+              if (!invocation && out.size !== entries.length)
+                throw new TypeError('map value is not canonical for its declared schema');
+              return out;
+            }
+            const out: Record<string, unknown> = {};
+            const keys: string[] = [];
+            entries.forEach((e) => {
+              const decodedKey = key.read(reader, e.key) as string;
+              keys.push(decodedKey);
+              out[decodedKey] = value.read(reader, e.value);
+            });
+            if (!invocation && !deepEqual(Object.keys(out), keys))
+              throw new TypeError('map value is not canonical for its declared schema');
+            return out;
+          }),
+      },
+      'map-value',
+    );
+  }
   if (codec.listItem) {
     const item = child(codec.listItem);
     if (!item) return undefined;
@@ -468,6 +547,93 @@ function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec 
     !['zod', 'golem.marker'].includes(codec.sourceSchema?.['~standard'].vendor ?? '')
   )
     return undefined;
+  if (codec.graph.root.body.tag === 'enum') {
+    const cases = codec.graph.root.body.cases;
+    return finish(
+      {
+        write: (value, writer) => {
+          const index = cases.indexOf(value as string);
+          if (index < 0) throw new TypeError('does not match its declared schema');
+          return writer.add({ tag: 'enum-value', val: index });
+        },
+        read: (reader, index) =>
+          reader.node(index, 'enum-value', (node) => {
+            const caseIndex = (node as Extract<WireValueNode, { tag: 'enum-value' }>).val;
+            if (
+              !invocation &&
+              (!Number.isInteger(caseIndex) || caseIndex < 0 || caseIndex >= cases.length)
+            )
+              throw new TypeError('does not match its declared schema');
+            return cases[caseIndex];
+          }),
+      },
+      'enum-value',
+    );
+  }
+  const richTag = codec.graph.root.body.tag;
+  if (
+    codec.sourceSchema?.['~standard'].vendor === 'golem.marker' &&
+    ['uuid', 'datetime', 'duration', 'url', 'path', 'quantity', 'text', 'binary'].includes(richTag)
+  ) {
+    const tag = (
+      richTag === 'quantity' ? 'quantity-value-node' : `${richTag}-value`
+    ) as WireValueNode['tag'];
+    const validateNode = (node: WireValueNode) => {
+      preflightWitValueTree([node], 0);
+      if (!invocation) {
+        const val = (node as WireValueNode & { val: unknown }).val;
+        const leaf = (
+          richTag === 'text' || richTag === 'binary'
+            ? { tag: richTag, ...(val as object) }
+            : richTag === 'duration'
+              ? { tag: richTag, nanoseconds: (val as { nanoseconds: bigint }).nanoseconds }
+              : { tag: richTag, value: richTag === 'uuid' ? Uuid.from(val as Uuid) : val }
+        ) as SchemaValue;
+        if (schemaLeafValueMatches(codec.graph.root.body, leaf) !== true)
+          throw new TypeError('does not match its declared schema');
+      }
+    };
+    return finish(
+      {
+        write: (input, writer) => {
+          if (richTag === 'uuid' && !(input instanceof Uuid))
+            throw new TypeError('uuid value must be a Uuid');
+          const val =
+            richTag === 'duration'
+              ? { nanoseconds: typeof input === 'bigint' ? input : BigInt(input as number) }
+              : richTag === 'text'
+                ? { text: input, language: undefined }
+                : richTag === 'binary'
+                  ? { bytes: input, mimeType: undefined }
+                  : input;
+          const node = { tag, val } as WireValueNode;
+          validateNode(node);
+          return writer.add(node);
+        },
+        read: (reader, index) =>
+          reader.node(index, tag, (node) => {
+            validateNode(node);
+            const val = (node as WireValueNode & { val: unknown }).val;
+            if (
+              !invocation &&
+              ((richTag === 'text' &&
+                (val as { language?: string }).language !== undefined &&
+                codec.graph.root.body.restrictions.languages === undefined) ||
+                (richTag === 'binary' &&
+                  (val as { mimeType?: string }).mimeType !== undefined &&
+                  codec.graph.root.body.restrictions.mimeTypes === undefined))
+            )
+              throw new TypeError('rich value is not canonical for its declared schema');
+            if (richTag === 'uuid') return Uuid.from(val as Uuid);
+            if (richTag === 'duration') return (val as { nanoseconds: bigint }).nanoseconds;
+            if (richTag === 'text') return (val as { text: string }).text;
+            if (richTag === 'binary') return (val as { bytes: Uint8Array }).bytes;
+            return val;
+          }),
+      },
+      tag,
+    );
+  }
   const primitive = new Map<SchemaType['body']['tag'], WireValueNode['tag']>([
     ['bool', 'bool-value'],
     ['s8', 's8-value'],
@@ -527,7 +693,13 @@ function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec 
       }
     }
     if (!valid) throw new TypeError('does not match its declared schema');
-    return tag === 'f32' ? Math.fround(value as number) : value;
+    const canonical = tag === 'f32' ? Math.fround(value as number) : value;
+    // Primitive wire types do not express source literals. Check only the leaf
+    // conversion, without validating the source schema or converting its parents.
+    if (!deepEqual(codec.fromValue({ tag, value: canonical } as SchemaValue), canonical)) {
+      throw new TypeError('is not canonical for its declared schema');
+    }
+    return canonical;
   };
   return finish(
     {
@@ -570,6 +742,10 @@ function freezeCodec(
   seenCodecs.add(codec);
 
   freezeSchemaValue(codec.graph, seenGraphValues);
+  if (codec.tupleItems) {
+    codec.tupleItems.forEach((item) => freezeCodec(item, seenCodecs, seenGraphValues));
+    Object.freeze(codec.tupleItems);
+  }
   if (codec.fields) {
     codec.fields.forEach((entry) => {
       freezeCodec(entry.codec, seenCodecs, seenGraphValues);

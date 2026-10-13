@@ -71,8 +71,9 @@ fn count_of(bytes: Vec<u8>) -> Result<u32, String> {
         .map_err(|bytes: Vec<u8>| format!("Invalid snapshot size: {}", bytes.len()))
 }
 
-/// An ephemeral counter whose definition enables snapshots.
-#[agent_definition(ephemeral, snapshotting = "enabled")]
+/// An ephemeral counter with snapshot hooks. An ephemeral agent cannot enable snapshots in its
+/// definition; the hooks run only if the executor takes a snapshot of the agent.
+#[agent_definition(ephemeral)]
 trait EphemeralSnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
