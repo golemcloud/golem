@@ -1085,6 +1085,30 @@ pub mod shared_args {
         pub repl_bridge_sdk_target: Option<GuestLanguage>,
     }
 
+    /// Options of the interactive oplog viewer.
+    #[derive(Debug, Args)]
+    pub struct OplogViewerArgs {
+        /// Write the oplog into a self-contained interactive HTML viewer at the given path instead of printing it.
+        /// The page embeds every selected entry; use `--serve` for very large oplogs.
+        /// Structured formats still emit one output document per oplog entry.
+        #[arg(long, value_name = "FILE", conflicts_with = "serve")]
+        pub html: Option<std::path::PathBuf>,
+        /// Serve the interactive oplog viewer on a local port. The viewer loads the oplog page by page
+        /// through the API and supports server-side queries, so it works for oplogs of any size.
+        /// Runs until interrupted.
+        #[arg(long)]
+        pub serve: bool,
+        /// Port of the local viewer server. A free port is chosen when omitted.
+        #[arg(long, requires = "serve")]
+        pub port: Option<u16>,
+        /// Open the generated page in the default browser. The served viewer opens automatically.
+        #[arg(long, conflicts_with = "no_open")]
+        pub open: bool,
+        /// Do not open the served viewer in the default browser.
+        #[arg(long, requires = "serve")]
+        pub no_open: bool,
+    }
+
     #[derive(Debug, Args)]
     pub struct AgentIdArgs {
         #[arg(
@@ -1555,7 +1579,8 @@ pub mod worker {
     use crate::args::parse_cursor;
     use crate::args::parse_key_val;
     use crate::command::shared_args::{
-        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
+        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogViewerArgs, PostDeployArgs,
+        StreamArgs,
     };
     use crate::model::agent::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
@@ -1808,6 +1833,8 @@ pub mod worker {
                 verbatim_doc_comment,
             )]
             query: Option<String>,
+            #[command(flatten)]
+            viewer: OplogViewerArgs,
         },
         /// DESTRUCTIVE: Rewrites the agent's oplog by undoing recent operations. Reverted entries are lost. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
         #[command(after_help = crate::command_examples::AGENT_REVERT)]

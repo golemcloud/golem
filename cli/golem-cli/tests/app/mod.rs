@@ -943,6 +943,76 @@ impl TestContext {
         child
     }
 
+    /// Spawns a long-running golem-cli command and returns the child together with the first
+    /// stdout line that contains `expected`. Used for commands that report where they listen.
+    async fn cli_process_after_line<I, S>(&self, command_args: I, expected: &str) -> (Child, String)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr.next_line().await {
+                eprintln!("> golem-cli - stderr: {line}");
+            }
+        });
+
+        let matched = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let line = stdout
+                    .next_line()
+                    .await
+                    .expect("failed to read golem-cli stdout")
+                    .expect("golem-cli exited before the expected output");
+                println!("> golem-cli - stdout: {line}");
+                if line.contains(expected) {
+                    break line;
+                }
+            }
+        })
+        .await
+        .expect("failed to observe expected golem-cli output");
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stdout.next_line().await {
+                println!("> golem-cli - stdout: {line}");
+            }
+        });
+
+        (child, matched)
+    }
+
     async fn cli_interactive<I, S, F>(&self, args: I, session_fn: F)
     where
         I: IntoIterator<Item = S>,
