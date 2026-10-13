@@ -21,7 +21,9 @@
 
 use super::prune::SNAPSHOTS_PATH;
 use super::runs::RunEnd;
-use golem_service_base::storage::blob::{BlobMissingError, BlobNameError, BlobRangeError};
+use golem_service_base::storage::blob::{
+    BlobFailure, BlobMissingError, BlobNameError, BlobRangeError,
+};
 use rustic_core::FileType;
 use rustic_core::Id;
 use std::error::Error;
@@ -160,7 +162,7 @@ pub(crate) enum CallFailure {
     /// The lease of the prune ran out.
     LeaseExpired,
     /// The storage gave an answer that no try can change: a name or a range that breaks a rule, a
-    /// permission that the storage refuses, or a blob that is not there.
+    /// request that the storage refuses, or a blob that is not there.
     Permanent,
     /// The try got no answer within the time left of the window of the call.
     TimedOut,
@@ -175,7 +177,7 @@ pub(super) fn call_failure(error: &anyhow::Error) -> CallFailure {
         CallFailure::Cancelled
     } else if in_chain(|error| error.is::<LeaseExpired>()) {
         CallFailure::LeaseExpired
-    } else if in_chain(is_permanent) {
+    } else if in_chain(is_permanent) || is_refused(error) {
         CallFailure::Permanent
     } else if in_chain(|error| error.is::<tokio::time::error::Elapsed>()) {
         CallFailure::TimedOut
@@ -184,14 +186,24 @@ pub(super) fn call_failure(error: &anyhow::Error) -> CallFailure {
     }
 }
 
-/// Tells whether an error is an answer of the storage that no try can change.
+/// Tells whether an error is an answer of the storage that no try can change. A refused request
+/// gets the same answer until an operator fixes the storage.
 fn is_permanent(error: &(dyn Error + 'static)) -> bool {
     error.is::<BlobNameError>()
         || error.is::<BlobRangeError>()
         || error.is::<BlobMissingError>()
         || error
+            .downcast_ref::<BlobCallFailed>()
+            .is_some_and(|failed| is_refused(&failed.failure))
+        || error
             .downcast_ref::<std::io::Error>()
             .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
+/// Tells whether the storage refused the request. A backend attaches the [`BlobRefusedError`] as a
+/// context, so only the `anyhow` error finds it, and not the chain of sources.
+fn is_refused(error: &anyhow::Error) -> bool {
+    matches!(BlobFailure::of(error), BlobFailure::Refused(_))
 }
 
 /// Tells whether a write whose try failed with `failure` can still land: every failure but one that
@@ -412,7 +424,9 @@ mod tests {
         missing_file_path, run_end, rustic_storage_end, storage_end,
     };
     use crate::filesystem_snapshot::rustic::runs::RunEnd;
-    use golem_service_base::storage::blob::{BlobMissingError, BlobNameError, BlobRangeError};
+    use golem_service_base::storage::blob::{
+        BlobMissingError, BlobNameError, BlobRangeError, BlobRefusal, BlobRefusedError,
+    };
     use pretty_assertions::assert_eq;
     use rustic_core::{ErrorKind, Id, RusticError};
     use std::io;
@@ -466,6 +480,9 @@ mod tests {
                 call_failure(&anyhow::Error::new(io::Error::from(
                     io::ErrorKind::PermissionDenied
                 ))),
+                call_failure(&anyhow::anyhow!("403 Forbidden").context(BlobRefusedError {
+                    refusal: BlobRefusal::AccessDenied
+                })),
                 call_failure(&elapsed().await),
                 call_failure(&anyhow::anyhow!("the bucket is gone")),
                 call_failure(&anyhow::Error::new(io::Error::from(
@@ -475,6 +492,7 @@ mod tests {
             [
                 CallFailure::Cancelled,
                 CallFailure::LeaseExpired,
+                CallFailure::Permanent,
                 CallFailure::Permanent,
                 CallFailure::Permanent,
                 CallFailure::Permanent,
@@ -542,12 +560,18 @@ mod tests {
                 rustic_storage_end(&failed_call(anyhow::Error::new(BlobNameError::NoName {
                     path: std::path::PathBuf::new(),
                 }))),
+                rustic_storage_end(&failed_call(anyhow::anyhow!("NoSuchBucket").context(
+                    BlobRefusedError {
+                        refusal: BlobRefusal::NoSuchBucket,
+                    }
+                ))),
                 rustic_storage_end(&rustic(io::Error::from(io::ErrorKind::PermissionDenied))),
                 rustic_storage_end(&missing("index/ab12")),
             ],
             [
                 Some(RunEnd::CallFailed),
                 Some(RunEnd::Cancelled),
+                Some(RunEnd::Permanent),
                 Some(RunEnd::Permanent),
                 None,
                 None,

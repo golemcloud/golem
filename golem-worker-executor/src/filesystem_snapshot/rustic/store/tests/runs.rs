@@ -191,6 +191,38 @@ async fn a_run_that_fails_frees_its_slot_its_pool_and_its_index_and_a_new_run_gi
 
 #[test]
 #[timeout("60s")]
+async fn a_call_that_the_storage_refuses_answers_failed_after_one_try_of_one_run() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    save_each(&store_over(&inner), &scope, &["p-1"]).await;
+    let storage = ScriptedBlobStorage::new(inner, |op_label, path| {
+        if op_label == "list" && path.starts_with("snapshots") {
+            Script::Deny
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 3));
+    let slots = SharedSlots::new(1);
+
+    let listed = store.list(&scope, &slots).await;
+
+    assert!(matches!(listed, Err(CallError::Failed(_))), "{listed:?}");
+    assert_eq!(
+        (
+            slots.counts().0,
+            storage
+                .calls()
+                .iter()
+                .filter(|(op_label, path)| *op_label == "list" && path.starts_with("snapshots"))
+                .count()
+        ),
+        (1, 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_failed_call_answers_failed_after_its_runs_and_each_run_tells_the_limiter_before_its_wait()
  {
     let inner = Arc::new(InMemoryBlobStorage::new());
