@@ -1166,6 +1166,20 @@ fn go_grep_tool() -> Tool {
                     }),
                 )
             },
+            OptionSpec {
+                default: Some(SchemaValue::Path {
+                    path: "out.json".to_string(),
+                }),
+                ..option(
+                    "output",
+                    OptionShape::Scalar(SchemaType::path(PathSpec {
+                        direction: PathDirection::Output,
+                        kind: PathKind::File,
+                        allowed_mime_types: None,
+                        allowed_extensions: None,
+                    })),
+                )
+            },
         ],
         result: Some(ToolResultSpec {
             type_: SchemaType::option(SchemaType::string()),
@@ -1210,6 +1224,7 @@ fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
         "s.Positional(&a.Key).Default(\"all\")",
         "s.Map(&a.Labels).Default(map[string]string{\"env\": \"dev\"})",
         "s.List(&a.Tag).Default(nil)",
+        "s.Option(&a.Output).Default(\"out.json\")",
         "s.Stdin(&a.Stdin).Optional()",
         "s.CountFlag(&a.Verbosity)",
     ] {
@@ -1604,20 +1619,30 @@ fn go_clients_spell_unstructured_and_multimodal_content(env: &GoEnv) {
     }
 }
 
-/// A parameter named like a local the generated method body declares keeps
-/// the method compiling.
+/// A parameter named like a local or a codec function the generated method
+/// body uses keeps the method compiling.
 #[test]
 fn go_external_parameters_avoid_the_generated_locals(env: &GoEnv) {
     let agent_type = agent(
         "Cleaner",
         "rust",
         vec![],
-        vec![method(
-            "clear",
-            vec![field("err", SchemaType::string())],
-            None,
+        vec![
+            method("clear", vec![field("err", SchemaType::string())], None),
+            method(
+                "send",
+                vec![
+                    field("encode-node", SchemaType::string()),
+                    field("decode-node", SchemaType::string()),
+                    field("node", ref_to("Node")),
+                ],
+                Some(ref_to("Node")),
+            ),
+        ],
+        vec![def(
+            "Node",
+            SchemaType::record(vec![named_field("value", SchemaType::string())]),
         )],
-        vec![],
         AgentMode::Durable,
     );
     let generated = GeneratedGo::external(env, agent_type);
@@ -1660,4 +1685,28 @@ fn go_case_types_avoid_other_package_names(env: &GoEnv) {
     let types = external.read("types.go");
     assert!(types.contains("type EventCreated struct {"), "{types}");
     assert!(types.contains("type EventCreated2 struct{}"), "{types}");
+}
+
+/// Two groups whose paths join to the same name (`repo foo-bar` and
+/// `repo foo bar`) get distinct variables.
+#[test]
+fn go_tool_group_names_do_not_collide(env: &GoEnv) {
+    let mut tool = go_grep_tool();
+    let first = tool.commands.nodes.len() as i32;
+    let mut repo = command_node("repo");
+    repo.subcommands = vec![CommandIndex(first + 1), CommandIndex(first + 3)];
+    let mut joined = command_node("foo-bar");
+    joined.subcommands = vec![CommandIndex(first + 2)];
+    let mut show = command_node("show");
+    show.body = Some(tool_body());
+    let mut first_part = command_node("foo");
+    first_part.subcommands = vec![CommandIndex(first + 4)];
+    let mut bar = command_node("bar");
+    bar.subcommands = vec![CommandIndex(first + 5)];
+    tool.commands.nodes[0].subcommands.push(CommandIndex(first));
+    tool.commands
+        .nodes
+        .extend([repo, joined, show.clone(), first_part, bar, show]);
+    let generated = GeneratedGo::tool(env, tool);
+    generated.assert_vets_for_wasip1(env);
 }

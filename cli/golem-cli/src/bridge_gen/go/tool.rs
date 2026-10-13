@@ -30,6 +30,7 @@ use super::go::{
 };
 use super::go_writer::GoWriter;
 use super::restriction;
+use super::type_ref::VALUES;
 use super::{GOLEM_PKG, GoBridgeGenerator, TOOL_PKG};
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{command_path, idx_to_usize, synthetic_agent_type};
@@ -508,8 +509,9 @@ impl GoToolBridgeGenerator {
         })
     }
 
-    /// A Go literal for a default value of a primitive or enum type. A default
-    /// no literal spells is left to the caller, who sets the field.
+    /// A Go literal for a default value of a primitive, rich scalar or enum
+    /// type. A default no literal spells is left to the caller, who sets the
+    /// field.
     fn literal(&self, typ: &SchemaType, value: &SchemaValue) -> Option<String> {
         Some(match value {
             SchemaValue::Bool(b) => b.to_string(),
@@ -525,6 +527,34 @@ impl GoToolBridgeGenerator {
             SchemaValue::F64(n) if n.is_finite() => format!("{n:?}"),
             SchemaValue::Char(c) => format!("{}", *c as u32),
             SchemaValue::String(s) => go_string(s),
+            // Untyped constants, which Go converts to the field's named type
+            // (values.Path, values.URL, values.Text, time.Duration).
+            SchemaValue::Path { path } => go_string(path),
+            SchemaValue::Url { url } => go_string(url),
+            SchemaValue::Text(text) => go_string(&text.text),
+            SchemaValue::Duration(duration) => duration.nanoseconds.to_string(),
+            SchemaValue::Uuid(uuid) => format!(
+                "{VALUES}.UUID{{{}}}",
+                uuid.as_bytes()
+                    .iter()
+                    .map(|b| format!("{b:#04x}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            SchemaValue::Binary(binary) => format!(
+                "{VALUES}.Binary{{{}}}",
+                binary
+                    .bytes
+                    .iter()
+                    .map(|b| format!("{b:#04x}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            SchemaValue::Datetime { value } => format!(
+                "time.Unix({}, {}).UTC()",
+                value.timestamp(),
+                value.timestamp_subsec_nanos()
+            ),
             SchemaValue::Enum { case } => {
                 let name = self.inner.named(typ)?;
                 self.inner
@@ -642,6 +672,7 @@ impl ToolNames {
         all.extend(commands.iter().map(|(_, stem)| format!("{stem}Args")));
         all.extend(globals.iter().map(|(_, name)| name.clone()));
         all.extend(error_candidates.iter().map(|(ident, _)| ident.clone()));
+        all.extend(groups.values().cloned());
         let unique = unique_idents(all);
         let mut it = unique.into_iter().skip(1);
         let marker = it.next().expect("a name");
@@ -675,6 +706,10 @@ impl ToolNames {
                 summary: case.doc.summary.trim().to_string(),
             });
         }
+        let groups = groups
+            .keys()
+            .map(|index| (*index, it.next().expect("a name")))
+            .collect::<BTreeMap<_, _>>();
 
         Ok(Self {
             marker,
@@ -693,6 +728,7 @@ impl ToolNames {
         out.extend(self.args.values().cloned());
         out.extend(self.globals.values().cloned());
         out.extend(self.errors.iter().map(|e| e.ident.clone()));
+        out.extend(self.groups.values().cloned());
         out
     }
 }

@@ -836,13 +836,20 @@ impl GoBridgeGenerator {
             params.push(self.render(&field.schema, w)?);
             encoders.push(codecs.func(Dir::Encode, &field.schema)?);
         }
-        // Parameter names avoid the receiver, the other locals and the
-        // packages the body refers to.
+        // Parameter names avoid the receiver, the other locals, the packages
+        // and the codec functions the body refers to.
+        let mut reserved = vec![
+            "c", "ctx", "err", "when", "bridge", "schema", "context", "time",
+        ];
+        reserved.extend(encoders.iter().map(String::as_str));
+        let decoder = match &method.output_schema {
+            OutputSchema::Single(typ) => Some(codecs.func(Dir::Decode, typ)?),
+            OutputSchema::Unit => None,
+        };
+        reserved.extend(decoder.as_deref());
         let param_idents = unique_idents_with_reserved(
             fields.iter().map(|f| to_param_ident(&f.name)).collect(),
-            &[
-                "c", "ctx", "err", "when", "bridge", "schema", "context", "time",
-            ],
+            &reserved,
         );
         let mut signature = vec!["ctx context.Context".to_string()];
         signature.extend(

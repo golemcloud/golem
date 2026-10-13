@@ -99,13 +99,67 @@ pub fn import_paths(source: &str) -> Vec<String> {
         }
         specs.sort();
         for (start, end) in specs {
-            let literal = &source[start..end];
-            if literal.len() >= 2 {
-                paths.push(literal[1..literal.len() - 1].to_string());
+            if let Some(path) = unquote(&source[start..end]) {
+                paths.push(path);
             }
         }
     }
     paths
+}
+
+/// The value of a Go string literal: a raw `` `…` `` literal as written, an
+/// interpreted `"…"` literal with its escapes decoded.
+fn unquote(literal: &str) -> Option<String> {
+    if let Some(raw) = literal.strip_prefix('`') {
+        return raw.strip_suffix('`').map(str::to_string);
+    }
+    let body = literal.strip_prefix('"')?.strip_suffix('"')?;
+    let mut bytes = Vec::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        let hex = |chars: &mut std::str::Chars, n: usize| -> Option<u32> {
+            u32::from_str_radix(&chars.by_ref().take(n).collect::<String>(), 16).ok()
+        };
+        match chars.next()? {
+            'a' => bytes.push(0x07),
+            'b' => bytes.push(0x08),
+            'f' => bytes.push(0x0c),
+            'n' => bytes.push(b'\n'),
+            'r' => bytes.push(b'\r'),
+            't' => bytes.push(b'\t'),
+            'v' => bytes.push(0x0b),
+            '\\' => bytes.push(b'\\'),
+            '"' => bytes.push(b'"'),
+            'x' => bytes.push(u8::try_from(hex(&mut chars, 2)?).ok()?),
+            'u' => {
+                let mut buf = [0; 4];
+                bytes.extend_from_slice(
+                    char::from_u32(hex(&mut chars, 4)?)?
+                        .encode_utf8(&mut buf)
+                        .as_bytes(),
+                )
+            }
+            'U' => {
+                let mut buf = [0; 4];
+                bytes.extend_from_slice(
+                    char::from_u32(hex(&mut chars, 8)?)?
+                        .encode_utf8(&mut buf)
+                        .as_bytes(),
+                )
+            }
+            d @ '0'..='7' => {
+                let rest: String = chars.by_ref().take(2).collect();
+                bytes.push(u8::from_str_radix(&format!("{d}{rest}"), 8).ok()?);
+            }
+            _ => return None,
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn parse_go(source: &str) -> anyhow::Result<Tree> {

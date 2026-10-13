@@ -411,6 +411,9 @@ func (o *outputStream) offer(c *sessionConn, e outEntry) error {
 	s.mu.Lock()
 	for {
 		if s.conn != c || s.over {
+			// The connection the item came on is gone, and the server replays
+			// the item on the next one: the streams it bound are free again.
+			unbindStreams(e.value)
 			s.mu.Unlock()
 			return nil
 		}
@@ -575,14 +578,7 @@ func (o *outputStream) resume() {
 	// The server replays the queued items, so the streams they bound are
 	// unbound again: an item binds its streams once the reader receives it.
 	for _, e := range o.queue {
-		if e.value != nil {
-			_, _ = mapStreams(e.value, func(sv schema.StreamValue) (schema.SchemaValue, error) {
-				if inner, ok := sv.Handle.(*outputStream); ok {
-					inner.bound = false
-				}
-				return sv, nil
-			})
-		}
+		unbindStreams(e.value)
 	}
 	for len(o.queue) > 0 {
 		o.pop()
@@ -593,6 +589,20 @@ func (o *outputStream) resume() {
 	if o.stopped && !o.terminal {
 		o.pendingCancel = o.stopReason
 	}
+}
+
+// unbindStreams frees the output streams a received value bound, for a value
+// the reader never got. Called with s.mu held.
+func unbindStreams(v schema.SchemaValue) {
+	if v == nil {
+		return
+	}
+	_, _ = mapStreams(v, func(sv schema.StreamValue) (schema.SchemaValue, error) {
+		if inner, ok := sv.Handle.(*outputStream); ok {
+			inner.bound = false
+		}
+		return sv, nil
+	})
 }
 
 // --- values ----------------------------------------------------------------

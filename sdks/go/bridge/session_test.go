@@ -884,3 +884,60 @@ func TestClosingAStreamWakesItsWaitingReader(t *testing.T) {
 	}
 	close(checked)
 }
+
+// An item that waits for queue space when its connection goes binds its inner
+// stream again when the server replays it on the next connection.
+func TestAReplayedItemThatWaitedForSpaceBindsItsInnerStreamAgain(t *testing.T) {
+	const items = maxQueuedItems + 1
+	inner := func(i int) string { return "inner" + itoa(uint64(i)) }
+	resumed := make(chan struct{})
+	var key any
+	sendItem := func(c *fakeConn, channel uint32, i int, mappings []any) {
+		c.send("outputStreamItem", map[string]any{
+			"channel": channel, "cursorToken": "c" + itoa(uint64(i)), "mappings": mappings,
+			"sequence": itoa(uint64(i)),
+			"value":    map[string]any{"kind": "stream", "value": map[string]any{"streamToken": inner(i)}},
+		})
+	}
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			for i := range items {
+				sendItem(c, 2, i, []any{outputMapping(uint32(10+i), inner(i))})
+			}
+			// The client reads no item, so the last one waits for space until
+			// the session gives the connection up.
+			c.waitClose()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			mappings := []map[string]any{outputMapping(5, "out")}
+			for i := range items {
+				mappings = append(mappings, outputMapping(uint32(1000+i), inner(i)))
+			}
+			acceptAs(c, resume, key, "sess2", mappings...)
+			close(resumed)
+			for i := range items {
+				sendItem(c, 5, i, []any{})
+			}
+			outputEnd(c, 5, items, "end", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-resumed
+	for i := range items {
+		if _, ok, err := out.Next(ctx); err != nil || !ok {
+			t.Fatalf("item %d: %v %v", i, ok, err)
+		}
+	}
+}
