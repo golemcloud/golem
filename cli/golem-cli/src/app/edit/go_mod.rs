@@ -148,12 +148,12 @@ fn directive_entries(content: &str) -> BTreeMap<String, Vec<(String, String)>> {
         if let Some(kind) = block {
             if trimmed == ")" {
                 block = None;
-            } else if let Some(module) = first_token(trimmed) {
-                if !module.starts_with("//") {
-                    out.entry(kind.to_string())
-                        .or_default()
-                        .push((module.to_string(), trimmed.to_string()));
-                }
+            } else if let Some(module) = first_token(trimmed)
+                && !module.starts_with("//")
+            {
+                out.entry(kind.to_string())
+                    .or_default()
+                    .push((module.to_string(), trimmed.to_string()));
             }
             continue;
         }
