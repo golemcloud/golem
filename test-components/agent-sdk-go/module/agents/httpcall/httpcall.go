@@ -32,6 +32,14 @@ var AtomicCallback = Agent.Method[CallbackIn, string]("atomic-callback", golem.D
 // callback endpoint; the steps of a transaction run inside an atomic region.
 var TransactionCallback = Agent.Method[CallbackIn, string]("transaction-callback", golem.Description("GET the callback endpoint from two transaction steps and join the bodies"))
 
+// ReadTruncated GETs /truncated, whose response ends before its Content-Length,
+// and reports whether reading the body failed.
+var ReadTruncated = Agent.Method[golem.Unit, string]("read-truncated", golem.Description("GET a truncated response and return the body read error, or the body"))
+
+// PostFailingBody POSTs a body whose reader fails after the first chunk, and
+// reports whether the request failed.
+var PostFailingBody = Agent.Method[golem.Unit, string]("post-failing-body", golem.Description("POST a body whose reader fails midway and return the request error, or the response"))
+
 var RunParallel = Agent.Method[RunParallelIn, []string]("run-parallel", golem.Description("POST n requests from n goroutines at once, each tagged with its X-Test id, and return the bodies in id order"))
 
 type SpanContextIn struct {

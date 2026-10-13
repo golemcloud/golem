@@ -558,6 +558,7 @@ func (o *outputStream) stop(reason string) {
 	for len(o.queue) > 0 {
 		o.pop()
 	}
+	poke(o.wake)
 	if o.terminal || s.over {
 		return
 	}
@@ -571,6 +572,18 @@ func (o *outputStream) stop(reason string) {
 // resume prepares the stream for a new attachment: what was queued but not
 // read is dropped, to be replayed from the last cursor. Called with s.mu held.
 func (o *outputStream) resume() {
+	// The server replays the queued items, so the streams they bound are
+	// unbound again: an item binds its streams once the reader receives it.
+	for _, e := range o.queue {
+		if e.value != nil {
+			_, _ = mapStreams(e.value, func(sv schema.StreamValue) (schema.SchemaValue, error) {
+				if inner, ok := sv.Handle.(*outputStream); ok {
+					inner.bound = false
+				}
+				return sv, nil
+			})
+		}
+	}
 	for len(o.queue) > 0 {
 		o.pop()
 	}

@@ -131,6 +131,7 @@ pub struct GoModDepsMarkerHash<'a> {
     pub go_module_root: &'a Path,
     pub go_mod_hash: &'a str,
     pub go_sum_hash: Option<&'a str>,
+    pub imports_hash: &'a str,
 }
 
 impl TaskResultMarkerHashSource for GoModDepsMarkerHash<'_> {

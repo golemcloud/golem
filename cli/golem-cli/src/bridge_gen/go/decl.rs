@@ -45,7 +45,7 @@
 //! linter check that would object to `OrderId` skips them anyway.
 
 use crate::bridge_gen::go::go::{
-    go_string, lower_first, one_field_struct, to_exported_ident, to_field_ident, unique_idents,
+    go_string, lower_first, one_field_struct, to_field_ident, unique_idents,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
 use crate::bridge_gen::go::restriction;
@@ -61,9 +61,12 @@ pub type TagOf<'a> = dyn Fn(&SchemaType) -> anyhow::Result<Option<String>> + 'a;
 
 /// Writes the declaration for a named schema type. Returns false when the type
 /// needs no declaration, which the caller treats as "already spelled inline".
+/// `case_idents` are the identifiers of an enum's, variant's or union's cases,
+/// allocated for the whole package.
 pub fn write(
     name: &str,
     typ: &SchemaType,
+    case_idents: &[String],
     render: &RenderType<'_>,
     tag: &TagOf<'_>,
     writer: &mut GoWriter,
@@ -78,7 +81,7 @@ pub fn write(
         SchemaType::Enum {
             cases, metadata, ..
         } => {
-            write_enum(name, cases, metadata, writer);
+            write_enum(name, cases, case_idents, metadata, writer);
             Ok(true)
         }
         SchemaType::Flags {
@@ -90,7 +93,7 @@ pub fn write(
         SchemaType::Variant {
             cases, metadata, ..
         } => {
-            write_variant(name, cases, metadata, render, writer)?;
+            write_variant(name, cases, case_idents, metadata, render, writer)?;
             Ok(true)
         }
         SchemaType::Union { spec, metadata, .. } => {
@@ -103,7 +106,7 @@ pub fn write(
                     metadata: branch.metadata.clone(),
                 })
                 .collect::<Vec<_>>();
-            write_variant(name, &cases, metadata, render, writer)?;
+            write_variant(name, &cases, case_idents, metadata, render, writer)?;
             Ok(true)
         }
         _ => Ok(false),
@@ -150,7 +153,13 @@ fn write_record(
     Ok(())
 }
 
-fn write_enum(name: &str, cases: &[String], metadata: &MetadataEnvelope, writer: &mut GoWriter) {
+fn write_enum(
+    name: &str,
+    cases: &[String],
+    idents: &[String],
+    metadata: &MetadataEnvelope,
+    writer: &mut GoWriter,
+) {
     write_doc(name, metadata, writer);
     // Integer-backed, because the wire carries the case index and because that
     // is what the guest SDK's DefineEnum accepts: a Go agent and a generated
@@ -160,12 +169,6 @@ fn write_enum(name: &str, cases: &[String], metadata: &MetadataEnvelope, writer:
 
     // The constant is named <Type><Case> so two enums in the same package can
     // both have a "pending" case.
-    let idents = unique_idents(
-        cases
-            .iter()
-            .map(|case| format!("{name}{}", to_exported_ident(case)))
-            .collect(),
-    );
     writer.line("const (");
     writer.indent();
     for (idx, ident) in idents.iter().enumerate() {
@@ -241,6 +244,7 @@ fn write_flags(name: &str, flags: &[String], metadata: &MetadataEnvelope, writer
 fn write_variant(
     name: &str,
     cases: &[VariantCaseType],
+    idents: &[String],
     metadata: &MetadataEnvelope,
     render: &RenderType<'_>,
     writer: &mut GoWriter,
@@ -252,12 +256,6 @@ fn write_variant(
             None => None,
         });
     }
-    let idents = unique_idents(
-        cases
-            .iter()
-            .map(|case| format!("{name}{}", to_exported_ident(&case.name)))
-            .collect(),
-    );
     // The sealing method is named after the type, so two variants in the same
     // package do not seal each other.
     let seal = format!("is{name}");
@@ -365,10 +363,38 @@ mod tests {
         type_ref::render(typ, &|_| None, &|t| t, type_ref::Streams::Guest, writer)
     }
 
+    /// The `<Type><Case>` identifiers the generator allocates when nothing
+    /// else in the package takes them.
+    fn case_idents(name: &str, typ: &SchemaType) -> Vec<String> {
+        let cases: Vec<String> = match typ {
+            SchemaType::Enum { cases, .. } => cases.clone(),
+            SchemaType::Variant { cases, .. } => cases.iter().map(|c| c.name.clone()).collect(),
+            SchemaType::Union { spec, .. } => spec.branches.iter().map(|b| b.tag.clone()).collect(),
+            _ => Vec::new(),
+        };
+        cases
+            .iter()
+            .map(|case| {
+                format!(
+                    "{name}{}",
+                    crate::bridge_gen::go::go::to_exported_ident(case)
+                )
+            })
+            .collect()
+    }
+
     fn emit(name: &str, typ: &SchemaType) -> String {
         let mut writer = GoWriter::new();
-        let declared =
-            write(name, typ, &render_inline, &|_| Ok(None), &mut writer).expect("a declaration");
+        let cases = case_idents(name, typ);
+        let declared = write(
+            name,
+            typ,
+            &cases,
+            &render_inline,
+            &|_| Ok(None),
+            &mut writer,
+        )
+        .expect("a declaration");
         assert!(declared, "{name} should need a declaration");
         writer.finish("client")
     }
@@ -606,6 +632,7 @@ mod tests {
         let declared = write(
             "Ignored",
             &SchemaType::String { metadata: meta() },
+            &[],
             &render_inline,
             &|_| Ok(None),
             &mut writer,

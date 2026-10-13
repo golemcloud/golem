@@ -15,3 +15,7 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var Callback = Agent.Method[CallbackIn, string]("callback", golem.Description("Wrap an outbound HTTP call in durability.Run and return its body"))
+
+// RecoveredPanic recovers a panic of a durability.Run body in the handler; the
+// panic must still trap the component.
+var RecoveredPanic = Agent.Method[golem.Unit, string]("recovered-panic", golem.Description("Recover a panic of a durability.Run body and return"))

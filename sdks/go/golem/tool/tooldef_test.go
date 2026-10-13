@@ -934,3 +934,42 @@ func TestAHandlerRejectsItsInput(t *testing.T) {
 		t.Errorf("a bare rejection reads %q", got)
 	}
 }
+
+type DefaultsArgs struct {
+	Include []string
+	Tags    map[string]string
+}
+
+// TestToolCallDefaultsAreCopiedPerCall — a fill callback that edits a map or
+// slice default changes only its own call: the next call sends the declared
+// defaults again.
+func TestToolCallDefaultsAreCopiedPerCall(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	tool := defineToolInto[Vcs](r, d, "defaults", Spec{Version: "1.0.0", Summary: "defaults"}, false)
+	var seen []DefaultsArgs
+	cmd := tool.Command[DefaultsArgs, golem.Unit]("run", func(a *DefaultsArgs, s *CommandSpec) {
+		s.List(&a.Include).Default([]string{"a", "b"})
+		s.Map(&a.Tags).Default(map[string]string{"k": "v"})
+	})
+	_ = cmd.Handle(func(_ *Context, a DefaultsArgs) (golem.Unit, error) {
+		seen = append(seen, a)
+		return golem.Unit{}, nil
+	})
+	if _, ok := r.discover(d); !ok {
+		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
+	}
+	loopback(t, r, d, golem.AnonymousPrincipal{})
+
+	if _, err := cmd.Call(func(a *DefaultsArgs) {
+		a.Include[0] = "changed"
+		a.Tags["k"] = "changed"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cmd.Call(nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen[1]; !slices.Equal(got.Include, []string{"a", "b"}) || got.Tags["k"] != "v" {
+		t.Errorf("the second call sent %+v", got)
+	}
+}

@@ -33,4 +33,16 @@ func init() {
 			},
 		)
 	})
+	agent.Handle(customdur.RecoveredPanic, func(_ *golem.Context[state], _ golem.Unit) (out string) {
+		defer func() {
+			if r := recover(); r != nil {
+				out = "recovered"
+			}
+		}()
+		return durability.Run(
+			durability.Spec{Interface: "agent-sdk-go", Function: "panicking-op", Type: durability.WriteRemote},
+			golem.Unit{},
+			func() string { panic("durable body failed") },
+		)
+	})
 }

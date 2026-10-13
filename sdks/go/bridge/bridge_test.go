@@ -472,3 +472,25 @@ func TestTheDialClientKeepsTheTransport(t *testing.T) {
 		t.Fatal("a client without a timeout was copied")
 	}
 }
+
+// Closing a writer wakes a Write that waits for room in a full buffer.
+func TestClosingAWriterWakesABlockedWrite(t *testing.T) {
+	w, _ := NewAgentStream[uint32]()
+	for i := range streamBuffer {
+		if err := w.Write(uint32(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.Write(streamBuffer) }()
+	time.Sleep(50 * time.Millisecond)
+	_ = w.Close()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a Write after Close succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not wake the blocked Write")
+	}
+}

@@ -218,25 +218,34 @@ resp, err := http.Post(
 
 See `golem-add-http-endpoint-go` for the full mount/route model.
 
-## Approach 4: the worker REST API
+## Approach 4: the agent REST API
 
-Call methods (or complete promises) directly against the Golem server over HTTP — usable from any language, including external Go:
+Invoke methods (or complete promises) directly against the Golem server over HTTP — usable from any language, including external Go. Constructor and method parameters are records in the REST wire form (`{"kind": ..., "value": ...}`; 64-bit integers are strings):
 
 ```shell
-# Invoke and await a method
-curl -X POST \
-  "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/invoke-and-await?function=add" \
+# Invoke CounterAgent("my-counter").add(5) and await the result
+curl -X POST "$GOLEM_URL/v1/agents/invoke-agent" \
+  -H "Authorization: Bearer $GOLEM_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"params": [5]}'
+  -d '{
+    "appName": "my-app",
+    "envName": "local",
+    "agentTypeName": "CounterAgent",
+    "parameters": {"kind": "record", "value": {"fields": [{"kind": "string", "value": "my-counter"}]}},
+    "methodName": "add",
+    "methodParameters": {"kind": "record", "value": {"fields": [{"kind": "s64", "value": "5"}]}},
+    "mode": "await"
+  }'
 
 # Complete a promise an agent is awaiting (see golem-wait-for-external-input-go)
 curl -X POST \
   "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/complete" \
+  -H "Authorization: Bearer $GOLEM_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"oplogIdx": <oplog_index>, "data": [<bytes>]}'
 ```
 
-`$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses. This is the mechanism a promise's `PromiseID` (`AgentID.ComponentID`, `AgentID.AgentID`, `OplogIndex`) feeds into for external completion.
+`"mode": "schedule"` triggers the invocation without awaiting it. For promise completion, `$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses; a promise's `PromiseID` (`AgentID.ComponentID`, `AgentID.AgentID`, `OplogIndex`) supplies the component, the agent and the oplog index. The generated external Go client (Approach 1) builds these requests for you.
 
 ## Key Constraints
 

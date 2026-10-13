@@ -257,6 +257,8 @@ func (w *AgentStreamWriter[T]) Write(v T) error {
 		return nil
 	case <-w.stopped:
 		return ErrStreamClosed
+	case <-w.ended:
+		return errors.New("golem: write to a closed stream")
 	}
 }
 

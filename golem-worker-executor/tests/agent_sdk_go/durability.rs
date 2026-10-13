@@ -20,6 +20,8 @@ use crate::Tracing;
 use axum::Router;
 use axum::extract::Query;
 use axum::routing::get;
+use golem_common::model::AgentStatus;
+use golem_common::model::oplog::{LogLevel, OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -29,6 +31,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
 
@@ -288,5 +291,53 @@ async fn go_custom_durable_op_replayed_after_restart(
 
     assert_eq!(result1.into_typed::<String>()?, "0-a");
     assert_eq!(result2.into_typed::<String>()?, "1-b");
+    Ok(())
+}
+
+/// A panic in the body of `durability.Run` traps the component even when the
+/// handler recovers it, so no code runs on past the unfinished durable
+/// operation: the invocation fails instead of returning "recovered".
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_custom_durable_op_panic_traps_despite_recover(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurAgent", "go-customdur-panic-1");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "recovered-panic", data_value!())
+        .await;
+    assert!(
+        result.is_err(),
+        "a recovered durable operation panic must not return: {result:?}"
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let trapped = oplog.iter().any(|e| {
+        matches!(&e.entry, PublicOplogEntry::Log(log)
+        if log.level == LogLevel::Stderr
+            && log.message.starts_with(
+                "panic: durable operation agent-sdk-go::panicking-op: durable body failed"
+            ))
+    });
+    assert!(trapped, "the trap is reported on stderr");
     Ok(())
 }

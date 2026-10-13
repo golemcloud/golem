@@ -71,14 +71,7 @@ func (HTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Host expects a Host header via the authority; don't duplicate it here.
 	headers.GetAndDelete("Host")
 
-	contents := requestBody(req)
-
-	// No request trailers. The future write blocks until the host consumes it,
-	// and only the blocking Send below drives the event loop — so resolve it
-	// from a goroutine, exactly like the request body stream.
-	trailersW, trailersR := httptypes.MakeFutureResultOptionFieldsErrorCode()
-	go trailersW.Write(witTypes.Ok[witTypes.Option[*httptypes.Fields], httptypes.ErrorCode](
-		witTypes.None[*httptypes.Fields]()))
+	contents, trailersR := requestBody(req)
 
 	// Translate the request's context deadline into wasi:http request-options.
 	// One budget bounds each transport phase.
@@ -139,73 +132,108 @@ func (HTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// enclosing atomic region then refuses to close over.
 	bodyStream, trailers := httptypes.ResponseConsumeBody(resp, doneR)
 
-	return &http.Response{
+	response := &http.Response{
 		StatusCode:    status,
 		Status:        fmt.Sprintf("%d %s", status, http.StatusText(status)),
 		Proto:         "HTTP/1.1",
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        header,
-		Body:          &responseBody{stream: bodyStream, trailers: trailers},
 		ContentLength: contentLength(header),
 		Request:       req,
-	}, nil
+	}
+	response.Body = &responseBody{stream: bodyStream, trailers: trailers, resp: response}
+	return response, nil
 }
 
-// requestBody turns req.Body into an optional stream the host reads from. A
-// goroutine copies the body into the stream writer; it runs concurrently with
-// the blocking Send because a goroutine blocked on WriteAll yields via
-// wasiOnIdle.
-func requestBody(req *http.Request) witTypes.Option[*witTypes.StreamReader[uint8]] {
+type trailersResult = witTypes.Result[witTypes.Option[*httptypes.Fields], httptypes.ErrorCode]
+
+// requestBody turns req.Body into an optional stream the host reads from, and
+// returns the request's trailers future. A goroutine copies the body into the
+// stream writer; it runs concurrently with the blocking Send because a goroutine
+// blocked on WriteAll yields via wasiOnIdle. The trailers future is the request
+// body's outcome: Ok once the body reached EOF, or an error when reading req.Body
+// failed, so the host fails the request instead of sending a truncated body. Its
+// write blocks until the host consumes it, so it too is resolved from a goroutine.
+func requestBody(req *http.Request) (witTypes.Option[*witTypes.StreamReader[uint8]], *witTypes.FutureReader[trailersResult]) {
+	trailersW, trailersR := httptypes.MakeFutureResultOptionFieldsErrorCode()
+	ok := witTypes.Ok[witTypes.Option[*httptypes.Fields], httptypes.ErrorCode](witTypes.None[*httptypes.Fields]())
 	if req.Body == nil || req.Body == http.NoBody {
-		return witTypes.None[*witTypes.StreamReader[uint8]]()
+		go trailersW.Write(ok)
+		return witTypes.None[*witTypes.StreamReader[uint8]](), trailersR
 	}
 	w, r := httptypes.MakeStreamU8()
 	go func() {
 		defer func() { _ = req.Body.Close() }()
-		defer w.Drop()
+		outcome := ok
 		buf := make([]byte, 16*1024)
 		for {
 			n, err := req.Body.Read(buf)
 			if n > 0 {
 				w.WriteAll(buf[:n])
 			}
+			if err == io.EOF {
+				break
+			}
 			if err != nil {
-				return
+				outcome = witTypes.Err[witTypes.Option[*httptypes.Fields]](
+					httptypes.MakeErrorCodeInternalError(witTypes.Some("reading the request body: " + err.Error())))
+				break
 			}
 		}
+		w.Drop()
+		trailersW.Write(outcome)
 	}()
-	return witTypes.Some(r)
+	return witTypes.Some(r), trailersR
 }
 
 // responseBody adapts a wasi stream<u8> to io.ReadCloser.
 type responseBody struct {
 	stream   *witTypes.StreamReader[uint8]
 	buf      []byte // leftover bytes from the last stream read
-	trailers *witTypes.FutureReader[witTypes.Result[witTypes.Option[*httptypes.Fields], httptypes.ErrorCode]]
+	trailers *witTypes.FutureReader[trailersResult]
+	resp     *http.Response
+	err      error // the outcome of the transfer, once the stream has ended
 }
 
-// awaitTrailers blocks until the host has finalized the body transfer. Called
-// once, after the stream reported EOF; net/http exposes no trailers here, so the
-// value is discarded — the wait is what matters.
-func (b *responseBody) awaitTrailers() {
-	if t := b.trailers; t != nil {
-		b.trailers = nil
-		t.Read()
+// awaitTrailers blocks until the host has finalized the body transfer, and
+// returns its outcome: io.EOF when the whole body arrived, or the transfer
+// error. Received trailers go to the response's Trailer, as net/http fills it
+// at EOF.
+func (b *responseBody) awaitTrailers() error {
+	t := b.trailers
+	if t == nil {
+		return b.err
 	}
+	b.trailers = nil
+	b.err = io.EOF
+	res := t.Read()
+	if res.IsErr() {
+		b.err = fmt.Errorf("golem/http: reading the response body: %s", errorCodeString(res.Err()))
+	} else if fields := res.Ok(); fields.IsSome() {
+		trailer := http.Header{}
+		for _, kv := range fields.Some().CopyAll() {
+			trailer.Add(kv.F0, string(kv.F1))
+		}
+		fields.Some().Drop()
+		b.resp.Trailer = trailer
+	}
+	return b.err
 }
 
 func (b *responseBody) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	if b.err != nil {
+		return 0, b.err
+	}
 	if len(b.buf) == 0 {
 		chunk := make([]byte, len(p))
 		n := b.stream.Read(chunk)
 		if n == 0 {
 			if b.stream.WriterDropped() {
-				b.awaitTrailers()
-				return 0, io.EOF
+				return 0, b.awaitTrailers()
 			}
 			return 0, nil
 		}
@@ -220,7 +248,7 @@ func (b *responseBody) Close() error {
 	b.stream.Drop()
 	// Closing before EOF cancels the transfer; the trailers future still
 	// resolves once the host has finalized, so wait for that as well.
-	b.awaitTrailers()
+	_ = b.awaitTrailers()
 	return nil
 }
 

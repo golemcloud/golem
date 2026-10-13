@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Concurrent outgoing HTTP from goroutines. Mirrors
+//! Outgoing HTTP from Go: a body transfer that fails is an error, not a short
+//! body; and concurrent outgoing HTTP from goroutines. The concurrency test mirrors
 //! `http::http_client_using_reqwest_async_parallel_replay`: sixteen goroutines
 //! post at once, the server holds every response and releases them in reverse
 //! order, so the sends overlap and complete out of initiation order in the
@@ -281,5 +282,151 @@ async fn go_parallel_http_from_goroutines_replays(
     drop(executor);
     http_server.abort();
 
+    Ok(())
+}
+
+/// Serves one raw HTTP/1.1 exchange per connection on `listener`. `respond`
+/// gets everything the client sent before it closed its side or sent a complete
+/// chunked body, and returns the bytes to write back (or nothing, to close
+/// without answering).
+fn raw_http_server(
+    listener: tokio::net::TcpListener,
+    respond: impl Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static,
+) -> tokio::task::JoinHandle<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let respond = Arc::new(respond);
+    spawn(
+        async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let respond = respond.clone();
+                spawn(async move {
+                    let mut received = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        let headers_end = received.windows(4).position(|w| w == b"\r\n\r\n");
+                        let complete = match headers_end {
+                            Some(end) => {
+                                let head = String::from_utf8_lossy(&received[..end]).to_lowercase();
+                                !head.contains("transfer-encoding: chunked")
+                                    || received[end + 4..].ends_with(b"0\r\n\r\n")
+                            }
+                            None => false,
+                        };
+                        if complete {
+                            break;
+                        }
+                        match timeout(Duration::from_secs(30), socket.read(&mut buf)).await {
+                            Ok(Ok(n)) if n > 0 => received.extend_from_slice(&buf[..n]),
+                            _ => break,
+                        }
+                    }
+                    let answer = respond(&received);
+                    if !answer.is_empty() {
+                        let _ = socket.write_all(&answer).await;
+                    }
+                    let _ = socket.shutdown().await;
+                });
+            }
+        }
+        .in_current_span(),
+    )
+}
+
+/// A response that ends before its announced `Content-Length` makes reading the
+/// body fail. The transport reports the error of the trailers future instead of
+/// a clean EOF after the bytes that arrived.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_http_truncated_response_body_is_an_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = raw_http_server(listener, |_| {
+        b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nhello".to_vec()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpAgent", "go-http-truncated-1");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "read-truncated", data_value!())
+        .await?
+        .into_typed::<String>()?;
+
+    drop(executor);
+    server.abort();
+
+    assert!(result.starts_with("body error: "), "{result}");
+    Ok(())
+}
+
+/// A request body whose reader fails midway fails the request. The transport
+/// resolves the request's trailers future with an error, so the host does not
+/// finish the chunked body and the server never sees a complete upload.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_http_failing_request_body_fails_the_request(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let complete_uploads = Arc::new(AtomicUsize::new(0));
+    let complete_uploads_in_server = complete_uploads.clone();
+    let server = raw_http_server(listener, move |received| {
+        if received.ends_with(b"0\r\n\r\n") {
+            complete_uploads_in_server.fetch_add(1, Ordering::SeqCst);
+            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\ncomplete".to_vec()
+        } else {
+            Vec::new()
+        }
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpAgent", "go-http-failing-body-1");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "post-failing-body", data_value!())
+        .await?
+        .into_typed::<String>()?;
+
+    drop(executor);
+    server.abort();
+
+    assert!(result.starts_with("request error: "), "{result}");
+    assert_eq!(complete_uploads.load(Ordering::SeqCst), 0);
     Ok(())
 }

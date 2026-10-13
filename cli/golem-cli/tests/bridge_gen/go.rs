@@ -1123,8 +1123,9 @@ fn go_grep_tool() -> Tool {
     }];
 
     let mut config = command_node("config");
+    // A default that looks like the receiver placeholder stays as declared.
     config.globals.options = vec![OptionSpec {
-        default: Some(SchemaValue::String("dev".to_string())),
+        default: Some(SchemaValue::String("{}".to_string())),
         ..option("profile", OptionShape::Scalar(SchemaType::string()))
     }];
     config.subcommands = vec![CommandIndex(3)];
@@ -1200,6 +1201,7 @@ fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
         ".Default(ColorModeAuto)",
         "var configGroup = Tool.Group(\"config\")",
         "var _ = configGroup.Globals[ConfigGlobals](",
+        "s.Option(&g.Profile).Default(\"{}\")",
         "var Root = Tool.Body[RootArgs, []string](",
         "var Replace = Tool.OutputCommand[ReplaceArgs, golem.Unit](\"replace\"",
         "s.Stdout().Required()",
@@ -1600,4 +1602,62 @@ fn go_clients_spell_unstructured_and_multimodal_content(env: &GoEnv) {
     ] {
         assert!(code.contains(expected), "missing {expected} in:\n{code}");
     }
+}
+
+/// A parameter named like a local the generated method body declares keeps
+/// the method compiling.
+#[test]
+fn go_external_parameters_avoid_the_generated_locals(env: &GoEnv) {
+    let agent_type = agent(
+        "Cleaner",
+        "rust",
+        vec![],
+        vec![method(
+            "clear",
+            vec![field("err", SchemaType::string())],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let generated = GeneratedGo::external(env, agent_type);
+    generated.assert_vets_natively(env);
+}
+
+/// A variant case type and a record share Go's package namespace: the case
+/// named `EventCreated` steps aside for the record of that name, and the
+/// declarations, codecs and registration all use the name it gets.
+#[test]
+fn go_case_types_avoid_other_package_names(env: &GoEnv) {
+    let colliding = agent(
+        "Journal",
+        "rust",
+        vec![],
+        vec![method(
+            "record",
+            vec![
+                field("event", ref_to("Event")),
+                field("created", ref_to("EventCreated")),
+            ],
+            Some(ref_to("Event")),
+        )],
+        vec![
+            def(
+                "Event",
+                SchemaType::variant(vec![variant_case("created", None)]),
+            ),
+            def(
+                "EventCreated",
+                SchemaType::record(vec![named_field("at", SchemaType::string())]),
+            ),
+        ],
+        AgentMode::Durable,
+    );
+    let guest = GeneratedGo::guest(env, colliding.clone());
+    guest.assert_vets_for_wasip1(env);
+    let external = GeneratedGo::external(env, colliding);
+    external.assert_vets_natively(env);
+    let types = external.read("types.go");
+    assert!(types.contains("type EventCreated struct {"), "{types}");
+    assert!(types.contains("type EventCreated2 struct{}"), "{types}");
 }

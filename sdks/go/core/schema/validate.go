@@ -413,9 +413,22 @@ func checkFloat(rs *NumericRestrictions, f float64, path string) error {
 	if rs == nil {
 		return nil
 	}
-	if math.IsNaN(f) || math.IsInf(f, 0) {
+	// Bounds are finite, so an infinity is beyond the bound on its own side
+	// only, and NaN compares with no bound, as on the host.
+	switch {
+	case math.IsNaN(f):
 		if rs.Min != nil || rs.Max != nil {
 			return violation(path, "%v is outside every bound", f)
+		}
+		return nil
+	case math.IsInf(f, 1):
+		if rs.Max != nil {
+			return violation(path, "above maximum %s", describeBound(*rs.Max))
+		}
+		return nil
+	case math.IsInf(f, -1):
+		if rs.Min != nil {
+			return violation(path, "below minimum %s", describeBound(*rs.Min))
 		}
 		return nil
 	}

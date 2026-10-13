@@ -30,7 +30,7 @@ use super::go::{
 };
 use super::go_writer::GoWriter;
 use super::restriction;
-use super::{GOLEM_PKG, GoBridgeGenerator, TOOL_PKG, case_idents};
+use super::{GOLEM_PKG, GoBridgeGenerator, TOOL_PKG};
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{command_path, idx_to_usize, synthetic_agent_type};
 use crate::fs;
@@ -281,10 +281,8 @@ impl GoToolBridgeGenerator {
                 ident: ident.clone(),
                 typ: "io.Reader".to_string(),
                 tag: None,
-                binding: format!(
-                    "Stdin(&{{}}.{ident}){}",
-                    if stdin.required { "" } else { ".Optional()" }
-                ),
+                spec_method: "Stdin",
+                settings: if stdin.required { "" } else { ".Optional()" }.to_string(),
             });
         }
 
@@ -408,18 +406,19 @@ impl GoToolBridgeGenerator {
         for ((surface, field), ident) in surfaces.iter().zip(&canonical).zip(idents) {
             let typ = self.inner.render(&field.type_, writer)?;
             let (method, default) = self.binding_of(command_index, *surface, &typ)?;
-            let mut binding = format!("{method}(&{{}}.{ident})");
+            let mut settings = String::new();
             if go_kebab(&ident) != field.name {
-                binding.push_str(&format!(".Name({})", go_string(&field.name)));
+                settings.push_str(&format!(".Name({})", go_string(&field.name)));
             }
             if let Some(default) = default {
-                binding.push_str(&format!(".Default({default})"));
+                settings.push_str(&format!(".Default({default})"));
             }
             out.push(Field {
                 ident,
                 typ,
                 tag: self.inner.restriction_tag(&field.type_)?,
-                binding,
+                spec_method: method,
+                settings,
             });
         }
         Ok(out)
@@ -528,10 +527,8 @@ impl GoToolBridgeGenerator {
             SchemaValue::String(s) => go_string(s),
             SchemaValue::Enum { case } => {
                 let name = self.inner.named(typ)?;
-                let SchemaType::Enum { cases, .. } = self.inner.resolve(typ) else {
-                    return None;
-                };
-                case_idents(&name, cases.iter().map(String::as_str))
+                self.inner
+                    .case_idents(&name)
                     .into_iter()
                     .nth(*case as usize)?
             }
@@ -700,18 +697,22 @@ impl ToolNames {
     }
 }
 
-/// One generated struct field and the spec call that binds it; `{}` in the
-/// binding stands for the struct variable.
+/// One generated struct field and the spec call that binds it: the spec
+/// method, applied to the field of the struct variable, then its settings.
 struct Field {
     ident: String,
     typ: String,
     tag: Option<String>,
-    binding: String,
+    spec_method: &'static str,
+    settings: String,
 }
 
 impl Field {
     fn binding(&self, var: &str) -> String {
-        self.binding.replace("{}", var)
+        format!(
+            "{}(&{var}.{}){}",
+            self.spec_method, self.ident, self.settings
+        )
     }
 }
 

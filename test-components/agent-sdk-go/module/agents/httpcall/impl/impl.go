@@ -5,6 +5,7 @@
 package impl
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,18 @@ func post(id int) string {
 	resp := golem.Must(http.DefaultClient.Do(req))
 	defer resp.Body.Close()
 	return string(golem.Must(io.ReadAll(resp.Body)))
+}
+
+// failingReader returns its data, then an error instead of io.EOF.
+type failingReader struct{ data []byte }
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, errors.New("the body source failed")
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
 }
 
 var agent = httpcall.Agent.Implement(func(httpcall.Id) *state { return &state{} })
@@ -109,6 +122,31 @@ func init() {
 			return "rolled-back"
 		}
 		return res.Ok()
+	})
+	agent.Handle(httpcall.ReadTruncated, func(_ *golem.Context[state], _ golem.Unit) string {
+		resp, err := http.Get("http://localhost:" + os.Getenv("PORT") + "/truncated")
+		if err != nil {
+			return "request error: " + err.Error()
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "body error: " + err.Error()
+		}
+		return "body: " + string(body)
+	})
+	agent.Handle(httpcall.PostFailingBody, func(_ *golem.Context[state], _ golem.Unit) string {
+		url := "http://localhost:" + os.Getenv("PORT") + "/upload"
+		resp, err := http.Post(url, "text/plain", &failingReader{data: []byte("partial")})
+		if err != nil {
+			return "request error: " + err.Error()
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "body error: " + err.Error()
+		}
+		return "response: " + string(body)
 	})
 	agent.Handle(httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string

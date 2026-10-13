@@ -785,3 +785,102 @@ func TestANestedInputStreamFlowsOnItsOwnChannel(t *testing.T) {
 		t.Fatalf("the nested stream carried %v", nested)
 	}
 }
+
+const nestedU32StreamGraph = `{"root":{"kind":"stream","value":{"inner":{"kind":"stream","value":{"inner":{"kind":"u32","value":{}}}}}}}`
+
+// An outer item that binds an inner stream and is dropped unread by a
+// reconnect binds that stream again when the server replays it.
+func TestAReplayedUnreadItemBindsItsInnerStreamAgain(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(3, "inner")}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			if cursors, _ := resume.m["outputCursors"].([]any); len(cursors) != 0 {
+				t.Errorf("resumed after a delivered item: %v", resume.m)
+			}
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "ok"})
+			outputItem(c, 6, 0, "i0", 7)
+			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-resumed
+	inner, ok, err := out.Next(ctx)
+	if err != nil || !ok {
+		t.Fatalf("outer item %v %v", ok, err)
+	}
+	values, err := inner.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(values, []uint32{7}) {
+		t.Fatalf("inner stream %v, %v", values, err)
+	}
+	if _, ok, err := out.Next(ctx); ok || err != nil {
+		t.Fatalf("the outer stream did not end: %v %v", ok, err)
+	}
+}
+
+// Closing a stream wakes a reader that waits on it with no deadline.
+func TestClosingAStreamWakesItsWaitingReader(t *testing.T) {
+	// The server holds the stream end back, so only Close can wake the reader.
+	checked := make(chan struct{})
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		c.expect("streamCancel")
+		<-checked
+		outputEnd(c, 2, 0, "", map[string]any{"kind": "cancelled", "reason": "consumer-drop"})
+		finished(c)
+		c.waitClose()
+	})
+	out, err := CallStreaming(ctxT(t), server.agent(t), "produce", schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type next struct {
+		ok  bool
+		err error
+	}
+	done := make(chan next, 1)
+	go func() {
+		_, ok, err := out.Next(context.Background())
+		done <- next{ok, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if r.ok || r.err != nil {
+			t.Fatalf("Next after Close = %v, %v", r.ok, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("Close did not wake the waiting reader")
+	}
+	close(checked)
+}

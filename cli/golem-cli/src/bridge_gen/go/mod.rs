@@ -72,6 +72,7 @@ use golem_common::schema::agent::contains_stream_in_graph;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{DiscriminatorRule, SchemaType};
 use golem_common::schema::{AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema};
+use std::collections::HashMap;
 
 /// Import path of the guest SDK.
 pub const GOLEM_PKG: &str = GO_SDK_MODULE;
@@ -107,6 +108,9 @@ pub struct GoBridgeGenerator {
     /// The client directory when it is not derived from the agent type: a tool
     /// client is named after the tool.
     client_dir: Option<String>,
+    /// Per enum, variant or union type name: its case identifiers, allocated
+    /// once for the package so they clash with no other package-level name.
+    case_names: HashMap<String, Vec<String>>,
 }
 
 /// The package-level names the generator emits for the agent itself. They
@@ -259,8 +263,10 @@ impl GoBridgeGenerator {
             content_markers,
             modality_names: Vec::new(),
             client_dir: None,
+            case_names: HashMap::new(),
         };
         generator.modality_names = generator.name_modalities();
+        generator.case_names = generator.allocate_case_names(&[]);
         Ok(generator)
     }
 
@@ -283,6 +289,7 @@ impl GoBridgeGenerator {
                 .chain(quantity_units.names())
                 .collect::<Vec<_>>(),
         );
+        let tool_names = reserved.clone();
         let type_naming = TypeNaming::new_with_reserved_names(
             &agent_type,
             false,
@@ -292,7 +299,7 @@ impl GoBridgeGenerator {
                 .chain(content_markers.names())
                 .map(GoTypeName::from),
         )?;
-        Ok(Self {
+        let mut generator = Self {
             target_path: target_path.to_path_buf(),
             agent_type,
             mode: GoBridgeMode::GuestWasmRpc,
@@ -302,7 +309,10 @@ impl GoBridgeGenerator {
             content_markers,
             modality_names: Vec::new(),
             client_dir: Some(client_dir),
-        })
+            case_names: HashMap::new(),
+        };
+        generator.case_names = generator.allocate_case_names(&tool_names);
+        Ok(generator)
     }
 
     /// The directory a generated client lives in, which also names its module.
@@ -415,6 +425,54 @@ impl GoBridgeGenerator {
 
     /// Every type the package declares: the shared naming's, then the
     /// multimodal item variants named here.
+    /// The case identifiers of every enum, variant and union declared in the
+    /// package, `<Type><Case>`, each kept clear of the type names, the names
+    /// the generator emits for the agent, `extra`, and the cases allocated
+    /// before it.
+    fn allocate_case_names(&self, extra: &[String]) -> HashMap<String, Vec<String>> {
+        let named = self.named_types();
+        let mut taken: Vec<String> = named
+            .iter()
+            .map(|(_, name)| name.clone())
+            .chain(self.names.reserved())
+            .chain(self.quantity_units.names())
+            .chain(self.content_markers.names())
+            .chain(extra.iter().cloned())
+            .collect();
+        let mut out = HashMap::new();
+        for (typ, name) in named {
+            if self.spelled_by_sdk(typ) {
+                continue;
+            }
+            let cases: Vec<&str> = match self.resolve(typ) {
+                SchemaType::Enum { cases, .. } => cases.iter().map(String::as_str).collect(),
+                SchemaType::Variant { cases, .. } => {
+                    cases.iter().map(|c| c.name.as_str()).collect()
+                }
+                SchemaType::Union { spec, .. } => {
+                    spec.branches.iter().map(|b| b.tag.as_str()).collect()
+                }
+                _ => continue,
+            };
+            let reserved = taken.iter().map(String::as_str).collect::<Vec<_>>();
+            let idents = unique_idents_with_reserved(
+                cases
+                    .iter()
+                    .map(|case| format!("{name}{}", to_exported_ident(case)))
+                    .collect(),
+                &reserved,
+            );
+            taken.extend(idents.iter().cloned());
+            out.insert(name, idents);
+        }
+        out
+    }
+
+    /// The case identifiers of the enum, variant or union declared as `name`.
+    pub(crate) fn case_idents(&self, name: &str) -> Vec<String> {
+        self.case_names.get(name).cloned().unwrap_or_default()
+    }
+
     fn named_types(&self) -> Vec<(&SchemaType, String)> {
         self.type_naming
             .types()
@@ -509,7 +567,8 @@ impl GoBridgeGenerator {
                 continue;
             }
             let body = self.resolve(typ);
-            decl::write(&name, body, &render, &tag, &mut writer)?;
+            let cases = self.case_idents(&name);
+            decl::write(&name, body, &cases, &render, &tag, &mut writer)?;
         }
         self.quantity_units.write(&mut writer);
         self.content_markers.write(&mut writer);
@@ -548,7 +607,7 @@ impl GoBridgeGenerator {
                 }
                 SchemaType::Variant { cases, .. } => {
                     writer.import(GOLEM_PKG);
-                    let idents = case_idents(name, cases.iter().map(|c| c.name.as_str()));
+                    let idents = self.case_idents(name);
                     writer.line(format!("var _ = golem.DefineVariant[{name}]("));
                     writer.indent();
                     for (case, ident) in cases.iter().zip(&idents) {
@@ -566,7 +625,7 @@ impl GoBridgeGenerator {
                 }
                 SchemaType::Union { spec, .. } => {
                     writer.import(GOLEM_PKG);
-                    let idents = case_idents(name, spec.branches.iter().map(|b| b.tag.as_str()));
+                    let idents = self.case_idents(name);
                     writer.line(format!("var _ = golem.DefineUnion[{name}]("));
                     writer.indent();
                     for (branch, ident) in spec.branches.iter().zip(&idents) {
@@ -1086,19 +1145,6 @@ fn input_uses_streams(graph: &SchemaGraph, input: &InputSchema) -> bool {
 pub(super) fn method_uses_streams(graph: &SchemaGraph, method: &AgentMethodSchema) -> bool {
     input_uses_streams(graph, &method.input_schema)
         || matches!(&method.output_schema, OutputSchema::Single(t) if contains_stream_in_graph(graph, t))
-}
-
-/// The per-case type names a variant or union declaration emits, which the
-/// registration has to name identically.
-pub(crate) fn case_idents<'a>(
-    type_name: &str,
-    cases: impl Iterator<Item = &'a str>,
-) -> Vec<String> {
-    unique_idents(
-        cases
-            .map(|case| format!("{type_name}{}", to_exported_ident(case)))
-            .collect(),
-    )
 }
 
 /// The unexported variable a method's descriptor is bound to.

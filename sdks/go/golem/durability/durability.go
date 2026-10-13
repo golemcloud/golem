@@ -162,9 +162,10 @@ type Spec struct {
 //   - Returning a value carries the outcome. If Out is a [golem.Result], an err Result
 //     is a RECORDED durable failure — it is persisted and replayed like any other
 //     value, so the operation is not retried.
-//   - Panicking records nothing: the unfinished invocation is dropped and the
-//     panic traps the component, which fails the agent. Inside [Atomically] the
-//     region is retried, and the retry runs body again.
+//   - Panicking records nothing: the panic traps the component at once, even
+//     where a caller above would recover it (such as a tool handler), which
+//     fails the agent. Inside [Atomically] the region is retried, and the retry
+//     runs body again.
 //
 // There is no async variant: a blocking body already suspends the fiber at its
 // await points, so one function covers both cases.
@@ -183,20 +184,16 @@ func Run[In any, Out any](spec Spec, request In, body func() Out) Out {
 		return decodeDurableValue[Out](name, invocation.Replayed().Response)
 	}
 
-	// Live: run the body, persist its result, and finish. If body panics the
-	// invocation is left unfinished (dropped below), so nothing is recorded.
+	// Live: run the body, persist its result, and finish. A panic traps the
+	// component at once, even where a caller above would recover it, so no
+	// code runs on past an unfinished durable operation.
 	live := invocation.Live()
-	committed := false
-	defer func() {
-		if !committed {
-			live.Drop()
-		}
-	}()
-
-	out := body()
-	resp := encodeDurableValue(reflect.ValueOf(&out).Elem())
-	witDurability.LiveCustomDurableInvocationFinish(live, resp, spec.ForcedCommit)
-	committed = true
+	var out Out
+	link.TrapOnPanic("durable operation "+name, func() {
+		out = body()
+		resp := encodeDurableValue(reflect.ValueOf(&out).Elem())
+		witDurability.LiveCustomDurableInvocationFinish(live, resp, spec.ForcedCommit)
+	})
 	return out
 }
 

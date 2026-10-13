@@ -14,7 +14,10 @@
 
 package schema
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // str is a pointer helper, since optional fields are pointers in this model.
 
@@ -130,5 +133,32 @@ func TestTypeNameStopsAtANamedDefinition(t *testing.T) {
 		typ(RefType{Id: "demo.Node"}))
 	if got := NewRef(g).TypeName(); got != "demo.Node" {
 		t.Errorf("TypeName = %q, want the definition's id", got)
+	}
+}
+
+// An infinity is checked only against the bound on its own side, and NaN
+// against any bound, as the host does.
+func TestFloatInfinitiesMeetOnlyTheirOwnBound(t *testing.T) {
+	inf, ninf, nan := math.Inf(1), math.Inf(-1), math.NaN()
+	onlyMin := croot(F64Type{Restrictions: &NumericRestrictions{Min: bound(floatBound(0))}})
+	onlyMax := croot(F64Type{Restrictions: &NumericRestrictions{Max: bound(floatBound(0))}})
+	cases := []struct {
+		name  string
+		ref   Ref
+		value float64
+		valid bool
+	}{
+		{"+Inf above a minimum", onlyMin, inf, true},
+		{"-Inf below a minimum", onlyMin, ninf, false},
+		{"-Inf below a maximum", onlyMax, ninf, true},
+		{"+Inf above a maximum", onlyMax, inf, false},
+		{"NaN with a minimum", onlyMin, nan, false},
+		{"NaN with a maximum", onlyMax, nan, false},
+	}
+	for _, c := range cases {
+		err := c.ref.Validate(F64Value{Value: c.value})
+		if (err == nil) != c.valid {
+			t.Errorf("%s: valid=%v, got %v", c.name, c.valid, err)
+		}
 	}
 }

@@ -30,9 +30,7 @@ use crate::bridge_gen::go::go::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
-use crate::bridge_gen::go::{
-    AgentNames, GoBridgeGenerator, case_idents, content, method_uses_streams,
-};
+use crate::bridge_gen::go::{AgentNames, GoBridgeGenerator, content, method_uses_streams};
 use crate::bridge_gen::type_naming::user_supplied_fields;
 use crate::sdk_overrides::{GO_BRIDGE_MODULE, GO_CORE_MODULE, sdk_overrides};
 use crate::versions;
@@ -386,7 +384,7 @@ impl<'g> Codecs<'g> {
                 Ok(())
             }
             SchemaType::Variant { cases, .. } => {
-                let idents = case_idents(name, cases.iter().map(|c| c.name.as_str()));
+                let idents = self.generator.case_idents(name);
                 let quoted = go_string(name);
 
                 // Encode: a type switch over the sealed cases.
@@ -460,7 +458,7 @@ impl<'g> Codecs<'g> {
                 Ok(())
             }
             SchemaType::Union { spec, .. } => {
-                let idents = case_idents(name, spec.branches.iter().map(|b| b.tag.as_str()));
+                let idents = self.generator.case_idents(name);
                 let quoted = go_string(name);
 
                 let mut encode = Vec::with_capacity(idents.len());
@@ -842,7 +840,9 @@ impl GoBridgeGenerator {
         // packages the body refers to.
         let param_idents = unique_idents_with_reserved(
             fields.iter().map(|f| to_param_ident(&f.name)).collect(),
-            &["c", "ctx", "when", "bridge", "schema", "context", "time"],
+            &[
+                "c", "ctx", "err", "when", "bridge", "schema", "context", "time",
+            ],
         );
         let mut signature = vec!["ctx context.Context".to_string()];
         signature.extend(

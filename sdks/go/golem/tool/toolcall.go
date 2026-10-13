@@ -315,6 +315,11 @@ func (ce *commandEntry) prepare(target string, fill func(reflect.Value)) (types.
 	}
 	args := reflect.New(ce.argsType).Elem()
 	args.Set(l.defaults)
+	for _, a := range l.fields {
+		if a.b.def.IsValid() {
+			args.FieldByIndex(a.path).Set(cloneValue(e.d, a.b.def))
+		}
+	}
 	fill(args)
 
 	var stdin io.Reader
@@ -545,4 +550,17 @@ func (i *Invocation[O]) Collect() Collected[O] {
 	<-stdout
 	<-stderr
 	return c
+}
+
+// cloneValue deep-copies a schema-valued v through its codec, so a call that
+// edits a map or slice default does not change the declared default.
+func cloneValue(d *definitions, v reflect.Value) reflect.Value {
+	c := d.Compile(v.Type())
+	tree := engine.EncodeWith(c, v)
+	out := reflect.New(v.Type()).Elem()
+	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	if err := c.Decode(&dec, out, tree.Root); err != nil {
+		panic(fmt.Errorf("golem: copying the default %s: %w", v.Type(), err))
+	}
+	return out
 }
