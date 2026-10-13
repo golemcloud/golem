@@ -14,9 +14,9 @@
 
 //! What may be done inside an atomic region. A durable call started in the region
 //! must settle before the region closes — the executor refuses to end a region
-//! while a non-re-executable durable call it started is still in flight. Today a
-//! cross-agent RPC settles and an outbound HTTP call does not, so these two tests
-//! pin down exactly where the boundary is.
+//! while a non-re-executable durable call it started is still in flight. These
+//! tests check that a cross-agent RPC and an outbound HTTP call both settle, also
+//! when the region is the one a transaction opens around its steps.
 
 use crate::Tracing;
 use axum::Router;
@@ -113,8 +113,7 @@ async fn go_atomic_region_with_outgoing_http(
 }
 
 /// A cross-agent RPC inside an atomic region settles, so the region closes
-/// normally. This is the pattern the `golem-atomic-block-go` skill documents, and
-/// it shows that only outbound HTTP keeps a Go atomic region from closing.
+/// normally. This is the pattern the `golem-atomic-block-go` skill documents.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -210,5 +209,68 @@ async fn go_atomic_region_with_clock_read_and_outgoing_http(
     server.abort();
 
     assert_eq!(body, "timed");
+    Ok(())
+}
+
+/// A fallible transaction whose two steps each make an outbound HTTP call. The
+/// transaction runs its steps inside one atomic region, which closes once both
+/// HTTP calls settle.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_transaction_with_outgoing_http(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    #[derive(Deserialize)]
+    struct QueryParams {
+        payload: String,
+    }
+
+    let server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/callback",
+                get(move |query: Query<QueryParams>| async move { query.payload.clone() }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpAgent", "go-transaction-http-1");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let body = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "transaction-callback",
+            data_value!("step"),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    server.abort();
+
+    assert_eq!(body, "step-1,step-2");
     Ok(())
 }

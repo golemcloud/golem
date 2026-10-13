@@ -25,8 +25,8 @@ trap the component — there is no in-band error return.
 
 ## Atomic Regions
 
-Group **external, observable side effects** (RPC to other agents, and other
-durable host calls) so that on a crash the whole group replays together. If the agent
+Group **external, observable side effects** (HTTP calls, RPC to other agents,
+and other durable host calls) so that on a crash the whole group replays together. If the agent
 fails partway through, recovery re-executes the **entire** region from the start —
 so effects performed before the crash happen again (all-or-nothing).
 
@@ -68,12 +68,6 @@ durability.Atomically(func() {
 > have **two or more external side effects** that must not be left half-applied
 > across a crash. For compensating multi-step workflows, prefer the saga helpers in
 > `golem-add-transactions-go`, which build on this primitive.
-
-> **Outgoing HTTP inside a region.** Cross-agent RPC works inside `Atomically`, as
-> above. An outgoing HTTP request (`net/http`) inside a region keeps it from
-> closing: the region fails with *"non-re-executable durable calls initiated in it
-> are still in flight"*. Make HTTP calls outside the region, or through RPC to an
-> agent that owns the call.
 
 ## Custom Durability for Libraries
 

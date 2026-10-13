@@ -19,6 +19,7 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem/durability"
 	"github.com/golemcloud/golem/sdks/go/golem/invocation"
 	"github.com/golemcloud/golem/sdks/go/golem/retry"
+	"github.com/golemcloud/golem/sdks/go/golem/transaction"
 )
 
 type state struct{}
@@ -83,6 +84,31 @@ func init() {
 		_, after := invocation.CurrentContext().Attribute(in.Key, false)
 		return fmt.Sprintf("trace=%t value=%s parent=%t started=%t after=%t",
 			inside.TraceID() != "", value, hasParent, started, after)
+	})
+	agent.Handle(httpcall.TransactionCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+		call := transaction.NewOperation(
+			func(payload string) golem.Result[string, string] {
+				return golem.Ok[string, string](fetch(payload))
+			},
+			func(string, string) golem.Result[golem.Unit, string] {
+				return golem.Ok[golem.Unit, string](golem.Unit{})
+			},
+		)
+		res := transaction.Fallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {
+			first := tx.Step(call, in.Payload+"-1")
+			if first.IsErr() {
+				return first
+			}
+			second := tx.Step(call, in.Payload+"-2")
+			if second.IsErr() {
+				return second
+			}
+			return golem.Ok[string, string](first.Ok() + "," + second.Ok())
+		})
+		if res.IsErr() {
+			return "rolled-back"
+		}
+		return res.Ok()
 	})
 	agent.Handle(httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string

@@ -8,13 +8,6 @@ compensated in **reverse order**. The saga helpers build on the durability
 primitives (an atomic region + the oplog) — no persistence beyond what the runtime
 already provides.
 
-> **Steps that call HTTP.** A transaction runs its steps inside an atomic region,
-> and an outgoing HTTP request (`net/http`) inside one keeps the region from
-> closing — it fails with *"non-re-executable durable calls initiated in it are
-> still in flight"*. Cross-agent RPC is unaffected, so a step does its external
-> work through RPC to an agent that owns the HTTP call. A panic in a step traps the
-> component at once.
-
 The Go API lives in the `transaction` package (`github.com/golemcloud/golem/sdks/go/golem/transaction`):
 
 - `transaction.Operation[In, Out, E]` — a compensable step, built with `transaction.NewOperation`.
@@ -25,8 +18,8 @@ The Go API lives in the `transaction` package (`github.com/golemcloud/golem/sdks
   transaction until it succeeds.
 
 Expected step failures are modeled as the **error arm** of a `golem.Result` (type
-`E`, often `string`). A `panic` is an infra failure: it leaves the atomic region
-open so the runtime replays it.
+`E`, often `string`). A `panic` is an infra failure: it traps the component at once
+and leaves the atomic region open, so the runtime replays it.
 
 ## Steps
 
