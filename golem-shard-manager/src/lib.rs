@@ -60,10 +60,8 @@ pub use sharding::{
     ShardAssignmentEntry, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
     ShardLeaseState,
 };
-use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
@@ -589,7 +587,7 @@ pub async fn run(
         .build_v1()?;
 
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
-        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), shard_manager_config.http_port),
+        shard_manager_config.http_addr(),
         registry,
         "shard manager is running",
         join_set,
@@ -745,11 +743,8 @@ pub async fn run(
 
         let service = ShardManagerServiceServer::new(shard_manager);
 
-        let listener = TcpListener::bind(SocketAddrV4::new(
-            Ipv4Addr::new(0, 0, 0, 0),
-            shard_manager_config.grpc.port,
-        ))
-        .await?;
+        let listener =
+            golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
 
         let grpc_port = listener.local_addr()?.port();
 

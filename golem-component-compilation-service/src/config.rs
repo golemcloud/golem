@@ -23,7 +23,7 @@ use golem_service_base::service::compiled_component::CompiledComponentServiceCon
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fmt::Write;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
 
@@ -45,8 +45,11 @@ pub struct ServerConfig {
     // Engine
     pub engine: EngineConfig,
 
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
+
     // Metrics and healthcheck
-    pub http_host: String,
     pub http_port: u16,
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
@@ -88,7 +91,7 @@ impl SafeDisplay for ServerConfig {
         let _ = writeln!(&mut result, "engine:");
         let _ = writeln!(&mut result, "{}", self.engine.to_safe_string_indented());
 
-        let _ = writeln!(&mut result, "HTTP host: {}", self.http_host);
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
         let _ = writeln!(
             &mut result,
@@ -100,9 +103,12 @@ impl SafeDisplay for ServerConfig {
 }
 
 impl ServerConfig {
-    pub fn http_addr(&self) -> Option<SocketAddrV4> {
-        let address = self.http_host.parse::<Ipv4Addr>().ok()?;
-        Some(SocketAddrV4::new(address, self.http_port))
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
     }
 }
 
@@ -116,7 +122,7 @@ impl Default for ServerConfig {
             compile_worker: Default::default(),
             grpc: GrpcApiConfig::default(),
             engine: EngineConfig::default(),
-            http_host: "0.0.0.0".to_string(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8084,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
         }

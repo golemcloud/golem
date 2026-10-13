@@ -27,7 +27,7 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -37,6 +37,9 @@ pub struct WorkerServiceConfig {
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
     pub blob_storage: BlobStorageConfig,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub port: u16,
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
@@ -63,6 +66,10 @@ pub struct WorkerServiceConfig {
 }
 
 impl WorkerServiceConfig {
+    pub fn socket_addr(&self, port: u16) -> SocketAddr {
+        SocketAddr::new(self.bind_address, port)
+    }
+
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
     }
@@ -86,6 +93,7 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.gateway_session_storage.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.port);
         let _ = writeln!(
             &mut result,
@@ -194,6 +202,7 @@ impl Default for WorkerServiceConfig {
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
             blob_storage: BlobStorageConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 9005,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
             custom_request_port: 9006,

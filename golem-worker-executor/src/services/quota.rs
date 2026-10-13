@@ -20,7 +20,9 @@ use golem_common::model::quota::{
     EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit, ResourceName,
 };
 use golem_common::model::quota::{Reservation, ReserveResult};
-use golem_service_base::clients::shard_manager::{BatchRenewalEntry, QuotaError, ShardManager};
+use golem_service_base::clients::shard_manager::{
+    BatchRenewalEntry, ExecutorEndpoint, QuotaError, ShardManager,
+};
 use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
 use itertools::Itertools;
 use std::pin::Pin;
@@ -181,7 +183,7 @@ impl LeaseInterest {
 
 #[async_trait]
 pub trait QuotaService: Send + Sync {
-    async fn initialize(&self, _grpc_port: u16) {}
+    async fn initialize(&self, _endpoint: ExecutorEndpoint) {}
 
     /// Declare interest in a resource. If a lease already exists it is
     /// reused; otherwise one is acquired from the shard manager.
@@ -227,7 +229,10 @@ pub struct LazyQuotaService {
     make_inner: Mutex<
         Option<
             Box<
-                dyn FnOnce(u16) -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>>
+                dyn FnOnce(
+                        ExecutorEndpoint,
+                    )
+                        -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>>
                     + Send
                     + Sync,
             >,
@@ -238,13 +243,13 @@ pub struct LazyQuotaService {
 impl LazyQuotaService {
     pub fn new<F, Fut>(f: F) -> Self
     where
-        F: FnOnce(u16) -> Fut + Send + Sync + 'static,
+        F: FnOnce(ExecutorEndpoint) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Arc<dyn QuotaService>> + Send,
     {
         Self {
             inner: RwLock::new(None),
-            make_inner: Mutex::new(Some(Box::new(|port| {
-                Box::pin(async move { f(port).await })
+            make_inner: Mutex::new(Some(Box::new(|endpoint| {
+                Box::pin(async move { f(endpoint).await })
             }))),
         }
     }
@@ -252,14 +257,14 @@ impl LazyQuotaService {
 
 #[async_trait]
 impl QuotaService for LazyQuotaService {
-    async fn initialize(&self, port: u16) {
+    async fn initialize(&self, endpoint: ExecutorEndpoint) {
         let make_inner = self
             .make_inner
             .lock()
             .await
             .take()
             .expect("LazyQuotaService already initialized");
-        let inner = make_inner(port).await;
+        let inner = make_inner(endpoint).await;
         let _ = self.inner.write().await.insert(inner);
     }
 
@@ -424,7 +429,7 @@ struct UnlimitedLease {
 
 pub struct GrpcQuotaService {
     client: Arc<dyn ShardManager>,
-    port: u16,
+    endpoint: ExecutorEndpoint,
     renewal_threshold: Duration,
     inline_wait_threshold: Duration,
     /// Per-resource state, each protected by its own Mutex so that
@@ -436,13 +441,13 @@ pub struct GrpcQuotaService {
 impl GrpcQuotaService {
     pub fn new(
         client: Arc<dyn ShardManager>,
-        port: u16,
+        endpoint: ExecutorEndpoint,
         config: QuotaServiceConfig,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self::new_inner(
             client,
-            port,
+            endpoint,
             config.renewal_threshold,
             config.inline_wait_threshold,
         );
@@ -452,13 +457,13 @@ impl GrpcQuotaService {
 
     fn new_inner(
         client: Arc<dyn ShardManager>,
-        port: u16,
+        endpoint: ExecutorEndpoint,
         renewal_threshold: Duration,
         inline_wait_threshold: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             client,
-            port,
+            endpoint,
             renewal_threshold,
             inline_wait_threshold,
             state: scc::HashMap::new(),
@@ -653,7 +658,7 @@ impl GrpcQuotaService {
                 // Re-acquire immediately so waiters can be served sooner.
                 match self
                     .client
-                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.port)
+                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.endpoint)
                     .await
                 {
                     Ok(new_lease) => {
@@ -701,7 +706,7 @@ impl GrpcQuotaService {
         };
         match self
             .client
-            .batch_renew_quota_leases(self.port, vec![entry])
+            .batch_renew_quota_leases(self.endpoint, vec![entry])
             .await
         {
             Ok(mut results) => {
@@ -848,7 +853,10 @@ impl GrpcQuotaService {
                     }
                 }
 
-                let rpc_result = self.client.batch_renew_quota_leases(self.port, batch).await;
+                let rpc_result = self
+                    .client
+                    .batch_renew_quota_leases(self.endpoint, batch)
+                    .await;
 
                 match rpc_result {
                     Ok(results) => {
@@ -912,7 +920,7 @@ impl GrpcQuotaService {
                     let expires_at = u.expires_at;
                     match self
                         .client
-                        .acquire_quota_lease(*environment_id, resource_name.clone(), self.port)
+                        .acquire_quota_lease(*environment_id, resource_name.clone(), self.endpoint)
                         .await
                     {
                         Ok(new_lease) => {
@@ -945,7 +953,7 @@ impl GrpcQuotaService {
 
                 match self
                     .client
-                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.port)
+                    .acquire_quota_lease(*environment_id, resource_name.clone(), self.endpoint)
                     .await
                 {
                     Ok(new_lease) => {
@@ -988,7 +996,7 @@ impl GrpcQuotaService {
                 .client
                 .release_quota_lease(
                     lease.resource_definition_id,
-                    self.port,
+                    self.endpoint,
                     lease.epoch.0,
                     lease.remaining,
                 )
@@ -1354,6 +1362,8 @@ mod tests {
         renew_fn: StdMutex<Option<RenewFn>>,
         renewed: StdMutex<Vec<RenewCall>>,
         released: StdMutex<Vec<(ResourceDefinitionId, u64, u64)>>,
+        /// The RPC and the endpoint of every quota call, in call order.
+        endpoints: StdMutex<Vec<(&'static str, ExecutorEndpoint)>>,
     }
 
     impl MockShardManager {
@@ -1365,6 +1375,7 @@ mod tests {
                 renew_fn: StdMutex::new(None),
                 renewed: StdMutex::new(Vec::new()),
                 released: StdMutex::new(Vec::new()),
+                endpoints: StdMutex::new(Vec::new()),
             }
         }
 
@@ -1391,6 +1402,10 @@ mod tests {
         fn renewed(&self) -> Vec<RenewCall> {
             self.renewed.lock().unwrap().clone()
         }
+
+        fn endpoints(&self) -> Vec<(&'static str, ExecutorEndpoint)> {
+            self.endpoints.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
@@ -1401,7 +1416,7 @@ mod tests {
 
         async fn register(
             &self,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _pod_name: Option<String>,
             _executor_id: Uuid,
         ) -> Result<ShardRegistration, ShardManagerError> {
@@ -1428,8 +1443,9 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
             _resource_name: ResourceName,
-            _port: u16,
+            endpoint: ExecutorEndpoint,
         ) -> Result<QuotaLease, QuotaError> {
+            self.endpoints.lock().unwrap().push(("acquire", endpoint));
             self.acquire_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if let Some(gate) = &self.acquire_gate {
@@ -1445,11 +1461,12 @@ mod tests {
         async fn renew_quota_lease(
             &self,
             resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            endpoint: ExecutorEndpoint,
             epoch: u64,
             unused: u64,
             pending_reservations: Vec<PendingReservation>,
         ) -> Result<QuotaLease, QuotaError> {
+            self.endpoints.lock().unwrap().push(("renew", endpoint));
             self.renewed.lock().unwrap().push(RenewCall {
                 resource_definition_id,
                 epoch,
@@ -1463,7 +1480,7 @@ mod tests {
 
         async fn batch_renew_quota_leases(
             &self,
-            port: u16,
+            endpoint: ExecutorEndpoint,
             renewals: Vec<BatchRenewalEntry>,
         ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
             let mut results = Vec::with_capacity(renewals.len());
@@ -1471,7 +1488,7 @@ mod tests {
                 results.push(
                     self.renew_quota_lease(
                         entry.resource_definition_id,
-                        port,
+                        endpoint,
                         entry.epoch,
                         entry.unused,
                         entry.pending_reservations,
@@ -1485,10 +1502,11 @@ mod tests {
         async fn release_quota_lease(
             &self,
             resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            endpoint: ExecutorEndpoint,
             epoch: u64,
             unused: u64,
         ) -> Result<(), QuotaError> {
+            self.endpoints.lock().unwrap().push(("release", endpoint));
             self.released
                 .lock()
                 .unwrap()
@@ -1501,7 +1519,7 @@ mod tests {
     fn make_service(mock: MockShardManager) -> Arc<GrpcQuotaService> {
         GrpcQuotaService::new_inner(
             Arc::new(mock),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         )
@@ -1529,7 +1547,7 @@ mod tests {
         let mock = Arc::new(mock);
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1578,7 +1596,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1638,7 +1656,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1773,7 +1791,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_millis(60),
         );
@@ -1837,7 +1855,7 @@ mod tests {
                     .with_acquire(Ok(slow_rate_lease_with_total(rid, 1, 0, 10)))
                     .with_renew_fn(move |_, _, _| Ok(slow_rate_lease_with_total(rid, 2, 0, 10))),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1893,7 +1911,7 @@ mod tests {
 
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1940,7 +1958,7 @@ mod tests {
 
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -1993,7 +2011,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2046,7 +2064,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2233,7 +2251,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2302,7 +2320,7 @@ mod tests {
                         }
                     }),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2349,7 +2367,7 @@ mod tests {
                     .with_acquire(Ok(slow_rate_lease_with_total(rid, 1, 0, 5)))
                     .with_renew_fn(move |_, _, _| Ok(slow_rate_lease_with_total(rid, 2, 0, 5))),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2382,7 +2400,7 @@ mod tests {
                     .with_acquire(Ok(capacity_lease_with_total(rid, 1, 0, 5)))
                     .with_renew_fn(move |_, _, _| Ok(capacity_lease_with_total(rid, 2, 0, 5))),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2475,7 +2493,7 @@ mod tests {
         let mock = Arc::new(MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 100))));
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2496,6 +2514,51 @@ mod tests {
         assert_eq!(releases[0].2, 70); // unused
     }
 
+    /// Every quota call names the executor at the endpoint the service was initialized with, so
+    /// the shard manager resolves the same address as for the shard lease.
+    #[test]
+    async fn every_quota_call_carries_the_advertised_endpoint() {
+        let rid = test_resource_definition_id();
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease(rid, 1, 100)))
+                .with_renew_fn(move |_, _, _| Ok(bounded_lease(rid, 2, 200))),
+        );
+        let advertised = ExecutorEndpoint {
+            port: 9093,
+            advertised_ip: Some("fdaa:0:1:a7b::2".parse().unwrap()),
+        };
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            advertised,
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let mut interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+        // More than the acquired allocation, so the reservation renews the lease.
+        assert_matches!(
+            svc.try_reserve(&mut interest, 200).await,
+            ReserveResult::Ok(Reservation::Bounded { epoch, .. }) if epoch == LeaseEpoch(2)
+        );
+        drop(interest);
+        svc.renew_all().await;
+
+        let calls = mock.endpoints();
+        for rpc in ["acquire", "renew", "release"] {
+            assert!(
+                calls.iter().any(|(called, _)| *called == rpc),
+                "no {rpc} call in {calls:?}"
+            );
+        }
+        assert!(
+            calls.iter().all(|(_, endpoint)| *endpoint == advertised),
+            "{calls:?}"
+        );
+    }
+
     #[test]
     async fn live_lease_is_not_released() {
         let rid = test_resource_definition_id();
@@ -2506,7 +2569,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2563,7 +2626,7 @@ mod tests {
                         }
                     }),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2612,7 +2675,7 @@ mod tests {
         );
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );
@@ -2658,7 +2721,7 @@ mod tests {
                         Err(QuotaError::LeaseNotFound("gone".to_string()))
                     }),
             ),
-            9093,
+            ExecutorEndpoint::without_advertised_ip(9093),
             Duration::from_millis(200),
             Duration::from_secs(60),
         );

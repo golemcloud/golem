@@ -176,8 +176,9 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
   }
   let cursors : Array[Json] = []
   session.cursors.each((_, cursor) => cursors.push(Json::string(cursor)))
-  let attempt_id = fresh_id()
-  let frozen_resume = protocol_message("resumeAttach", [
+  let mut attempt_id = fresh_id()
+  let mut takeover = false
+  let mut frozen_resume = protocol_message("resumeAttach", [
     ("attemptId", Json::string(attempt_id)),
     ("operation", Json::string("resume")),
     ("outputCursors", Json::array(cursors)),
@@ -197,8 +198,28 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
           break
         }
         "invocationRejected" => {
-          if expect_bool(get_field(response, "retryable")) {
-            break
+          candidate.close()
+          if expect_string(get_field(response, "attemptId")) != attempt_id {
+            raise BridgeError(
+              "attempt-conflict: rejection attempt does not match",
+            )
+          }
+          let code = expect_string(get_field(response, "code"))
+          let retryable = expect_bool(get_field(response, "retryable"))
+          if (!takeover && code == "invalid-attachment-state") ||
+            (retryable && code != "invalid-attachment-state") {
+            takeover = takeover || code == "invalid-attachment-state"
+            attempt_id = fresh_id()
+            frozen_resume = protocol_message("resumeAttach", [
+              ("attemptId", Json::string(attempt_id)),
+              (
+                "operation",
+                Json::string(if takeover { "takeover" } else { "resume" }),
+              ),
+              ("outputCursors", Json::array(cursors)),
+              ("sessionToken", Json::string(token)),
+            ])
+            continue
           }
           raise BridgeError(expect_string(get_field(response, "message")))
         }
@@ -217,9 +238,6 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
     if accepted is Some(_) {
       break
     }
-  }
-  if accepted is None {
-    return resume_session(session)
   }
   let accepted = accepted.unwrap()
   let socket = socket.unwrap()

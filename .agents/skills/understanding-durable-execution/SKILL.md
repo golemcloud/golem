@@ -186,7 +186,7 @@ replay tolerance.
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Cut points | `worker/cut_point.rs` | Preserves atomic/transaction outcomes; ordinary calls recover from the exact retained prefix |
 | Durable streams | `durable_host/{durable_stream/mod.rs,durable_session/mod.rs,stream_session.rs,stream_bus.rs,stream_transport.rs,schema_value_stream.rs}` | Producer-oplog stream records, consumer session journal, exactly-once item delivery, protocol terminals |
-| Tool invocations | `durable_host/tool/{mod.rs,streams.rs,boundary.rs,operation/mod.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance.rs}` | Outer-surface authorization, pinned middleware plans, typed boundaries, owner-oplog entity bodies, shared replay state, operation settlement |
+| Tool invocations | `durable_host/tool/{mod.rs,streams.rs,boundary.rs,operation/mod.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance.rs}` | Per-admission authorization, inherited invocation scope, pinned middleware plans, typed boundaries, owner-oplog entity bodies, shared replay state, operation settlement |
 
 ## Worker lifecycle and reconstruction
 
@@ -1636,7 +1636,9 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
 - Entity and native-tool invocation spans open on the invocation `Start` and close on its
   `End`/`Cancelled` terminal. `set_entity_invocation_scope` restores the recorded invocation
   context before the body runs; keep this reconstruction boundary covered.
-- The ambient call authorizes once against the outer surface. Its root `Start` records the pinned
+- Every live admission, ambient or underlying, authorizes the command and arguments its layer
+  receives, after replay claims and boundary projection; entity Stores authorize with the owner's
+  wallet and the caller's inherited invocation scope. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.

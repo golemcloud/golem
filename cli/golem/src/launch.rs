@@ -76,11 +76,12 @@ pub struct LaunchArgs {
 }
 
 impl LaunchArgs {
+    /// The host the services started here use to reach each other. They bind `0.0.0.0`, which
+    /// accepts IPv4 only, so an IPv6 router address falls back to the IPv4 loopback.
     fn host_for_service_connect(&self) -> String {
-        match self.router_addr.as_str() {
-            "0.0.0.0" => "127.0.0.1".to_string(),
-            "::" => "::1".to_string(),
-            host => host.to_string(),
+        match self.router_addr.parse::<std::net::IpAddr>() {
+            Ok(ip) if ip.is_unspecified() || ip.is_ipv6() => "127.0.0.1".to_string(),
+            _ => self.router_addr.clone(),
         }
     }
 }
