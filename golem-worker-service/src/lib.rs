@@ -91,6 +91,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> anyhow::Result<RunDetails> {
         let registry_service = self.services.registry_service.clone();
+        let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
@@ -98,6 +99,7 @@ impl WorkerService {
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
+                component_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
@@ -135,6 +137,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let registry_service = self.services.registry_service.clone();
+        let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
@@ -142,6 +145,7 @@ impl WorkerService {
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
+                component_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
