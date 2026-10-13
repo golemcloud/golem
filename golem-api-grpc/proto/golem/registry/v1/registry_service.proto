@@ -87,6 +87,9 @@ message AuthenticateTokenSuccessResponse {
 
 message GetResourceLimitsRequest {
   golem.common.AccountId accountId = 1;
+  bool compute_metering_enabled = 2;
+  bool memory_metering_enabled = 3;
+  bool filesystem_metering_enabled = 4;
 }
 
 message GetResourceLimitsResponse {

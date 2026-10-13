@@ -34,7 +34,7 @@ impl UpdateTest for UpdateTestImpl {
     }
 
     // The agent environment variable `LOAD_SNAPSHOT` steers the load: `exit` exits the guest,
-    // and `read-clock` reads the wall clock, where a test can hold the load.
+    // and `read-clock` reads the monotonic clock, where a test can hold the load.
     async fn load_snapshot(
         bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
@@ -46,7 +46,7 @@ impl UpdateTest for UpdateTestImpl {
         match std::env::var("LOAD_SNAPSHOT").as_deref() {
             Ok("exit") => std::process::exit(1),
             Ok("read-clock") => {
-                let _ = std::time::SystemTime::now();
+                let _ = std::time::Instant::now();
             }
             _ => {}
         }

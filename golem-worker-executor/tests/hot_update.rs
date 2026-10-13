@@ -3893,7 +3893,7 @@ async fn manual_update_agent_with_load(
 }
 
 /// An interrupt during the snapshot load of a manual update leaves the update pending. The load is
-/// held at its wall-clock read while the interrupt arrives. The resume waits until the interrupted
+/// held at its monotonic-clock read while the interrupt arrives. The resume waits until the interrupted
 /// start has unloaded the agent: a resume while the agent is still loaded starts nothing. The next
 /// start loads the snapshot again, and only that load applies the update.
 #[test]
@@ -3920,7 +3920,9 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
         .await?;
 
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let mut first_load = executor.gate_next_wall_clock_now(&owned_agent_id).await?;
+    let mut first_load = executor
+        .gate_next_monotonic_clock_start(&owned_agent_id)
+        .await?;
     executor
         .manual_update_worker(&worker_id, target.revision, false)
         .await?;

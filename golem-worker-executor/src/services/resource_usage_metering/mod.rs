@@ -61,12 +61,39 @@ pub(crate) trait FilesystemUsageReader: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>;
 }
 
+#[cfg(feature = "test-utils")]
+type ScriptedObservationSignals = (
+    tokio_util::sync::CancellationToken,
+    tokio_util::sync::CancellationToken,
+);
+
 /// Scripted allocation observations for Worker tests, not native filesystem quota evidence.
 #[cfg(feature = "test-utils")]
 #[derive(Clone)]
 pub struct ScriptedFilesystemUsageForTest {
     value: Arc<Mutex<FilesystemUsage>>,
     observations: Arc<AtomicU64>,
+    next_observation: Arc<Mutex<Option<ScriptedObservationSignals>>>,
+}
+
+#[cfg(feature = "test-utils")]
+pub struct ScriptedFilesystemObservationBlockForTest {
+    started: tokio_util::sync::CancellationToken,
+    released: tokio_util::sync::CancellationToken,
+}
+
+#[cfg(feature = "test-utils")]
+impl ScriptedFilesystemObservationBlockForTest {
+    pub async fn wait_started(&self) {
+        self.started.cancelled().await;
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Drop for ScriptedFilesystemObservationBlockForTest {
+    fn drop(&mut self) {
+        self.released.cancel();
+    }
 }
 
 #[cfg(feature = "test-utils")]
@@ -75,6 +102,7 @@ impl ScriptedFilesystemUsageForTest {
         Self {
             value: Arc::new(Mutex::new(value)),
             observations: Arc::new(AtomicU64::new(0)),
+            next_observation: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -84,6 +112,16 @@ impl ScriptedFilesystemUsageForTest {
 
     pub fn observations(&self) -> u64 {
         self.observations.load(Ordering::Acquire)
+    }
+
+    /// Hold one scripted allocation read until the returned guard is dropped.
+    pub fn block_next_observation(&self) -> ScriptedFilesystemObservationBlockForTest {
+        let started = tokio_util::sync::CancellationToken::new();
+        let released = tokio_util::sync::CancellationToken::new();
+        let mut next = self.next_observation.lock().unwrap();
+        assert!(next.is_none(), "a scripted observation is already queued");
+        *next = Some((started.clone(), released.clone()));
+        ScriptedFilesystemObservationBlockForTest { started, released }
     }
 
     pub(crate) fn source(self) -> FilesystemUsageSource {
@@ -98,6 +136,11 @@ impl FilesystemUsageReader for ScriptedFilesystemUsageForTest {
     ) -> Pin<Box<dyn Future<Output = Result<FilesystemUsage, FilesystemStorageError>> + Send + '_>>
     {
         Box::pin(async move {
+            let blocked = self.next_observation.lock().unwrap().take();
+            if let Some((started, released)) = blocked {
+                started.cancel();
+                released.cancelled().await;
+            }
             let value = *self.value.lock().unwrap();
             self.observations.fetch_add(1, Ordering::Release);
             Ok(value)
@@ -258,6 +301,39 @@ pub struct ResourceUsageMeteringWindow {
     lose_settlement_observer: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MeteringFault {
+    FilesystemObservationTimeout,
+    FilesystemObservationFailed(String),
+    HealthChannelClosed,
+}
+
+impl Display for MeteringFault {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FilesystemObservationTimeout => {
+                formatter.write_str("filesystem usage observation timed out")
+            }
+            Self::FilesystemObservationFailed(error) => {
+                write!(formatter, "filesystem usage observation failed: {error}")
+            }
+            Self::HealthChannelClosed => formatter.write_str("metering health channel closed"),
+        }
+    }
+}
+
+pub(crate) async fn wait_for_enforcement_failure(
+    health: &mut Option<tokio::sync::watch::Receiver<Option<MeteringFault>>>,
+) -> MeteringFault {
+    let Some(health) = health else {
+        return std::future::pending().await;
+    };
+    match health.wait_for(|failure| failure.is_some()).await {
+        Ok(failure) => failure.as_ref().expect("failure was observed").clone(),
+        Err(_) => MeteringFault::HealthChannelClosed,
+    }
+}
+
 impl ResourceUsageMeteringWindow {
     pub(crate) fn observe_permit_release(
         &mut self,
@@ -320,7 +396,7 @@ impl ResourceUsageMeteringWindow {
         if let Some(storage) = &mut state.storage {
             storage.last_accepted_at = None;
         }
-        result
+        result.and_then(|()| shared.enforcement_failure().map_or(Ok(()), Err))
     }
 
     #[cfg(test)]
@@ -343,6 +419,16 @@ impl ResourceUsageMeteringWindow {
         shared
             .memory_enabled
             .then(|| shared.account.linear_memory.clone())
+    }
+
+    pub(crate) fn subscribe_enforcement_failure(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<Option<MeteringFault>>> {
+        self.shared
+            .as_ref()?
+            .health
+            .as_ref()
+            .map(|health| health.subscribe())
     }
 
     pub(crate) fn usage_flusher(&self) -> Option<Weak<dyn ResourceUsageFlusher>> {
@@ -370,6 +456,7 @@ struct WindowShared {
     observation_lane: Option<Arc<tokio::sync::Semaphore>>,
     observation_changed: tokio::sync::Notify,
     sampler_changed: tokio::sync::Notify,
+    health: Option<tokio::sync::watch::Sender<Option<MeteringFault>>>,
     state: Mutex<WindowState>,
 }
 
@@ -693,6 +780,9 @@ pub(crate) fn open_window(
             observation_lane: meter.observation_lane.clone(),
             observation_changed: tokio::sync::Notify::new(),
             sampler_changed: tokio::sync::Notify::new(),
+            health: meter
+                .filesystem_enabled
+                .then(|| tokio::sync::watch::channel(None).0),
             state: Mutex::new(WindowState {
                 status: WindowStatus::Active,
                 sampling: false,
@@ -734,8 +824,9 @@ pub fn close_window(
         let settlement = shared.settle_close(shared.clock.time());
         shared.account.record_settlement(&settlement);
         shared.clear_meter();
+        let result = shared.enforcement_failure().map_or(Ok(settlement), Err);
         drop(window);
-        return Box::pin(std::future::ready(Ok(settlement)));
+        return Box::pin(std::future::ready(result));
     }
     let closing = close_window_retaining_permit(window, deadline);
     Box::pin(async move {
@@ -899,6 +990,26 @@ impl MeterShared {
 }
 
 impl WindowShared {
+    fn fail_enforcement(&self, failure: MeteringFault) {
+        if let Some(health) = &self.health {
+            health.send_if_modified(|current| {
+                if current.is_some() {
+                    return false;
+                }
+                *current = Some(failure);
+                true
+            });
+        }
+    }
+
+    fn enforcement_failure(&self) -> Option<MeteringCloseError> {
+        self.health
+            .as_ref()?
+            .borrow()
+            .as_ref()
+            .map(|failure| MeteringCloseError::Faulted(failure.to_string()))
+    }
+
     fn begin_close(&self) {
         let mut state = self.state.lock().unwrap();
         if state.status == WindowStatus::Active {
@@ -951,6 +1062,7 @@ impl WindowShared {
                 }
                 PeriodicAttempt::TimedOut => {
                     self.suspend_observation(observation.active);
+                    self.fail_enforcement(MeteringFault::FilesystemObservationTimeout);
                     let result = observation.receiver.await.ok();
                     let at = self.clock.time();
                     result.is_some_and(|result| {
@@ -1088,6 +1200,9 @@ impl WindowShared {
         }
         let may_accept = state.status == WindowStatus::Active
             || (accept_while_closing && state.status == WindowStatus::Closing);
+        let failure = (!accept_while_closing)
+            .then(|| result.as_ref().err().map(|error| error.to_string()))
+            .flatten();
         let succeeded = match result {
             Ok(FilesystemUsage::Authoritative {
                 allocated_bytes, ..
@@ -1122,6 +1237,9 @@ impl WindowShared {
         };
         state.active_observation = None;
         drop(state);
+        if let Some(error) = failure {
+            self.fail_enforcement(MeteringFault::FilesystemObservationFailed(error));
+        }
         self.observation_changed.notify_waiters();
         succeeded
     }
@@ -1154,7 +1272,7 @@ impl WindowShared {
         let settlement = self.settle_close(self.clock.time());
         self.account.record_settlement(&settlement);
         self.clear_meter();
-        Ok(settlement)
+        self.enforcement_failure().map_or(Ok(settlement), Err)
     }
 
     async fn run_final_observation_sequence(self: &Arc<Self>, deadline: Instant) {

@@ -19,6 +19,17 @@ mod monthly;
 const GIB: u64 = 1024 * 1024 * 1024;
 
 #[test]
+async fn disabled_filesystem_health_wait_does_not_create_a_failure() {
+    use futures::FutureExt;
+    let mut health = None;
+    assert!(
+        wait_for_enforcement_failure(&mut health)
+            .now_or_never()
+            .is_none()
+    );
+}
+
+#[test]
 fn window_open_failures_keep_bounded_typed_reasons() {
     use crate::metrics::resource_release::Failure;
     for (error, expected) in [
@@ -615,9 +626,10 @@ async fn timeout_keeps_single_flight_skips_ticks_and_accepts_late_success() {
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
 
-    close_window(window, now + Duration::from_secs(2))
-        .await
-        .unwrap();
+    assert!(matches!(
+        close_window(window, now + Duration::from_secs(2)).await,
+        Err(MeteringCloseError::Faulted(_))
+    ));
     assert_eq!(reader.maximum_active.load(Ordering::Acquire), 1);
 }
 
@@ -660,9 +672,10 @@ async fn failure_backoff_suspends_at_attempt_start_and_recovery_is_prospective()
     meter.flush(clock.now());
 
     assert_eq!(entry.durable_byte_seconds_delta(), 310);
-    close_window(window, now + Duration::from_secs(1))
-        .await
-        .unwrap();
+    assert!(matches!(
+        close_window(window, now + Duration::from_secs(1)).await,
+        Err(MeteringCloseError::Faulted(_))
+    ));
 }
 
 #[test]
@@ -695,9 +708,10 @@ async fn retry_backoff_uses_the_full_capped_sequence() {
         wait_for_observation_state(&window).await;
     }
 
-    close_window(window, now + Duration::from_secs(5))
-        .await
-        .unwrap();
+    assert!(matches!(
+        close_window(window, now + Duration::from_secs(5)).await,
+        Err(MeteringCloseError::Faulted(_))
+    ));
     assert_eq!(reader.calls.load(Ordering::Acquire), 9);
 }
 
@@ -718,7 +732,7 @@ fn scheduler_staleness_caps_accrual_at_one_second() {
 
 #[test]
 #[timeout("5s")]
-async fn storage_timeout_does_not_pause_memory_or_fault_the_window() {
+async fn storage_timeout_preserves_memory_accounting_and_retains_enforcement_fault() {
     let now = Instant::now();
     let clock = TestClock::new(now);
     let blocked = ObservationGate::pending(authoritative(100));
@@ -728,8 +742,21 @@ async fn storage_timeout_does_not_pause_memory_or_fault_the_window() {
     let (_, _, permit) = permit(&entry).await;
     let window = open_window(&meter, permit).await.unwrap();
     blocked.wait_started().await;
+    clock
+        .wait_for_sleep_until(FILESYSTEM_OBSERVATION_TIMEOUT)
+        .await;
 
     clock.set(Duration::from_secs(2)).await;
+    let mut health = window.subscribe_enforcement_failure();
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_enforcement_failure(&mut health)
+        )
+        .await
+        .unwrap(),
+        MeteringFault::FilesystemObservationTimeout
+    );
     meter.flush(clock.now());
 
     assert!(meter.is_active());
@@ -737,6 +764,64 @@ async fn storage_timeout_does_not_pause_memory_or_fault_the_window() {
     assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 2);
     drop(window);
     blocked.release();
+}
+
+#[test]
+#[timeout("5s")]
+async fn pending_storage_observation_reports_unavailable_without_releasing_the_window() {
+    let now = Instant::now();
+    let clock = TestClock::new(now);
+    let blocked = ObservationGate::pending(authoritative(200));
+    let reader = ScriptedUsageReader::new(vec![
+        ObservationGate::ready(authoritative(100)),
+        Arc::clone(&blocked),
+        ObservationGate::ready(authoritative(200)),
+    ]);
+    let entry = Arc::new(AtomicResourceEntry::new(u64::MAX, 0, 0, 0, 1));
+    let (meter, _) = meter(reader.clone(), clock.clone(), &entry, GIB);
+    let (_, _, permit) = permit(&entry).await;
+    let mut window = open_window(&meter, permit).await.unwrap();
+    let held = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    window.track_permit_for_test(held.clone());
+    let mut health = window.subscribe_enforcement_failure().unwrap();
+    wait_for_calls(&reader, 1).await;
+    wait_for_observations_to_finish(&reader).await;
+    wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
+    clock.set(Duration::from_millis(10)).await;
+    blocked.wait_started().await;
+    clock.wait_for_sleep_until(Duration::from_millis(260)).await;
+    clock.set(Duration::from_millis(260)).await;
+    let failure = tokio::time::timeout(
+        Duration::from_secs(1),
+        health.wait_for(|failure| failure.is_some()),
+    )
+    .await
+    .map(|failure| failure.unwrap().clone());
+    let retained = held.load(Ordering::Acquire);
+    let active = reader.active.load(Ordering::Acquire);
+    clock.set(Duration::from_secs(2)).await;
+    meter.flush(clock.now());
+    let memory = entry.memory_gb_seconds_delta(AgentMode::Durable);
+    blocked.release();
+    wait_for_observations_to_finish(&reader).await;
+    wait_for_observation_state(&window).await;
+    let closed = close_window(window, now + Duration::from_secs(3)).await;
+    assert!(retained, "observation failure must not release the permit");
+    assert_eq!(
+        active, 1,
+        "the mandatory read must remain owned and pending"
+    );
+    assert_eq!(
+        memory, 2,
+        "known memory must accrue until actual window closure"
+    );
+    assert!(!held.load(Ordering::Acquire));
+    assert!(matches!(closed, Err(MeteringCloseError::Faulted(_))));
+    assert_eq!(
+        failure.expect("the sampling timeout must publish enforcement-unavailable health"),
+        Some(MeteringFault::FilesystemObservationTimeout)
+    );
 }
 
 #[test]
@@ -1195,7 +1280,10 @@ async fn active_error_completed_during_close_suspends_from_attempt_start() {
     let close = tokio::spawn(close_window(window, now + Duration::from_secs(1)));
     clock.set(Duration::from_millis(50)).await;
     crossing_error.release();
-    close.await.unwrap().unwrap();
+    assert!(matches!(
+        close.await.unwrap(),
+        Err(MeteringCloseError::Faulted(_))
+    ));
 
     assert_eq!(entry.durable_byte_seconds_delta(), 1);
 }
@@ -1300,10 +1388,22 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     let (scheduler, account_id, first_permit) = permit(&entry).await;
     let first = open_window(&meter, first_permit).await.unwrap();
     first_baseline.wait_started().await;
+    clock
+        .wait_for_sleep_until(FILESYSTEM_OBSERVATION_TIMEOUT)
+        .await;
+    clock.set(FILESYSTEM_OBSERVATION_TIMEOUT).await;
+    let mut first_health = first.subscribe_enforcement_failure();
+    assert_eq!(
+        wait_for_enforcement_failure(&mut first_health).await,
+        MeteringFault::FilesystemObservationTimeout,
+    );
 
     let first_close = close_window(first, now + Duration::from_secs(1));
     clock.set(Duration::from_secs(1)).await;
-    first_close.await.unwrap();
+    assert!(matches!(
+        first_close.await,
+        Err(MeteringCloseError::Faulted(_))
+    ));
 
     let second_permit = scheduler
         .acquire(
@@ -1316,10 +1416,24 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
         .await;
     let second = open_window(&meter, second_permit).await.unwrap();
     wait_for_active_observation(&second).await;
+    clock
+        .wait_for_sleep_until(Duration::from_secs(1) + FILESYSTEM_OBSERVATION_TIMEOUT)
+        .await;
+    clock
+        .set(Duration::from_secs(1) + FILESYSTEM_OBSERVATION_TIMEOUT)
+        .await;
+    let mut second_health = second.subscribe_enforcement_failure();
+    assert_eq!(
+        wait_for_enforcement_failure(&mut second_health).await,
+        MeteringFault::FilesystemObservationTimeout,
+    );
 
     let second_close = close_window(second, now + Duration::from_secs(2));
     clock.set(Duration::from_secs(2)).await;
-    second_close.await.unwrap();
+    assert!(matches!(
+        second_close.await,
+        Err(MeteringCloseError::Faulted(_))
+    ));
 
     first_baseline.release();
     wait_for_observations_to_finish(&reader).await;
@@ -1340,6 +1454,13 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     current_baseline.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&third).await;
+    assert!(
+        third
+            .subscribe_enforcement_failure()
+            .unwrap()
+            .borrow()
+            .is_none()
+    );
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     close_window(third, now + Duration::from_secs(3))
         .await

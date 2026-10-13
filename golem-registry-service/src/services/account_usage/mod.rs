@@ -73,6 +73,25 @@ pub struct ResourceUsageUpdate {
     pub metering: ResourceUsageMetering,
 }
 
+impl ResourceUsageUpdate {
+    fn enabled_monthly_usage(mut self) -> Self {
+        if !self.metering.compute {
+            self.fuel_delta = 0;
+        }
+        if !self.metering.memory {
+            self.memory_gb_seconds_delta = 0;
+            self.memory_byte_nanoseconds_remainder = 0;
+        }
+        if !self.metering.filesystem {
+            self.durable_storage_byte_seconds_delta = 0;
+            self.ephemeral_storage_byte_seconds_delta = 0;
+            self.durable_storage_byte_nanoseconds_remainder = 0;
+            self.ephemeral_storage_byte_nanoseconds_remainder = 0;
+        }
+        self
+    }
+}
+
 fn monthly_usage_attribution(update: &ResourceUsageUpdate) -> MonthlyUsageAttribution {
     MonthlyUsageAttribution {
         policy_revision: update.monthly_policy_revision,
@@ -229,8 +248,9 @@ impl AccountUsageService {
     async fn get_account_usage_for_resource_limits(
         &self,
         account_id: AccountId,
+        period: AccountUsagePeriod,
+        metering: ResourceUsageMetering,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
-        let period = AccountUsagePeriod::current();
         let date = SqlDateTime::new(
             Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
                 .single()
@@ -238,7 +258,7 @@ impl AccountUsageService {
         );
         match self
             .account_usage_repo
-            .get_for_resource_limits(account_id.0, &date)
+            .get_for_resource_limits(account_id.0, &date, metering)
             .await?
         {
             Some(usage) => Ok(usage),
@@ -378,9 +398,9 @@ impl AccountUsageService {
 
         let mut limits_of_updated_accounts = HashMap::new();
         for (account_id, update) in updates {
-            let now = SqlDateTime::now();
+            let update = update.enabled_monthly_usage();
             match self
-                .get_account_usage_at(account_id, None, update.period, &now)
+                .get_account_usage_for_resource_limits(account_id, update.period, update.metering)
                 .await
             {
                 Ok(mut account_usage) => {
@@ -429,42 +449,53 @@ impl AccountUsageService {
 
                     let monthly_usage_mode_revision = account_usage.monthly_usage_mode_revision;
                     let monthly_policy_revision = account_usage.monthly_policy_revision;
-                    let fallback_limits = account_usage.resource_limits().ok().map(|limits| {
-                        Self::fence_monthly_policy(
-                            limits,
-                            monthly_usage_mode_revision,
-                            monthly_policy_revision,
-                            true,
-                        )
-                    });
+                    let fallback_limits =
+                        account_usage
+                            .resource_limits(update.metering)
+                            .ok()
+                            .map(|limits| {
+                                Self::fence_monthly_policy(
+                                    limits,
+                                    monthly_usage_mode_revision,
+                                    monthly_policy_revision,
+                                    true,
+                                )
+                            });
                     match self.account_usage_repo.add(&account_usage).await {
                         Ok(_) => {
                             self.trigger_blob_storage_reconciliation(account_id);
-                            let reloaded_usage =
-                                self.get_account_usage_for_resource_limits(account_id).await;
+                            let reloaded_usage = self
+                                .get_account_usage_for_resource_limits(
+                                    account_id,
+                                    AccountUsagePeriod::current(),
+                                    update.metering,
+                                )
+                                .await;
                             match reloaded_usage {
-                                Ok(account_usage) => match account_usage.resource_limits() {
-                                    Ok(limits) => {
-                                        limits_of_updated_accounts.insert(account_id, limits);
+                                Ok(account_usage) => {
+                                    match account_usage.resource_limits(update.metering) {
+                                        Ok(limits) => {
+                                            limits_of_updated_accounts.insert(account_id, limits);
+                                        }
+                                        Err(error) => {
+                                            tracing::error!(
+                                                %account_id,
+                                                %error,
+                                                "Failed to resolve resource limits after usage update"
+                                            );
+                                            limits_of_updated_accounts.insert(
+                                                account_id,
+                                                fallback_limits.clone().unwrap_or_else(|| {
+                                                    Self::fenced_resource_limits(
+                                                        monthly_usage_mode_revision,
+                                                        monthly_policy_revision,
+                                                        true,
+                                                    )
+                                                }),
+                                            );
+                                        }
                                     }
-                                    Err(error) => {
-                                        tracing::error!(
-                                            %account_id,
-                                            %error,
-                                            "Failed to resolve resource limits after usage update"
-                                        );
-                                        limits_of_updated_accounts.insert(
-                                            account_id,
-                                            fallback_limits.clone().unwrap_or_else(|| {
-                                                Self::fenced_resource_limits(
-                                                    monthly_usage_mode_revision,
-                                                    monthly_policy_revision,
-                                                    true,
-                                                )
-                                            }),
-                                        );
-                                    }
-                                },
+                                }
                                 Err(AccountUsageError::AccountNotfound(_)) => {
                                     limits_of_updated_accounts.insert(
                                         account_id,
@@ -525,6 +556,7 @@ impl AccountUsageService {
     pub async fn get_resouce_limits(
         &self,
         account_id: AccountId,
+        metering: ResourceUsageMetering,
         auth: &AuthCtx,
     ) -> Result<ResourceLimits, AccountUsageError> {
         let account = self
@@ -537,11 +569,15 @@ impl AccountUsageService {
 
         self.trigger_blob_storage_reconciliation(account_id);
         let account_usage = self
-            .get_account_usage_for_resource_limits(account_id)
+            .get_account_usage_for_resource_limits(
+                account_id,
+                AccountUsagePeriod::current(),
+                metering,
+            )
             .await?;
 
         account_usage
-            .resource_limits()
+            .resource_limits(metering)
             .map_err(|error| AccountUsageError::InternalError(error.into()))
     }
 
@@ -1184,6 +1220,74 @@ fn account_usage_permission_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_monthly_dimensions_do_not_create_hidden_usage() {
+        for compute in [false, true] {
+            for memory in [false, true] {
+                for filesystem in [false, true] {
+                    let update = ResourceUsageUpdate {
+                        period: AccountUsagePeriod::current(),
+                        monthly_usage_mode_revision: 1,
+                        monthly_policy_revision: 2,
+                        memory_byte_nanoseconds_remainder: 3,
+                        durable_storage_byte_nanoseconds_remainder: 4,
+                        ephemeral_storage_byte_nanoseconds_remainder: 5,
+                        fuel_delta: 6,
+                        http_call_count_delta: 7,
+                        rpc_call_count_delta: 8,
+                        durable_storage_byte_seconds_delta: 9,
+                        ephemeral_storage_byte_seconds_delta: 10,
+                        memory_gb_seconds_delta: 11,
+                        blob_storage_bytes_delta: 12,
+                        metering: ResourceUsageMetering {
+                            compute,
+                            memory,
+                            filesystem,
+                        },
+                    }
+                    .enabled_monthly_usage();
+                    assert_eq!(update.fuel_delta, if compute { 6 } else { 0 });
+                    assert_eq!(update.memory_gb_seconds_delta, if memory { 11 } else { 0 });
+                    assert_eq!(
+                        update.memory_byte_nanoseconds_remainder,
+                        if memory { 3 } else { 0 }
+                    );
+                    assert_eq!(
+                        update.durable_storage_byte_seconds_delta,
+                        if filesystem { 9 } else { 0 }
+                    );
+                    assert_eq!(
+                        update.ephemeral_storage_byte_seconds_delta,
+                        if filesystem { 10 } else { 0 }
+                    );
+                    assert_eq!(
+                        update.durable_storage_byte_nanoseconds_remainder,
+                        if filesystem { 4 } else { 0 }
+                    );
+                    assert_eq!(
+                        update.ephemeral_storage_byte_nanoseconds_remainder,
+                        if filesystem { 5 } else { 0 }
+                    );
+                    assert_eq!(
+                        (
+                            update.http_call_count_delta,
+                            update.rpc_call_count_delta,
+                            update.blob_storage_bytes_delta
+                        ),
+                        (7, 8, 12)
+                    );
+                    assert_eq!(
+                        (
+                            update.monthly_usage_mode_revision,
+                            update.monthly_policy_revision
+                        ),
+                        (1, 2)
+                    );
+                }
+            }
+        }
+    }
     use crate::repo::model::account_usage::{AccountUsage, AdminResourceGrantValues, UsageType};
     use crate::repo::model::plan::PlanRecord;
     use golem_common::model::account_usage::{
@@ -1518,7 +1622,11 @@ mod tests {
         );
         usage.monthly_durable_storage_byte_nanoseconds_remainder = 500_000_000;
 
-        let limits = usage.resource_limits().unwrap();
+        let limits = usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+            )
+            .unwrap();
 
         assert_eq!(
             limits.monthly_policy.period,
@@ -1563,7 +1671,9 @@ mod tests {
         usage.usage.insert(UsageType::MonthlyMemoryGbSeconds, 71);
         assert_eq!(
             usage
-                .resource_limits()
+                .resource_limits(
+                    golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+                )
                 .unwrap()
                 .monthly_policy
                 .available_memory_gb_seconds,
@@ -1599,7 +1709,11 @@ mod tests {
 
     #[test]
     fn post_write_failure_fence_preserves_per_agent_limits() {
-        let mut limits = make_policy_usage().resource_limits().unwrap();
+        let mut limits = make_policy_usage()
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+            )
+            .unwrap();
         let expected_memory = limits.max_memory_per_worker;
         let expected_table_elements = limits.max_table_elements_per_worker;
         let expected_disk_space = limits.max_disk_space_per_worker;

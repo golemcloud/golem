@@ -272,7 +272,15 @@ impl RegistryServiceGrpcApi {
             .try_into()?;
         let limits = self
             .account_usage_service
-            .get_resouce_limits(account_id, &AuthCtx::System)
+            .get_resouce_limits(
+                account_id,
+                golem_service_base::clients::registry::ResourceUsageMetering {
+                    compute: request.compute_metering_enabled,
+                    memory: request.memory_metering_enabled,
+                    filesystem: request.filesystem_metering_enabled,
+                },
+                &AuthCtx::System,
+            )
             .await?;
         Ok(GetResourceLimitsSuccessResponse {
             limits: Some(limits.into()),

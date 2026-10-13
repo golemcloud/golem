@@ -250,8 +250,25 @@ failure is distinct from exhausted capacity and must not be reported as an ordin
 Capacity can return after a UTC month reset, a grant or plan increase above current usage, or
 application of an `allowOverage` revision. Subsequent demand uses the same admission and
 reconstruction path, not a second recovery system. Mode changes reach running agents through
-refresh within five minutes. Excess accrued under the applied `allowOverage` revision remains
-billable until `hardLimit` applies; earlier `hardLimit` usage never becomes billable retrospectively.
+refresh within five minutes. Idle refresh eligibility reserves one batch interval for the next
+scheduled tick, so an account initialized just after a tick does not wait an extra interval.
+Usage attributed to an applied `allowOverage` revision remains eligible for excess billing until
+`hardLimit` applies. Registry currently allocates the allowance in revision order rather than exact
+cross-executor accrual order during overlapping refreshes. That MVP limitation is tracked in
+[GOL-848](https://linear.app/golem-cloud/issue/GOL-848/preserve-chronological-allowance-allocation-across-overlapping-policy).
+
+Memory and storage exports retain measured hard-limit overshoot instead of clipping it to capacity.
+Fractional byte-time remains exact across settlements and policy/month cutovers. Overshoot totals
+are diagnostics, not a second capacity debit. Billing eligibility is separate from measured usage.
+Registry limit requests carry the deployment's existing meter flags; disabled runtime dimensions
+skip usage reads and allowance calculations. All-off reads resolve per-agent policy without creating
+monthly billing revisions or baselines, and aggregate display does not create runtime billing state.
+
+Fuel keeps the existing prepaid/refund meter. A remaining prepaid reservation can retain its borrow
+revision and month across a transition, with a default remaining batch of 10,000 fuel. Failed Registry
+delivery can also lose captured usage; ambiguous additive updates are not blindly resent. Delivery
+and customer-credit safety are tracked in
+[GOL-847](https://linear.app/golem-cloud/issue/GOL-847/recover-resource-usage-safely-after-registry-delivery-failures).
 
 Disabled meters omit their monthly accounting, caps, overage, and billing. Filesystem metering
 controls both storage meters but their amounts and usage remain separate. Per-agent memory and
@@ -291,7 +308,12 @@ Initial idle settlement precedes startup readiness. Monitor, accepted-stop drive
 errors at either idle boundary survive successful filesystem deletion as `CleanupFailed`; they
 neither request immediate reconstruction nor acquire a replacement permit. The monitor treats a
 closed lifecycle channel or lost send as an infrastructure error, retains that health, and requests
-a cooperative Worker stop. If status work then panics because the actor has stopped, the invocation
+a cooperative Worker stop. Filesystem observation timeout or failure publishes retained window
+health to that same monitor. Missing storage measurement is unavailable, not a zero sample or quota
+exhaustion. The existing read remains owned and final allocation/drain work is still joined before
+physical release. Known memory continues accruing during that wait; unavailable storage intervals
+do not fabricate measurements. A late successful read does not erase the window's failure.
+If status work then panics because the actor has stopped, the invocation
 loop retains its resident agent across the borrowed inner-loop failure and runs ordinary unload
 without submitting more actor work. Tests in `tests/api/interruption/lifecycle/health.rs` cover both idle boundaries
 and a pending silent-TCP invocation. Other panic paths still use the outer panic boundary.

@@ -4465,7 +4465,11 @@ pub async fn test_account_resource_override_clear_falls_back_to_plan(deps: &Deps
         .await
         .unwrap()
         .unwrap();
-    let limits = usage.resource_limits().unwrap();
+    let limits = usage
+        .resource_limits(
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        )
+        .unwrap();
     assert_eq!(limits.max_memory_per_worker, 500);
     assert_eq!(limits.max_disk_space_per_worker, 1_500);
     assert_eq!(
@@ -4493,7 +4497,11 @@ pub async fn test_account_resource_override_clear_falls_back_to_plan(deps: &Deps
         .await
         .unwrap()
         .unwrap();
-    let limits = usage.resource_limits().unwrap();
+    let limits = usage
+        .resource_limits(
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        )
+        .unwrap();
     assert_eq!(limits.max_memory_per_worker, 100);
     assert_eq!(limits.max_disk_space_per_worker, 200);
     assert_eq!(usage.max_memory_per_worker.override_value, None);
@@ -4550,7 +4558,15 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
         .await
         .unwrap()
         .unwrap();
-    assert!(usage.resource_limits().unwrap().max_disk_space_per_worker == 1073741824);
+    assert!(
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_disk_space_per_worker
+            == 1073741824
+    );
     assert_eq!(
         usage.storage_limit.effective_value,
         finite_storage_limit(1073741824)
@@ -4558,7 +4574,15 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
     assert_eq!(usage.storage_limit.plan_default, finite_limit(1073741824));
     assert_eq!(usage.storage_limit.override_value, None);
     assert_eq!(usage.max_memory_per_worker.override_value, None);
-    assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 4000);
+    assert_eq!(
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_memory_per_worker,
+        4000
+    );
 
     deps.account_resource_override_repo
         .upsert(AccountResourceOverrideRecord {
@@ -4605,14 +4629,30 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
         .await
         .unwrap()
         .unwrap();
-    assert!(usage.resource_limits().unwrap().max_disk_space_per_worker == 1073741824);
+    assert!(
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_disk_space_per_worker
+            == 1073741824
+    );
     assert_eq!(
         usage.storage_limit.effective_value,
         finite_storage_limit(1073741824)
     );
     assert_eq!(usage.storage_limit.override_value, None);
     assert_eq!(usage.max_memory_per_worker.override_value, None);
-    assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 4000);
+    assert_eq!(
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_memory_per_worker,
+        4000
+    );
 }
 
 static ADMIN_GRANT_CLEANUP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -4750,9 +4790,22 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
         usage.storage_limit.effective_value,
         finite_storage_limit(300)
     );
-    assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 300);
     assert_eq!(
-        usage.resource_limits().unwrap().max_disk_space_per_worker,
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_memory_per_worker,
+        300
+    );
+    assert_eq!(
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_disk_space_per_worker,
         300
     );
 
@@ -5193,7 +5246,9 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
     );
     assert_eq!(
         before_expiry
-            .resource_limits()
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
             .unwrap()
             .monthly_policy
             .available_fuel,
@@ -5234,7 +5289,9 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
     assert!(after_expiry.admin_grants.is_empty());
     assert_eq!(
         after_expiry
-            .resource_limits()
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
             .unwrap()
             .monthly_policy
             .available_fuel,
@@ -6061,7 +6118,12 @@ pub async fn test_storage_limit_discards_out_of_range_override_after_plan_update
     );
     assert_eq!(usage.plan.max_disk_space_per_worker.get(), 500);
     assert_eq!(
-        usage.resource_limits().unwrap().max_disk_space_per_worker,
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_disk_space_per_worker,
         500
     );
 
@@ -6102,7 +6164,12 @@ pub async fn test_storage_limit_discards_out_of_range_override_after_plan_update
         StorageResourceLimitValue::Disabled(_)
     ));
     assert_eq!(
-        usage.resource_limits().unwrap().max_disk_space_per_worker,
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .max_disk_space_per_worker,
         golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
     );
 }
@@ -7035,7 +7102,11 @@ pub async fn test_account_usage(deps: &Deps) {
 
         let resource_limits_usage = deps
             .account_usage_repo
-            .get_for_resource_limits(user.revision.account_id, &now)
+            .get_for_resource_limits(
+                user.revision.account_id,
+                &now,
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -7197,6 +7268,7 @@ pub async fn test_account_usage(deps: &Deps) {
     account_usage_service
         .get_resouce_limits(
             AccountId(user.revision.account_id),
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
             &golem_service_base::model::auth::AuthCtx::System,
         )
         .await
@@ -7255,7 +7327,11 @@ pub async fn test_account_usage(deps: &Deps) {
 
     tokio::time::sleep(reconciliation_interval).await;
     account_usage_service
-        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .get_resouce_limits(
+            AccountId(user.revision.account_id),
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+            &AuthCtx::System,
+        )
         .await
         .unwrap();
     for _ in 0..100 {
@@ -7296,7 +7372,11 @@ pub async fn test_account_usage(deps: &Deps) {
         std::time::Duration::from_secs(60),
     );
     retrying_service
-        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .get_resouce_limits(
+            AccountId(user.revision.account_id),
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+            &AuthCtx::System,
+        )
         .await
         .unwrap();
     for _ in 0..100 {
@@ -7315,7 +7395,11 @@ pub async fn test_account_usage(deps: &Deps) {
 
     for _ in 0..100 {
         retrying_service
-            .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+            .get_resouce_limits(
+                AccountId(user.revision.account_id),
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+                &AuthCtx::System,
+            )
             .await
             .unwrap();
         let usage = deps
@@ -7472,7 +7556,13 @@ pub async fn test_monthly_usage_mode_transitions(deps: &Deps) {
         .unwrap();
     assert_eq!(usage.monthly_usage_mode, MonthlyUsageMode::AllowOverage);
     assert_eq!(
-        usage.resource_limits().unwrap().monthly_policy.mode,
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .monthly_policy
+            .mode,
         MonthlyUsageMode::AllowOverage
     );
 
@@ -7580,7 +7670,13 @@ pub async fn test_monthly_usage_mode_transitions(deps: &Deps) {
         .unwrap();
     assert_eq!(usage.monthly_usage_mode, MonthlyUsageMode::HardLimit);
     assert_eq!(
-        usage.resource_limits().unwrap().monthly_policy.mode,
+        usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+            )
+            .unwrap()
+            .monthly_policy
+            .mode,
         MonthlyUsageMode::HardLimit
     );
     assert!(matches!(
@@ -7860,10 +7956,252 @@ async fn register_current_monthly_policy(deps: &Deps, account_id: Uuid) -> u64 {
             account_id,
             AccountUsagePeriod::current(),
             &SqlDateTime::now(),
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         )
         .await
         .unwrap()
         .revision()
+}
+
+pub async fn test_resource_reads_exclude_disabled_monthly_usage_and_baselines(deps: &Deps) {
+    use golem_service_base::clients::registry::ResourceUsageMetering;
+
+    for compute in [false, true] {
+        for memory in [false, true] {
+            for filesystem in [false, true] {
+                let account_id = deps.create_account().await.revision.account_id;
+                let revision = register_current_monthly_policy(deps, account_id).await;
+                let date = SqlDateTime::now();
+                let mut usage = deps
+                    .account_usage_repo
+                    .get(account_id, &date)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                for (dimension, amount) in [
+                    (UsageType::MonthlyGasLimit, 11),
+                    (UsageType::MonthlyMemoryGbSeconds, 12),
+                    (UsageType::MonthlyDurableAgentStorageByteSeconds, 13),
+                    (UsageType::MonthlyEphemeralStorageByteSeconds, 14),
+                    (UsageType::MonthlyHttpCalls, 15),
+                ] {
+                    assert!(usage.add_change(dimension, amount));
+                }
+                usage.metering = Some(ResourceUsageMetering::all_enabled());
+                usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+                    policy_revision: revision,
+                    memory_byte_nanoseconds_remainder: 16,
+                    durable_storage_byte_nanoseconds_remainder: 17,
+                    ephemeral_storage_byte_nanoseconds_remainder: 18,
+                });
+                deps.account_usage_repo.add(&usage).await.unwrap();
+
+                let metering = ResourceUsageMetering {
+                    compute,
+                    memory,
+                    filesystem,
+                };
+                let resolved = deps
+                    .account_usage_repo
+                    .get_for_resource_limits(account_id, &date, metering)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let expected = (
+                    if compute { 11 } else { 0 },
+                    if memory { 12 } else { 0 },
+                    if memory { 16 } else { 0 },
+                    if filesystem { 13 } else { 0 },
+                    if filesystem { 17 } else { 0 },
+                    if filesystem { 14 } else { 0 },
+                    if filesystem { 18 } else { 0 },
+                );
+                assert_eq!(
+                    (
+                        resolved.usage(UsageType::MonthlyGasLimit) as i64,
+                        resolved.usage(UsageType::MonthlyMemoryGbSeconds) as i64,
+                        resolved.monthly_memory_byte_nanoseconds_remainder as i64,
+                        resolved.usage(UsageType::MonthlyDurableAgentStorageByteSeconds) as i64,
+                        resolved.monthly_durable_storage_byte_nanoseconds_remainder as i64,
+                        resolved.usage(UsageType::MonthlyEphemeralStorageByteSeconds) as i64,
+                        resolved.monthly_ephemeral_storage_byte_nanoseconds_remainder as i64,
+                    ),
+                    expected,
+                    "{metering:?}"
+                );
+                assert_eq!(resolved.usage(UsageType::MonthlyHttpCalls), 15);
+                assert_eq!(
+                    resolved.max_memory_per_worker_value,
+                    usage.max_memory_per_worker_value
+                );
+
+                if metering.any_enabled() && metering != ResourceUsageMetering::all_enabled() {
+                    assert!(resolved.monthly_policy_revision > revision);
+                    let query = "SELECT CAST(baseline_compute_fuel AS BIGINT), CAST(baseline_memory_gb_seconds AS BIGINT), CAST(baseline_memory_byte_nanoseconds_remainder AS BIGINT), CAST(baseline_durable_storage_byte_seconds AS BIGINT), CAST(baseline_durable_storage_byte_nanoseconds_remainder AS BIGINT), CAST(baseline_ephemeral_storage_byte_seconds AS BIGINT), CAST(baseline_ephemeral_storage_byte_nanoseconds_remainder AS BIGINT) FROM account_monthly_policy_revisions WHERE account_id = $1 AND revision = $2";
+                    let baseline: (i64, i64, i64, i64, i64, i64, i64) = match &deps.test_db {
+                        TestDb::Postgres(pool) => pool
+                            .with_ro("test", "partial_meter_baseline")
+                            .fetch_one_as(
+                                sqlx::query_as(query)
+                                    .bind(account_id)
+                                    .bind(resolved.monthly_policy_revision as i64),
+                            )
+                            .await
+                            .unwrap(),
+                        TestDb::Sqlite(pool) => pool
+                            .with_ro("test", "partial_meter_baseline")
+                            .fetch_one_as(
+                                sqlx::query_as(query)
+                                    .bind(account_id)
+                                    .bind(resolved.monthly_policy_revision as i64),
+                            )
+                            .await
+                            .unwrap(),
+                    };
+                    assert_eq!(baseline, expected, "{metering:?}");
+                }
+            }
+        }
+    }
+}
+
+pub async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps: &Deps) {
+    use chrono::TimeZone;
+    use golem_common::model::account_usage::MeteringStatus;
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
+    use golem_service_base::clients::registry::ResourceUsageMetering;
+    use golem_service_base::model::auth::AuthCtx;
+
+    let account_id = deps.create_account().await.revision.account_id;
+    let plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let service = deps.account_usage_service();
+    let initial = service
+        .get_resouce_limits(
+            AccountId(account_id),
+            ResourceUsageMetering::default(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        initial.max_memory_per_worker,
+        plan.max_memory_per_worker.get()
+    );
+    let initial_policy = service
+        .get_resource_policy(AccountId(account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert_eq!(
+        initial_policy.monthly.compute_gcu.metering,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(
+        initial_policy.monthly.memory_gb_seconds.metering,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(
+        initial_policy.monthly.durable_storage_gb_month.metering,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(
+        initial_policy.monthly.ephemeral_storage_gb_month.metering,
+        MeteringStatus::Disabled
+    );
+    let updates = HashMap::from([(
+        AccountId(account_id),
+        ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
+            monthly_usage_mode_revision: 0,
+            monthly_policy_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
+            metering: ResourceUsageMetering::default(),
+        },
+    )]);
+    for _ in 0..2 {
+        let response = service
+            .update_resource_usage(updates.clone(), &AuthCtx::System)
+            .await
+            .unwrap();
+        let limits = response.0.get(&AccountId(account_id)).unwrap();
+        assert_eq!(
+            limits.max_memory_per_worker,
+            plan.max_memory_per_worker.get()
+        );
+    }
+    let policy = service
+        .get_resource_policy(AccountId(account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert_eq!(
+        policy.monthly.compute_gcu.metering,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(
+        policy.monthly.memory_gb_seconds.metering,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(
+        policy.monthly.durable_storage_gb_month.metering,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(
+        policy.monthly.ephemeral_storage_gb_month.metering,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(policy.monthly.compute_gcu.behavior, None);
+    assert_eq!(policy.monthly.memory_gb_seconds.usage, None);
+
+    let period = AccountUsagePeriod::current();
+    let (year, month) = if period.month == 12 {
+        (period.year + 1, 1)
+    } else {
+        (period.year, period.month + 1)
+    };
+    let next_month = SqlDateTime::new(
+        chrono::Utc
+            .with_ymd_and_hms(year, month, 1, 0, 0, 0)
+            .single()
+            .unwrap(),
+    );
+    let next = deps
+        .account_usage_repo
+        .get_for_resource_limits(account_id, &next_month, ResourceUsageMetering::default())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        next.max_memory_per_worker_value,
+        plan.max_memory_per_worker.get()
+    );
+
+    let query = "SELECT (SELECT COUNT(*) FROM account_monthly_policy_revisions WHERE account_id = $1), (SELECT COUNT(*) FROM account_monthly_policy_attribution WHERE account_id = $1), (SELECT COUNT(*) FROM account_monthly_memory_remainders WHERE account_id = $1), (SELECT COUNT(*) FROM account_monthly_storage_remainders WHERE account_id = $1)";
+    let counts: (i64, i64, i64, i64) = match &deps.test_db {
+        TestDb::Postgres(pool) => pool
+            .with_ro("test", "all_off_billing_rows")
+            .fetch_one_as(sqlx::query_as(query).bind(account_id))
+            .await
+            .unwrap(),
+        TestDb::Sqlite(pool) => pool
+            .with_ro("test", "all_off_billing_rows")
+            .fetch_one_as(sqlx::query_as(query).bind(account_id))
+            .await
+            .unwrap(),
+    };
+    assert_eq!(counts, (0, 0, 0, 0));
 }
 
 async fn compute_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i64)> {
@@ -8424,7 +8762,9 @@ pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps:
         .unwrap()
         .unwrap();
     let initial_available = before
-        .resource_limits()
+        .resource_limits(
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        )
         .unwrap()
         .monthly_policy
         .available_memory_gb_seconds;
@@ -8457,7 +8797,9 @@ pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps:
                 .await
                 .unwrap()
                 .unwrap()
-                .resource_limits()
+                .resource_limits(
+                    golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+                )
                 .unwrap()
                 .monthly_policy;
             assert_eq!(partial.available_memory_gb_seconds, initial_available - 1);
@@ -8475,7 +8817,12 @@ pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps:
         .unwrap()
         .unwrap();
     assert_eq!(after.monthly_memory_byte_nanoseconds_remainder, 0);
-    let after_policy = after.resource_limits().unwrap().monthly_policy;
+    let after_policy = after
+        .resource_limits(
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        )
+        .unwrap()
+        .monthly_policy;
     assert_eq!(
         after_policy.available_memory_gb_seconds,
         initial_available - 1
@@ -8531,7 +8878,12 @@ pub async fn test_fractional_storage_attribution_reduces_separate_capacities(dep
         .await
         .unwrap()
         .unwrap();
-    let initial_policy = before.resource_limits().unwrap().monthly_policy;
+    let initial_policy = before
+        .resource_limits(
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        )
+        .unwrap()
+        .monthly_policy;
     let initial_durable = initial_policy.available_durable_storage_byte_seconds;
     let initial_ephemeral = initial_policy.available_ephemeral_storage_byte_seconds;
 
@@ -8570,7 +8922,12 @@ pub async fn test_fractional_storage_attribution_reduces_separate_capacities(dep
                 partial_usage.monthly_ephemeral_storage_byte_nanoseconds_remainder,
                 600_000_000
             );
-            let partial = partial_usage.resource_limits().unwrap().monthly_policy;
+            let partial = partial_usage
+                .resource_limits(
+                    golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+                )
+                .unwrap()
+                .monthly_policy;
             assert_eq!(
                 partial.available_durable_storage_byte_seconds,
                 initial_durable - 1
@@ -8665,7 +9022,12 @@ pub async fn test_fractional_storage_attribution_reduces_separate_capacities(dep
             .usage(UsageType::MonthlyEphemeralStorageByteSeconds),
         1
     );
-    let after_policy = after.resource_limits().unwrap().monthly_policy;
+    let after_policy = after
+        .resource_limits(
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        )
+        .unwrap()
+        .monthly_policy;
     assert_eq!(
         after_policy.available_durable_storage_byte_seconds,
         initial_durable - 1
@@ -8886,7 +9248,11 @@ pub async fn test_monthly_policy_revision_resolves_policy_after_account_lock(dep
     let date = SqlDateTime::now();
     let initial = deps
         .account_usage_repo
-        .get(account_id, &date)
+        .get_for_resource_limits(
+            account_id,
+            &date,
+            golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+        )
         .await
         .unwrap()
         .unwrap();
@@ -8940,7 +9306,15 @@ pub async fn test_monthly_policy_revision_resolves_policy_after_account_lock(dep
 
     let reader = tokio::spawn({
         let account_usage_repo = deps.account_usage_repo.clone();
-        async move { account_usage_repo.get(account_id, &date).await }
+        async move {
+            account_usage_repo
+                .get_for_resource_limits(
+                    account_id,
+                    &date,
+                    golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+                )
+                .await
+        }
     });
     wait_for_postgres_lock(&pool, "SELECT account_id").await;
     assert!(!reader.is_finished());

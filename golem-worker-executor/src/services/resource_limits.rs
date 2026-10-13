@@ -181,6 +181,7 @@ struct MonthlyPolicyGate {
     unassigned_in_flight_usage: BTreeMap<AccountUsagePeriod, LocalMonthlyUsage>,
     in_flight_usage: HashMap<u64, InFlightMonthlyUsage>,
     stale_delivered_usage: Vec<StaleDeliveredUsage>,
+    // Diagnostic totals. Full overshoot is already included in the usage sent to Registry.
     hard_limit_memory_overshoot_byte_nanoseconds: BTreeMap<(AccountUsagePeriod, u64), u128>,
     hard_limit_durable_storage_overshoot_byte_nanoseconds:
         BTreeMap<(AccountUsagePeriod, u64), u128>,
@@ -459,21 +460,21 @@ impl AccountUsageAccumulator {
             .units
             .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
             .saturating_add(settlement.remainder);
-        let billable_byte_nanoseconds = maximum_byte_nanoseconds
+        let within_capacity_byte_nanoseconds = maximum_byte_nanoseconds
             .map_or(requested_byte_nanoseconds, |maximum| {
                 requested_byte_nanoseconds.min(maximum)
             });
-        let billable_units = billable_byte_nanoseconds / BYTE_NANOSECONDS_PER_GB_SECOND;
-        let billable_remainder = billable_byte_nanoseconds % BYTE_NANOSECONDS_PER_GB_SECOND;
-        memory.remainder = memory.remainder.saturating_add(billable_remainder);
+        let measured_units = requested_byte_nanoseconds / BYTE_NANOSECONDS_PER_GB_SECOND;
+        let measured_remainder = requested_byte_nanoseconds % BYTE_NANOSECONDS_PER_GB_SECOND;
+        memory.remainder = memory.remainder.saturating_add(measured_remainder);
         let remainder_units = memory.remainder / BYTE_NANOSECONDS_PER_GB_SECOND;
         memory.remainder %= BYTE_NANOSECONDS_PER_GB_SECOND;
         let pending = match mode {
             AgentMode::Durable => &mut memory.durable_memory_gb_seconds,
             AgentMode::Ephemeral => &mut memory.ephemeral_memory_gb_seconds,
         };
-        *pending = pending.saturating_add(billable_units.saturating_add(remainder_units));
-        requested_byte_nanoseconds.saturating_sub(billable_byte_nanoseconds)
+        *pending = pending.saturating_add(measured_units.saturating_add(remainder_units));
+        requested_byte_nanoseconds.saturating_sub(within_capacity_byte_nanoseconds)
     }
 
     fn add_storage_settlement(
@@ -489,21 +490,21 @@ impl AccountUsageAccumulator {
             .units
             .saturating_mul(1_000_000_000)
             .saturating_add(settlement.remainder);
-        let billable_byte_nanoseconds = maximum_byte_nanoseconds
+        let within_capacity_byte_nanoseconds = maximum_byte_nanoseconds
             .map_or(requested_byte_nanoseconds, |maximum| {
                 requested_byte_nanoseconds.min(maximum)
             });
-        let billable_units = billable_byte_nanoseconds / 1_000_000_000;
-        let billable_remainder = billable_byte_nanoseconds % 1_000_000_000;
+        let measured_units = requested_byte_nanoseconds / 1_000_000_000;
+        let measured_remainder = requested_byte_nanoseconds % 1_000_000_000;
         let remainder = match mode {
             AgentMode::Durable => &mut storage.durable_storage_remainder,
             AgentMode::Ephemeral => &mut storage.ephemeral_storage_remainder,
         };
-        *remainder = remainder.saturating_add(billable_remainder);
+        *remainder = remainder.saturating_add(measured_remainder);
         let remainder_units = *remainder / 1_000_000_000;
         *remainder %= 1_000_000_000;
-        self.add_storage(mode, billable_units.saturating_add(remainder_units));
-        requested_byte_nanoseconds.saturating_sub(billable_byte_nanoseconds)
+        self.add_storage(mode, measured_units.saturating_add(remainder_units));
+        requested_byte_nanoseconds.saturating_sub(within_capacity_byte_nanoseconds)
     }
 
     fn is_active(&self) -> bool {
@@ -1070,7 +1071,7 @@ impl AtomicResourceEntry {
         let gate = revision_state
             .monthly_policy
             .as_mut()
-            .expect("memory usage was clipped without an active monthly policy");
+            .expect("memory overshoot was recorded without an active monthly policy");
         let overshoot = gate
             .hard_limit_memory_overshoot_byte_nanoseconds
             .entry(key)
@@ -1093,7 +1094,7 @@ impl AtomicResourceEntry {
         let gate = revision_state
             .monthly_policy
             .as_mut()
-            .expect("storage usage was clipped without an active monthly policy");
+            .expect("storage overshoot was recorded without an active monthly policy");
         let overshoots = match mode {
             AgentMode::Durable => &mut gate.hard_limit_durable_storage_overshoot_byte_nanoseconds,
             AgentMode::Ephemeral => {
@@ -1194,33 +1195,6 @@ impl AtomicResourceEntry {
         {
             usage.saturating_add_assign(local);
         }
-        let memory_overshoot = gate
-            .hard_limit_memory_overshoot_byte_nanoseconds
-            .iter()
-            .filter(|((period, _), _)| period_matches(*period))
-            .map(|(_, amount)| *amount)
-            .fold(0u128, u128::saturating_add);
-        usage.memory_byte_nanoseconds = usage
-            .memory_byte_nanoseconds
-            .saturating_add(memory_overshoot);
-        let durable_storage_overshoot = gate
-            .hard_limit_durable_storage_overshoot_byte_nanoseconds
-            .iter()
-            .filter(|((period, _), _)| period_matches(*period))
-            .map(|(_, amount)| *amount)
-            .fold(0u128, u128::saturating_add);
-        usage.durable_storage_byte_nanoseconds = usage
-            .durable_storage_byte_nanoseconds
-            .saturating_add(durable_storage_overshoot);
-        let ephemeral_storage_overshoot = gate
-            .hard_limit_ephemeral_storage_overshoot_byte_nanoseconds
-            .iter()
-            .filter(|((period, _), _)| period_matches(*period))
-            .map(|(_, amount)| *amount)
-            .fold(0u128, u128::saturating_add);
-        usage.ephemeral_storage_byte_nanoseconds = usage
-            .ephemeral_storage_byte_nanoseconds
-            .saturating_add(ephemeral_storage_overshoot);
         usage
     }
 
@@ -2731,6 +2705,16 @@ pub struct ResourceLimitsGrpc {
     refresh_generation: AtomicU64,
 }
 
+fn idle_refresh_threshold_secs(
+    batch_update_interval: Duration,
+    limit_refresh_interval: Duration,
+) -> i64 {
+    limit_refresh_interval
+        .saturating_sub(batch_update_interval)
+        .as_secs()
+        .min(i64::MAX as u64) as i64
+}
+
 impl ResourceLimitsGrpc {
     pub fn new(
         registry_service: Arc<dyn RegistryService>,
@@ -2751,7 +2735,8 @@ impl ResourceLimitsGrpc {
         // Background task for batch updates
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(batch_update_interval);
-            let refresh_threshold_secs = limit_refresh_interval.as_secs() as i64;
+            let refresh_threshold_secs =
+                idle_refresh_threshold_secs(batch_update_interval, limit_refresh_interval);
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
@@ -2783,7 +2768,14 @@ impl ResourceLimitsGrpc {
 
         let last_known_limits = self
             .client
-            .get_resource_limits(account_id)
+            .get_resource_limits(
+                account_id,
+                golem_service_base::clients::registry::ResourceUsageMetering {
+                    compute: self.metering.compute,
+                    memory: self.metering.memory,
+                    filesystem: self.metering.filesystem,
+                },
+            )
             .await
             .map_err(|e| {
                 WorkerExecutorError::runtime(format!(
@@ -5316,7 +5308,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_hard_limit_clips_billable_usage_while_allow_overage_does_not() {
+    fn memory_hard_limit_exports_full_usage_while_preserving_exhaustion() {
         let period = AccountUsagePeriod::current();
         let hard = memory_entry(period, MonthlyUsageMode::HardLimit, 10);
         hard.record_memory_gb_seconds(AgentMode::Durable, 14);
@@ -5328,7 +5320,7 @@ mod tests {
         );
         assert_eq!(
             hard.capture_usage_update_for_test().memory_gb_seconds_delta,
-            10
+            14
         );
         assert_eq!(
             hard.usage_revision_state
@@ -5341,14 +5333,14 @@ mod tests {
                 .get(&(period, 7)),
             Some(&(4 * BYTE_NANOSECONDS_PER_GB_SECOND))
         );
-        hard.begin_monthly_refresh_with_memory_for_test(1, 0, 10);
+        hard.begin_monthly_refresh_with_memory_for_test(1, 0, 14);
         assert!(hard.apply_monthly_snapshot(
             1,
             MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: u64::MAX,
-                available_memory_gb_seconds: 2,
+                available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
                 available_durable_storage_byte_seconds: u64::MAX,
                 available_durable_storage_byte_nanoseconds_remainder: 0,
@@ -5369,7 +5361,7 @@ mod tests {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: u64::MAX,
-                available_memory_gb_seconds: 5,
+                available_memory_gb_seconds: 1,
                 available_memory_byte_nanoseconds_remainder: 0,
                 available_durable_storage_byte_seconds: u64::MAX,
                 available_durable_storage_byte_nanoseconds_remainder: 0,
@@ -5425,7 +5417,113 @@ mod tests {
     }
 
     #[test]
-    fn storage_hard_limit_clips_billable_usage_and_preserves_exhaustion() {
+    fn hard_limit_memory_exports_full_measurement_and_matches_fresh_entry_capacity() {
+        let period = AccountUsagePeriod::current();
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 1);
+        entry.record_memory_gb_seconds(AgentMode::Durable, 2);
+        let captured = entry.capture_usage_update(i64::MAX).unwrap();
+        assert_eq!(captured.update.memory_gb_seconds_delta, 2);
+        entry.begin_monthly_refresh(1, &captured.update, 2, 0);
+        assert!(entry.apply_monthly_snapshot(
+            1,
+            memory_policy(period, MonthlyUsageMode::HardLimit, 0),
+            7,
+            true,
+        ));
+        let reconstructed = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
+        assert_eq!(
+            entry.monthly_resource_capacity(AgentMode::Durable),
+            reconstructed.monthly_resource_capacity(AgentMode::Durable)
+        );
+        assert_eq!(
+            entry.monthly_resource_capacity(AgentMode::Durable),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        assert!(entry.apply_monthly_snapshot_for_test(
+            2,
+            memory_policy(period, MonthlyUsageMode::HardLimit, 1),
+            8,
+        ));
+        assert_eq!(entry.effective_memory_gb_seconds(), 1);
+    }
+
+    #[test]
+    fn hard_limit_storage_exports_full_measurement_for_both_classes() {
+        let period = AccountUsagePeriod::current();
+        let entry = storage_entry(period, MonthlyUsageMode::HardLimit, 1, 1);
+        entry.record_storage_byte_seconds(AgentMode::Durable, 2);
+        entry.record_storage_byte_seconds(AgentMode::Ephemeral, 3);
+        let captured = entry.capture_usage_update(i64::MAX).unwrap();
+        assert_eq!(captured.update.durable_storage_byte_seconds_delta, 2);
+        assert_eq!(captured.update.ephemeral_storage_byte_seconds_delta, 3);
+        entry.begin_monthly_refresh(1, &captured.update, 0, 0);
+        assert!(entry.apply_monthly_snapshot(
+            1,
+            storage_policy(period, MonthlyUsageMode::HardLimit, 0, 0),
+            7,
+            true,
+        ));
+        let reconstructed = storage_entry(period, MonthlyUsageMode::HardLimit, 0, 0);
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            assert_eq!(
+                entry.monthly_resource_capacity(mode),
+                reconstructed.monthly_resource_capacity(mode)
+            );
+            assert!(entry.monthly_resource_capacity(mode).is_err());
+        }
+        assert!(entry.apply_monthly_snapshot_for_test(
+            2,
+            storage_policy(period, MonthlyUsageMode::HardLimit, 1, 1),
+            8,
+        ));
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            assert!(entry.monthly_resource_capacity(mode).is_ok());
+        }
+    }
+
+    #[test]
+    fn idle_refresh_accounts_for_adversarial_batch_phase_with_sub_unit_memory() {
+        let ResourceLimitsConfig::Grpc(config) = ResourceLimitsConfig::default() else {
+            panic!("default resource limits must use Registry refresh");
+        };
+        let threshold = idle_refresh_threshold_secs(
+            config.batch_update_interval,
+            config.limit_refresh_interval,
+        );
+        let entry = memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::AllowOverage,
+            1,
+        );
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: 1,
+            },
+        );
+        assert!(
+            !entry
+                .account_usage_accumulator
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .is_active()
+        );
+        // The account initializes one second after the batch timer's zero tick.
+        // At the 300-second tick its cached policy is only 299 seconds old.
+        entry
+            .last_refresh_secs
+            .store(Utc::now().timestamp() - 299, Ordering::Release);
+        assert!(
+            entry.capture_usage_update(threshold).is_some(),
+            "the 300-second tick must refresh rather than waiting until 360 seconds"
+        );
+    }
+
+    #[test]
+    fn storage_hard_limit_exports_full_usage_and_preserves_exhaustion() {
         let period = AccountUsagePeriod::current();
         let entry = storage_entry(period, MonthlyUsageMode::HardLimit, 1, u64::MAX);
 
@@ -5442,7 +5540,7 @@ mod tests {
             Err(MonthlyResourceExhaustion::DurableStorage)
         );
         let captured = entry.capture_usage_update_for_test();
-        assert_eq!(captured.durable_storage_byte_seconds_delta, 1);
+        assert_eq!(captured.durable_storage_byte_seconds_delta, 2);
         assert_eq!(captured.durable_storage_byte_nanoseconds_remainder, 0);
         assert_eq!(
             entry
@@ -5555,7 +5653,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_storage_settlements_cannot_bill_beyond_hard_limit() {
+    fn concurrent_storage_settlements_preserve_all_measured_usage() {
         let entry = Arc::new(storage_entry(
             AccountUsagePeriod::current(),
             MonthlyUsageMode::HardLimit,
@@ -5574,7 +5672,7 @@ mod tests {
             recorder.join().unwrap();
         }
 
-        assert_eq!(entry.durable_byte_seconds_delta(), 100);
+        assert_eq!(entry.durable_byte_seconds_delta(), 160);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
             Err(MonthlyResourceExhaustion::DurableStorage)
@@ -5583,7 +5681,7 @@ mod tests {
             entry
                 .capture_usage_update_for_test()
                 .durable_storage_byte_seconds_delta,
-            100
+            160
         );
     }
 
@@ -5737,7 +5835,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_limit_clips_memory_settlement_units_and_remainder() {
+    fn hard_limit_preserves_memory_settlement_units_and_remainder() {
         let entry = memory_entry(
             AccountUsagePeriod::current(),
             MonthlyUsageMode::HardLimit,
@@ -5752,8 +5850,15 @@ mod tests {
         );
 
         let captured = entry.capture_usage_update_for_test();
-        assert_eq!(captured.memory_gb_seconds_delta, 1);
+        assert_eq!(captured.memory_gb_seconds_delta, 2);
         assert_eq!(captured.memory_byte_nanoseconds_remainder, 0);
+        entry.update_policy_revision(8);
+        let remainder = entry.capture_usage_update_for_test();
+        assert_eq!(remainder.memory_gb_seconds_delta, 0);
+        assert_eq!(
+            remainder.memory_byte_nanoseconds_remainder,
+            (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64
+        );
     }
 
     #[test]
@@ -5798,7 +5903,6 @@ mod tests {
             1,
         );
         let three_quarters = BYTE_NANOSECONDS_PER_GB_SECOND * 3 / 4;
-        let one_quarter = BYTE_NANOSECONDS_PER_GB_SECOND / 4;
 
         entry.record_memory_settlement(
             AgentMode::Durable,
@@ -5831,7 +5935,7 @@ mod tests {
         assert_eq!(revision_8.monthly_policy_revision, 8);
         assert_eq!(
             revision_8.memory_byte_nanoseconds_remainder,
-            one_quarter as u64
+            three_quarters as u64
         );
     }
 
@@ -5885,7 +5989,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_memory_settlements_cannot_bill_beyond_hard_limit() {
+    fn concurrent_memory_settlements_preserve_all_measured_usage() {
         let entry = Arc::new(memory_entry(
             AccountUsagePeriod::current(),
             MonthlyUsageMode::HardLimit,
@@ -5901,7 +6005,7 @@ mod tests {
             recorder.join().unwrap();
         }
 
-        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 100);
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 160);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
             Err(MonthlyResourceExhaustion::Memory)
@@ -5910,7 +6014,7 @@ mod tests {
             entry
                 .capture_usage_update_for_test()
                 .memory_gb_seconds_delta,
-            100
+            160
         );
     }
 
@@ -7610,6 +7714,7 @@ mod tests {
         async fn get_resource_limits(
             &self,
             _account_id: AccountId,
+            _metering: golem_service_base::clients::registry::ResourceUsageMetering,
         ) -> Result<ServiceResourceLimits, RegistryServiceError> {
             self.get_limits_result
                 .lock()

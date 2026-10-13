@@ -3867,6 +3867,23 @@ mod test {
     }
 
     #[test]
+    fn shipped_account_limit_examples_use_supported_arguments() {
+        for text in [
+            crate::command_examples::ACCOUNT_LIMITS_SET,
+            crate::command_examples::ACCOUNT_LIMITS_UNSET,
+            include_str!("../../../docs/src/content/next/cli/account-usage.mdx"),
+        ] {
+            for line in text.lines().map(str::trim).filter(|line| {
+                line.starts_with("golem-cli account limits ")
+                    || line.starts_with("golem account limits ")
+            }) {
+                GolemCliCommand::try_parse_from(line.split_whitespace())
+                    .unwrap_or_else(|error| panic!("invalid shipped example {line:?}: {error}"));
+            }
+        }
+    }
+
+    #[test]
     fn account_limits_set_rejects_invalid_storage_size() {
         assert!(
             GolemCliCommand::try_parse_from([

@@ -180,6 +180,7 @@ impl ExecutionWindow {
             let weak_worker = Arc::downgrade(worker);
             let actor = worker.state_actor.clone();
             let memory = window.monthly_memory_tracker();
+            let mut health = window.subscribe_enforcement_failure();
             #[cfg(feature = "test-utils")]
             let clock = worker.monthly_clock.lock().unwrap().clone();
             let task = tokio::spawn(async move {
@@ -213,6 +214,10 @@ impl ExecutionWindow {
                             _ = actor.monthly_delivery_closed() => {
                                 monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
                                 return Err(WorkerExecutorError::runtime("Monthly monitor lost the lifecycle actor"));
+                            },
+                            failure = crate::services::resource_usage_metering::wait_for_enforcement_failure(&mut health) => {
+                                monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MeterFault);
+                                return Err(WorkerExecutorError::runtime(format!("Monthly enforcement unavailable: {failure}")));
                             },
                             _ = async {
                                 #[cfg(feature = "test-utils")]

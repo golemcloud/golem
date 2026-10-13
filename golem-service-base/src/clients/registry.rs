@@ -95,6 +95,10 @@ pub struct ResourceUsageMetering {
 }
 
 impl ResourceUsageMetering {
+    pub const fn any_enabled(self) -> bool {
+        self.compute || self.memory || self.filesystem
+    }
+
     pub const fn all_enabled() -> Self {
         Self {
             compute: true,
@@ -147,6 +151,7 @@ pub trait RegistryService: Send + Sync {
     async fn get_resource_limits(
         &self,
         account_id: AccountId,
+        metering: ResourceUsageMetering,
     ) -> Result<ResourceLimits, RegistryServiceError>;
 
     async fn update_worker_connection_limit(
@@ -599,12 +604,16 @@ impl RegistryService for GrpcRegistryService {
     async fn get_resource_limits(
         &self,
         account_id: AccountId,
+        metering: ResourceUsageMetering,
     ) -> Result<ResourceLimits, RegistryServiceError> {
         let response = self
             .client
             .call("get_resource_limits", move |client| {
                 let request = GetResourceLimitsRequest {
                     account_id: Some(account_id.into()),
+                    compute_metering_enabled: metering.compute,
+                    memory_metering_enabled: metering.memory,
+                    filesystem_metering_enabled: metering.filesystem,
                 };
                 Box::pin(client.get_resource_limits(request))
             })

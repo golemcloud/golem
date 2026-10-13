@@ -684,11 +684,11 @@ pub const ACCOUNT_LIMITS_SHOW: &str = "Examples:
   golem-cli account limits show --account owner@example.com";
 
 pub const ACCOUNT_LIMITS_SET: &str = "Examples:
-  golem-cli account limits set 1048576
+  golem-cli account limits set --max-storage-per-agent 1048576
   golem-cli account limits set --max-memory-per-agent 2097152 --account owner@example.com";
 
 pub const ACCOUNT_LIMITS_UNSET: &str = "Examples:
-  golem-cli account limits unset
+  golem-cli account limits unset --max-storage-per-agent
   golem-cli account limits unset --max-memory-per-agent --account owner@example.com";
 
 pub const ACCOUNT_PERMISSION_SHARE_LIST: &str = "Examples:

@@ -289,7 +289,7 @@ async fn monthly_owner_flush_does_not_settle_sibling_allocations_on_the_same_acc
 
 #[test]
 #[timeout("5s")]
-async fn monthly_scripted_storage_unavailable_observations_do_not_fabricate_exhaustion() {
+async fn monthly_scripted_storage_unavailable_observations_report_health_not_exhaustion() {
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         for unsupported in [true, false] {
             let clock = TestClock::new_at(Instant::now(), Utc::now());
@@ -309,6 +309,15 @@ async fn monthly_scripted_storage_unavailable_observations_do_not_fabricate_exha
             let window = open_window(&meter, permit).await.unwrap();
             wait_for_calls(&reader, 1).await;
             wait_for_observation_state(&window).await;
+            let mut health = window.subscribe_enforcement_failure();
+            if unsupported {
+                assert!(health.as_ref().unwrap().borrow().is_none());
+            } else {
+                assert!(matches!(
+                    wait_for_enforcement_failure(&mut health).await,
+                    MeteringFault::FilesystemObservationFailed(_),
+                ));
+            }
             assert_eq!(
                 window
                     .shared
@@ -327,9 +336,12 @@ async fn monthly_scripted_storage_unavailable_observations_do_not_fabricate_exha
             assert_eq!(entry.monthly_resource_capacity(mode), Ok(()));
             assert_eq!(entry.durable_byte_seconds_delta(), 0);
             assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
-            close_window(window, clock.now() + Duration::from_secs(1))
-                .await
-                .unwrap();
+            let closed = close_window(window, clock.now() + Duration::from_secs(1)).await;
+            if unsupported {
+                closed.unwrap();
+            } else {
+                assert!(matches!(closed, Err(MeteringCloseError::Faulted(_))));
+            }
         }
     }
 }

@@ -30,6 +30,7 @@ use golem_common::model::account_usage::{
     AccountUsagePeriod, BYTE_NANOSECONDS_PER_GB_SECOND, MemoryLimit, MonthlyUsageMode,
     MonthlyUsageModeTransitionSource, StorageLimit,
 };
+use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -346,6 +347,7 @@ pub trait AccountUsageRepo: Send + Sync {
         &self,
         account_id: Uuid,
         date: &SqlDateTime,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<Option<AccountUsage>>;
 
     async fn get_for_type(
@@ -391,6 +393,7 @@ pub trait AccountUsageRepo: Send + Sync {
         account_id: Uuid,
         period: AccountUsagePeriod,
         active_at: &SqlDateTime,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<ResolvedMonthlyPolicyRevision>;
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<u64>;
@@ -444,9 +447,10 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
         &self,
         account_id: Uuid,
         date: &SqlDateTime,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<Option<AccountUsage>> {
         self.repo
-            .get_for_resource_limits(account_id, date)
+            .get_for_resource_limits(account_id, date, metering)
             .instrument(Self::span_account_id(account_id))
             .await
     }
@@ -524,9 +528,10 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
         account_id: Uuid,
         period: AccountUsagePeriod,
         active_at: &SqlDateTime,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<ResolvedMonthlyPolicyRevision> {
         self.repo
-            .get_or_create_monthly_policy_revision(account_id, period, active_at)
+            .get_or_create_monthly_policy_revision(account_id, period, active_at, metering)
             .instrument(Self::span_account_id(account_id))
             .await
     }
@@ -708,29 +713,35 @@ impl DbAccountUsageRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         account_id: Uuid,
         period: AccountUsagePeriod,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<MonthlyUsageBaselineRow> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 SELECT
                     COALESCE(MAX(CASE WHEN usage_type = $3 THEN value END), 0) AS compute_fuel,
                     COALESCE(MAX(CASE WHEN usage_type = $4 THEN value END), 0) AS memory_gb_seconds,
-                    COALESCE((SELECT byte_nanoseconds FROM account_monthly_memory_remainders
-                              WHERE account_id = $1 AND usage_key = $2), 0) AS memory_byte_nanoseconds_remainder,
+                    CASE WHEN $8 THEN COALESCE((SELECT byte_nanoseconds FROM account_monthly_memory_remainders
+                              WHERE account_id = $1 AND usage_key = $2), 0) ELSE 0 END AS memory_byte_nanoseconds_remainder,
                     COALESCE(MAX(CASE WHEN usage_type = $5 THEN value END), 0) AS durable_storage_byte_seconds,
-                    COALESCE((SELECT durable_byte_nanoseconds FROM account_monthly_storage_remainders
-                              WHERE account_id = $1 AND usage_key = $2), 0) AS durable_storage_byte_nanoseconds_remainder,
+                    CASE WHEN $9 THEN COALESCE((SELECT durable_byte_nanoseconds FROM account_monthly_storage_remainders
+                              WHERE account_id = $1 AND usage_key = $2), 0) ELSE 0 END AS durable_storage_byte_nanoseconds_remainder,
                     COALESCE(MAX(CASE WHEN usage_type = $6 THEN value END), 0) AS ephemeral_storage_byte_seconds,
-                    COALESCE((SELECT ephemeral_byte_nanoseconds FROM account_monthly_storage_remainders
-                              WHERE account_id = $1 AND usage_key = $2), 0) AS ephemeral_storage_byte_nanoseconds_remainder
+                    CASE WHEN $9 THEN COALESCE((SELECT ephemeral_byte_nanoseconds FROM account_monthly_storage_remainders
+                              WHERE account_id = $1 AND usage_key = $2), 0) ELSE 0 END AS ephemeral_storage_byte_nanoseconds_remainder
                 FROM account_usage_stats
                 WHERE account_id = $1 AND usage_key = $2
+                    AND ((usage_type = $3 AND $7) OR (usage_type = $4 AND $8)
+                         OR (usage_type IN ($5, $6) AND $9))
             "#})
             .bind(account_id)
             .bind(year_and_month_to_usage_key(period.year, period.month))
             .bind(UsageType::MonthlyGasLimit)
             .bind(UsageType::MonthlyMemoryGbSeconds)
             .bind(UsageType::MonthlyDurableAgentStorageByteSeconds)
-            .bind(UsageType::MonthlyEphemeralStorageByteSeconds),
+            .bind(UsageType::MonthlyEphemeralStorageByteSeconds)
+            .bind(metering.compute)
+            .bind(metering.memory)
+            .bind(metering.filesystem),
         )
         .await
     }
@@ -740,6 +751,7 @@ impl DbAccountUsageRepo<PostgresPool> {
         account_id: Uuid,
         period: AccountUsagePeriod,
         active_at: &SqlDateTime,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<Option<ResolvedMonthlyPolicyRevision>> {
         if DbAccountResourceOverrideRepo::<PostgresPool>::lock_account_in_tx(tx, account_id)
             .await?
@@ -755,7 +767,7 @@ impl DbAccountUsageRepo<PostgresPool> {
                     "Account {account_id} disappeared while resolving monthly policy"
                 ))
             })?;
-        let snapshot = account_plan.monthly_policy_snapshot()?;
+        let snapshot = account_plan.monthly_policy_snapshot(metering)?;
         let current = Self::current_policy_revision_in_tx(tx, account_id).await?;
         let mode = crate::repo::model::account_usage::monthly_usage_mode_str(snapshot.mode);
         if let Some(current) = &current
@@ -783,7 +795,7 @@ impl DbAccountUsageRepo<PostgresPool> {
             })?,
             None => 0,
         };
-        let baseline = Self::usage_baseline_in_tx(tx, account_id, period).await?;
+        let baseline = Self::usage_baseline_in_tx(tx, account_id, period, metering).await?;
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO account_monthly_policy_revisions (
@@ -824,12 +836,36 @@ impl DbAccountUsageRepo<PostgresPool> {
         }))
     }
 
+    async fn record_metering_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        account_id: Uuid,
+        usage_key: &str,
+        metering: ResourceUsageMetering,
+        updated_at: &SqlDateTime,
+    ) -> RepoResult<()> {
+        tx.execute(sqlx::query(indoc! { r#"
+            INSERT INTO account_usage_metering_state (
+                account_id, usage_key, compute_enabled, memory_enabled, filesystem_enabled, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (account_id, usage_key) DO UPDATE SET
+                compute_enabled = excluded.compute_enabled,
+                memory_enabled = excluded.memory_enabled,
+                filesystem_enabled = excluded.filesystem_enabled,
+                updated_at = excluded.updated_at
+        "#})
+            .bind(account_id).bind(usage_key)
+            .bind(metering.compute).bind(metering.memory).bind(metering.filesystem)
+            .bind(updated_at)).await?;
+        Ok(())
+    }
+
     async fn get_usage_at(
         &self,
         account_id: Uuid,
         date: &SqlDateTime,
         active_at: &SqlDateTime,
         include_counts: bool,
+        metering: Option<ResourceUsageMetering>,
     ) -> RepoResult<Option<AccountUsage>> {
         let date = date.clone();
         let active_at = active_at.clone();
@@ -839,20 +875,15 @@ impl DbAccountUsageRepo<PostgresPool> {
                     year: date.as_utc().year(),
                     month: date.as_utc().month(),
                 };
-                let Some(resolved_policy) = Self::resolve_monthly_policy_revision_in_tx(
-                    tx,
-                    account_id,
-                    period,
-                    &active_at,
-                )
-                .await?
-                else {
-                    return Ok(None);
+                let (monthly_policy_revision, account_plan) = if let Some(metering) = metering.filter(|metering| metering.any_enabled()) {
+                    let Some(resolved_policy) = Self::resolve_monthly_policy_revision_in_tx(
+                        tx, account_id, period, &active_at, metering,
+                    ).await? else { return Ok(None); };
+                    (resolved_policy.revision, resolved_policy.account_plan)
+                } else {
+                    let Some(plan) = Self::get_plan_in_tx(tx, account_id, &active_at).await? else { return Ok(None); };
+                    (0, plan)
                 };
-                let ResolvedMonthlyPolicyRevision {
-                    revision: monthly_policy_revision,
-                    account_plan,
-                } = resolved_policy;
 
                 let usage_rows = tx
                     .fetch_all(
@@ -892,6 +923,10 @@ impl DbAccountUsageRepo<PostgresPool> {
                     WHERE
                         account_id = $1
                         AND usage_key IN ($2, $3)
+                        AND (usage_type NOT IN ($12, $13, $14, $15)
+                             OR (usage_type = $12 AND $9)
+                             OR (usage_type = $13 AND $10)
+                             OR (usage_type IN ($14, $15) AND $11))
                     UNION ALL SELECT $4 AS usage_type, total_apps AS value, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC) FROM counts WHERE $8
                     UNION ALL SELECT $5 AS usage_type, total_envs AS value, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC) FROM counts WHERE $8
                     UNION ALL SELECT $6 AS usage_type, total_components AS value, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC) FROM counts WHERE $8
@@ -899,11 +934,11 @@ impl DbAccountUsageRepo<PostgresPool> {
                     UNION ALL
                     SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), byte_nanoseconds, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC)
                     FROM account_monthly_memory_remainders
-                    WHERE account_id = $1 AND usage_key = $2
+                    WHERE account_id = $1 AND usage_key = $2 AND $10
                     UNION ALL
                     SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), durable_byte_nanoseconds, ephemeral_byte_nanoseconds
                     FROM account_monthly_storage_remainders
-                    WHERE account_id = $1 AND usage_key = $2;
+                    WHERE account_id = $1 AND usage_key = $2 AND $11;
                         "#})
                         .bind(account_id)
                         .bind(date_to_usage_key(&date))
@@ -912,7 +947,14 @@ impl DbAccountUsageRepo<PostgresPool> {
                         .bind(UsageType::TotalEnvCount)
                         .bind(UsageType::TotalComponentCount)
                         .bind(UsageType::TotalComponentStorageBytes)
-                        .bind(include_counts),
+                        .bind(include_counts)
+                        .bind(metering.is_none_or(|metering| metering.compute))
+                        .bind(metering.is_none_or(|metering| metering.memory))
+                        .bind(metering.is_none_or(|metering| metering.filesystem))
+                        .bind(UsageType::MonthlyGasLimit)
+                        .bind(UsageType::MonthlyMemoryGbSeconds)
+                        .bind(UsageType::MonthlyDurableAgentStorageByteSeconds)
+                        .bind(UsageType::MonthlyEphemeralStorageByteSeconds),
                     )
                     .await?;
 
@@ -975,6 +1017,10 @@ impl DbAccountUsageRepo<PostgresPool> {
                     plan: account_plan.plan,
                     changes: Default::default(),
                 };
+                if let Some(metering) = metering {
+                    Self::record_metering_in_tx(tx, account_id, &date_to_usage_key(&date),
+                        metering, &SqlDateTime::now()).await?;
+                }
                 Ok(Some(account_usage))
             }
             .boxed()
@@ -1041,7 +1087,13 @@ impl DbAccountUsageRepo<PostgresPool> {
             year: changed_at.as_utc().year(),
             month: changed_at.as_utc().month(),
         };
-        let baseline = Self::usage_baseline_in_tx(tx, account_id, period).await?;
+        let baseline = Self::usage_baseline_in_tx(
+            tx,
+            account_id,
+            period,
+            ResourceUsageMetering::all_enabled(),
+        )
+        .await?;
         let previous_mode_value =
             crate::repo::model::account_usage::monthly_usage_mode_str(previous_mode);
         let new_mode_value = crate::repo::model::account_usage::monthly_usage_mode_str(new_mode);
@@ -1147,15 +1199,17 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         active_at: &SqlDateTime,
     ) -> RepoResult<Option<AccountUsage>> {
-        self.get_usage_at(account_id, date, active_at, true).await
+        self.get_usage_at(account_id, date, active_at, true, None)
+            .await
     }
 
     async fn get_for_resource_limits(
         &self,
         account_id: Uuid,
         date: &SqlDateTime,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<Option<AccountUsage>> {
-        self.get_usage_at(account_id, date, &SqlDateTime::now(), false)
+        self.get_usage_at(account_id, date, &SqlDateTime::now(), false, Some(metering))
             .await
     }
 
@@ -1770,17 +1824,20 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         account_id: Uuid,
         period: AccountUsagePeriod,
         active_at: &SqlDateTime,
+        metering: ResourceUsageMetering,
     ) -> RepoResult<ResolvedMonthlyPolicyRevision> {
         let active_at = active_at.clone();
         self.with_tx("get_or_create_monthly_policy_revision", |tx| {
             async move {
-                Self::resolve_monthly_policy_revision_in_tx(tx, account_id, period, &active_at)
-                    .await?
-                    .ok_or_else(|| {
-                        RepoError::InternalError(anyhow::anyhow!(
-                            "Account {account_id} not found while registering monthly policy"
-                        ))
-                    })
+                Self::resolve_monthly_policy_revision_in_tx(
+                    tx, account_id, period, &active_at, metering,
+                )
+                .await?
+                .ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "Account {account_id} not found while registering monthly policy"
+                    ))
+                })
             }
             .boxed()
         })
@@ -1821,8 +1878,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 attribution.ephemeral_storage_byte_nanoseconds_remainder,
             )
         });
-        let has_attribution =
-            attributed_usage != (0, 0, 0, 0) || attributed_remainders != (0, 0, 0);
+        let has_attribution = attribution.is_some()
+            && (attributed_usage != (0, 0, 0, 0) || attributed_remainders != (0, 0, 0));
         let metering = account_usage.metering;
         let monthly_policy_revision = account_usage.monthly_policy_revision;
 
@@ -1830,9 +1887,9 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             async move {
                 DbAccountResourceOverrideRepo::<PostgresPool>::lock_account_in_tx(tx, account_id)
                     .await?;
-                let current_policy_revision = Self::current_policy_revision_in_tx(tx, account_id)
+                let current_policy_revision = if has_attribution { Self::current_policy_revision_in_tx(tx, account_id)
                     .await?
-                    .map(|revision| revision.revision.get());
+                    .map(|revision| revision.revision.get()) } else { None };
                 if has_attribution && current_policy_revision.is_none() {
                     return Err(RepoError::InternalError(anyhow::anyhow!(
                         "No monthly policy revision exists for account {account_id}"
@@ -2054,35 +2111,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 }
 
                 if let Some(metering) = metering {
-                    let usage_key = date_usage_key;
-                    let mut query = QueryBuilder::<<PostgresPool as Pool>::Db>::new(indoc! { r#"
-                        INSERT INTO account_usage_metering_state (
-                            account_id,
-                            usage_key,
-                            compute_enabled,
-                            memory_enabled,
-                            filesystem_enabled,
-                            updated_at
-                        )
-                    "#});
-                    query.push_values([metering], |mut row, metering| {
-                        row.push_bind(account_id)
-                            .push_bind(&usage_key)
-                            .push_bind(metering.compute)
-                            .push_bind(metering.memory)
-                            .push_bind(metering.filesystem)
-                            .push_bind(updated_at.clone());
-                    });
-                    query.push(indoc! { r#"
-                        ON CONFLICT (account_id, usage_key) DO UPDATE
-                        SET
-                            compute_enabled = excluded.compute_enabled,
-                            memory_enabled = excluded.memory_enabled,
-                            filesystem_enabled = excluded.filesystem_enabled,
-                            updated_at = excluded.updated_at
-                    "#});
-
-                    tx.execute(query.build()).await?;
+                    Self::record_metering_in_tx(tx, account_id, &date_usage_key, metering, &updated_at).await?;
                 }
 
                 Ok(current_policy_revision.unwrap_or(monthly_policy_revision))

@@ -252,6 +252,7 @@ impl RegistryService for MutableResourceLimitsRegistry {
     async fn get_resource_limits(
         &self,
         _account_id: AccountId,
+        _metering: golem_service_base::clients::registry::ResourceUsageMetering,
     ) -> Result<golem_service_base::model::ResourceLimits, RegistryServiceError> {
         Ok(self.current_limits())
     }

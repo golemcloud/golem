@@ -608,6 +608,21 @@ async fn test_monthly_usage_attribution_uses_accrual_revision(
 }
 
 #[test]
+async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps).await;
+}
+
+#[test]
+async fn test_resource_reads_exclude_disabled_monthly_usage_and_baselines(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_resource_reads_exclude_disabled_monthly_usage_and_baselines(deps)
+        .await;
+}
+
+#[test]
 async fn test_monthly_policy_revision_tracks_allowance_changes(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

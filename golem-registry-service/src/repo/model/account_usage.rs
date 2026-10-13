@@ -294,24 +294,30 @@ impl AccountUsagePlan {
         }
     }
 
-    pub fn monthly_policy_snapshot(&self) -> RepoResult<MonthlyPolicySnapshot> {
+    pub fn monthly_policy_snapshot(
+        &self,
+        metering: ResourceUsageMetering,
+    ) -> RepoResult<MonthlyPolicySnapshot> {
         let grants = self.admin_grant_values();
         Ok(MonthlyPolicySnapshot {
             mode: self.monthly_usage_mode()?,
-            resolved: MonthlyPlanAmounts {
-                compute_gcu: grants
-                    .monthly_compute_gcu
-                    .unwrap_or_else(|| self.plan.monthly_compute_gcu.get()),
-                memory_gb_seconds: grants
-                    .monthly_memory_gb_seconds
-                    .unwrap_or_else(|| self.plan.monthly_memory_gb_seconds.get()),
-                durable_storage_gb_month: grants
-                    .monthly_durable_storage_gb_month
-                    .unwrap_or_else(|| self.plan.monthly_durable_storage_gb_month.get()),
-                ephemeral_storage_gb_month: grants
-                    .monthly_ephemeral_storage_gb_month
-                    .unwrap_or_else(|| self.plan.monthly_ephemeral_storage_gb_month.get()),
-            }
+            resolved: enabled_monthly_amounts(
+                MonthlyPlanAmounts {
+                    compute_gcu: grants
+                        .monthly_compute_gcu
+                        .unwrap_or_else(|| self.plan.monthly_compute_gcu.get()),
+                    memory_gb_seconds: grants
+                        .monthly_memory_gb_seconds
+                        .unwrap_or_else(|| self.plan.monthly_memory_gb_seconds.get()),
+                    durable_storage_gb_month: grants
+                        .monthly_durable_storage_gb_month
+                        .unwrap_or_else(|| self.plan.monthly_durable_storage_gb_month.get()),
+                    ephemeral_storage_gb_month: grants
+                        .monthly_ephemeral_storage_gb_month
+                        .unwrap_or_else(|| self.plan.monthly_ephemeral_storage_gb_month.get()),
+                },
+                metering,
+            )
             .resolve()
             .map_err(|error| RepoError::InternalError(error.into()))?,
         })
@@ -600,6 +606,23 @@ impl AccountUsageRecord {
     }
 }
 
+fn enabled_monthly_amounts(
+    mut amounts: MonthlyPlanAmounts,
+    metering: ResourceUsageMetering,
+) -> MonthlyPlanAmounts {
+    if !metering.compute {
+        amounts.compute_gcu = 0;
+    }
+    if !metering.memory {
+        amounts.memory_gb_seconds = 0;
+    }
+    if !metering.filesystem {
+        amounts.durable_storage_gb_month = 0;
+        amounts.ephemeral_storage_gb_month = 0;
+    }
+    amounts
+}
+
 impl AccountUsage {
     pub fn monthly_policy_snapshot(&self) -> Result<MonthlyPolicySnapshot, MonthlyPlanAmountError> {
         Ok(MonthlyPolicySnapshot {
@@ -669,39 +692,57 @@ impl AccountUsage {
         self.final_value(usage_type) <= self.plan.limit(usage_type)
     }
 
-    pub fn resource_limits(&self) -> Result<ResourceLimits, MonthlyPlanAmountError> {
-        let monthly_amounts = self.monthly_plan_amounts().resolve()?;
-        let available_fuel = monthly_amounts
-            .compute_fuel
-            .saturating_sub(self.final_value(UsageType::MonthlyGasLimit));
-        let available_memory_byte_nanoseconds = (monthly_amounts.memory_gb_seconds as u128)
-            .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
-            .saturating_sub(
-                (self.final_value(UsageType::MonthlyMemoryGbSeconds) as u128)
-                    .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
-                    .saturating_add(self.monthly_memory_byte_nanoseconds_remainder),
-            );
+    pub fn resource_limits(
+        &self,
+        metering: ResourceUsageMetering,
+    ) -> Result<ResourceLimits, MonthlyPlanAmountError> {
+        let monthly_amounts =
+            enabled_monthly_amounts(self.monthly_plan_amounts(), metering).resolve()?;
+        let available_fuel = if metering.compute {
+            monthly_amounts
+                .compute_fuel
+                .saturating_sub(self.final_value(UsageType::MonthlyGasLimit))
+        } else {
+            u64::MAX
+        };
+        let available_memory_byte_nanoseconds = if metering.memory {
+            (monthly_amounts.memory_gb_seconds as u128)
+                .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+                .saturating_sub(
+                    (self.final_value(UsageType::MonthlyMemoryGbSeconds) as u128)
+                        .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+                        .saturating_add(self.monthly_memory_byte_nanoseconds_remainder),
+                )
+        } else {
+            (u64::MAX as u128) * BYTE_NANOSECONDS_PER_GB_SECOND
+        };
         let available_memory_gb_seconds = (available_memory_byte_nanoseconds
             / BYTE_NANOSECONDS_PER_GB_SECOND)
             .min(u64::MAX as u128) as u64;
         let available_memory_byte_nanoseconds_remainder =
             (available_memory_byte_nanoseconds % BYTE_NANOSECONDS_PER_GB_SECOND) as u64;
-        let available_durable_storage_byte_nanoseconds =
+        let available_durable_storage_byte_nanoseconds = if metering.filesystem {
             (monthly_amounts.durable_storage_byte_seconds as u128)
                 .saturating_mul(1_000_000_000)
                 .saturating_sub(
                     (self.final_value(UsageType::MonthlyDurableAgentStorageByteSeconds) as u128)
                         .saturating_mul(1_000_000_000)
                         .saturating_add(self.monthly_durable_storage_byte_nanoseconds_remainder),
-                );
-        let available_ephemeral_storage_byte_nanoseconds =
+                )
+        } else {
+            (u64::MAX as u128) * 1_000_000_000
+        };
+        let available_ephemeral_storage_byte_nanoseconds = if metering.filesystem {
             (monthly_amounts.ephemeral_storage_byte_seconds as u128)
                 .saturating_mul(1_000_000_000)
                 .saturating_sub(
                     (self.final_value(UsageType::MonthlyEphemeralStorageByteSeconds) as u128)
                         .saturating_mul(1_000_000_000)
                         .saturating_add(self.monthly_ephemeral_storage_byte_nanoseconds_remainder),
-                );
+                )
+        } else {
+            (u64::MAX as u128) * 1_000_000_000
+        };
 
         let http_limit = self.plan.limit(UsageType::MonthlyHttpCalls);
         let available_http_calls =
@@ -975,7 +1016,69 @@ mod tests {
             changes: BTreeMap::new(),
         };
 
-        let policy = usage.resource_limits().unwrap().monthly_policy;
+        for compute in [false, true] {
+            for memory in [false, true] {
+                for filesystem in [false, true] {
+                    let limits = usage
+                        .resource_limits(
+                            golem_service_base::clients::registry::ResourceUsageMetering {
+                                compute,
+                                memory,
+                                filesystem,
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(limits.max_memory_per_worker, u64::MAX);
+                    assert_eq!(
+                        limits.max_disk_space_per_worker,
+                        usage.max_disk_space_per_worker_value
+                    );
+                    if !compute {
+                        assert_eq!(limits.monthly_policy.available_fuel, u64::MAX);
+                    }
+                    if !memory {
+                        assert_eq!(limits.monthly_policy.available_memory_gb_seconds, u64::MAX);
+                        assert_eq!(
+                            limits
+                                .monthly_policy
+                                .available_memory_byte_nanoseconds_remainder,
+                            0
+                        );
+                    }
+                    if !filesystem {
+                        assert_eq!(
+                            limits.monthly_policy.available_durable_storage_byte_seconds,
+                            u64::MAX
+                        );
+                        assert_eq!(
+                            limits
+                                .monthly_policy
+                                .available_ephemeral_storage_byte_seconds,
+                            u64::MAX
+                        );
+                        assert_eq!(
+                            limits
+                                .monthly_policy
+                                .available_durable_storage_byte_nanoseconds_remainder,
+                            0
+                        );
+                        assert_eq!(
+                            limits
+                                .monthly_policy
+                                .available_ephemeral_storage_byte_nanoseconds_remainder,
+                            0
+                        );
+                    }
+                }
+            }
+        }
+
+        let policy = usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+            )
+            .unwrap()
+            .monthly_policy;
         let durable_total = usage
             .monthly_plan_amounts()
             .resolve()
@@ -1003,13 +1106,23 @@ mod tests {
             750_000_000
         );
         assert_eq!(
-            usage.resource_limits().unwrap().max_memory_per_worker,
+            usage
+                .resource_limits(
+                    golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+                )
+                .unwrap()
+                .max_memory_per_worker,
             u64::MAX
         );
         usage.max_memory_per_worker_value =
             golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_MEMORY_LIMIT;
         assert_eq!(
-            usage.resource_limits().unwrap().max_memory_per_worker,
+            usage
+                .resource_limits(
+                    golem_service_base::clients::registry::ResourceUsageMetering::all_enabled()
+                )
+                .unwrap()
+                .max_memory_per_worker,
             golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_MEMORY_LIMIT
         );
 
@@ -1017,7 +1130,12 @@ mod tests {
         usage.usage.insert(UsageType::MonthlyMemoryGbSeconds, 3);
         usage.monthly_memory_byte_nanoseconds_remainder =
             golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND / 4;
-        let memory_policy = usage.resource_limits().unwrap().monthly_policy;
+        let memory_policy = usage
+            .resource_limits(
+                golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
+            )
+            .unwrap()
+            .monthly_policy;
         assert_eq!(memory_policy.available_memory_gb_seconds, 6);
         assert_eq!(
             memory_policy.available_memory_byte_nanoseconds_remainder,
