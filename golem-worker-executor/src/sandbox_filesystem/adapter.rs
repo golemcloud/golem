@@ -482,8 +482,9 @@ impl PartialEq<SandboxNamespaceCoordinationKey> for SandboxDirectoryCoordination
 #[derive(Clone)]
 pub(crate) struct SandboxResolvedNamespaceTarget {
     parent: SandboxDirectory,
-    name: OsString,
+    name: Box<std::ffi::OsStr>,
     coordination_key: SandboxNamespaceCoordinationKey,
+    parent_byte_exact_lookup_proven: bool,
     final_directory_key: Option<SandboxDirectoryCoordinationKey>,
     read_only_file: bool,
     followed_read_only_file: NativeReadOnlyResolution,
@@ -500,6 +501,12 @@ enum NativeReadOnlyResolution {
 }
 
 impl SandboxResolvedNamespaceTarget {
+    /// Reports a positive proof that lookup in this parent requires the exact stored spelling.
+    /// False means no such proof. This does not establish any ancestor's spelling.
+    pub(crate) fn has_byte_exact_lookup_proof(&self) -> bool {
+        self.parent_byte_exact_lookup_proven
+    }
+
     /// Returns the semantic key used to coordinate access to this namespace entry.
     pub(crate) fn coordination_key(&self) -> SandboxNamespaceCoordinationKey {
         self.coordination_key.clone()
@@ -514,7 +521,7 @@ impl SandboxResolvedNamespaceTarget {
     ///
     /// Namespace operations should use this instead of resolving the original ambient path again.
     pub(crate) fn target(&self) -> SandboxPath {
-        SandboxPath::at(self.parent.clone(), PathBuf::from(&self.name))
+        SandboxPath::at(self.parent.clone(), PathBuf::from(self.name.as_ref()))
     }
 
     /// Tells whether the resolved object is a regular file without write permission.
@@ -542,7 +549,7 @@ impl SandboxResolvedNamespaceTarget {
                 );
                 Err(FilesystemStorageError::io(
                     "resolve sandbox filesystem target permissions",
-                    &self.parent.path.join(&self.name),
+                    &self.parent.path.join(self.name.as_ref()),
                     source,
                 ))
             }
@@ -1197,12 +1204,15 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// brings all that is under it, and a symlink becomes a symlink. Directories and symlinks are
     /// made again, and permissions and modification times are copied. `access` sets the write
     /// permission of seeded files, or keeps the permissions of the source. `placement` decides
-    /// what happens to a target path that is already there. On XFS each file is one reflink. With
-    /// project quotas the reflink goes into the project of this filesystem, so the quota is charged
-    /// here, and EDQUOT and ENOSPC appear here. On development storage each file is copied.
+    /// what happens to a target path that is already there. Each file is a copy-on-write copy on
+    /// XFS or Apfs storage, and a byte copy on other storage. With project quotas the reflink goes
+    /// into the project of this filesystem, so the quota is charged here, and EDQUOT and ENOSPC
+    /// appear here.
     /// Nothing is written outside the sandbox root. The first entry that fails stops the call. The
-    /// entries before it stay. On XFS, what the call wrote is on stable storage when the call
-    /// returns, also when an entry fails.
+    /// entries before it stay. Linux XFS seeds synchronize the volume after the entries. macOS
+    /// seeds fsync each file and affected directory, then request one full device flush through an
+    /// unlinked regular descriptor owned by the filesystem. Both finalizers run after an entry
+    /// failure. A synchronization failure is an error, without a weaker fallback.
     fn seed(
         &self,
         entries: Box<[SeedEntry]>,
@@ -1233,8 +1243,8 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// symlinks are made again. Permissions and modification times are copied, and `target` gets
     /// the permissions and the modification time of `source`. On XFS, with or without project
     /// quotas, each file is one reflink: the cost follows the number of files, not the bytes, and
-    /// the copy adds nothing to any quota, because a HostPath is outside every agent project. On
-    /// development storage each file is copied.
+    /// the copy adds nothing to any quota, because a HostPath is outside every agent project.
+    /// Apfs also makes copy-on-write copies. Other storage makes byte copies.
     ///
     /// A regular file or a symlink with more than one name under `source` is copied once, at the
     /// first name that the copy meets, and the result gives its names as one [`LinkGroup`].
@@ -1920,44 +1930,68 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let materialization_root: Arc<Path> = Arc::from(self.root());
         let root_directory = self.root_directory_state();
-        let mode = file_copy_mode(&self.volume);
-        let transfer = seed_transfer(mode, self.quota_authority);
+        let platform = tree_copy::native_seed_sync_platform();
+        let policy = tree_copy::SeedSyncPolicy::new(
+            platform,
+            file_transfer(platform, file_copy_mode(&self.volume), self.quota_authority),
+        );
         let storage_profile = storage_profile(&self.volume);
         async move {
             let error_path = Arc::clone(&materialization_root);
             execute_native(storage_profile, NativeOperation::TreeCopy, move || {
-                let seeded = entries.iter().try_for_each(|entry| {
-                    let context = tree_copy::SeedContext {
-                        transfer,
-                        access: entry.access,
-                        placement: entry.placement,
-                    };
-                    directory_for(&root_directory, &entry.target)
-                        .and_then(|base| {
-                            tree_copy::seed_entry(
-                                context,
-                                &base,
-                                entry.source.as_path(),
-                                &entry.target.path,
-                            )
-                        })
-                        .map_err(|error| {
-                            FilesystemStorageError::io(
-                                "seed sandbox filesystem entry",
-                                &entry.target.operation_path(&materialization_root),
-                                error,
-                            )
-                        })
-                });
-                let synced =
-                    tree_copy::sync_after_reflink(mode, &materialization_root).map_err(|error| {
+                let admitted = if policy.requires_batch_root() {
+                    Some(admit_root(&root_directory).map_err(|error| {
                         FilesystemStorageError::io(
-                            "sync seeded sandbox filesystem",
+                            "admit sandbox filesystem seed",
                             &materialization_root,
                             error,
                         )
-                    });
-                seeded.and(synced)
+                    })?)
+                } else {
+                    None
+                };
+                tree_copy::finalize_operation(
+                    || {
+                        entries.iter().try_for_each(|entry| {
+                            let context = tree_copy::SeedContext {
+                                policy,
+                                access: entry.access,
+                                placement: entry.placement,
+                            };
+                            match &admitted {
+                                Some(root) => {
+                                    base_directory(&entry.target, || Ok(root.directory()))
+                                }
+                                None => directory_for(&root_directory, &entry.target),
+                            }
+                            .and_then(|base| {
+                                tree_copy::seed_entry(
+                                    context,
+                                    &base,
+                                    entry.source.as_path(),
+                                    &entry.target.path,
+                                )
+                            })
+                            .map_err(|error| {
+                                FilesystemStorageError::io(
+                                    "seed sandbox filesystem entry",
+                                    &entry.target.operation_path(&materialization_root),
+                                    error,
+                                )
+                            })
+                        })
+                    },
+                    || {
+                        tree_copy::sync_seed_batch(policy, admitted.as_ref(), &materialization_root)
+                            .map_err(|error| {
+                                FilesystemStorageError::io(
+                                    "sync seeded sandbox filesystem",
+                                    &materialization_root,
+                                    error,
+                                )
+                            })
+                    },
+                )
             })
             .await
             .map_err(|error| task_error("seed sandbox filesystem", &error_path, error))?
@@ -1987,21 +2021,19 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         excluded: Arc<TreeExclusions>,
         target: &HostPath,
     ) -> impl Future<Output = Result<Box<[LinkGroup]>, FilesystemStorageError>> + Send {
+        let transfer = file_transfer(
+            tree_copy::native_seed_sync_platform(),
+            file_copy_mode(&self.volume),
+            QuotaAuthority::Unsupported,
+        );
         let operation_path = source.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let copy_mode = file_copy_mode(&self.volume);
         let storage_profile = storage_profile(&self.volume);
         let target = target.clone();
         async move {
             execute_native(storage_profile, NativeOperation::TreeCopy, move || {
                 let base = directory_for(&root_directory, &source)?;
-                tree_copy::copy_contents(
-                    &base,
-                    &source.path,
-                    &excluded,
-                    target.as_path(),
-                    copy_mode,
-                )
+                tree_copy::copy_contents(&base, &source.path, &excluded, target.as_path(), transfer)
             })
             .await
             .map_err(|error| {
@@ -2031,7 +2063,7 @@ impl SandboxFilesystemAllocationReader for SandboxFilesystemAllocationObserver {
 }
 
 impl SandboxFilesystem {
-    fn root_directory_state(&self) -> Arc<Mutex<Option<Arc<cap_std::fs::Dir>>>> {
+    fn root_directory_state(&self) -> Arc<Mutex<Option<NativeRootHandles>>> {
         Arc::clone(&self.root.directory)
     }
 }
@@ -2043,33 +2075,45 @@ fn node_path(node: &SandboxNode) -> PathBuf {
     }
 }
 
-fn directory_for(
-    root: &Arc<Mutex<Option<Arc<cap_std::fs::Dir>>>>,
+fn admit_root(root: &Arc<Mutex<Option<NativeRootHandles>>>) -> std::io::Result<NativeRootHandles> {
+    root.lock()
+        .expect("sandbox filesystem root descriptor lock poisoned")
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "sandbox filesystem root has been released",
+            )
+        })
+}
+
+/// Gives the directory that `target` is relative to. `root` gives the root directory of the
+/// sandbox, and is called only for a target at the root.
+fn base_directory(
     target: &SandboxPath,
+    root: impl FnOnce() -> std::io::Result<Arc<cap_std::fs::Dir>>,
 ) -> std::io::Result<Arc<cap_std::fs::Dir>> {
     match &target.base {
         SandboxPathBase::Directory(directory) => {
             directory.host().cloned().map_err(std::io::Error::other)
         }
-        SandboxPathBase::Root => {
-            let directory = {
-                let root = root
-                    .lock()
-                    .expect("sandbox filesystem root descriptor lock poisoned");
-                Arc::clone(root.as_ref().ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotConnected,
-                        "sandbox filesystem root has been released",
-                    )
-                })?)
-            };
-            #[cfg(test)]
-            if benchmark_disable_root_capability_reuse() {
-                return directory.try_clone().map(Arc::new);
-            }
-            Ok(directory)
-        }
+        SandboxPathBase::Root => root(),
     }
+}
+
+fn directory_for(
+    root: &Arc<Mutex<Option<NativeRootHandles>>>,
+    target: &SandboxPath,
+) -> std::io::Result<Arc<cap_std::fs::Dir>> {
+    base_directory(target, || {
+        let directory = admit_root(root)?.directory();
+        #[cfg(test)]
+        if benchmark_disable_root_capability_reuse() {
+            return directory.try_clone().map(Arc::new);
+        }
+        Ok(directory)
+    })
 }
 
 #[cfg(test)]
@@ -2141,7 +2185,9 @@ fn resolve_host_namespace_target(
             path: parent_path,
             coordination_key: coordination_key.parent.clone(),
         },
-        name,
+        name: name.into_boxed_os_str(),
+        parent_byte_exact_lookup_proven: coordination_key.name.mode
+            == NativeNameComparisonMode::Exact,
         coordination_key,
         final_directory_key,
         read_only_file,
@@ -2246,6 +2292,7 @@ fn native_name_comparison_mode(
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
+        // Case sensitivity does not prove byte-exact lookup. APFS also aliases Unicode spellings.
         let _ = (directory, parent, source, probe);
         Ok(NativeNameComparisonMode::Conservative)
     }
@@ -3278,7 +3325,9 @@ mod scripted {
                 programmed.parent_identity,
                 format!("programmed-directory-{}", programmed.parent_identity),
             ),
-            name,
+            name: name.into_boxed_os_str(),
+            // A programmed canonical label proves equivalence, not byte-exact lookup.
+            parent_byte_exact_lookup_proven: false,
             coordination_key: SandboxNamespaceCoordinationKey {
                 parent: parent_key,
                 name: NativeNameCoordinationKey {
@@ -3358,6 +3407,7 @@ mod scripted {
                     _ => unreachable!("scripted namespace parent identity must be scripted"),
                 },
             ),
+            parent_byte_exact_lookup_proven: true,
             coordination_key: SandboxNamespaceCoordinationKey {
                 parent: parent_key,
                 name: NativeNameCoordinationKey {
@@ -3365,7 +3415,7 @@ mod scripted {
                     mode: NativeNameComparisonMode::Exact,
                 },
             },
-            name,
+            name: name.into_boxed_os_str(),
             final_directory_key: None,
             read_only_file: false,
             followed_read_only_file: NativeReadOnlyResolution::Resolved(false),
@@ -3651,6 +3701,455 @@ mod tests {
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(filesystem, Box::new([entry])).await
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn an_empty_standard_seed_succeeds_after_root_retirement() {
+        let parent = tempfile::tempdir().unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        filesystem.root.close();
+        filesystem.seed(Box::default()).await.unwrap();
+        SandboxFilesystem::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_seed_provisionings(parent: &Path) -> Box<[SandboxFilesystemProvisioning]> {
+        [
+            FilesystemStorageMode::Temporary,
+            FilesystemStorageMode::Directory {
+                root: parent.join("directory-agents").into_boxed_path(),
+            },
+            FilesystemStorageMode::Apfs {
+                root: parent.join("apfs-agents").into_boxed_path(),
+            },
+        ]
+        .iter()
+        .map(|storage| SandboxFilesystemProvisioning::new(storage, RetryConfig::default()).unwrap())
+        .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn macos_empty_seed_preserves_read_only_root_namespace_and_mtime() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let parent = tempfile::tempdir().unwrap();
+        futures::future::join_all(
+            macos_seed_provisionings(parent.path())
+                .into_vec()
+                .into_iter()
+                .map(|provisioning| async move {
+                    let filesystem = provisioning.create_fresh(name()).await.unwrap();
+                    let root = filesystem.root().to_path_buf().into_boxed_path();
+                    let modified =
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_100);
+                    File::open(&root).unwrap().set_modified(modified).unwrap();
+                    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000))
+                        .unwrap();
+                    let result = filesystem.seed(Box::new([])).await;
+                    let attributes = std::fs::metadata(&root).unwrap();
+                    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                        .unwrap();
+                    result.unwrap();
+                    assert_eq!(attributes.permissions().mode() & 0o777, 0);
+                    assert_eq!(attributes.modified().unwrap(), modified);
+                    assert!(std::fs::read_dir(&root).unwrap().next().is_none());
+                    SandboxFilesystem::delete_and_verify(filesystem)
+                        .await
+                        .unwrap();
+                }),
+        )
+        .await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn macos_seed_uses_a_writable_child_capability_under_an_unsearchable_root() {
+        use cap_std::fs::PermissionsExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path()).await;
+        let source = host_child(&sources, "file");
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_101);
+        std::fs::write(source.as_path(), b"seeded through child").unwrap();
+        std::fs::set_permissions(source.as_path(), std::fs::Permissions::from_mode(0o640)).unwrap();
+        File::open(source.as_path())
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        futures::future::join_all(
+            macos_seed_provisionings(parent.path())
+                .into_vec()
+                .into_iter()
+                .map(|provisioning| {
+                    let source = source.clone();
+                    async move {
+                        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+                        let root = filesystem.root().to_path_buf().into_boxed_path();
+                        std::fs::create_dir(root.join("child")).unwrap();
+                        let child = open_native_directory(&filesystem, "child").await;
+                        File::open(&root).unwrap().set_modified(modified).unwrap();
+                        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000))
+                            .unwrap();
+                        let result = filesystem
+                            .seed(Box::new([SeedEntry {
+                                source,
+                                target: SandboxPath::at(child.clone(), "file"),
+                                access: SeedAccess::ReadOnly,
+                                placement: SeedPlacement::CreateNew,
+                            }]))
+                            .await;
+                        let root_attributes = std::fs::metadata(&root).unwrap();
+                        let child_attributes = child.host().unwrap().metadata("file");
+                        let contents = child.host().unwrap().read("file");
+                        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                            .unwrap();
+                        result.unwrap();
+                        let child_attributes = child_attributes.unwrap();
+                        assert_eq!(child_attributes.permissions().mode() & 0o777, 0o440);
+                        assert_eq!(child_attributes.modified().unwrap().into_std(), modified);
+                        assert_eq!(contents.unwrap(), b"seeded through child");
+                        assert_eq!(root_attributes.permissions().mode() & 0o777, 0);
+                        assert_eq!(root_attributes.modified().unwrap(), modified);
+                        assert_eq!(
+                            tree_copy::tree_listing(&root),
+                            ["child", "child/file"].map(String::from).into()
+                        );
+                        drop(child);
+                        SandboxFilesystem::delete_and_verify(filesystem)
+                            .await
+                            .unwrap();
+                    }
+                }),
+        )
+        .await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn macos_seed_and_batch_flush_follow_the_pinned_root_after_path_replacement() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path()).await;
+        let source = host_child(&sources, "file");
+        std::fs::write(source.as_path(), b"pinned root content").unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_102);
+        File::open(source.as_path())
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        futures::future::join_all(
+            macos_seed_provisionings(parent.path())
+                .into_vec()
+                .into_iter()
+                .map(|provisioning| {
+                    let source = source.clone();
+                    async move {
+                        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+                        let root = filesystem.root().to_path_buf().into_boxed_path();
+                        let moved = root.with_extension("moved").into_boxed_path();
+                        std::fs::rename(&root, &moved).unwrap();
+                        std::fs::create_dir(&root).unwrap();
+                        std::fs::write(root.join("decoy"), b"unchanged").unwrap();
+                        File::open(&root).unwrap().set_modified(modified).unwrap();
+                        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000))
+                            .unwrap();
+                        let result = seed_one(
+                            &filesystem,
+                            seed_entry(
+                                source,
+                                "file",
+                                SeedAccess::ReadOnly,
+                                SeedPlacement::CreateNew,
+                            ),
+                        )
+                        .await;
+                        let replacement_attributes = std::fs::metadata(&root).unwrap();
+                        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                            .unwrap();
+                        let replacement_listing = tree_copy::tree_listing(&root);
+                        let seeded_content = std::fs::read(moved.join("file"));
+                        let seeded_attributes = std::fs::metadata(moved.join("file"));
+                        std::fs::remove_dir_all(&root).unwrap();
+                        std::fs::rename(&moved, &root).unwrap();
+                        result.unwrap();
+                        assert_eq!(replacement_attributes.modified().unwrap(), modified);
+                        assert_eq!(replacement_listing, ["decoy"].map(String::from).into());
+                        assert_eq!(seeded_content.unwrap(), b"pinned root content");
+                        let seeded_attributes = seeded_attributes.unwrap();
+                        assert_eq!(seeded_attributes.modified().unwrap(), modified);
+                        assert_eq!(seeded_attributes.permissions().mode() & 0o222, 0);
+                        SandboxFilesystem::delete_and_verify(filesystem)
+                            .await
+                            .unwrap();
+                    }
+                }),
+        )
+        .await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn macos_seed_flushes_directory_only_and_symlink_only_batches() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path()).await;
+        let tree = host_child(&sources, "tree");
+        std::fs::create_dir_all(tree.as_path().join("nested/empty")).unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_103);
+        File::open(tree.as_path())
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let link = host_child(&sources, "link");
+        std::os::unix::fs::symlink("missing", link.as_path()).unwrap();
+        futures::future::join_all(
+            macos_seed_provisionings(parent.path())
+                .into_vec()
+                .into_iter()
+                .map(|provisioning| {
+                    let tree = tree.clone();
+                    let link = link.clone();
+                    async move {
+                        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+                        seed_one(
+                            &filesystem,
+                            seed_entry(
+                                tree,
+                                "tree",
+                                SeedAccess::FromSource,
+                                SeedPlacement::CreateNew,
+                            ),
+                        )
+                        .await
+                        .unwrap();
+                        assert_eq!(
+                            std::fs::metadata(filesystem.root().join("tree"))
+                                .unwrap()
+                                .modified()
+                                .unwrap(),
+                            modified
+                        );
+                        seed_one(
+                            &filesystem,
+                            seed_entry(
+                                link,
+                                "link",
+                                SeedAccess::FromSource,
+                                SeedPlacement::CreateNew,
+                            ),
+                        )
+                        .await
+                        .unwrap();
+                        assert_eq!(
+                            std::fs::read_link(filesystem.root().join("link")).unwrap(),
+                            Path::new("missing")
+                        );
+                        assert_eq!(
+                            tree_copy::tree_listing(filesystem.root()),
+                            ["link", "tree", "tree/nested", "tree/nested/empty"]
+                                .map(String::from)
+                                .into()
+                        );
+                        SandboxFilesystem::delete_and_verify(filesystem)
+                            .await
+                            .unwrap();
+                    }
+                }),
+        )
+        .await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn macos_partial_seed_keeps_prior_entries_and_removes_temporary_names() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path()).await;
+        let source = host_child(&sources, "file");
+        std::fs::write(source.as_path(), b"prior entry").unwrap();
+        let link = host_child(&sources, "link");
+        std::os::unix::fs::symlink("file", link.as_path()).unwrap();
+        futures::future::join_all(
+            macos_seed_provisionings(parent.path())
+                .into_vec()
+                .into_iter()
+                .map(|provisioning| {
+                    let source = source.clone();
+                    let link = link.clone();
+                    async move {
+                        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+                        let result = filesystem
+                            .seed(Box::new([
+                                seed_entry(
+                                    source.clone(),
+                                    "ancestor/file",
+                                    SeedAccess::ReadOnly,
+                                    SeedPlacement::CreateNew,
+                                ),
+                                seed_entry(
+                                    link,
+                                    "ancestor/link",
+                                    SeedAccess::FromSource,
+                                    SeedPlacement::CreateNew,
+                                ),
+                                seed_entry(
+                                    source.clone(),
+                                    "ancestor/file",
+                                    SeedAccess::ReadOnly,
+                                    SeedPlacement::CreateNew,
+                                ),
+                                seed_entry(
+                                    source,
+                                    "not-visited",
+                                    SeedAccess::FromSource,
+                                    SeedPlacement::CreateNew,
+                                ),
+                            ]))
+                            .await;
+                        assert_eq!(
+                            result.unwrap_err().io_kind(),
+                            Some(std::io::ErrorKind::AlreadyExists)
+                        );
+                        assert_eq!(
+                            std::fs::read(filesystem.root().join("ancestor/file")).unwrap(),
+                            b"prior entry"
+                        );
+                        assert_eq!(
+                            std::fs::read_link(filesystem.root().join("ancestor/link")).unwrap(),
+                            Path::new("file")
+                        );
+                        assert_eq!(
+                            tree_copy::tree_listing(filesystem.root()),
+                            ["ancestor", "ancestor/file", "ancestor/link"]
+                                .map(String::from)
+                                .into()
+                        );
+                        SandboxFilesystem::delete_and_verify(filesystem)
+                            .await
+                            .unwrap();
+                    }
+                }),
+        )
+        .await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn apfs_seed_clones_unflushed_source_content_without_changing_its_attributes() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path()).await;
+        let source = host_child(&sources, "unflushed");
+        let contents = (0..128_000)
+            .map(|position| (position % 251) as u8)
+            .collect::<Box<[u8]>>();
+        let mut file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(source.as_path())
+            .unwrap();
+        file.write_all(&contents).unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_104);
+        file.set_modified(modified).unwrap();
+        let before = file.metadata().unwrap();
+        let provisioning = SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Apfs {
+                root: parent.path().join("apfs-agents").into_boxed_path(),
+            },
+            RetryConfig::default(),
+        )
+        .unwrap();
+        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+        seed_one(
+            &filesystem,
+            seed_entry(
+                source,
+                "clone",
+                SeedAccess::ReadOnly,
+                SeedPlacement::CreateNew,
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read(filesystem.root().join("clone")).unwrap(),
+            contents.as_ref()
+        );
+        assert_eq!(
+            std::fs::metadata(filesystem.root().join("clone"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            modified
+        );
+        let after = file.metadata().unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+        assert_eq!(after.permissions(), before.permissions());
+        SandboxFilesystem::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn an_admitted_macos_root_retains_its_unlinked_regular_flusher_after_retirement() {
+        let parent = tempfile::tempdir().unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let state = filesystem.root_directory_state();
+        let admitted = admit_root(&state).unwrap();
+        let metadata = admitted
+            .seed_flusher
+            .as_deref()
+            .unwrap()
+            .metadata()
+            .unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(cap_fs_ext::MetadataExt::nlink(&metadata), 0);
+        assert!(
+            std::fs::read_dir(filesystem.root())
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        filesystem.root.close();
+        assert_eq!(
+            admit_root(&state).err().unwrap().kind(),
+            std::io::ErrorKind::NotConnected
+        );
+        tree_copy::sync_seed_batch(
+            tree_copy::SeedSyncPolicy::new(tree_copy::SeedSyncPlatform::MacOs, FileTransfer::Bytes),
+            Some(&admitted),
+            filesystem.root(),
+        )
+        .unwrap();
+        assert!(
+            admitted
+                .seed_flusher
+                .as_deref()
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .is_file()
+        );
+        drop(admitted);
+        SandboxFilesystem::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
+
     #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt as _;
@@ -3678,8 +4177,14 @@ mod tests {
         let lifecycle = Arc::new(AsyncMutex::new(()))
             .try_lock_owned()
             .expect("new name-mode test filesystem lease must be available");
+        let native_root = NativeRoot::new(
+            root.clone(),
+            directory,
+            tree_copy::native_seed_sync_platform(),
+        )
+        .unwrap();
         SandboxFilesystem::new(
-            NativeRoot::new(root.clone(), directory),
+            native_root,
             LeaseState {
                 lifecycle,
                 cleanup: NativeCleanup::Directory {
@@ -4094,6 +4599,26 @@ mod tests {
         assert!(first.coordination_key() == second.coordination_key());
         assert!(first.final_directory_key() == second.final_directory_key());
         assert_eq!(first.target().path, PathBuf::from("First"));
+        assert!(
+            !first.has_byte_exact_lookup_proof(),
+            "a canonical coordination label is not a lookup proof"
+        );
+        assert!(!second.has_byte_exact_lookup_proof());
+
+        let default = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("default"))
+            .await
+            .unwrap();
+        assert!(default.has_byte_exact_lookup_proof());
+        control.push_namespace_resolution(41, "First", Some(42));
+        let same_label = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("First"))
+            .await
+            .unwrap();
+        assert!(
+            !same_label.has_byte_exact_lookup_proof(),
+            "matching a canonical label does not prove the parent's lookup"
+        );
     }
 
     fn coordination_key_hash(key: &SandboxNamespaceCoordinationKey) -> u64 {
@@ -4146,6 +4671,25 @@ mod tests {
         assert!(!first.may_conflict_with(&other_parent));
         assert!(first != exact);
         assert!(first.may_conflict_with(&exact));
+    }
+
+    #[test]
+    fn apfs_conservative_keys_cover_normalization_aliases_and_parent_scope() {
+        let composed = SandboxNamespaceCoordinationKey::scripted_conservative(1, "caf\u{00e9}.txt");
+        let decomposed =
+            SandboxNamespaceCoordinationKey::scripted_conservative(1, "cafe\u{0301}.txt");
+        let sibling = SandboxNamespaceCoordinationKey::scripted_conservative(1, "notes.txt");
+        let other_parent =
+            SandboxNamespaceCoordinationKey::scripted_conservative(2, "cafe\u{0301}.txt");
+
+        assert!(composed == decomposed);
+        assert_eq!(
+            coordination_key_hash(&composed),
+            coordination_key_hash(&decomposed)
+        );
+        assert!(composed.may_conflict_with(&decomposed));
+        assert!(composed.may_conflict_with(&sibling));
+        assert!(!composed.may_conflict_with(&other_parent));
     }
 
     #[cfg(target_os = "linux")]
@@ -4231,6 +4775,125 @@ mod tests {
             NativeNameComparisonMode::Exact
         );
         assert_eq!(probes.get(), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn apfs_native_coordination_preserves_filename_spelling_and_lookup() {
+        let root = tempfile::tempdir().unwrap();
+        let provisioning = SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Apfs {
+                root: root.path().into(),
+            },
+            RetryConfig::default(),
+        )
+        .unwrap();
+        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+        std::fs::write(filesystem.root().join("CaseProbe"), b"case").unwrap();
+        let case_alias_exists = filesystem.root().join("caseprobe").exists();
+        let case_exact = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("CaseProbe"))
+            .await
+            .unwrap();
+        let case_alias = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("caseprobe"))
+            .await
+            .unwrap();
+        assert_eq!(
+            case_exact.target().path.as_os_str(),
+            std::ffi::OsStr::new("CaseProbe")
+        );
+        assert_eq!(
+            case_alias.target().path.as_os_str(),
+            std::ffi::OsStr::new("caseprobe")
+        );
+        let case_object = filesystem
+            .get_path_attributes(case_exact.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        let alias_result = filesystem
+            .get_path_attributes(case_alias.target(), SandboxFollow::No)
+            .await;
+        if case_alias_exists {
+            assert_eq!(case_object, alias_result.unwrap().object);
+        } else {
+            assert_eq!(
+                alias_result.unwrap_err().io_kind(),
+                Some(std::io::ErrorKind::NotFound)
+            );
+        }
+        let composed = "caf\u{00e9}.txt";
+        let decomposed = "cafe\u{0301}.txt";
+        let created = filesystem
+            .open(
+                SandboxPath::at_root(decomposed),
+                SandboxOpenOptions::File {
+                    access: SandboxAccessMode::ReadWrite,
+                    disposition: SandboxFileDisposition::CreateExclusive,
+                    follow: SandboxFollow::No,
+                },
+            )
+            .await
+            .unwrap();
+        filesystem.close(created.into_node()).await.unwrap();
+        std::fs::write(filesystem.root().join("notes.txt"), b"distinct").unwrap();
+        let first = filesystem
+            .resolve_namespace_target(SandboxPath::at_root(composed))
+            .await
+            .unwrap();
+        let alias = filesystem
+            .resolve_namespace_target(SandboxPath::at_root(decomposed))
+            .await
+            .unwrap();
+        let sibling = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("notes.txt"))
+            .await
+            .unwrap();
+        assert_eq!(
+            first.target().path.as_os_str(),
+            std::ffi::OsStr::new(composed)
+        );
+        assert_eq!(
+            alias.target().path.as_os_str(),
+            std::ffi::OsStr::new(decomposed)
+        );
+        assert!(first.coordination_key() == alias.coordination_key());
+        assert!(
+            first
+                .coordination_key()
+                .may_conflict_with(&sibling.coordination_key())
+        );
+        let first_object = filesystem
+            .get_path_attributes(first.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        let alias_object = filesystem
+            .get_path_attributes(alias.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        let sibling_object = filesystem
+            .get_path_attributes(sibling.target(), SandboxFollow::No)
+            .await
+            .unwrap()
+            .object;
+        assert_eq!(first_object, alias_object);
+        assert_ne!(first_object, sibling_object);
+        assert!(
+            std::fs::read_dir(filesystem.root())
+                .unwrap()
+                .any(|entry| { entry.unwrap().file_name() == std::ffi::OsStr::new(decomposed) })
+        );
+        assert_eq!(
+            filesystem.root().join("caseprobe").exists(),
+            case_alias_exists
+        );
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+            .await
+            .unwrap();
     }
 
     #[cfg(target_os = "linux")]
@@ -5736,6 +6399,26 @@ mod tests {
     async fn external_seed_keeps_the_pinned_destination_after_directory_rename() {
         let parent = tempfile::tempdir().unwrap();
         let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
+        assert_pinned_seed_after_directory_rename(parent.path(), provisioning).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[test_r::tag(native_apfs)]
+    async fn apfs_seed_keeps_the_pinned_destination_after_directory_rename() {
+        let parent = tempfile::tempdir().unwrap();
+        let storage = FilesystemStorageMode::Apfs {
+            root: parent.path().join("agents").into_boxed_path(),
+        };
+        let provisioning =
+            SandboxFilesystemProvisioning::new(&storage, RetryConfig::default()).unwrap();
+        assert_pinned_seed_after_directory_rename(parent.path(), provisioning).await;
+    }
+
+    async fn assert_pinned_seed_after_directory_rename(
+        parent: &Path,
+        provisioning: SandboxFilesystemProvisioning,
+    ) {
         let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
             provisioning,
             name(),
@@ -5749,7 +6432,7 @@ mod tests {
         std::fs::rename(root.join("pinned"), root.join("renamed")).unwrap();
         std::fs::create_dir(root.join("pinned")).unwrap();
 
-        let host_source = host_directory_at(parent.path()).await;
+        let host_source = host_directory_at(parent).await;
         std::fs::write(host_source.path().as_path().join("source"), b"seeded").unwrap();
         let source = host_child(&host_source, "source");
         seed_one(
@@ -6417,6 +7100,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[test_r::tag(native_apfs)]
     async fn production_namespace_resolution_does_not_require_final_directory_search_permission() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -6449,19 +7133,75 @@ mod tests {
             .await
             .unwrap();
         assert!(resolved.final_directory_key().is_some());
-        filesystem
-            .rename(resolved.target(), SandboxPath::at_root("renamed-directory"))
-            .await
-            .unwrap();
+        let source_parent = resolved.parent.host().unwrap();
+        let destination_parent = directory_for(
+            &filesystem.root_directory_state(),
+            &SandboxPath::at_root("renamed-directory"),
+        )
+        .unwrap();
 
-        let renamed = filesystem
-            .resolve_namespace_target(SandboxPath::at_root("renamed-directory"))
-            .await
-            .unwrap();
-        filesystem.remove_directory(renamed.target()).await.unwrap();
+        let native_source = filesystem.root().join("native-locked-directory");
+        let native_destination = filesystem.root().join("native-renamed-directory");
+        std::fs::create_dir(&native_source).unwrap();
+        std::fs::set_permissions(&native_source, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(native_source.join("child"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let native_result = rustix::fs::renameat(
+            source_parent.as_ref(),
+            "native-locked-directory",
+            destination_parent.as_ref(),
+            "native-renamed-directory",
+        )
+        .map_err(std::io::Error::from);
+        let remaining_native = if native_result.is_ok() {
+            &native_destination
+        } else {
+            &native_source
+        };
+        std::fs::set_permissions(remaining_native, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir(remaining_native).unwrap();
+
+        let renamed_result = filesystem
+            .rename(resolved.target(), SandboxPath::at_root("renamed-directory"))
+            .await;
+        assert_eq!(
+            renamed_result.is_ok(),
+            native_result.is_ok(),
+            "the adapter rename must succeed exactly when the kernel rename succeeds: \
+             adapter={renamed_result:?}, native={native_result:?}"
+        );
+        assert_eq!(
+            renamed_result
+                .as_ref()
+                .err()
+                .and_then(FilesystemStorageError::io_error)
+                .map(std::io::Error::kind),
+            native_result.as_ref().err().map(std::io::Error::kind),
+        );
+
+        match renamed_result {
+            Ok(()) => {
+                let renamed = filesystem
+                    .resolve_namespace_target(SandboxPath::at_root("renamed-directory"))
+                    .await
+                    .unwrap();
+                filesystem.remove_directory(renamed.target()).await.unwrap();
+                drop(renamed);
+            }
+            Err(_) => {
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+                filesystem
+                    .remove_directory(resolved.target())
+                    .await
+                    .unwrap();
+            }
+        }
 
         drop(resolved);
-        drop(renamed);
         <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
             .await
             .unwrap();
