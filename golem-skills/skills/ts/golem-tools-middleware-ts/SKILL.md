@@ -38,4 +38,4 @@ and result shape follows the command's arguments, declared errors, and streams; 
 infer it rather than casting. Use `underlying` only during the middleware handler; it may make
 multiple calls before the handler settles. Do not retain it for later invocations. Do not reuse
 transferred streams or permission-card handles. Returned stdout and stderr may be consumed lazily
-after the handler returns; forward, consume, or cancel each channel independently.
+after the handler returns; forward, consume, or cancel each channel independently. Golem checks each underlying call against the calling agent's tool permissions, using the command and arguments the next layer receives, so an adapter that changes them needs the agent to hold grants for both forms.

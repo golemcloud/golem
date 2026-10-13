@@ -12,5 +12,6 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
+futures-concurrency = "7.6.3"
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 validation-probe-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/validation-probe-tool-guest-client" }
