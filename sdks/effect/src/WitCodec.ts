@@ -128,6 +128,76 @@ class WireWriter {
 }
 
 const wireCodecs = new WeakMap<Schema.Top, Schema.Top>()
+const sequenceWire = (
+  tag: "tuple-value" | "fixed-list-value",
+  pairs: ReadonlyArray<ValuePair>,
+  length: number,
+): WirePair | undefined =>
+  pairs.every((p) => p.wire)
+    ? {
+        write: (xs, writer) => {
+          if (tag === "fixed-list-value" && xs.length !== length)
+            throw new Error(`value: expected ${tag} with ${length} elements`)
+          return writer.add({
+            tag,
+            val: Array.from({ length }, (_, i) =>
+              pairs[i % pairs.length]!.wire!.write(xs[i], writer),
+            ),
+          })
+        },
+        read: (nodes, index) => {
+          const indices = wireNode(nodes, index, tag).val
+          if (indices.length !== length)
+            throw new Error(`value: expected ${tag} with ${length} elements`)
+          return indices.map((child, i) => pairs[i % pairs.length]!.wire!.read(nodes, child))
+        },
+      }
+    : undefined
+
+const mapWire = (
+  key: ValuePair,
+  value: ValuePair,
+  native: boolean,
+  hash = false,
+): WirePair | undefined =>
+  key.wire && value.wire
+    ? {
+        write: (map, writer) => {
+          const entries = hash ? HashMap.toEntries(map) : map.entries()
+          if (native)
+            return writer.add({
+              tag: "map-value",
+              val: Array.from(entries as Iterable<[unknown, unknown]>, ([k, v]) => ({
+                key: key.wire!.write(k, writer),
+                value: value.wire!.write(v, writer),
+              })),
+            })
+          return writer.add({
+            tag: "list-value",
+            val: Array.from(entries as Iterable<[unknown, unknown]>, ([k, v]) =>
+              writer.add({
+                tag: "tuple-value",
+                val: [key.wire!.write(k, writer), value.wire!.write(v, writer)],
+              }),
+            ),
+          })
+        },
+        read: (nodes, index) => {
+          const entries: Array<[unknown, unknown]> = native
+            ? wireNode(nodes, index, "map-value").val.map((e) => [
+                key.wire!.read(nodes, e.key),
+                value.wire!.read(nodes, e.value),
+              ])
+            : wireNode(nodes, index, "list-value").val.map((i) => {
+                const tuple = wireNode(nodes, i, "tuple-value").val
+                if (tuple.length !== 2) throw new Error("value: expected tuple with 2 elements")
+                return [key.wire!.read(nodes, tuple[0]!), value.wire!.read(nodes, tuple[1]!)]
+              })
+          return hash ? HashMap.fromIterable(entries) : new Map(entries)
+        },
+      }
+    : undefined
+
 const wireNode = <T extends CoreTypes.SchemaValueNode["tag"]>(
   nodes: CoreTypes.SchemaValueNode[],
   index: number,
@@ -229,8 +299,20 @@ const primPair = (
             ? "f64"
             : make === v.s64
               ? "s64"
-              : undefined)
-  const wireTag = `${tag}-value` as CoreTypes.SchemaValueNode["tag"]
+              : make === v.path
+                ? "path"
+                : make === v.url
+                  ? "url"
+                  : make === v.uuid
+                    ? "uuid"
+                    : make === v.datetime
+                      ? "datetime"
+                      : make === v.quantity
+                        ? "quantity"
+                        : undefined)
+  const wireTag = (
+    tag === "quantity" ? "quantity-value-node" : `${tag}-value`
+  ) as CoreTypes.SchemaValueNode["tag"]
   return {
     toValue: (val) => make(val),
     fromValue: (sv) => (sv as { value: unknown }).value,
@@ -972,6 +1054,17 @@ const walk = (
           if (ov.value === undefined) return emptyEncoded()
           return wrap(innerPair.fromValue(ov.value))
         },
+        wire: innerPair.wire && {
+          write: (val, writer) =>
+            writer.add({
+              tag: "option-value",
+              val: isEmpty(val) ? undefined : innerPair.wire!.write(unwrap(val), writer),
+            }),
+          read: (nodes, index) => {
+            const child = wireNode(nodes, index, "option-value").val
+            return child === undefined ? emptyEncoded() : wrap(innerPair.wire!.read(nodes, child))
+          },
+        },
       }
       return { type: t.option(innerType), pair }
     }
@@ -990,6 +1083,11 @@ const walk = (
                 pair: {
                   toValue: v.text,
                   fromValue: (x) => (x as Extract<SchemaValue, { tag: "text" }>).text,
+                  wire: {
+                    write: (text, writer) =>
+                      writer.add({ tag: "text-value", val: { text, language: undefined } }),
+                    read: (nodes, index) => wireNode(nodes, index, "text-value").val.text,
+                  },
                 },
               }
             case "binary":
@@ -998,6 +1096,11 @@ const walk = (
                 pair: {
                   toValue: v.binary,
                   fromValue: (x) => (x as Extract<SchemaValue, { tag: "binary" }>).bytes,
+                  wire: {
+                    write: (bytes, writer) =>
+                      writer.add({ tag: "binary-value", val: { bytes, mimeType: undefined } }),
+                    read: (nodes, index) => wireNode(nodes, index, "binary-value").val.bytes,
+                  },
                 },
               }
             case "path":
@@ -1014,6 +1117,12 @@ const walk = (
                 pair: {
                   toValue: v.duration,
                   fromValue: (x) => (x as Extract<SchemaValue, { tag: "duration" }>).nanoseconds,
+                  wire: {
+                    write: (nanoseconds, writer) =>
+                      writer.add({ tag: "duration-value", val: { nanoseconds } }),
+                    read: (nodes, index) =>
+                      wireNode(nodes, index, "duration-value").val.nanoseconds,
+                  },
                 },
               }
             case "quantity":
@@ -1027,6 +1136,7 @@ const walk = (
                 type: t.fixedList(item.type, native.length),
                 pair: {
                   toValue: (xs: ReadonlyArray<unknown>) => v.fixedList(xs.map(item.pair.toValue)),
+                  wire: sequenceWire("fixed-list-value", [item.pair], native.length),
                   fromValue: (x) =>
                     (x as Extract<SchemaValue, { tag: "fixed-list" }>).elements.map(
                       item.pair.fromValue,
@@ -1043,6 +1153,7 @@ const walk = (
               return {
                 type: t.map(key.type, value.type),
                 pair: {
+                  wire: mapWire(key.pair, value.pair, true),
                   toValue: (map: ReadonlyMap<unknown, unknown>) =>
                     v.map(
                       [...map].map(([k, val]) => ({
@@ -1069,6 +1180,15 @@ const walk = (
               return {
                 type: t.flags([...native.names]),
                 pair: {
+                  wire: {
+                    write: (flags, writer) => writer.add({ tag: "flags-value", val: [...flags] }),
+                    read: (nodes, index) => {
+                      const flags = wireNode(nodes, index, "flags-value").val
+                      if (flags.length !== native.names.length)
+                        throw new Error(`value: expected ${native.names.length} flags`)
+                      return [...flags]
+                    },
+                  },
                   toValue: (flags: ReadonlyArray<boolean>) => v.flags([...flags]),
                   fromValue: (value) => [
                     ...(value as Extract<SchemaValue, { tag: "flags" }>).flags,
@@ -1246,6 +1366,16 @@ const walk = (
               pair: {
                 toValue: (value) => v.enum(values.indexOf(value)),
                 fromValue: (value) => values[(value as { caseIndex: number }).caseIndex],
+                wire: {
+                  write: (value, writer) =>
+                    writer.add({ tag: "enum-value", val: values.indexOf(value) }),
+                  read: (nodes, index) => {
+                    const caseIndex = wireNode(nodes, index, "enum-value").val
+                    if (caseIndex >= values.length)
+                      throw new Error("value: enum case index out of range")
+                    return values[caseIndex]
+                  },
+                },
               },
             }
           }
@@ -1271,6 +1401,7 @@ const walk = (
               return {
                 type: t.tuple(elemTypes),
                 pair: {
+                  wire: sequenceWire("tuple-value", elemPairs, elemPairs.length),
                   toValue: (arr: ReadonlyArray<unknown>) =>
                     v.tuple(elemPairs.map((p, i) => p.toValue(arr[i]))),
                   fromValue: (sv) => {
@@ -1702,6 +1833,26 @@ const walk = (
             const { type: okType, pair: okPair } = yield* child(okAst)
             const { type: errType, pair: errPair } = yield* child(errAst)
             const pair: ValuePair = {
+              wire:
+                okPair.wire && errPair.wire
+                  ? {
+                      write: (r, writer) =>
+                        writer.add({
+                          tag: "result-value",
+                          val: Result.isSuccess(r)
+                            ? { tag: "ok-value", val: okPair.wire!.write(r.success, writer) }
+                            : { tag: "err-value", val: errPair.wire!.write(r.failure, writer) },
+                        }),
+                      read: (nodes, index) => {
+                        const result = wireNode(nodes, index, "result-value").val
+                        if (result.val === undefined)
+                          throw new Error("value: result payload is required")
+                        return result.tag === "ok-value"
+                          ? Result.succeed(okPair.wire!.read(nodes, result.val))
+                          : Result.fail(errPair.wire!.read(nodes, result.val))
+                      },
+                    }
+                  : undefined,
               toValue: (val) => {
                 const r = val as Result.Result<unknown, unknown>
                 return Result.isSuccess(r)
@@ -1734,6 +1885,7 @@ const walk = (
             // Represented as `list<tuple<k, v>>` so arbitrary (non-primitive)
             // key types are allowed, matching the previous model's behaviour.
             const pair: ValuePair = {
+              wire: mapWire(kPair, vPair, false, isHashMap),
               toValue: (val) => {
                 const entries: Iterable<readonly [unknown, unknown]> = isHashMap
                   ? HashMap.toEntries(val as HashMap.HashMap<unknown, unknown>)
@@ -2046,16 +2198,7 @@ export const makeWireEncoder = <A, RD, RE>(
   if (direct) {
     const encode = Schema.encodeEffect(direct)
     const validate = (tree: CoreTypes.SchemaValueTree) => {
-      const seen = new Set<unknown>()
-      for (const node of tree.valueNodes) {
-        if (node.tag === "record-value" || node.tag === "list-value" || node.tag === "option-value")
-          continue
-        assertSchemaValueRepresentable(
-          { tag: node.tag.slice(0, -6), value: (node as { val: unknown }).val } as SchemaValue,
-          false,
-          seen,
-        )
-      }
+      preflightWitValueTree(tree.valueNodes, tree.root)
       return tree
     }
     return (value: A): Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, RE> =>
@@ -2122,15 +2265,56 @@ export const prepareWireRecordCodec = <A, RD, RE>(
           const offset = nodes.length
           roots.push(tree.root + offset)
           for (const node of tree.valueNodes) {
-            nodes.push(
-              offset === 0
-                ? node
-                : node.tag === "record-value" || node.tag === "list-value"
-                  ? { tag: node.tag, val: node.val.map((i) => i + offset) }
-                  : node.tag === "option-value"
-                    ? { tag: node.tag, val: node.val === undefined ? undefined : node.val + offset }
-                    : node,
-            )
+            if (offset === 0) {
+              nodes.push(node)
+              continue
+            }
+            switch (node.tag) {
+              case "record-value":
+              case "tuple-value":
+              case "list-value":
+              case "fixed-list-value":
+                nodes.push({ tag: node.tag, val: node.val.map((i) => i + offset) })
+                break
+              case "map-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: node.val.map((entry) => ({
+                    key: entry.key + offset,
+                    value: entry.value + offset,
+                  })),
+                })
+                break
+              case "option-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: node.val === undefined ? undefined : node.val + offset,
+                })
+                break
+              case "result-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: {
+                    ...node.val,
+                    val: node.val.val === undefined ? undefined : node.val.val + offset,
+                  },
+                })
+                break
+              case "variant-value":
+                nodes.push({
+                  tag: node.tag,
+                  val: {
+                    ...node.val,
+                    payload: node.val.payload === undefined ? undefined : node.val.payload + offset,
+                  },
+                })
+                break
+              case "union-value":
+                nodes.push({ tag: node.tag, val: { ...node.val, body: node.val.body + offset } })
+                break
+              default:
+                nodes.push(node)
+            }
           }
         }
         const root = nodes.length

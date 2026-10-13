@@ -6,7 +6,7 @@ use golem_rust::{
     AllowedLanguages, AllowedMimeTypes, FromWire, IntoWire, MultimodalSchema, Schema, WireSchema,
 };
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct AllPrimitives {
     pub u8v: u8,
     pub u16v: u16,
@@ -23,7 +23,7 @@ pub struct AllPrimitives {
     pub stringv: String,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct OptionResultBound {
     pub option_u8: Option<u8>,
     pub option_str: Option<String>,
@@ -35,14 +35,14 @@ pub struct OptionResultBound {
     pub bound_str: Bound<String>,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct Tuples {
     pub pair: (String, f64),
     pub triple: (String, f64, bool),
     pub mixed: (i8, u16, f32),
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct Collections {
     pub list_u8: Vec<u8>,
     pub list_str: Vec<String>,
@@ -50,7 +50,7 @@ pub struct Collections {
     pub map_text: HashMap<i32, String>,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct SimpleStruct {
     pub name: String,
     pub value: f64,
@@ -58,7 +58,7 @@ pub struct SimpleStruct {
     pub symbol: char,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct NestedStruct {
     pub id: String,
     pub simple: SimpleStruct,
@@ -68,7 +68,7 @@ pub struct NestedStruct {
     pub result: Result<String, String>,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub enum SimpleEnum {
     U8(u8),
     I64(i64),
@@ -81,14 +81,14 @@ pub enum SimpleEnum {
     Unit,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub enum EnumWithOnlyLiterals {
     A,
     B,
     C,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub enum EnumWithCollections {
     Vec(Vec<u8>),
     Map(HashMap<String, f64>),
@@ -96,7 +96,7 @@ pub enum EnumWithCollections {
     Bound(Bound<u8>),
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub enum ComplexEnum {
     Primitive(SimpleEnum),
     Struct(NestedStruct),
@@ -110,7 +110,7 @@ pub enum ComplexEnum {
     UnitB,
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct ComplexStruct {
     pub primitives: AllPrimitives,
     pub options_results_bounds: OptionResultBound,
@@ -130,7 +130,7 @@ pub enum TextImageData {
     Data(Data),
 }
 
-#[derive(Schema, IntoWire, FromWire, WireSchema)]
+#[derive(Schema)]
 pub struct Data {
     pub id: u32,
     pub name: String,

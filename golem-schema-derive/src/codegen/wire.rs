@@ -307,15 +307,46 @@ fn field_schema(
             let hosts = option_strings(spec.allowed_hosts.as_deref());
             quote!(#wire::SchemaTypeBody::UrlType(#wire::UrlRestrictions { allowed_schemes: #schemes, allowed_hosts: #hosts }))
         }
+        Some(RichSpec::Path(spec)) => {
+            let direction = match spec.direction.as_str() {
+                "input" => quote!(#wire::PathDirection::Input),
+                "output" => quote!(#wire::PathDirection::Output),
+                "in-out" | "inout" => quote!(#wire::PathDirection::InOut),
+                _ => return Err(syn::Error::new_spanned(field, "unknown path direction")),
+            };
+            let kind = match spec.kind.as_str() {
+                "file" => quote!(#wire::PathKind::File),
+                "directory" => quote!(#wire::PathKind::Directory),
+                "any" => quote!(#wire::PathKind::Any),
+                _ => return Err(syn::Error::new_spanned(field, "unknown path kind")),
+            };
+            let mimes = option_strings(spec.allowed_mime_types.as_deref());
+            let extensions = option_strings(spec.allowed_extensions.as_deref());
+            quote!(#wire::SchemaTypeBody::PathType(#wire::PathSpec {
+                direction: #direction, kind: #kind,
+                allowed_mime_types: #mimes, allowed_extensions: #extensions,
+            }))
+        }
+        Some(RichSpec::Quantity(spec)) => {
+            let base = &spec.base_unit;
+            let suffixes = spec.allowed_suffixes.as_deref().unwrap_or_default();
+            let bound = |raw: Option<&str>| match raw {
+                Some(raw) => {
+                    let (mantissa, scale, unit) = super::helpers::parse_quantity_literal(raw, base);
+                    quote!(::core::option::Option::Some(#wire::QuantityValue { mantissa: #mantissa, scale: #scale, unit: #unit.to_string() }))
+                }
+                None => quote!(::core::option::Option::None),
+            };
+            let min = bound(spec.min.as_deref());
+            let max = bound(spec.max.as_deref());
+            quote!(#wire::SchemaTypeBody::QuantityType(#wire::QuantitySpec {
+                base_unit: #base.to_string(), allowed_suffixes: ::std::vec![#(#suffixes.to_string()),*],
+                min: #min, max: #max,
+            }))
+        }
         Some(RichSpec::QuotaToken(spec)) => {
             let resource_name = option_string(spec.resource_name.as_deref());
             quote!(#wire::SchemaTypeBody::QuotaTokenType(#wire::QuotaTokenSpec { resource_name: #resource_name }))
-        }
-        Some(_) => {
-            return Err(syn::Error::new_spanned(
-                field,
-                "this rich field schema is not supported by WireSchema",
-            ));
         }
         None => return Ok(quote!(<#ty as #direct::WireSchema>::append_schema(builder))),
     };

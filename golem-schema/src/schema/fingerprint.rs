@@ -78,6 +78,49 @@ impl FromSchema for SchemaFingerprintV1 {
     }
 }
 
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::WireSchema for SchemaFingerprintV1 {
+    fn wire_type_id() -> String {
+        <Self as IntoSchema>::type_id().0
+    }
+
+    fn append_schema(builder: &mut crate::schema::wit::direct::WireSchemaBuilder) -> i32 {
+        <Vec<u8> as crate::schema::wit::direct::WireSchema>::append_schema(builder)
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::IntoWire for SchemaFingerprintV1 {
+    const NEEDS_PREPARATION: bool = false;
+
+    fn write_wire(
+        &self,
+        writer: &mut crate::schema::wit::direct::WireWriter,
+    ) -> Result<i32, crate::schema::wit::direct::WireError> {
+        use crate::schema::wit::wire::SchemaValueNode;
+        let elements = self
+            .0
+            .iter()
+            .map(|value| writer.push(SchemaValueNode::U8Value(*value)))
+            .collect();
+        Ok(writer.push(SchemaValueNode::ListValue(elements)))
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::FromWire for SchemaFingerprintV1 {
+    fn read_wire(
+        reader: &mut crate::schema::wit::direct::WireReader,
+        index: i32,
+    ) -> Result<Self, crate::schema::wit::direct::WireError> {
+        let bytes = <Vec<u8> as crate::schema::wit::direct::FromWire>::read_wire(reader, index)?;
+        bytes
+            .try_into()
+            .map(Self)
+            .map_err(|_| crate::schema::wit::direct::WireError::Shape("32-byte schema fingerprint"))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SchemaFingerprintError {
     #[error("invalid stream element schema: {0}")]

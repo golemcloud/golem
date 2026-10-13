@@ -14,8 +14,8 @@
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.14",
-      "sha256": "0258a7ae0019e258c5beec86dbd0451756e74363be5e118567575bba0797612e"
+      "version": "0.0.15",
+      "sha256": "193f322b666681f7ba708f4873a98f9b3ebd772d7fdda392f0229d37d339bbd8"
     },
     "javascript_tools": {
       "component": "javascript-tools",

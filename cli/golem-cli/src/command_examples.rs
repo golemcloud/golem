@@ -332,7 +332,13 @@ pub const AGENT_OPLOG: &str = "Examples:
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment'
 
   # In structured formats, each oplog entry is emitted as a separate document
-  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'";
+  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'
+
+  # Explore the oplog in an interactive viewer served locally (loads pages on demand, opens the browser)
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --serve
+
+  # Write a self-contained HTML viewer of the oplog and open it in the browser
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --html oplog.html --open";
 
 pub const AGENT_REVERT: &str = "Examples:
   # Undo the agent's last N invocations

@@ -32,7 +32,6 @@ use golem_common::poem::{
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
-use poem::listener::Listener;
 use poem::middleware::CookieJarManager;
 use poem::middleware::Cors;
 use poem::{EndpointExt, Route};
@@ -112,9 +111,14 @@ impl RegistryService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
         services: &Services,
     ) -> Result<u16, anyhow::Error> {
-        let port = crate::grpc::start_grpc_server(&self.config.grpc, services, join_set)
-            .await
-            .context("starting gRPC server failed")?;
+        let port = crate::grpc::start_grpc_server(
+            self.config.grpc_addr(),
+            &self.config.grpc,
+            services,
+            join_set,
+        )
+        .await
+        .context("starting gRPC server failed")?;
 
         info!("Started registry-service grpc server on port {port}");
         Ok(port)
@@ -150,9 +154,7 @@ impl RegistryService {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });
 
-        let poem_listener =
-            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor = golem_service_base::net::bind_poem_acceptor(self.config.http_addr())?;
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
             .expect("socket address")

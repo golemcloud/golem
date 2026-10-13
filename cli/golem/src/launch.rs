@@ -17,12 +17,12 @@ use crate::router::bind_router;
 use crate::{StartedComponents, registry_db_path};
 use anyhow::Context;
 use golem_cli::fs;
-use golem_common::config::DbConfig;
-use golem_common::config::DbSqliteConfig;
+use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
+use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{
     BuiltinArtifactsConfig, BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig,
@@ -40,8 +40,8 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig as WorkerExecutorConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
@@ -54,7 +54,7 @@ use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -76,11 +76,12 @@ pub struct LaunchArgs {
 }
 
 impl LaunchArgs {
+    /// The host the services started here use to reach each other. They bind `0.0.0.0`, which
+    /// accepts IPv4 only, so an IPv6 router address falls back to the IPv4 loopback.
     fn host_for_service_connect(&self) -> String {
-        match self.router_addr.as_str() {
-            "0.0.0.0" => "127.0.0.1".to_string(),
-            "::" => "::1".to_string(),
-            host => host.to_string(),
+        match self.router_addr.parse::<std::net::IpAddr>() {
+            Ok(ip) if ip.is_unspecified() || ip.is_ipv6() => "127.0.0.1".to_string(),
+            _ => self.router_addr.clone(),
         }
     }
 }
@@ -208,11 +209,16 @@ async fn start_components(
     )
     .await?;
 
-    let worker_executor = {
-        let config =
-            worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
-        run_worker_executor(config, join_set).await?
-    };
+    let worker_executor = run_worker_executor(
+        configure_filesystem(
+            worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?,
+            args,
+            &golem_worker_executor::services::golem_config::make_config_loader().config_file_name,
+            golem_common::config::env_config_provider(),
+        )?,
+        join_set,
+    )
+    .await?;
 
     Ok(StartedComponents {
         registry_service,
@@ -220,6 +226,25 @@ async fn start_components(
         worker_executor,
         worker_service,
         prometheus_registry: prometheus::default_registry().clone(),
+    })
+}
+
+pub(crate) fn configure_filesystem(
+    config: WorkerExecutorConfig,
+    args: &LaunchArgs,
+    config_file: &Path,
+    environment: impl figment::Provider,
+) -> anyhow::Result<WorkerExecutorConfig> {
+    let (filesystem_storage, filesystem_snapshots) = crate::filesystem_config::prepare(
+        &args.data_dir,
+        config_file,
+        args.agent_filesystem_root.as_deref(),
+        environment,
+    )?;
+    Ok(WorkerExecutorConfig {
+        filesystem_storage,
+        filesystem_snapshots,
+        ..config
     })
 }
 
@@ -322,7 +347,7 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
                     name: "Builtin Tool Owner".to_string(),
-                    email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
+                    email: AccountEmail::new(BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL),
                     token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,
@@ -456,15 +481,6 @@ fn worker_executor_config(
         },
         agent_webhooks_service: AgentWebhooksServiceConfig {
             use_https_for_webhook_url: false,
-            ..Default::default()
-        },
-        filesystem_storage: FilesystemStorageConfig {
-            mode: args
-                .agent_filesystem_root
-                .clone()
-                .map_or(FilesystemStorageMode::Temporary, |root| {
-                    FilesystemStorageMode::Directory { root: root.into() }
-                }),
             ..Default::default()
         },
         ..Default::default()

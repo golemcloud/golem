@@ -68,6 +68,7 @@ scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["unbounded_depth"] }
 sha2.workspace = true
+socket2 = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "tls-rustls",

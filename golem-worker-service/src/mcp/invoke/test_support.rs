@@ -255,6 +255,8 @@ struct StaticComponentService {
 
 #[async_trait]
 impl ComponentService for StaticComponentService {
+    async fn invalidate_current(&self) {}
+
     async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
         (self.component.id == component_id).then(|| self.component.clone())
     }

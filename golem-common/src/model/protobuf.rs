@@ -221,17 +221,34 @@ pub fn lease_ttl_to_proto(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> pros
     }
 }
 
+pub fn ip_addr_to_proto(ip: IpAddr) -> GrpcIpAddress {
+    use crate::model::protobuf::golem::shardmanager::ip_address;
+
+    let kind = match ip {
+        IpAddr::V4(v4) => ip_address::Kind::Ipv4(u32::from(v4)),
+        IpAddr::V6(v6) => ip_address::Kind::Ipv6(v6.octets().to_vec()),
+    };
+    GrpcIpAddress { kind: Some(kind) }
+}
+
+pub fn ip_addr_from_proto(ip: GrpcIpAddress) -> Result<IpAddr, String> {
+    use crate::model::protobuf::golem::shardmanager::ip_address;
+
+    match ip.kind.ok_or("IpAddress.kind missing")? {
+        ip_address::Kind::Ipv4(v4) => Ok(IpAddr::V4(Ipv4Addr::from(v4))),
+        ip_address::Kind::Ipv6(v6) => {
+            let bytes: [u8; 16] = v6
+                .try_into()
+                .map_err(|_| "invalid IPv6 length (must be 16 bytes)")?;
+            Ok(IpAddr::V6(Ipv6Addr::from(bytes)))
+        }
+    }
+}
+
 impl From<Pod> for GrpcPod {
     fn from(value: Pod) -> Self {
-        use crate::model::protobuf::golem::shardmanager::ip_address;
-
-        let kind = match value.ip {
-            IpAddr::V4(v4) => ip_address::Kind::Ipv4(u32::from(v4)),
-            IpAddr::V6(v6) => ip_address::Kind::Ipv6(v6.octets().to_vec()),
-        };
-
         GrpcPod {
-            ip: Some(GrpcIpAddress { kind: Some(kind) }),
+            ip: Some(ip_addr_to_proto(value.ip)),
             port: value.port.into(),
         }
     }
@@ -240,19 +257,7 @@ impl From<Pod> for GrpcPod {
 impl TryFrom<GrpcPod> for Pod {
     type Error = String;
     fn try_from(value: GrpcPod) -> Result<Self, Self::Error> {
-        use crate::model::protobuf::golem::shardmanager::ip_address;
-
-        let ip = value.ip.ok_or("missing ip field")?;
-
-        let ip = match ip.kind.ok_or("IpAddress.kind missing")? {
-            ip_address::Kind::Ipv4(v4) => IpAddr::V4(Ipv4Addr::from(v4)),
-            ip_address::Kind::Ipv6(v6) => {
-                let bytes: [u8; 16] = v6
-                    .try_into()
-                    .map_err(|_| "invalid IPv6 length (must be 16 bytes)")?;
-                IpAddr::V6(Ipv6Addr::from(bytes))
-            }
-        };
+        let ip = ip_addr_from_proto(value.ip.ok_or("missing ip field")?)?;
 
         Ok(Self {
             ip,

@@ -918,21 +918,7 @@ async fn collect_dependency_guest_bridge_targets(
         .flat_map(|metadata| metadata.tool_middlewares.iter().cloned())
         .collect::<Vec<_>>();
     middleware_definitions.extend(ctx.remote_middleware_definitions()?);
-    let environment_bindings = ctx
-        .application()
-        .environment_tool_bindings()
-        .map(|bindings| {
-            bindings
-                .iter()
-                .map(|(name, binding)| {
-                    (
-                        name.as_str(),
-                        ToolBindingState::from_binding(binding.clone()),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>()
-        })
-        .unwrap_or_default();
+    let environment_bindings = ctx.application().environment_tool_bindings();
 
     for (component_name, metadata) in &extracted {
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
