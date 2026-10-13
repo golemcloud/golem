@@ -17,6 +17,13 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
+#[cfg(feature = "guest")]
+crate::schema::wit::direct::wire_string!(
+    ::num_bigint::BigInt,
+    |value: &::num_bigint::BigInt| value.to_string(),
+    |value: &str| value.parse::<::num_bigint::BigInt>()
+);
+
 impl IntoSchema for ::num_bigint::BigInt {
     fn type_id() -> TypeId {
         TypeId::new("num_bigint.BigInt")

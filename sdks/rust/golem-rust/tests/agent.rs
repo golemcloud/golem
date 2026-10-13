@@ -929,7 +929,7 @@ mod tests {
         Image(Vec<u8>),
     }
 
-    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema, Clone)]
+    #[derive(golem_rust::Schema, Clone)]
     struct UserId {
         id: String,
     }

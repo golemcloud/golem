@@ -255,6 +255,7 @@ fn synthesize_tool_error(ir: &ToolErrorIr, guest: bool) -> proc_macro2::TokenStr
             },
         }
     });
+    let ordinary_wire_impl = guest.then(|| synthesize_ordinary_wire(ir));
     let variant_count = ir.variants.len() as u32;
     let direct_error_impl = guest.then(|| {
         let cases = ir.variants.iter().map(|variant| {
@@ -376,6 +377,7 @@ fn synthesize_tool_error(ir: &ToolErrorIr, guest: bool) -> proc_macro2::TokenStr
         }
 
         #direct_error_impl
+        #ordinary_wire_impl
 
         impl golem_rust::IntoSchema for #enum_ident {
             fn type_id() -> golem_rust::schema::TypeId {
@@ -433,6 +435,111 @@ fn synthesize_tool_error(ir: &ToolErrorIr, guest: bool) -> proc_macro2::TokenStr
                         "tool error",
                     )),
                 }
+            }
+        }
+    }
+}
+
+fn synthesize_ordinary_wire(ir: &ToolErrorIr) -> proc_macro2::TokenStream {
+    let ident = &ir.enum_ident;
+    let name = ident.to_string();
+    let direct = quote! { golem_rust::schema::wit::direct };
+    let wire = quote! { golem_rust::schema::wit::wire };
+    let mut cases = Vec::new();
+    let mut encode = Vec::new();
+    let mut decode = Vec::new();
+    let mut preflight = Vec::new();
+    let mut prepare = Vec::new();
+    let mut payload_types = Vec::new();
+    for (index, variant) in ir.variants.iter().enumerate() {
+        let index = index as u32;
+        let variant_ident = &variant.variant_ident;
+        let case_name = to_kebab_case(&variant_ident.to_string());
+        let (pattern, constructor, schema, value, read, check, prep) = match &variant.payload {
+            ToolErrorPayloadIr::None { style } => (
+                no_payload_pattern(variant_ident, *style),
+                no_payload_constructor(variant_ident, *style),
+                quote! { ::core::option::Option::None },
+                quote! { ::core::option::Option::None },
+                quote! {
+                    if value.payload.is_some() { return ::core::result::Result::Err(#direct::WireError::Shape("payloadless tool error variant")); }
+                },
+                quote! { ::core::result::Result::Ok(()) },
+                quote! { ::core::result::Result::Ok(()) },
+            ),
+            ToolErrorPayloadIr::Single { ty, field_ident } => {
+                payload_types.push(ty);
+                let (pattern, constructor) = match field_ident {
+                    Some(field) => (
+                        quote! { Self::#variant_ident { #field: __payload } },
+                        quote! { Self::#variant_ident { #field: __payload } },
+                    ),
+                    None => (
+                        quote! { Self::#variant_ident(__payload) },
+                        quote! { Self::#variant_ident(__payload) },
+                    ),
+                };
+                (
+                    pattern,
+                    constructor,
+                    quote! { ::core::option::Option::Some(<#ty as #direct::WireSchema>::append_schema(builder)) },
+                    quote! { ::core::option::Option::Some(<#ty as #direct::IntoWire>::write_wire(__payload, writer)?) },
+                    quote! { let __payload = <#ty as #direct::FromWire>::read_wire(reader, value.payload.ok_or(#direct::WireError::Shape("tool error payload"))?)?; },
+                    quote! { <#ty as #direct::IntoWire>::preflight(__payload, resources) },
+                    quote! { <#ty as #direct::IntoWire>::prepare_wire(__payload).await },
+                )
+            }
+        };
+        cases.push(quote! { #wire::VariantCaseType { name: #case_name.to_string(), payload: #schema, metadata: #direct::empty_metadata() } });
+        encode.push(quote! { #pattern => { let payload = #value; ::core::result::Result::Ok(writer.push(#wire::SchemaValueNode::VariantValue(#wire::VariantValuePayload { case: #index, payload }))) } });
+        decode.push(quote! { #index => { #read ::core::result::Result::Ok(#constructor) } });
+        preflight.push(quote! { #pattern => #check });
+        prepare.push(quote! { #pattern => #prep });
+    }
+    quote! {
+        impl #direct::WireSchema for #ident {
+            fn contains_stream(seen: &mut ::std::collections::HashSet<&'static str>) -> bool {
+                if !seen.insert(::std::any::type_name::<Self>()) { return false; }
+                false #(|| <#payload_types as #direct::WireSchema>::contains_stream(seen))*
+            }
+            fn append_schema(builder: &mut #direct::WireSchemaBuilder) -> #wire::TypeNodeIndex {
+                let (definition, reservation) = builder.reserve_nominal(
+                    Self::wire_type_id(), ::core::option::Option::Some(#name.to_string()), ::std::any::type_name::<Self>(),
+                );
+                match reservation {
+                    #direct::WireSchemaReservation::Fresh => {
+                        let cases = ::std::vec![#(#cases),*];
+                        let node = builder.push(#wire::SchemaTypeBody::VariantType(cases));
+                        builder.commit(definition, node);
+                    }
+                    #direct::WireSchemaReservation::Occupied => {
+                        let checkpoint = builder.begin_candidate(definition);
+                        let cases = ::std::vec![#(#cases),*];
+                        let node = builder.push(#wire::SchemaTypeBody::VariantType(cases));
+                        builder.verify_candidate(checkpoint, definition, node);
+                    }
+                    #direct::WireSchemaReservation::Recursive => {}
+                }
+                builder.reference(definition)
+            }
+        }
+        impl #direct::IntoWire for #ident {
+            fn preflight(&self, resources: &mut #direct::WirePreflight) -> ::core::result::Result<(), #direct::WireError> {
+                match self { #(#preflight),* }
+            }
+            async fn prepare_wire(&self) -> ::core::result::Result<(), #direct::WireError> {
+                match self { #(#prepare),* }
+            }
+            fn write_wire(&self, writer: &mut #direct::WireWriter) -> ::core::result::Result<#wire::ValueNodeIndex, #direct::WireError> {
+                match self { #(#encode),* }
+            }
+        }
+        impl #direct::FromWire for #ident {
+            fn read_wire(reader: &mut #direct::WireReader, index: #wire::ValueNodeIndex) -> ::core::result::Result<Self, #direct::WireError> {
+                let #wire::SchemaValueNode::VariantValue(value) = reader.take(index)? else {
+                    return ::core::result::Result::Err(#direct::WireError::Shape("tool error variant"));
+                };
+                match value.case { #(#decode),*, _ => ::core::result::Result::Err(#direct::WireError::Shape("tool error variant case")) }
             }
         }
     }

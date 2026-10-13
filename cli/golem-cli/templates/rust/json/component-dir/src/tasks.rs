@@ -1,10 +1,7 @@
 use chrono::{DateTime, Utc};
-use golem_rust::{
-    FromWire, IntoWire, Schema, WireSchema, agent_definition, agent_implementation, description,
-    endpoint, prompt,
-};
+use golem_rust::{Schema, agent_definition, agent_implementation, description, endpoint, prompt};
 
-#[derive(Clone, Schema, FromWire, IntoWire, WireSchema)]
+#[derive(Clone, Schema)]
 pub struct Task {
     id: usize,
     title: String,
@@ -12,7 +9,7 @@ pub struct Task {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Schema, FromWire, IntoWire, WireSchema)]
+#[derive(Schema)]
 pub struct CreateTaskRequest {
     title: String,
 }
