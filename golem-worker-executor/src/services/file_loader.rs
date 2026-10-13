@@ -19,7 +19,7 @@ use futures::TryStreamExt;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
-use golem_service_base::storage::blob::BlobFailure;
+use golem_service_base::storage::blob::{BlobFailure, BlobRefusal};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::{Display, Formatter};
@@ -59,6 +59,9 @@ pub(crate) enum InitialFileLoadFailure {
     /// The blob storage could not give the source, or a concurrent download of it stopped
     /// before its end. A later load can pass.
     Unavailable,
+    /// The blob storage refuses the executor. A later load passes only after an operator fixes
+    /// the storage.
+    Refused(BlobRefusal),
     /// The source cannot load: the blob storage has no source with the key, gives a permanent
     /// error, or gives bytes that do not verify, or the local cache failed.
     Failed,
@@ -83,12 +86,13 @@ impl InitialFileLoadError {
         }
     }
 
-    /// The error of a failed read of the blob storage: unavailable for a transient error, and
-    /// failed for a permanent one ([`BlobFailure::of`]).
+    /// The error of a failed read of the blob storage: unavailable for a transient error, refused
+    /// for a refusal of the storage, and failed for a permanent one ([`BlobFailure::of`]).
     fn of_blob(key: AgentFileContentHash, error: &anyhow::Error) -> Self {
         Self {
             failure: match BlobFailure::of(error) {
                 BlobFailure::Transient => InitialFileLoadFailure::Unavailable,
+                BlobFailure::Refused(refusal) => InitialFileLoadFailure::Refused(refusal),
                 BlobFailure::Permanent => InitialFileLoadFailure::Failed,
             },
             reason: format!("{key}: {error:#}").into(),
@@ -396,8 +400,9 @@ pub(crate) mod scripted_storage {
     use futures::stream::BoxStream;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_service_base::storage::blob::{
-        BlobMetadata, BlobNameError, BlobRangeStream, BlobStorageBackend, BlobStorageNamespace,
-        ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+        BlobMetadata, BlobNameError, BlobRangeStream, BlobRefusal, BlobRefusedError,
+        BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
+        PutIfAbsent,
     };
     use std::collections::VecDeque;
     use std::path::PathBuf;
@@ -411,6 +416,8 @@ pub(crate) mod scripted_storage {
         Unavailable,
         /// The read fails with a [`BlobNameError`], which is permanent.
         Permanent,
+        /// The read fails with a [`BlobRefusedError`] of denied access, which is refused.
+        Refused,
         /// The read opens the stream, and the stream fails with an error of the backend
         /// after its first chunk.
         BrokenChunk,
@@ -468,6 +475,11 @@ pub(crate) mod scripted_storage {
             match read {
                 Some(SourceRead::Unavailable) => Err(anyhow!("injected 503")),
                 Some(SourceRead::Permanent) => Err(BlobNameError::NulByte.into()),
+                Some(SourceRead::Refused) => {
+                    Err(anyhow!("injected 403").context(BlobRefusedError {
+                        refusal: BlobRefusal::AccessDenied,
+                    }))
+                }
                 Some(SourceRead::BrokenChunk) => Ok(self
                     .inner
                     .get_stream_at(target_label, op_label, namespace, path)
@@ -788,14 +800,15 @@ mod tests {
     }
 
     /// A read that the blob storage cannot answer now, and a stream that breaks, make an
-    /// unavailable source. A permanent error of the storage, a missing source and a wrong size
-    /// make a failed one.
+    /// unavailable source. A refusal of the storage makes a refused source. A permanent error of
+    /// the storage, a missing source and a wrong size make a failed one.
     #[test]
     async fn a_load_is_unavailable_only_for_a_transient_error_of_the_blob_storage() {
         let content = b"scripted content";
         let reads = [
             Some(SourceRead::Unavailable),
             Some(SourceRead::BrokenChunk),
+            Some(SourceRead::Refused),
             Some(SourceRead::Permanent),
         ];
 
@@ -822,6 +835,7 @@ mod tests {
             [
                 InitialFileLoadFailure::Unavailable,
                 InitialFileLoadFailure::Unavailable,
+                InitialFileLoadFailure::Refused(BlobRefusal::AccessDenied),
                 InitialFileLoadFailure::Failed,
             ]
         );
