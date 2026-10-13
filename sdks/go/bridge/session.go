@@ -934,12 +934,21 @@ func (s *session) receiveResult(c *sessionConn, m message) error {
 		if err := ref.Validate(raw); err != nil {
 			return protocolErrorf("result value: %v", err)
 		}
+		// Binding the result's streams and delivering the result happen in
+		// one critical section on a connection that is still the session's:
+		// a replay on the next connection then finds the result delivered.
 		s.mu.Lock()
-		value, err = s.bindOutputs(ref, ref.Type(), raw)
-		s.mu.Unlock()
+		defer s.mu.Unlock()
+		if s.conn != c || s.over || s.resultSent {
+			return nil
+		}
+		value, err := s.bindOutputs(ref, ref.Type(), raw)
 		if err != nil {
 			return err
 		}
+		s.resultSent = true
+		s.result <- sessionResult{value: value}
+		return nil
 	default:
 		return protocolErrorf("invalid invocation result kind %q", kind)
 	}
@@ -975,6 +984,7 @@ func (s *session) bindOutputs(ref schema.Ref, t schema.SchemaType, v schema.Sche
 			return nil, protocolErrorf("a returned stream has no item type")
 		}
 		out.bound = true
+		out.typed = true
 		out.item = ref.At(*item)
 		out.lane = laneOfType(out.item)
 		return schema.StreamValue{Handle: out}, nil
@@ -1000,8 +1010,10 @@ func (s *session) outputOn(channel uint32) (*outputStream, error) {
 	if !ok || s.directions[token] != "output" {
 		return nil, protocolErrorf("channel %d is not an output", channel)
 	}
+	// A stream that was returned once keeps its item type while a resume
+	// replays the value that returned it, so its own items may arrive first.
 	out := s.outputs[token]
-	if !out.bound {
+	if !out.typed {
 		return nil, protocolErrorf("an item arrived for a stream that was never returned")
 	}
 	return out, nil
@@ -1019,8 +1031,11 @@ func (s *session) receiveItem(c *sessionConn, m message) error {
 // caller offers the entry to the stream. A nil stream means the frame is from
 // a connection the session has left.
 func (s *session) bindItem(c *sessionConn, m message) (*outputStream, outEntry, error) {
-	current, err := s.installFrom(c, m)
-	if err != nil || !current {
+	// Everything is decoded first; installing the mappings and binding the
+	// item's streams then happen in one critical section on a connection that
+	// is still the session's, so a detach cannot fall between them.
+	mappings, err := m.mappings()
+	if err != nil {
 		return nil, outEntry{}, err
 	}
 	channel, err := m.channel()
@@ -1040,6 +1055,16 @@ func (s *session) bindItem(c *sessionConn, m message) (*outputStream, outEntry, 
 		return nil, outEntry{}, protocolErrorf("stream item: %v", err)
 	}
 	s.mu.Lock()
+	// A frame from a connection the session has left is not bound: the
+	// server replays the item on the next one.
+	if s.conn != c || s.over {
+		s.mu.Unlock()
+		return nil, outEntry{}, nil
+	}
+	if err := s.install(mappings, false); err != nil {
+		s.mu.Unlock()
+		return nil, outEntry{}, err
+	}
 	out, err := s.outputOn(channel)
 	if err != nil {
 		s.mu.Unlock()

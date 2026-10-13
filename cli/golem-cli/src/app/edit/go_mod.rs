@@ -218,53 +218,54 @@ pub fn local_replacements(content: &str) -> Vec<String> {
         let Some(target) = entry.get(arrow + 1).and_then(|t| token_value(t)) else {
             continue;
         };
-        let local = ["./", "../", ".\\", "..\\"]
-            .iter()
-            .any(|prefix| target.starts_with(prefix))
-            || std::path::Path::new(&target).is_absolute();
-        if local {
+        if is_directory_path(&target) {
             targets.push(target);
         }
     }
     targets
 }
 
+/// Whether a `replace` target is a directory rather than a module path: the
+/// go command's `modfile.IsDirectoryPath`, which checks the Unix and the
+/// Windows syntax on every system because a go.mod moves between them.
+fn is_directory_path(target: &str) -> bool {
+    let bytes = target.as_bytes();
+    target == "."
+        || target == ".."
+        || ["./", ".\\", "../", "..\\", "/", "\\"]
+            .iter()
+            .any(|prefix| target.starts_with(prefix))
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
+/// Whether a token names `module`, quoted or not.
+fn names(token: Option<&String>, module: &str) -> bool {
+    token.and_then(|t| token_value(t)).as_deref() == Some(module)
+}
+
 /// A `require` entry for `module` — either `require <module> <ver>` (single) or
-/// `<module> <ver>` inside a `require (…)` block — has its version set. A require
-/// line has no `=>` (which distinguishes it from a `replace` line that also
-/// names the module).
+/// `<module> <ver>` inside a `require (…)` block — has its version set. Lines
+/// are read with the go command's tokens, so a quoted module path matches too.
 fn set_require_version(lines: &mut [String], module: &str, version: &str) {
     let mut in_require_block = false;
     for line in lines.iter_mut() {
-        let trimmed = line.trim();
-
-        if !in_require_block && trimmed.starts_with("require (") {
+        let toks = tokens(line);
+        if !in_require_block && toks == ["require", "("] {
             in_require_block = true;
             continue;
         }
-        if in_require_block && trimmed == ")" {
+        if in_require_block && toks == [")"] {
             in_require_block = false;
             continue;
         }
-
-        if trimmed.contains("=>") {
+        if toks.iter().any(|t| t == "=>") {
             continue; // replace line, not require
         }
-
-        // Single-line: `require <module> <ver>`
-        if let Some(rest) = trimmed.strip_prefix("require ") {
-            if first_token(rest) == Some(module) {
-                let indent = leading_ws(line);
-                let suffix = trailing_comment(rest);
-                *line = format!("{indent}require {module} {version}{suffix}");
-            }
-            continue;
-        }
-
-        // Block entry: `<module> <ver>`
-        if in_require_block && first_token(trimmed) == Some(module) {
-            let indent = leading_ws(line);
-            let suffix = trailing_comment(trimmed);
+        let indent = leading_ws(line).to_string();
+        let suffix = trailing_comment(line.trim());
+        if toks.first().is_some_and(|t| t == "require") && names(toks.get(1), module) {
+            *line = format!("{indent}require {module} {version}{suffix}");
+        } else if in_require_block && names(toks.first(), module) {
             *line = format!("{indent}{module} {version}{suffix}");
         }
     }
@@ -272,29 +273,27 @@ fn set_require_version(lines: &mut [String], module: &str, version: &str) {
 
 /// Ensure or remove a top-level `replace <module> => <path>` directive.
 /// Replace *blocks* are also handled: an entry `<module> => <path>` inside a
-/// `replace (…)` block is updated or removed.
+/// `replace (…)` block is updated or removed. A quoted module path matches.
 fn set_replace_directive(lines: &mut Vec<String>, module: &str, replace_path: Option<&str>) {
     let mut updated = false;
     let mut in_replace_block = false;
     let mut removals = Vec::new();
 
     for (idx, line) in lines.iter_mut().enumerate() {
-        let trimmed = line.trim();
-
-        if !in_replace_block && trimmed.starts_with("replace (") {
+        let toks = tokens(line);
+        if !in_replace_block && toks == ["replace", "("] {
             in_replace_block = true;
             continue;
         }
-        if in_replace_block && trimmed == ")" {
+        if in_replace_block && toks == [")"] {
             in_replace_block = false;
             continue;
         }
-
-        let is_single = trimmed
-            .strip_prefix("replace ")
-            .map(|rest| replace_lhs_is(rest, module))
-            .unwrap_or(false);
-        let is_block_entry = in_replace_block && replace_lhs_is(trimmed, module);
+        if !toks.iter().any(|t| t == "=>") {
+            continue;
+        }
+        let is_single = toks.first().is_some_and(|t| t == "replace") && names(toks.get(1), module);
+        let is_block_entry = in_replace_block && names(toks.first(), module);
 
         if is_single || is_block_entry {
             match replace_path {
@@ -325,19 +324,6 @@ fn set_replace_directive(lines: &mut Vec<String>, module: &str, replace_path: Op
         }
         lines.push(format!("replace {module} => {path}"));
     }
-}
-
-/// True if the text before `=>` names exactly `module` (ignoring an optional
-/// version token, e.g. `replace mod v1 => …`).
-fn replace_lhs_is(rest: &str, module: &str) -> bool {
-    match rest.split("=>").next() {
-        Some(lhs) => lhs.split_whitespace().next() == Some(module),
-        None => false,
-    }
-}
-
-fn first_token(s: &str) -> Option<&str> {
-    s.split_whitespace().next()
 }
 
 fn leading_ws(line: &str) -> &str {
@@ -520,5 +506,33 @@ replace(
             vec!["replace", r#""a b""#, "=>", "`c d`"]
         );
         assert_eq!(tokens("module app/é"), vec!["module", "app/é"]);
+    }
+
+    /// A bare parent or current directory is a local replacement too.
+    #[test]
+    fn a_bare_parent_is_a_local_replacement() {
+        assert_eq!(
+            local_replacements(
+                "module app\n\nreplace localdep => ..\nreplace other => .\nreplace rooted => \\x\nreplace drive => C:\\x\nreplace module => example.com/m v1.0.0\n"
+            ),
+            vec!["..", ".", "\\x", "C:\\x"]
+        );
+    }
+
+    /// A quoted module path is the same module: reconciling updates its
+    /// replace and require instead of adding a second, conflicting one.
+    #[test]
+    fn quoted_module_paths_are_reconciled_in_place() {
+        let src =
+            format!("module app\n\nrequire \"{MOD}\" v0.0.0\n\nreplace \"{MOD}\" => /old/path\n");
+        let out = reconcile_sdk_dependency(&src, MOD, "v0.1.0", Some("/new/path"));
+        assert_eq!(out.matches("replace").count(), 1, "{out}");
+        assert!(
+            out.contains(&format!("replace {MOD} => /new/path")),
+            "{out}"
+        );
+        assert!(out.contains(&format!("require {MOD} v0.1.0")), "{out}");
+        let removed = reconcile_sdk_dependency(&src, MOD, "v0.1.0", None);
+        assert!(!removed.contains("replace"), "{removed}");
     }
 }

@@ -1167,6 +1167,10 @@ fn go_grep_tool() -> Tool {
                 )
             },
             OptionSpec {
+                default: Some(SchemaValue::String("fast".to_string())),
+                ..option("mode", OptionShape::OptionalScalar(SchemaType::string()))
+            },
+            OptionSpec {
                 default: Some(SchemaValue::Path {
                     path: "out.json".to_string(),
                 }),
@@ -1225,6 +1229,7 @@ fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
         "s.Map(&a.Labels).Default(map[string]string{\"env\": \"dev\"})",
         "s.List(&a.Tag).Default(nil)",
         "s.Option(&a.Output).Default(\"out.json\")",
+        "s.Option(&a.Mode).Default(\"fast\")",
         "s.Stdin(&a.Stdin).Optional()",
         "s.CountFlag(&a.Verbosity)",
     ] {
@@ -1711,24 +1716,28 @@ fn go_tool_group_names_do_not_collide(env: &GoEnv) {
     generated.assert_vets_for_wasip1(env);
 }
 
-/// A text default with a language has no Go spelling that keeps the language,
-/// so generating the tool client fails rather than sending plain text.
+/// An optional text default with a language has no Go spelling that keeps the
+/// language, so generating the tool client fails rather than sending plain
+/// text or no default at all; so does any default of an optional field, which
+/// the Go SDK does not accept.
 #[test]
 fn go_tool_client_refuses_a_default_it_cannot_carry_whole() {
     let mut tool = go_grep_tool();
     let get = tool.commands.nodes[3].body.as_mut().unwrap();
     get.options.push(OptionSpec {
-        default: Some(SchemaValue::Text(
-            golem_common::schema::schema_value::TextValuePayload {
-                text: "bonjour".to_string(),
-                language: Some("fr".to_string()),
-            },
-        )),
+        default: Some(SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Text(
+                golem_common::schema::schema_value::TextValuePayload {
+                    text: "bonjour".to_string(),
+                    language: Some("fr".to_string()),
+                },
+            ))),
+        }),
         ..option(
             "greeting",
-            OptionShape::Scalar(SchemaType::text(
+            OptionShape::Scalar(SchemaType::option(SchemaType::text(
                 golem_common::schema::schema_type::TextRestrictions::default(),
-            )),
+            ))),
         )
     });
     let dir = TempDir::new().unwrap();

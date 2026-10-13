@@ -38,7 +38,7 @@ use crate::fs;
 use anyhow::{Context, anyhow};
 use camino::Utf8Path;
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::schema::schema_value::SchemaValue;
+use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue};
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
 use golem_common::schema::tool::{CommandNode, ErrorKind, FlagShape, OptionShape, Tool};
 use std::collections::BTreeMap;
@@ -493,7 +493,7 @@ impl GoToolBridgeGenerator {
             CanonicalSurfaceRef::GlobalOption { node, index } => {
                 let o = &self.node(node)?.globals.options[index];
                 check_default(&o.long, o.default.as_ref())?;
-                option(o)
+                spelled(&o.long, o.default.as_ref(), option(o))?
             }
             CanonicalSurfaceRef::GlobalFlag { node, index } => {
                 flag(&self.node(node)?.globals.flags[index])
@@ -501,16 +501,20 @@ impl GoToolBridgeGenerator {
             CanonicalSurfaceRef::BodyPositional { index } => {
                 let p = &body()?.positionals.fixed[index];
                 check_default(&p.name, p.default.as_ref())?;
-                (
-                    "Positional",
-                    p.default.as_ref().and_then(|v| self.literal(&p.type_, v)),
-                )
+                spelled(
+                    &p.name,
+                    p.default.as_ref(),
+                    (
+                        "Positional",
+                        p.default.as_ref().and_then(|v| self.literal(&p.type_, v)),
+                    ),
+                )?
             }
             CanonicalSurfaceRef::BodyTail => ("Tail", None),
             CanonicalSurfaceRef::BodyOption { index } => {
                 let o = &body()?.options[index];
                 check_default(&o.long, o.default.as_ref())?;
-                option(o)
+                spelled(&o.long, o.default.as_ref(), option(o))?
             }
             CanonicalSurfaceRef::BodyFlag { index } => flag(&body()?.flags[index]),
         })
@@ -530,8 +534,13 @@ impl GoToolBridgeGenerator {
             SchemaValue::U16(n) => n.to_string(),
             SchemaValue::U32(n) => n.to_string(),
             SchemaValue::U64(n) => n.to_string(),
-            SchemaValue::F32(n) if n.is_finite() => format!("{n:?}"),
-            SchemaValue::F64(n) if n.is_finite() => format!("{n:?}"),
+            // Go has no negative-zero constant, so -0.0 has no literal.
+            SchemaValue::F32(n) if n.is_finite() && !(*n == 0.0 && n.is_sign_negative()) => {
+                format!("{n:?}")
+            }
+            SchemaValue::F64(n) if n.is_finite() && !(*n == 0.0 && n.is_sign_negative()) => {
+                format!("{n:?}")
+            }
             SchemaValue::Char(c) => format!("{}", *c as u32),
             SchemaValue::String(s) => go_string(s),
             // Untyped constants, which Go converts to the field's named type
@@ -740,6 +749,20 @@ impl ToolNames {
     }
 }
 
+/// Refuses a declared default the generator has no Go spelling for, rather
+/// than generating the field without it. That includes any default of an
+/// optional (`option<T>`) field, which the Go SDK does not accept.
+fn spelled(
+    name: &str,
+    declared: Option<&SchemaValue>,
+    binding: (&'static str, Option<String>),
+) -> anyhow::Result<(&'static str, Option<String>)> {
+    if declared.is_some() && binding.1.is_none() {
+        anyhow::bail!("the default of {name} has no Go spelling in a tool client");
+    }
+    Ok(binding)
+}
+
 /// Refuses a default the Go value types cannot carry whole: `values.Text`
 /// has no language and `values.Binary` no MIME type, so such a default would
 /// reach the tool changed.
@@ -750,7 +773,10 @@ fn check_default(name: &str, value: Option<&SchemaValue>) -> anyhow::Result<()> 
     let carried = match value {
         SchemaValue::Text(text) => text.language.is_none(),
         SchemaValue::Binary(binary) => binary.mime_type.is_none(),
-        SchemaValue::List { elements } => {
+        SchemaValue::List { elements }
+        | SchemaValue::FixedList { elements }
+        | SchemaValue::Tuple { elements }
+        | SchemaValue::Record { fields: elements } => {
             for element in elements {
                 check_default(name, Some(element))?;
             }
@@ -761,6 +787,20 @@ fn check_default(name: &str, value: Option<&SchemaValue>) -> anyhow::Result<()> 
                 check_default(name, Some(key))?;
                 check_default(name, Some(value))?;
             }
+            true
+        }
+        SchemaValue::Option { inner } => {
+            check_default(name, inner.as_deref())?;
+            true
+        }
+        SchemaValue::Variant(variant) => {
+            check_default(name, variant.payload.as_deref())?;
+            true
+        }
+        SchemaValue::Result(
+            ResultValuePayload::Ok { value } | ResultValuePayload::Err { value },
+        ) => {
+            check_default(name, value.as_deref())?;
             true
         }
         _ => true,

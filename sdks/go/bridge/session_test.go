@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1099,5 +1100,181 @@ func TestAReplayedItemBindsWhileTheOldReaderIsPaused(t *testing.T) {
 	}
 	if !s.outputs["inner"].bound {
 		t.Fatal("the old reader's late offer unbound the replayed stream")
+	}
+}
+
+// An item that arrives on a connection the session has left binds nothing,
+// so its replay on the next connection binds its streams.
+func TestAnItemOnALeftConnectionBindsNothing(t *testing.T) {
+	old, current := &sessionConn{}, &sessionConn{}
+	s := &session{
+		conn: current, accepted: true, everAccepted: true, sessionToken: "sess",
+		byProvisional: map[string]*inputStream{}, byToken: map[string]*inputStream{},
+		outputs: map[string]*outputStream{}, inflight: map[uint64]schema.SchemaValue{},
+		directions: map[string]string{}, channels: map[uint32]string{},
+		tokenChannels: map[string]uint32{}, cursors: map[string]string{},
+		result: make(chan sessionResult, 1), done: make(chan struct{}),
+	}
+	data, err := encodeMessage("outputStreamItem", map[string]any{
+		"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(2, "out"), outputMapping(3, "inner")},
+		"sequence": "0",
+		"value":    map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, m, err := parseMessage(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := s.bindItem(old, m)
+	if err != nil || out != nil {
+		t.Fatalf("a stale item was taken: %v %v", out, err)
+	}
+	if len(s.channels) != 0 || len(s.inflight) != 0 {
+		t.Fatalf("a stale item changed the session: %v %v", s.channels, s.inflight)
+	}
+}
+
+// On resume the server pumps the outer and inner streams concurrently, so the
+// inner stream's first item can arrive before the replayed outer item that
+// carries it; the inner stream keeps its item type and takes the item.
+func TestAnInnerItemMayArriveBeforeItsOuterItemIsReplayed(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(3, "inner")}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			time.Sleep(100 * time.Millisecond)
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			outputItem(c, 6, 0, "i0", 7)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-resumed
+	inner, ok, err := out.Next(ctx)
+	if err != nil || !ok {
+		t.Fatalf("outer item %v %v", ok, err)
+	}
+	values, err := inner.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(values, []uint32{7}) {
+		t.Fatalf("inner stream %v, %v", values, err)
+	}
+}
+
+// The reader closes the outer stream while an unread item holds an inner
+// stream, and the connection drops before the end: the server's replay of the
+// item binds the inner stream again rather than failing the session.
+func TestAReplayAfterCloseDoesNotFailTheSession(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(3, "inner")}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			c.expect("streamCancel")
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := out.core.src.(*remoteSource[AgentStream[uint32]]).out.s
+	time.Sleep(100 * time.Millisecond)
+	_ = out.Close()
+	<-resumed
+	time.Sleep(300 * time.Millisecond)
+	s.mu.Lock()
+	err = s.err
+	s.mu.Unlock()
+	if err != nil && strings.Contains(err.Error(), "twice") {
+		t.Fatal("replay after Close failed the session")
+	}
+}
+
+// Closing the outer stream stops the inner stream an unread item carried, so
+// that stream's items do not fill a queue nobody reads and stall the session.
+func TestClosingAStreamStopsTheStreamsItsUnreadItemsCarried(t *testing.T) {
+	gotEnd := make(chan struct{})
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(3, "inner")}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			c.expect("streamCancel")
+			for i := 0; i < maxQueuedItems+2; i++ {
+				outputItem(c, 3, uint64(i), "i"+itoa(uint64(i)), uint32(i))
+			}
+			outputEnd(c, 2, 1, "", map[string]any{"kind": "cancelled", "reason": "consumer-drop"})
+			close(gotEnd)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := out.core.src.(*remoteSource[AgentStream[uint32]]).out
+	time.Sleep(100 * time.Millisecond)
+	_ = out.Close()
+	<-gotEnd
+	time.Sleep(500 * time.Millisecond)
+	o.s.mu.Lock()
+	terminal := o.terminal
+	innerQ := len(o.s.outputs["inner"].queue)
+	innerExposed := o.s.outputs["inner"].exposed
+	o.s.mu.Unlock()
+	if !terminal || innerQ != 0 || innerExposed {
+		t.Fatalf("outer terminal=%v, inner queued=%d, exposed=%v", terminal, innerQ, innerExposed)
 	}
 }

@@ -354,6 +354,9 @@ type outputStream struct {
 	item    schema.Ref
 	lane    lane
 	bound   bool
+	// typed is set once a received value has bound the stream, which gives it
+	// its item type; it stays set while a resume unbinds the stream.
+	typed   bool
 	exposed bool
 
 	queue  []outEntry
@@ -450,6 +453,7 @@ func (o *outputStream) offer(c *sessionConn, e outEntry) error {
 		o.pendingCancel = ""
 	}
 	if o.stopped {
+		releaseCarried(e.value, o.stopReason)
 		return nil
 	}
 	// A resumed stream replays from its last cursor; what the reader already
@@ -556,15 +560,24 @@ func (o *outputStream) ready() bool {
 // stop is the reader closing the stream: the server is told unless the stream
 // already ended.
 func (o *outputStream) stop(reason string) {
+	o.s.mu.Lock()
+	defer o.s.mu.Unlock()
+	o.stopLocked(reason)
+}
+
+// stopLocked stops the stream. The values it drops unread give up the
+// streams they carried: nobody can reach those any more, so they are stopped
+// too, and a replay of a dropped value may bind them again. Called with s.mu
+// held.
+func (o *outputStream) stopLocked(reason string) {
 	s := o.s
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if o.ended || o.stopped {
 		return
 	}
 	o.stopped = true
 	o.stopReason = reason
 	for len(o.queue) > 0 {
+		releaseCarried(o.queue[0].value, reason)
 		o.pop()
 	}
 	poke(o.wake)
@@ -606,6 +619,23 @@ func unbindStreams(v schema.SchemaValue) {
 	_, _ = mapStreams(v, func(sv schema.StreamValue) (schema.SchemaValue, error) {
 		if inner, ok := sv.Handle.(*outputStream); ok {
 			inner.bound = false
+		}
+		return sv, nil
+	})
+}
+
+// releaseCarried frees the output streams a dropped value carried and stops
+// the ones the reader never got. Called with s.mu held.
+func releaseCarried(v schema.SchemaValue, reason string) {
+	if v == nil {
+		return
+	}
+	_, _ = mapStreams(v, func(sv schema.StreamValue) (schema.SchemaValue, error) {
+		if inner, ok := sv.Handle.(*outputStream); ok {
+			inner.bound = false
+			if !inner.exposed {
+				inner.stopLocked(reason)
+			}
 		}
 		return sv, nil
 	})

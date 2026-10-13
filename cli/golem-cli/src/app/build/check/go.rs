@@ -27,7 +27,8 @@ use crate::versions;
 ///
 /// Simpler than Rust: Go has no workspace concept, so each component is a
 /// standalone module edited independently. `go.mod` sits exactly at the
-/// component dir in both flat (`dir: ""` → app root) and multi-component layouts.
+/// component dir: `module/` in a single-component application, the
+/// component's own directory in a multi-component one.
 pub(super) fn plan_go_mod_fix_steps(
     ctx: &BuildContext<'_>,
     overrides: &SdkOverrides,
