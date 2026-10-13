@@ -2207,7 +2207,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     #[test_r::tag(native_apfs)]
-    fn a_supplied_linux_capture_reflink_action_does_not_execute_a_macos_clone() {
+    fn a_supplied_linux_capture_reflink_transfer_does_not_execute_a_macos_clone() {
         let source = tempfile::tempfile().unwrap();
         std::io::Write::write_all(&mut &source, b"selected capture transfer").unwrap();
         let destination = tempfile::tempdir().unwrap();

@@ -921,8 +921,8 @@ fn file_transfer(
 pub(crate) enum AgentAccounting {
     /// Project quotas enforce the disk limits of each agent and measure its usage.
     ProjectQuotas,
-    /// Development storage. It has no per-agent accounting, and a finite disk limit fails the start
-    /// of the agent.
+    /// `Temporary` and `Directory` storage. It has no per-agent accounting, and a finite disk limit
+    /// fails the start of the agent.
     Development,
     /// Copy-on-write storage without per-agent accounting. It enforces no per-agent disk limit and
     /// measures no per-agent usage.

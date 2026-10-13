@@ -235,7 +235,8 @@ root directory and its `seed_flusher` together, and every admitted batch attempt
 batches, and batches that fail early. Verify that flush
 finalization creates no per-batch directory entry, does not change the root's modification time,
 works without a writable root, and cannot be redirected by pathname replacement. Distinguish
-a setup or admission failure before admission, which has no pinned `seed_flusher` to flush.
+a setup or admission failure, which happens before admission and has no pinned `seed_flusher` to
+flush.
 Check that the namespace and batch finalizers attempt every required synchronization after an
 admitted batch error while preserving the first error. Keep Linux seed
 synchronization and explicit guest flush behavior unchanged. These are correctness checks,
@@ -253,7 +254,7 @@ For broader local verification on macOS, use these commands. The first and the t
 portable helpers that the ordinary unit suite covers. The second runs the only `local_filesystem`
 case, `apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay`. That case is macOS-only and
 no CI job runs it, so run it locally after a change to APFS capture or restore. It needs the
-fixture that the end of this section names:
+`test-components/it_initial_file_system_release.wasm` fixture:
 
 ```shell
 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- sandbox_filesystem:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time

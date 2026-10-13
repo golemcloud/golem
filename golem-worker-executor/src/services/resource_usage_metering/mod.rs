@@ -1112,7 +1112,7 @@ fn spawn_metering_task(task: impl Future<Output = ()> + Send + 'static) {
     }
 }
 
-/// Refuses filesystem metering on storage that measures no per-agent usage.
+/// Refuses filesystem metering on storage with `Unaccounted` accounting.
 ///
 /// Filesystem metering reads the usage of each agent from the project quota of its filesystem.
 /// Copy-on-write storage without per-agent accounting (`Unaccounted`) would meter zero for every
