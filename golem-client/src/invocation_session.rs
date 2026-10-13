@@ -1762,18 +1762,34 @@ impl InvocationSession {
                         replay_revocation_eligible: exact_retry,
                     };
                 }
-                PublicServerMessage::InvocationRejected { attempt_id, .. } => {
+                PublicServerMessage::InvocationRejected {
+                    attempt_id, code, ..
+                } => {
                     match self.attachment_state {
                         AttachmentState::Pending { .. } => {
-                            if let Some(attempt_id) = attempt_id {
-                                let pending = self
-                                    .deliveries
-                                    .snapshot()
-                                    .pending_operation
-                                    .ok_or(SessionTransportError::UnexpectedAttempt)?;
-                                if operation_attempt_id(&pending) != Some(*attempt_id) {
-                                    return Err(SessionTransportError::UnexpectedAttempt);
-                                }
+                            let state = self.deliveries.snapshot();
+                            let mut pending = state
+                                .pending_operation
+                                .ok_or(SessionTransportError::UnexpectedAttempt)?;
+                            if let Some(attempt_id) = attempt_id
+                                && operation_attempt_id(&pending) != Some(*attempt_id)
+                            {
+                                return Err(SessionTransportError::UnexpectedAttempt);
+                            }
+                            if *code == PublicErrorCode::InvalidAttachmentState
+                                && attempt_id.is_some()
+                                && state.session_token.is_some()
+                                && let PublicClientMessage::ResumeAttach {
+                                    attempt_id,
+                                    operation: operation @ PublicResumeOperation::Resume,
+                                    ..
+                                } = &mut pending
+                            {
+                                *attempt_id = uuid::Uuid::new_v4();
+                                *operation = PublicResumeOperation::Takeover;
+                                self.deliveries.set_attachment_state(Some(pending), None)?;
+                                self.connect_pending(false).await?;
+                                continue;
                             }
                         }
                         AttachmentState::Accepted {
@@ -1867,6 +1883,10 @@ impl InvocationSession {
                 return Err(SessionTransportError::AttachmentTerminated);
             }
         };
+        self.connect_pending(exact_retry).await
+    }
+
+    async fn connect_pending(&mut self, exact_retry: bool) -> Result<(), SessionTransportError> {
         self.attachment_state = AttachmentState::Pending { exact_retry };
         self.deliveries.begin_connection(&[])?;
         for input in &mut self.inputs {
@@ -6729,6 +6749,175 @@ mod tests {
             }
         );
         server.await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn resume_attachment_rejection_takes_over_once() {
+        for second_rejection in [None, Some(false), Some(true)] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let initial = start_request(uuid::Uuid::new_v4());
+            let server_initial = initial.clone();
+            let server = tokio::spawn(async move {
+                let mut previous_takeover = None;
+                let mut previous_resume = None;
+                for connection in 0..4 {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut socket =
+                        accept_hdr_async(socket, |request: &Request, response: Response| {
+                            Ok(select_session_subprotocol(request, response))
+                        })
+                        .await
+                        .unwrap();
+                    let request = receive_client_message(&mut socket).await;
+                    let attempt_id = operation_attempt_id(&request).unwrap();
+                    if connection == 0 {
+                        assert_eq!(request, server_initial);
+                    } else {
+                        let PublicClientMessage::ResumeAttach {
+                            operation,
+                            session_token,
+                            output_cursors,
+                            ..
+                        } = &request
+                        else {
+                            panic!("expected recovery attempt")
+                        };
+                        assert_eq!(session_token, "session-token");
+                        assert_eq!(output_cursors, &["delivered-first".to_string()]);
+                        assert_eq!(
+                            *operation,
+                            if connection == 1 {
+                                PublicResumeOperation::Resume
+                            } else {
+                                PublicResumeOperation::Takeover
+                            }
+                        );
+                    }
+                    if connection == 1 || (connection == 3 && second_rejection.is_some()) {
+                        socket
+                            .send(Message::Text(
+                                encode_text(&PublicServerMessage::InvocationRejected {
+                                    attempt_id: Some(attempt_id),
+                                    code: PublicErrorCode::InvalidAttachmentState,
+                                    message: "old attachment remains".to_string(),
+                                    retryable: second_rejection.unwrap_or(false),
+                                    version: 1,
+                                })
+                                .unwrap()
+                                .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        previous_resume = Some(request);
+                    } else if connection == 2 {
+                        assert_ne!(
+                            Some(attempt_id),
+                            previous_resume.as_ref().and_then(operation_attempt_id)
+                        );
+                        previous_takeover = Some(request);
+                        socket.close(None).await.unwrap();
+                    } else {
+                        if connection == 3 {
+                            assert_eq!(Some(&request), previous_takeover.as_ref());
+                        }
+                        let channel = if connection == 0 { 2 } else { 9 };
+                        socket
+                            .send(Message::Text(
+                                encode_text(&PublicServerMessage::InvocationAccepted {
+                                    attempt_id,
+                                    idempotency_key: "invocation-key".to_string(),
+                                    mappings: vec![PublicStreamMapping {
+                                        channel,
+                                        direction: PublicStreamDirection::Output,
+                                        byte_role: None,
+                                        input_high_water: None,
+                                        provisional_ref: None,
+                                        stream_token: "output".to_string(),
+                                    }],
+                                    session_token: "session-token".to_string(),
+                                    version: 1,
+                                })
+                                .unwrap()
+                                .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        socket
+                            .send(Message::Binary(
+                                encode_binary_message(&BinaryMessage {
+                                    metadata: BinaryMessageMetadata {
+                                        channel,
+                                        cursor_token: Some(
+                                            if connection == 0 {
+                                                "delivered-first"
+                                            } else {
+                                                "delivered-second"
+                                            }
+                                            .to_string(),
+                                        ),
+                                        item_count: DecimalU64(1),
+                                        kind: BinaryMessageKind::OutputU8,
+                                        mime_type: None,
+                                        sequence: DecimalU64(if connection == 0 { 0 } else { 1 }),
+                                        version: 1,
+                                    },
+                                    payload: vec![if connection == 0 { 17 } else { 29 }],
+                                })
+                                .unwrap()
+                                .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        socket.close(None).await.unwrap();
+                    }
+                }
+            });
+            let mut session = InvocationSession::open(
+                Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+                None,
+                InvocationSessionStateSnapshot {
+                    delivered_output_cursors: BTreeMap::new(),
+                    stable_stream_bindings: BTreeMap::new(),
+                    pending_operation: Some(initial),
+                    session_token: None,
+                },
+                false,
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+            session.receive().await.unwrap();
+            let mut first = session.receive().await.unwrap();
+            assert!(
+                matches!(first.frame(), ServerFrame::Binary(message) if message.payload == [17])
+            );
+            first.mark_delivered().unwrap();
+            let decision = session.receive().await.unwrap();
+            if second_rejection.is_some() {
+                assert!(matches!(
+                    decision.frame(),
+                    ServerFrame::Message(PublicServerMessage::InvocationRejected { .. })
+                ));
+                assert!(matches!(
+                    session
+                        .recover_after_send_failure(SessionTransportError::Closed)
+                        .await,
+                    Err(SessionTransportError::AttachmentTerminated)
+                ));
+            } else {
+                assert!(matches!(
+                    decision.frame(),
+                    ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+                ));
+                let next = session.receive().await.unwrap();
+                assert!(
+                    matches!(next.frame(), ServerFrame::Binary(message) if message.payload == [29])
+                );
+            }
+            server.await.unwrap();
+        }
     }
 
     #[test]

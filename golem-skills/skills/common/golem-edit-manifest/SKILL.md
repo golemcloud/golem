@@ -166,6 +166,33 @@ agents:
           CACHE_TTL: "60"
 ```
 
+### Initial permission cards
+
+Use `initialCard` on a component or agent, with `lowerBound` and `upperBound` containing `positive` and `negative` permission-string lists. Tool bindings expose tools but do not grant runtime permission. This fragment assumes the agent already has a Git binding; add its required filesystem permissions separately:
+
+```yaml
+agents:
+  RepositoryAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative:
+          - "tool(?component/git) @ ?agent : invoke : status --short --null"
+      upperBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative: []
+```
+
+Use primary command and long-option names in manifests and permission shares. Short aliases require effective metadata and are rejected at these context-free boundaries. Runtime derivation resolves aliases before attenuation and freezes their meaning durably.
+
+Tool command paths match exactly. `.` means the root command, and whole-resource `*` means any invocation; an empty resource is not an alternative. Flags are unordered requirements, positionals are ordered prefixes, and extra arguments do not defeat a match. Thus `status` allows that command with arguments, not only an empty argument list. Denying `status --short --null` blocks both flags together even when reordered or accompanied by extras.
+
+Attach option values with `=`. Inside a value, `*` matches zero or more non-slash characters and `**` can cross slashes. `/workspace/**` includes `/workspace/project/src`, but not `/workspace` without its slash; matching does not normalize paths. Quote spaces (`--message="two words"`) or empty values (`--message=""`), and backslash-escape literal stars. Preserve those escapes through YAML or JSON encoding.
+
+Repeated options retain every occurrence. A positive `--include=/workspace/**` requires one matching value, not an all-values allowlist; use a negative `--include=/private/**` to block any matching private value. Repeating a positive requirement in a ceiling does not change this rule. Count requirements retain multiplicity. Opaque streams cannot satisfy restricted positive value patterns and cannot evade a potentially matching denial; authorization never drains streams. Derivation must narrow positives and retain or strengthen denials on both bounds.
+
 ## Config and WASI Config
 
 The `config` field accepts arbitrary YAML values (objects, arrays, scalars) passed as typed configuration to the agent at runtime. The `wasiConfig` field is a string-to-string map of WASI-level configuration variables.
@@ -463,6 +490,36 @@ mcp:
 ```
 
 The MCP tool must also have a top-level implementation declaration and a `components.my-app:tool-owner.tools.search` binding. No agent is required. The implementation and owner components may differ; `include`/`exclude` selects exported commands. A remote declaration requires an environment grant, which application deployment automatically reconciles when the deploy actor has permission.
+
+## Tool Client Dependencies
+
+Prefer `dependencies.tools` for typed clients used by a component. Keep its
+language template; `golem build` automatically generates the
+clients in that language, like agent clients selected by `dependencies.agents`.
+For a custom template, set `componentTemplates.<template-name>.guestLanguage`
+and apply that template to the consumer.
+No additional `bridge.<language>.internal.tools` selection is needed.
+
+```yaml
+components:
+  my-app:consumer:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
+      tools: [search]
+    tools:
+      search: {}
+```
+
+The dependency selects client generation, while the component or agent binding
+exposes the tool at runtime. Neither entry supplies the other. A binding alone
+does not generate a client. Configure runtime permissions and consumer compiler
+imports separately. A local tool dependency builds its provider before the
+consumer; a component cannot depend on its own guest bridge SDK. Use the SDK's
+definition-owned client for a tool defined in the same component.
+
+Use explicit internal bridge selection only for a separate generation target,
+such as another language or output directory. Load `golem-generating-tool-clients`
+for built-in release and MCP import examples.
 
 ## Bridge SDK Generation
 
@@ -763,6 +820,7 @@ This table shows where each property can be defined:
 
 ## Related Skills
 
+- Load `golem-generating-tool-clients` to select built-in releases or MCP imports, generate typed clients, and configure consumer imports separately from deployment bindings
 - Load `golem-profiles-and-environments` for detailed guidance on CLI profiles, app environments, component presets, and how they interact
 - Load `golem-deployment-version` for the `version:` source (git tag/hash, static, env var) and the `versionCheck` uniqueness policy
 

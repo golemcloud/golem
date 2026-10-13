@@ -294,7 +294,8 @@ export type SnapshotPolicy =
  * save and restoration. A bare {@link SnapshotPolicy} requires a custom
  * `snapshot: { save, load }` implementation when enabled. Explicit `{ multipart:
  * { state }, policy? }` always requires both hooks and keeps live state independent
- * of saved schema. Save returns schema input JSON; load receives validated output.
+ * of saved schema. Save returns schema input; load receives validated output.
+ * Schema-backed snapshots preserve bigint values through lossless JSON encoding.
  * Hooks run unpersisted and must tolerate retries. Whole-buffer copies amplify
  * memory use; the host inline/blob threshold is not a snapshot size cap.
  */

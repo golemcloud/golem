@@ -17,6 +17,7 @@ pub mod extraction;
 pub mod files;
 pub mod invocation_session;
 pub mod oplog;
+pub mod oplog_html;
 pub mod stream;
 
 use crate::agent_id_display::SourceLanguage;

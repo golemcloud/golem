@@ -1682,3 +1682,23 @@ fn only_the_named_filesystem_snapshot_of_an_automatic_snapshot_is_confirmed() {
 fn a_pending_update_kind_keeps_the_assisted_selection_behind_one_box() {
     assert_eq!(std::mem::size_of::<crate::model::PendingUpdateKind>(), 24);
 }
+
+#[test]
+fn pod_uri_and_display_bracket_ipv6() {
+    use crate::model::Pod;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    let v4 = Pod {
+        ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        port: 9000,
+    };
+    assert_eq!(v4.to_string(), "10.0.0.1:9000");
+    assert_eq!(v4.uri(false).to_string(), "http://10.0.0.1:9000/");
+
+    let v6 = Pod {
+        ip: IpAddr::V6("fdaa:0:1:a7b::2".parse::<Ipv6Addr>().unwrap()),
+        port: 9000,
+    };
+    assert_eq!(v6.to_string(), "[fdaa:0:1:a7b::2]:9000");
+    assert_eq!(v6.uri(true).to_string(), "https://[fdaa:0:1:a7b::2]:9000/");
+}

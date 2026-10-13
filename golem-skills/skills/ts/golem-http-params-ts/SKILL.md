@@ -212,9 +212,23 @@ returned inline text has a `languageCode`, it is forwarded as the
 | `z.void()` / no value | 204 No Content | empty |
 | any schema `T` | 200 OK | JSON-serialized `T` |
 | `T.nullable()` / `T.optional()` | 200 OK if value, 404 Not Found if `null` / `undefined` | JSON `T` or empty |
+| `s.option(T)` | 200 OK if value, 404 Not Found if `undefined` | JSON `T` or empty |
 | `s.result(ok, err)` returning `Result.ok` / `Result.err` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `ok` or JSON `err` |
-| `s.unstructuredBinary()` | 200 OK | Raw binary with Content-Type |
+| `s.result(s.option(T), err)` | 200 OK if `Result.ok(value)`, 404 if `Result.ok(undefined)`, 500 if `Result.err` | JSON `T`, empty, or JSON `err` |
+| `s.unstructuredBinary()` | 200 OK | Raw binary with Content-Type (default `application/octet-stream`) |
 | `s.unstructuredText()` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
+| unstructured `{ tag: 'url', val }` | 307 Temporary Redirect | `Location` = `val` |
+
+The value inside an option or `Result.ok` follows the same rules as a top-level value. An unstructured marker wrapped in `s.option(...)`, `s.result(..., err)`, or `s.result(s.option(...), err)` is sent as the **raw** body (or a redirect), not as JSON. Wrap unstructured markers with `s.option(...)`; zod `.nullable()` / `.optional()` wrappers cannot wrap them:
+
+```typescript
+// 200 raw bytes / 404 for Result.ok(undefined) / 500 with JSON error for Result.err
+download: method({
+  input: { id: z.string() },
+  returns: s.result(s.option(s.unstructuredBinary()), z.object({ error: z.string() })),
+  http: http.get('/files/{id}'),
+}),
+```
 
 ## Data Type to JSON Mapping
 

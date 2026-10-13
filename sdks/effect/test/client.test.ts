@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, DateTime, Effect, Exit, Fiber, Layer, Result, Schema, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, Fiber, Layer, Option, Result, Schema, Stream } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
@@ -14,6 +14,7 @@ import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClie
 import { compileMethodSpec, compileParamBindings, invokeMethod, method } from "../src/Method.js"
 import { PrincipalSchema } from "../src/Principal.js"
 import {
+  Option as UnstructuredOption,
   UnstructuredBinary,
   UnstructuredText,
   type BinaryReferenceValue,
@@ -393,6 +394,66 @@ describe("Client 1.6 durable lifecycle", () => {
           Effect.provide(runtime.layer),
         ) as Effect.Effect<unknown, unknown, never>
         expect(actual).toEqual(expected)
+      }
+    }),
+  )
+
+  it.effect("decodes unstructured outputs combined with typed errors and options", () =>
+    Effect.gen(function* () {
+      const Pending = Schema.Struct({ _tag: Schema.Literal("Pending"), retryAfter: Schema.Number })
+      const RawResults = defineAgent({
+        name: "RawResults",
+        id: {},
+        methods: {
+          binary: method({ input: {}, success: UnstructuredBinary(), error: Pending }),
+          text: method({ input: {}, success: UnstructuredText(), error: Pending }),
+          maybe: method({ input: {}, success: UnstructuredOption(UnstructuredBinary()) }),
+          lookup: method({
+            input: {},
+            success: UnstructuredOption(UnstructuredBinary()),
+            error: Pending,
+          }),
+        },
+      })
+      const bytes: BinaryReferenceValue = {
+        _tag: "inline",
+        val: new Uint8Array([9, 8, 7]),
+        mimeType: "application/octet-stream",
+      }
+      const url: BinaryReferenceValue = { _tag: "url", val: "https://example.com/blob" }
+      const text: TextReferenceValue = { _tag: "inline", val: "ready" }
+      const pending = { _tag: "Pending" as const, retryAfter: 3 }
+      const cases: ReadonlyArray<
+        readonly [keyof typeof RawResults.methods, Effect.Effect<unknown, unknown>]
+      > = [
+        ["binary", Effect.succeed(bytes)],
+        ["binary", Effect.succeed(url)],
+        ["binary", Effect.fail(pending)],
+        ["text", Effect.succeed(text)],
+        ["text", Effect.fail(pending)],
+        ["maybe", Effect.succeed(Option.none())],
+        ["maybe", Effect.succeed(Option.some(bytes))],
+        ["lookup", Effect.succeed(Option.none())],
+        ["lookup", Effect.succeed(Option.some(bytes))],
+        ["lookup", Effect.succeed(Option.some(url))],
+        ["lookup", Effect.fail(pending)],
+      ]
+      for (const [methodName, handler] of cases) {
+        const codec = yield* compileMethodSpec(methodName, RawResults.methods[methodName] as any)
+        const input = yield* codec.inputCodec.encodeAsync({})
+        const response = yield* invokeMethod(codec, () => handler as any, input) as Effect.Effect<
+          CoreTypes.SchemaValueTree | undefined,
+          unknown,
+          never
+        >
+        const runtime = makeRuntime({ response })
+        const actual = yield* RawResults.client.get({}).pipe(
+          Effect.flatMap((remote) => (remote[methodName] as any)({})),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+          Effect.result,
+        ) as Effect.Effect<Result.Result<unknown, unknown>, never, never>
+        expect(actual).toEqual(yield* Effect.result(handler))
       }
     }),
   )

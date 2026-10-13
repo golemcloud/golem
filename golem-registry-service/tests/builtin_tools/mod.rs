@@ -16,6 +16,7 @@ use golem_registry_service::config::{
 use golem_registry_service::services::builtin_tool_provisioner::{
     BuiltinExportDescriptor, BuiltinExportKind, provision_descriptors,
 };
+use golem_registry_service::startup::{StartupPhase, StartupProgress};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
@@ -200,6 +201,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     let error = provision_descriptors(
         std::slice::from_ref(&mismatch),
         &artifacts,
+        &StartupProgress::default(),
         owner,
         &services.auth_service,
         &services.application_service,
@@ -515,9 +517,11 @@ async fn provision(
     descriptors: &[BuiltinExportDescriptor],
     artifacts: &BTreeMap<&str, Arc<Vec<u8>>>,
 ) {
+    let startup_progress = StartupProgress::default();
     provision_descriptors(
         descriptors,
         artifacts,
+        &startup_progress,
         owner,
         &services.auth_service,
         &services.application_service,
@@ -531,6 +535,16 @@ async fn provision(
     )
     .await
     .unwrap();
+
+    match startup_progress.current() {
+        StartupPhase::InspectingBuiltinArtifacts {
+            completed, total, ..
+        }
+        | StartupPhase::ProvisioningBuiltinArtifacts {
+            completed, total, ..
+        } => assert_eq!(completed, total),
+        phase => panic!("unexpected startup phase after provisioning: {phase:?}"),
+    }
 }
 
 fn replace_embedded_tool_versions(wasm: &mut [u8], from: &[u8; 5], to: &[u8; 5]) -> usize {

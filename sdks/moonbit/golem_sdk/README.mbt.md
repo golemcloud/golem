@@ -6,6 +6,27 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## Self metadata and authority
+
+`@api.get_self_metadata()` calls the host operation `get-self-metadata`. It requires
+the self-view permission in the effective permission card. The agent's
+`initialCard` is an upper bound on that authority; an invocation cannot grant a
+permission outside that bound. This convenience API unwraps the host result and
+traps on failure. It does not retry with broader permissions.
+
+Pure initialization does not implicitly read self metadata. Keep metadata reads out
+of an untrusted evaluator instead of granting self-view for bootstrap. Declare no
+tools or secrets and admit only the host operations the evaluator needs.
+Self metadata is a host operation, not a pure source of identity. Snapshot restoration reads
+`GOLEM_AGENT_ID` through the WASI environment API rather than self metadata, so it
+requires the separate environment-read permission for that variable. Granting
+self-view does not grant environment-read permission, and granting environment-read
+permission does not grant self-view.
+
+Self metadata contains the full stored environment and configuration. Those fields
+are not filtered per key like WASI environment reads. Treat self-view as authority
+to read those complete fields, and do not log the metadata to diagnose a denial.
+
 ## Quick Start
 
 Golem CLI 1.6.0 includes built-in MoonBit templates for ordinary agent components, pure tool
@@ -97,6 +118,32 @@ pub(all) struct TaskInfo {
 For a unit-case enum that should appear directly in every generated schema rather than as a named
 schema definition, use `#derive.golem_schema(inline=true)`. Add `#derive.case(name="...")` to a
 case when its authored schema value differs from the MoonBit constructor name.
+
+#### Unstructured text and binary
+
+`@schema.UnstructuredText[L]` and `@schema.UnstructuredBinary[M]` hold inline content or a URL
+reference. The type argument restricts the inline language codes or MIME types; use
+`@schema.AnyLanguage` / `@schema.AnyMimeType` for no restriction. They work as parameters and as
+return types, also inside `T?` and `Result[T, E]`. An HTTP endpoint that returns one of them
+responds with the raw body; `None` responds with 404 and `Err` with 500:
+
+```moonbit nocheck
+///|
+pub(all) struct ReportMimeTypes {}
+
+///|
+impl @schema.AllowedMimeTypes for ReportMimeTypes with fn mime_types() {
+  ["text/csv"]
+}
+
+///|
+#derive.endpoint(get="/report")
+pub fn ReportAgent::report(
+  self : Self,
+) -> Result[@schema.UnstructuredBinary[ReportMimeTypes]?, String] {
+  Ok(Some(@schema.UnstructuredBinary::inline(self.csv, mime_type="text/csv")))
+}
+```
 
 ### 3. Stream typed agent data
 
@@ -471,7 +518,7 @@ one host-managed retry sequence.
 | Package | Description |
 |---|---|
 | `agents` | Agent registry, `RawAgent` trait, `register_agent`, dispatch runtime |
-| `schema` | `IntoSchema` / `FromSchema` traits and impls for primitives, `Option`, `Array`, `Result`, records/enums/variants |
+| `schema` | `IntoSchema` / `FromSchema` traits and impls for primitives, `Option`, `Array`, `Result`, records/enums/variants, rich types, and `UnstructuredText` / `UnstructuredBinary` |
 | `schema_model` | The recursive `SchemaType` / `SchemaValue` model + `SchemaGraph` / `SchemaBuilder` and WIT (`golem:core/types@2.0.0`) conversions |
 | `multimodal` | `Multimodal[T]` + `MultimodalModality` trait (schema-native `list<variant>` with `role = multimodal`) |
 | `config` | Code-first configuration (`Config[T]`, `Secret[T]`, `#derive.config`) |

@@ -678,7 +678,7 @@ pub(crate) fn never_cancelled() -> &'static CancellationToken {
 /// Gives the store of the filesystem snapshots over `storage`, with the key and the settings of
 /// `config`. Only the holder of the store calls of the service can make a [`StoreKey`], so only it
 /// makes the store.
-pub(crate) fn managed_store(
+pub(crate) fn store(
     storage: std::sync::Arc<dyn golem_service_base::storage::blob::BlobStorage>,
     config: &crate::services::golem_config::FilesystemSnapshotStoreConfig,
     _key: StoreKey,

@@ -1,193 +1,111 @@
 use super::*;
-use golem_common::model::entity::{AgentEntity, EntityInvocationPlanReference};
-use golem_common::schema::TypedSchemaValue;
 
-#[derive(Debug, Clone)]
-pub(crate) enum RequestClaimIdentity {
-    Exact(Box<HostRequest>),
-    EntityInvocation(Box<EntityInvocationRequestIdentity>),
-    ToolInvocation(Box<ToolInvocationClaimIdentity>),
+/// Whether a claimed `Start` records a durable call or opens a durable scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartKind {
+    /// A durable call `Start`, which carries a request.
+    Call,
+    /// A durable scope `Start`, which carries no request.
+    Scope,
 }
 
-/// Typed descriptor of the recorded `Start` entry a concurrent-replay claim is looking for.
-/// Every identity-based claim variant — top-level call, owned call, durable scope, dynamic
-/// "any call", with or without request-payload matching — is a variant of this descriptor driven
-/// through the single core [`CursorTx::claim_start`]; each variant carries exactly the identity
-/// the write side records in the `Start` entry for that kind of claim, so no invalid combination
-/// (e.g. a scope claim without a function name) is representable.
+/// Typed descriptor of the recorded `Start` entry a replay claim is looking for. Every claim is
+/// driven through the single core [`CursorTx::claim_start`].
+///
+/// A `Start` is identified by the invocation id of the guest call that recorded it (see
+/// [`DurableInvocationId`]) together with its function name and kind. One guest call can record
+/// several `Start`s with the same function name, such as the retries of one request or the chunks
+/// of one stream; they are recorded one after another, so they are claimed in oplog order. The
+/// durable function type, the parent `Start` and the observational owner must match as well.
 #[derive(Debug, Clone)]
-pub(crate) enum StartClaim {
-    /// A top-level (unowned) durable-call `Start`. "Unowned" means the caller did not open its
-    /// own durable scope; the expected recorded `parent_start_index` is still the scope encoded
-    /// in the durable function type when there is one (batched / transaction
-    /// `Some(begin_index)`), mirroring how the write side derives it — see
-    /// [`Self::expected_parent_start_index`].
-    Unowned {
-        function_name: HostFunctionName,
-        function_type: DurableFunctionType,
-        observational_owner: Option<OplogIndex>,
-        /// When `Some`, the recorded request payload must additionally match this value by
-        /// value; see [`recorded_request_payload_matches`].
-        matching_request: Option<RequestClaimIdentity>,
-    },
-    /// A durable-call `Start` owned by another durable record (`parent_start_index` points at
-    /// the owning scope/call `Start`).
-    Owned {
-        function_name: HostFunctionName,
-        function_type: DurableFunctionType,
-        parent_start_index: OplogIndex,
-        observational_owner: Option<OplogIndex>,
-        /// When `Some`, the recorded request payload must additionally match this value by
-        /// value; see [`recorded_request_payload_matches`].
-        matching_request: Option<RequestClaimIdentity>,
-    },
-    /// Atomically claims either the accepted generic entity Start or the deterministic
-    /// predispatch-rejection Start for one tool invocation attempt, whichever occurs first in the
-    /// owner oplog.
-    OwnedToolInvocation {
-        accepted_function_name: HostFunctionName,
-        rejected_function_name: HostFunctionName,
-        function_type: DurableFunctionType,
-        parent_start_index: OplogIndex,
-        observational_owner: Option<OplogIndex>,
-        matching_request: RequestClaimIdentity,
-    },
-    /// A durable-*scope* `Start`: request-less and optionally owned by an entity invocation.
-    /// Primary scopes remain unowned; entity scope Starts point at the entity invocation Start.
-    Scope {
-        function_name: HostFunctionName,
-        function_type: DurableFunctionType,
-        parent_start_index: Option<OplogIndex>,
-        observational_owner: Option<OplogIndex>,
-    },
-    /// Any top-level durable-call `Start`, whatever its function name and durable function type
-    /// (the dynamic guest-facing durability read learns the identity from the claimed entry
-    /// itself). The `Start` must carry a request (durable host calls always do; a request-less
-    /// `Start` is a scope `Start`) and must not be owned by another durable record.
-    AnyUnownedCall,
+pub(crate) struct StartClaim {
+    function_name: HostFunctionName,
+    /// The function of the `Start` a tool invocation records when it rejects the call before
+    /// dispatch. The claim takes either kind of `Start`, whichever the call recorded.
+    tool_rejection_function_name: Option<HostFunctionName>,
+    function_type: DurableFunctionType,
+    kind: StartKind,
+    parent_start_index: Option<OplogIndex>,
+    observational_owner: Option<OplogIndex>,
+    invocation_id: Option<DurableInvocationId>,
+    /// The `Start` opens a custom durable invocation. Replay returns its persisted result without
+    /// executing its body, so the records under it are drained instead of claimed.
+    custom_invocation: bool,
 }
 
 impl StartClaim {
-    /// See [`StartClaim::Unowned`].
+    /// A durable call `Start` that is not owned by another record. The expected recorded
+    /// `parent_start_index` is still the scope encoded in the durable function type when there is
+    /// one (batched / transaction `Some(begin_index)`), mirroring how the write side derives it.
     pub(crate) fn unowned(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
     ) -> Self {
-        Self::Unowned {
+        Self {
             function_name: function_name.clone(),
+            tool_rejection_function_name: None,
             function_type: function_type.clone(),
+            kind: StartKind::Call,
+            parent_start_index: parent_start_index_of(function_type),
             observational_owner: None,
-            matching_request: None,
+            invocation_id: None,
+            custom_invocation: false,
         }
     }
 
-    /// [`StartClaim::Unowned`] additionally requiring the recorded request payload to match
-    /// `request` by value; see [`recorded_request_payload_matches`].
-    pub(crate) fn unowned_matching_request(
-        function_name: &HostFunctionName,
-        function_type: &DurableFunctionType,
-        request: &HostRequest,
-    ) -> Self {
-        Self::Unowned {
-            function_name: function_name.clone(),
-            function_type: function_type.clone(),
-            observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
-        }
-    }
-
-    pub(crate) fn unowned_matching_entity_invocation(
-        function_name: &HostFunctionName,
-        function_type: &DurableFunctionType,
-        request: &EntityInvocationRequestIdentity,
-    ) -> Self {
-        Self::Unowned {
-            function_name: function_name.clone(),
-            function_type: function_type.clone(),
-            observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
-                request.clone(),
-            ))),
-        }
-    }
-
-    /// See [`StartClaim::Owned`].
+    /// A durable call `Start` owned by another durable record (`parent_start_index` points at the
+    /// owning scope, call or entity invocation `Start`).
     pub(crate) fn owned(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
         parent_start_index: OplogIndex,
     ) -> Self {
-        Self::Owned {
-            function_name: function_name.clone(),
-            function_type: function_type.clone(),
-            parent_start_index,
-            observational_owner: None,
-            matching_request: None,
+        Self {
+            parent_start_index: Some(parent_start_index),
+            ..Self::unowned(function_name, function_type)
         }
     }
 
-    /// [`StartClaim::Owned`] additionally requiring the recorded request payload to match
-    /// `request` by value; see [`recorded_request_payload_matches`].
-    pub(crate) fn owned_matching_request(
-        function_name: &HostFunctionName,
-        function_type: &DurableFunctionType,
-        parent_start_index: OplogIndex,
-        request: &HostRequest,
-    ) -> Self {
-        Self::Owned {
-            function_name: function_name.clone(),
-            function_type: function_type.clone(),
-            parent_start_index,
-            observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
-        }
-    }
-
-    pub(crate) fn owned_matching_entity_invocation(
-        function_name: &HostFunctionName,
-        function_type: &DurableFunctionType,
-        parent_start_index: OplogIndex,
-        request: &EntityInvocationRequestIdentity,
-    ) -> Self {
-        Self::Owned {
-            function_name: function_name.clone(),
-            function_type: function_type.clone(),
-            parent_start_index,
-            observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
-                request.clone(),
-            ))),
-        }
-    }
-
-    pub(crate) fn owned_tool_invocation(
+    /// The `Start` of a tool invocation under its owner: either the accepted entity invocation
+    /// `Start` or the `Start` of the rejection recorded before dispatch.
+    pub(crate) fn tool_invocation(
         accepted_function_name: &HostFunctionName,
         rejected_function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
         parent_start_index: OplogIndex,
-        request: &ToolInvocationClaimIdentity,
     ) -> Self {
-        Self::OwnedToolInvocation {
-            accepted_function_name: accepted_function_name.clone(),
-            rejected_function_name: rejected_function_name.clone(),
-            function_type: function_type.clone(),
-            parent_start_index,
-            observational_owner: None,
-            matching_request: RequestClaimIdentity::ToolInvocation(Box::new(request.clone())),
+        Self {
+            tool_rejection_function_name: Some(rejected_function_name.clone()),
+            ..Self::owned(accepted_function_name, function_type, parent_start_index)
         }
     }
 
-    /// See [`StartClaim::Scope`].
+    /// A durable scope `Start`: request-less and optionally owned by an entity invocation.
+    /// Primary scopes remain unowned; entity scope Starts point at the entity invocation Start.
     pub(crate) fn scope(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
     ) -> Self {
-        Self::Scope {
-            function_name: function_name.clone(),
-            function_type: function_type.clone(),
+        Self {
+            kind: StartKind::Scope,
             parent_start_index,
-            observational_owner: None,
+            ..Self::unowned(function_name, function_type)
+        }
+    }
+
+    /// The `Start` of a custom durable invocation with `invocation_id`.
+    pub(crate) fn custom_invocation(
+        function_name: &HostFunctionName,
+        function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
+        invocation_id: DurableInvocationId,
+    ) -> Self {
+        Self {
+            parent_start_index,
+            invocation_id: Some(invocation_id),
+            custom_invocation: true,
+            ..Self::unowned(function_name, function_type)
         }
     }
 
@@ -195,152 +113,50 @@ impl StartClaim {
         mut self,
         observational_owner: Option<OplogIndex>,
     ) -> Self {
-        match &mut self {
-            Self::Unowned {
-                observational_owner: expected,
-                ..
-            }
-            | Self::Owned {
-                observational_owner: expected,
-                ..
-            }
-            | Self::OwnedToolInvocation {
-                observational_owner: expected,
-                ..
-            }
-            | Self::Scope {
-                observational_owner: expected,
-                ..
-            } => *expected = observational_owner,
-            Self::AnyUnownedCall => {
-                debug_assert!(observational_owner.is_none());
-            }
-        }
+        self.observational_owner = observational_owner;
         self
     }
 
-    /// See [`StartClaim::AnyUnownedCall`].
-    pub(super) fn any_unowned_call() -> Self {
-        Self::AnyUnownedCall
+    /// Requires the recorded `Start` to carry `invocation_id`, the invocation id of the guest call
+    /// that is claiming it.
+    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<DurableInvocationId>) -> Self {
+        self.invocation_id = invocation_id;
+        self
     }
 
-    /// The expected recorded host function name; `None` claims any name.
-    pub(super) fn expected_function_name(&self) -> Option<&HostFunctionName> {
-        match self {
-            Self::Unowned { function_name, .. }
-            | Self::Owned { function_name, .. }
-            | Self::Scope { function_name, .. } => Some(function_name),
-            Self::OwnedToolInvocation { .. } | Self::AnyUnownedCall => None,
-        }
+    /// The invocation id the recorded `Start` must carry.
+    pub(super) fn expected_invocation_id(&self) -> Option<DurableInvocationId> {
+        self.invocation_id
+    }
+
+    /// The expected recorded host function name of the accepted `Start`.
+    pub(super) fn expected_function_name(&self) -> &HostFunctionName {
+        &self.function_name
     }
 
     pub(super) fn matches_function_name(&self, actual: &HostFunctionName) -> bool {
-        match self {
-            Self::OwnedToolInvocation {
-                accepted_function_name,
-                rejected_function_name,
-                ..
-            } => actual == accepted_function_name || actual == rejected_function_name,
-            _ => self
-                .expected_function_name()
-                .is_none_or(|expected| actual == expected),
-        }
-    }
-
-    /// The expected recorded durable function type; `None` claims any type.
-    pub(super) fn expected_function_type(&self) -> Option<&DurableFunctionType> {
-        match self {
-            Self::Unowned { function_type, .. }
-            | Self::Owned { function_type, .. }
-            | Self::Scope { function_type, .. }
-            | Self::OwnedToolInvocation { function_type, .. } => Some(function_type),
-            Self::AnyUnownedCall => None,
-        }
+        *actual == self.function_name || self.tool_rejection_function_name.as_ref() == Some(actual)
     }
 
     /// Whether the `Start` must carry a request payload: `true` for durable host calls, `false`
     /// for durable-scope `Start`s.
     pub(super) fn carries_request(&self) -> bool {
-        match self {
-            Self::Unowned { .. }
-            | Self::Owned { .. }
-            | Self::OwnedToolInvocation { .. }
-            | Self::AnyUnownedCall => true,
-            Self::Scope { .. } => false,
-        }
+        self.kind == StartKind::Call
     }
 
-    /// The expected recorded `parent_start_index`: the explicit owner for owned claims, the
-    /// scope encoded in the durable function type for unowned calls (batched / transaction
-    /// `Some(begin_index)`, mirroring how the write side derives it), and `None` for scopes and
-    /// dynamic claims.
+    /// The expected recorded `parent_start_index`.
     pub(super) fn expected_parent_start_index(&self) -> Option<OplogIndex> {
-        match self {
-            Self::Unowned { function_type, .. } => parent_start_index_of(function_type),
-            Self::Owned {
-                parent_start_index, ..
-            } => Some(*parent_start_index),
-            Self::OwnedToolInvocation {
-                parent_start_index, ..
-            } => Some(*parent_start_index),
-            Self::Scope {
-                parent_start_index, ..
-            } => *parent_start_index,
-            Self::AnyUnownedCall => None,
-        }
+        self.parent_start_index
     }
 
-    /// The request payload the recorded `Start` must additionally match by value, when the
-    /// claim pins one; see [`recorded_request_payload_matches`].
-    pub(super) fn matching_request(&self) -> Option<&RequestClaimIdentity> {
-        match self {
-            Self::Unowned {
-                matching_request, ..
-            }
-            | Self::Owned {
-                matching_request, ..
-            } => matching_request.as_ref(),
-            Self::OwnedToolInvocation {
-                matching_request, ..
-            } => Some(matching_request),
-            Self::Scope { .. } | Self::AnyUnownedCall => None,
-        }
-    }
-
-    pub(super) fn expected_observational_owner(&self) -> Option<OplogIndex> {
-        match self {
-            Self::Unowned {
-                observational_owner,
-                ..
-            }
-            | Self::Owned {
-                observational_owner,
-                ..
-            }
-            | Self::OwnedToolInvocation {
-                observational_owner,
-                ..
-            }
-            | Self::Scope {
-                observational_owner,
-                ..
-            } => *observational_owner,
-            Self::AnyUnownedCall => None,
-        }
-    }
-
+    /// Whether the claimed `Start` is an entity invocation, whose replayed body is a historical
+    /// reconstruction.
     pub(super) fn is_reconstruction_claim(&self) -> bool {
-        match self {
-            Self::Owned {
-                matching_request: Some(RequestClaimIdentity::EntityInvocation(_)),
-                ..
-            }
-            | Self::OwnedToolInvocation { .. } => true,
-            Self::Unowned { .. }
-            | Self::Owned { .. }
-            | Self::Scope { .. }
-            | Self::AnyUnownedCall => false,
-        }
+        self.function_name == HostFunctionName::GolemEntityInvoke
+    }
+
+    pub(super) fn is_custom_invocation(&self) -> bool {
+        self.custom_invocation
     }
 
     pub(super) fn matches_start_identity(&self, entry: &OplogEntry) -> bool {
@@ -353,76 +169,31 @@ impl StartClaim {
             parent_start_index,
             ..
         } if self.matches_function_name(function_name)
-            && self
-                .expected_function_type()
-                .is_none_or(|expected| durable_function_type == expected)
-            && invocation_id.is_none()
-            && *observational_owner == self.expected_observational_owner()
+            && *durable_function_type == self.function_type
+            && *invocation_id == self.invocation_id
+            && *observational_owner == self.observational_owner
             && request.is_some() == self.carries_request()
-            && *parent_start_index == self.expected_parent_start_index())
+            && *parent_start_index == self.parent_start_index)
     }
 
     /// Human-readable description of the expected `Start`, used as the "expected" side of an
-    /// `unexpected_oplog_entry` claim error. Worded per claim variant, matching exactly what each
-    /// variant has always reported.
+    /// `unexpected_oplog_entry` claim error.
     pub(crate) fn expected_description(&self) -> String {
-        match self {
-            Self::AnyUnownedCall => {
-                "Start { request: Some(..), parent_start_index: None }".to_string()
-            }
-            Self::Scope {
-                function_name,
-                function_type,
-                parent_start_index,
-                ..
-            } => {
-                format!(
-                    "Start {{ {function_name}, {function_type:?}, request: None, parent_start_index: {parent_start_index:?} }}"
-                )
-            }
-            Self::Unowned {
-                function_name,
-                function_type,
-                matching_request,
-                ..
-            } => {
-                let parent = parent_start_index_of(function_type);
-                if matching_request.is_some() {
-                    format!(
-                        "Start {{ {function_name}, {function_type:?}, request: Some(<matching payload>), parent_start_index: {parent:?} }}"
-                    )
-                } else {
-                    format!(
-                        "Start {{ {function_name}, {function_type:?}, request: Some(..), parent_start_index: {parent:?} }}"
-                    )
-                }
-            }
-            Self::Owned {
-                function_name,
-                function_type,
-                parent_start_index,
-                matching_request,
-                ..
-            } => {
-                if matching_request.is_some() {
-                    format!(
-                        "Start {{ {function_name}, {function_type:?}, request: Some(<matching payload>), parent_start_index: Some({parent_start_index}) }}"
-                    )
-                } else {
-                    format!(
-                        "Start {{ {function_name}, {function_type:?}, parent_start_index: Some({parent_start_index}) }}"
-                    )
-                }
-            }
-            Self::OwnedToolInvocation {
-                accepted_function_name,
-                rejected_function_name,
-                function_type,
-                parent_start_index,
-                ..
-            } => format!(
-                "Start {{ {accepted_function_name} or {rejected_function_name}, {function_type:?}, request: Some(<matching tool invocation>), parent_start_index: Some({parent_start_index}) }}"
-            ),
+        let function_name = match &self.tool_rejection_function_name {
+            Some(rejected) => format!("{} or {rejected}", self.function_name),
+            None => self.function_name.to_string(),
+        };
+        let request = match self.kind {
+            StartKind::Call => "Some(..)",
+            StartKind::Scope => "None",
+        };
+        let description = format!(
+            "Start {{ {function_name}, {:?}, request: {request}, parent_start_index: {:?} }}",
+            self.function_type, self.parent_start_index
+        );
+        match self.invocation_id {
+            Some(invocation_id) => format!("{description} with invocation id {invocation_id}"),
+            None => description,
         }
     }
 }
@@ -461,6 +232,7 @@ impl ReplayState {
     /// the described `Start` (consuming it and registering a resolver receiver atomically), and
     /// return the registered handle together with the claimed entry. Shared frame of every
     /// public claim wrapper below.
+    #[cfg(test)]
     async fn claim_start(
         &self,
         claim: StartClaim,
@@ -583,7 +355,6 @@ impl ReplayState {
                     state
                         .with_claim_tx(
                             &owned_claim,
-                            None,
                             |handle, entry| {
                                 on_claim(handle.start_idx(), &entry);
                                 (Some((handle, entry)), None, None)
@@ -646,38 +417,6 @@ impl ReplayState {
         Ok(handle)
     }
 
-    /// Positionally claims the next `Start` entry for a durable call **without** validating its
-    /// function name or durable function type, registering a resolver receiver keyed by the
-    /// `Start`'s index and returning the claimed entry's identity for the caller to inspect.
-    ///
-    /// This is the dynamic counterpart of an identity-based claim: it is used by callers
-    /// that learn the call identity from the claimed entry itself rather than knowing it up front —
-    /// notably the guest-facing `golem::durability` read, which returns the persisted invocation's
-    /// function name to the guest and therefore has no expected name to validate against.
-    ///
-    /// The `Start` consume and the resolver registration happen atomically under the cursor lock;
-    /// see [`CursorTx::claim_start_matching`].
-    pub async fn claim_any_concurrent_start(
-        &self,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        let (handle, entry) = self.claim_start(StartClaim::any_unowned_call()).await?;
-        let OplogEntry::Start {
-            timestamp,
-            function_name,
-            durable_function_type,
-            ..
-        } = *entry
-        else {
-            unreachable!("claim_start only claims Start entries");
-        };
-        Ok(ClaimedConcurrentStart {
-            handle,
-            function_name,
-            durable_function_type,
-            timestamp,
-        })
-    }
-
     /// Claims the `Start` of a durable call owned by another durable record (its
     /// `parent_start_index`) by identity instead of position, scan-ahead-claiming a matching
     /// `Start` ahead of the cursor when concurrent host tasks interleaved the live append order.
@@ -705,12 +444,6 @@ impl ReplayState {
     /// [`Self::await_resolution_outcome`] rather than a positional read. Returns the scope's
     /// begin index and the handle its `end_function` / transaction-terminal awaits.
     ///
-    /// The expected name must be exactly the name the live path recorded, including any
-    /// discriminator suffix (a caller-supplied suffix that makes a concurrent scope claim-safe,
-    /// e.g. `<scope:batched-write:req:HASH>`). There is no plain-name fallback: a discriminated
-    /// claim must never match a plain scope `Start` (P3 deploys on a clean database, so every
-    /// replayed oplog was recorded with the same naming scheme).
-    ///
     /// Folding scope `End`s into the resolver is what lets a scope `End` be auto-drained by any
     /// cursor driver (so a positional reader never steals a concurrently-replaying sibling call's
     /// terminal, and the scope close never steals a sibling's), at the cost of nothing on the serial
@@ -719,8 +452,8 @@ impl ReplayState {
     /// Every durable scope `Start` consumed during replay leaves a registered awaiter, so its
     /// `End` is always a resolver-routed *awaited terminal* and never an orphan that a parked
     /// awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals the
-    /// cursor may leave at its head are then the dedicated-positional-consumer pairs (manual
-    /// durability, `GolemApiFork`).
+    /// cursor may leave at its head are then the dedicated-positional-consumer pairs
+    /// (`GolemApiFork`).
     #[cfg(test)]
     pub async fn claim_scope_start(
         &self,
@@ -739,18 +472,21 @@ impl ReplayState {
     }
 
     /// Claims an exact synthetic scope `Start`. If no such entry was committed, atomically proves
-    /// that the remaining replay suffix has no competing claim, matching discriminator, delivery
-    /// boundary, or concurrent side effect before entering replay settlement.
+    /// that the remaining replay suffix has no competing claim, scope `Start` with the same
+    /// invocation id, delivery boundary, or concurrent side effect before entering replay
+    /// settlement.
     pub(crate) async fn claim_scope_start_or_recover_missing(
         &self,
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         self.claim_scope_start_with_missing_recovery(
             expected_function_name,
             expected_function_type,
             parent_start_index,
+            invocation_id,
             true,
         )
         .await
@@ -762,11 +498,13 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         self.claim_scope_start_with_missing_recovery(
             expected_function_name,
             expected_function_type,
             parent_start_index,
+            invocation_id,
             false,
         )
         .await
@@ -780,6 +518,7 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
         readiness: impl Future<Output = Result<(), WorkerExecutorError>>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         match self
@@ -787,6 +526,7 @@ impl ReplayState {
                 expected_function_name,
                 expected_function_type,
                 parent_start_index,
+                invocation_id,
             )
             .await?
         {
@@ -797,6 +537,7 @@ impl ReplayState {
                     expected_function_name,
                     expected_function_type,
                     parent_start_index,
+                    invocation_id,
                 )
                 .await
             }
@@ -811,13 +552,15 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
         recover_missing: bool,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         let claim = StartClaim::scope(
             expected_function_name,
             expected_function_type,
             parent_start_index,
-        );
+        )
+        .with_invocation_id(invocation_id);
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
@@ -831,7 +574,7 @@ impl ReplayState {
                             .await
                     };
                     state
-                        .with_claim_tx(&owned_claim, None, StartClaimAttempt::Claimed, gated)
+                        .with_claim_tx(&owned_claim, StartClaimAttempt::Claimed, gated)
                         .await
                 })
                 .await?;
@@ -856,267 +599,50 @@ impl ReplayState {
         }
     }
 
-    /// Claims the next top-level (unowned) durable-call `Start` whose identity **and recorded
-    /// request payload** match. Payload matching is what disambiguates concurrent durable calls
-    /// that share the same function name and durable function type but were issued with different
-    /// requests (e.g. parallel P3 HTTP sends): their `Start` entries land in the oplog in
-    /// scheduling order, so identity alone would pair a replayed call with another call's record —
-    /// and consequently deliver another call's recorded response. Calls with equal requests are
-    /// still claimed in oplog order among the matches.
+    /// Claims the `Start` of a custom durable invocation by its invocation id and marks it as a
+    /// replay-inert subtree root: replay returns the root's persisted result without executing its
+    /// body, so the records under it are drained while its resolution is awaited.
     ///
-    /// `expected_request` must be the [`HostRequest`] value the live path would have persisted in
-    /// the `Start` entry; see [`recorded_request_payload_matches`] for the value-based comparison.
-    #[cfg(test)]
-    pub async fn claim_concurrent_start_matching_request(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        expected_request: &HostRequest,
-    ) -> Result<ReplayCallHandle, WorkerExecutorError> {
-        Ok(self
-            .claim_concurrent_start_matching_request_with_identity(
-                expected_function_name,
-                expected_function_type,
-                expected_request,
-            )
-            .await?
-            .handle)
-    }
-
-    /// Claims by exact identity and also returns the recorded Start metadata.
-    #[cfg(test)]
-    pub async fn claim_concurrent_start_matching_request_with_identity(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        expected_request: &HostRequest,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        let (handle, entry) = self
-            .claim_start(StartClaim::unowned_matching_request(
-                expected_function_name,
-                expected_function_type,
-                expected_request,
-            ))
-            .await?;
-        let OplogEntry::Start {
-            timestamp,
-            function_name,
-            durable_function_type,
-            ..
-        } = *entry
-        else {
-            unreachable!("claim_start only claims Start entries");
-        };
-        Ok(ClaimedConcurrentStart {
-            handle,
-            function_name,
-            durable_function_type,
-            timestamp,
-        })
-    }
-
-    /// Claims a custom durable invocation root and marks it as a logical subtree. Descendant
-    /// custom invocations recorded under this owner are drained while the root resolution is
-    /// awaited, because replay returns the root's persisted result without executing its body.
-    ///
-    /// Reports [`CustomStartClaimOutcome::ReplayEnded`] when no `Start` carries the invocation id
-    /// and the cursor has already reached the replay target, and
-    /// [`CustomStartClaimOutcome::StoreAlreadyLive`] when no `Start` carries it and the claiming
-    /// Store's own liveness `store_live` already holds. A custom invocation admitted after the
-    /// live transition while unclaimed retained `Start`s exist (see
-    /// `WorkerState::durable_call_is_live`) uses this to adopt its retained `Start` or fall back
-    /// to recording a new one. A missing id while replay is still positioned before the target
-    /// and the Store is not live waits while an active entity body owns the cursor head (see
-    /// [`missing_start_waits_for`](super::cursor::missing_start_waits_for)), and otherwise remains
-    /// strict divergence.
+    /// A custom invocation admitted after the live transition while unclaimed retained `Start`s
+    /// exist (see `WorkerState::durable_call_is_live`) uses this to adopt its retained `Start` or
+    /// fall back to recording a new one.
     pub(crate) async fn claim_custom_start_for_store(
         &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        expected_parent_start_index: Option<OplogIndex>,
-        expected_invocation_id: uuid::Uuid,
-        expected_request: &HostRequest,
+        function_name: &HostFunctionName,
+        function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
+        invocation_id: DurableInvocationId,
         store_live: bool,
     ) -> Result<CustomStartClaimOutcome, WorkerExecutorError> {
-        enum Missing {
-            ReplayEnded,
-            StoreAlreadyLive,
+        let claim = StartClaim::custom_invocation(
+            function_name,
+            function_type,
+            parent_start_index,
+            invocation_id,
+        );
+        match self.claim_start_for_store(claim, store_live).await? {
+            ReplayStartClaimOutcome::Claimed { handle, entry } => {
+                let OplogEntry::Start {
+                    timestamp,
+                    function_name,
+                    durable_function_type,
+                    ..
+                } = *entry
+                else {
+                    unreachable!("claim_start only claims Start entries");
+                };
+                Ok(CustomStartClaimOutcome::Claimed(ClaimedConcurrentStart {
+                    handle,
+                    function_name,
+                    durable_function_type,
+                    timestamp,
+                }))
+            }
+            ReplayStartClaimOutcome::ReplayEnded => Ok(CustomStartClaimOutcome::ReplayEnded),
+            ReplayStartClaimOutcome::DeletedRegion | ReplayStartClaimOutcome::StoreAlreadyLive => {
+                Ok(CustomStartClaimOutcome::StoreAlreadyLive)
+            }
         }
-        let (handle, entry) = loop {
-            let progress = self.cursor.progress.notified();
-            tokio::pin!(progress);
-            progress.as_mut().enable();
-
-            let expected_function_name = expected_function_name.clone();
-            let expected_function_type = expected_function_type.clone();
-            let expected_request = expected_request.clone();
-            let (claimed, blocked, missing) = self
-                .run_owned_cursor_op(move |state| async move {
-                    let claim = match expected_parent_start_index {
-                        Some(parent) => StartClaim::owned_matching_request(
-                            &expected_function_name,
-                            &expected_function_type,
-                            parent,
-                            &expected_request,
-                        ),
-                        None => StartClaim::unowned_matching_request(
-                            &expected_function_name,
-                            &expected_function_type,
-                            &expected_request,
-                        ),
-                    };
-                    let gated = async |tx: &mut super::cursor::CursorTx<'_>| {
-                        tx.retained_claims()
-                            .ensure_custom_invocation_unused(expected_invocation_id)?;
-                        let matches_id = |entry: &OplogEntry| {
-                            matches!(entry, OplogEntry::Start {
-                                invocation_id: Some(id), observational_owner: None, ..
-                            } if *id == expected_invocation_id)
-                        };
-
-                        let replay_target = tx.cursor.replay_target();
-                        // The scan passes the cursor head without buffering it. It notes the owner
-                        // of the entry the head path would stop at, so a missing id is classified
-                        // against the head without another oplog read.
-                        let cursor_index = tx.cursor.last_replayed_index();
-                        let mut scanned_head = None;
-                        let view = &*tx;
-                        let exact = view
-                            .cursor
-                            .scan_oplog(
-                                OplogIndex::INITIAL,
-                                replay_target.next(),
-                                &view.st.skipped_regions,
-                                view.st
-                                    .skipped_regions
-                                    .find_next_deleted_region(OplogIndex::INITIAL),
-                                OplogIndex::NONE,
-                                |entry, _begin_idx, index: &Option<OplogIndex>| {
-                                    index.is_some_and(|idx| idx <= replay_target)
-                                        && matches_id(entry)
-                                },
-                                |_, _, _| true,
-                                None,
-                                |entry, idx, index: &mut Option<OplogIndex>| {
-                                    *index = Some(idx);
-                                    if scanned_head.is_none()
-                                        && idx > cursor_index
-                                        && !super::cursor::is_drained_at_head(
-                                            entry,
-                                            view.head_drain_facts(idx, entry),
-                                        )
-                                    {
-                                        scanned_head = Some(super::cursor::head_owner(entry));
-                                    }
-                                },
-                            )
-                            .await;
-
-                        let result = match exact {
-                            OplogEntryLookupResult::Found {
-                                index: candidate_index,
-                                entry: candidate,
-                                ..
-                            } => {
-                                tx.retained_claims()
-                                    .validate_custom_candidate(
-                                        &claim,
-                                        expected_invocation_id,
-                                        expected_parent_start_index,
-                                        candidate_index,
-                                        &candidate,
-                                        candidate_index.next(),
-                                    )
-                                    .await?;
-
-                                match tx.claim_start_matching(matches_id).await? {
-                                    StartClaimAttempt::Claimed(handle, entry) => (handle, entry),
-                                    StartClaimAttempt::Blocked(on) => {
-                                        return Ok((None, Some(on), None));
-                                    }
-                                    StartClaimAttempt::Missing => {
-                                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                            format!(
-                                                "custom durable Start {{ invocation_id: {expected_invocation_id} }}"
-                                            ),
-                                            "no matching Start between the replay cursor and the replay target"
-                                                .to_string(),
-                                        ));
-                                    }
-                                    StartClaimAttempt::MissingSettling { .. } => unreachable!(
-                                        "custom invocation claims never enter missing-scope settlement"
-                                    ),
-                                }
-                            }
-                            OplogEntryLookupResult::NotFound { .. } if tx.cursor.is_live() => {
-                                return Ok((None, None, Some(Missing::ReplayEnded)));
-                            }
-                            OplogEntryLookupResult::NotFound { .. } if store_live => {
-                                return Ok((None, None, Some(Missing::StoreAlreadyLive)));
-                            }
-                            OplogEntryLookupResult::NotFound { .. } => {
-                                if let Some(bodies) = tx.active_body_owning_head(
-                                    tx.buffered_head_owner().or(scanned_head),
-                                    expected_parent_start_index,
-                                ) {
-                                    return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
-                                }
-                                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                    format!(
-                                        "custom durable Start {{ invocation_id: {expected_invocation_id} }}"
-                                    ),
-                                    "no Start with the required custom invocation ID before the replay target"
-                                        .to_string(),
-                                ));
-                            }
-                        };
-                        tx.st
-                            .claimed_custom_invocation_ids
-                            .insert(expected_invocation_id);
-                        tx.register_custom_subtree_root(result.0.start_idx());
-                        Ok((Some(result), None, None))
-                    };
-                    state
-                        .with_claim_tx(
-                            &claim,
-                            Some((expected_invocation_id, expected_parent_start_index)),
-                            |handle, entry| (Some((handle, entry)), None, None),
-                            gated,
-                        )
-                        .await
-            })
-            .await?;
-            if let Some(claimed) = claimed {
-                break claimed;
-            }
-            match missing {
-                Some(Missing::ReplayEnded) => return Ok(CustomStartClaimOutcome::ReplayEnded),
-                Some(Missing::StoreAlreadyLive) => {
-                    return Ok(CustomStartClaimOutcome::StoreAlreadyLive);
-                }
-                None => {}
-            }
-            self.wait_while_blocked(
-                blocked.expect("an undecided custom Start claim is blocked"),
-                progress,
-            )
-            .await;
-        };
-        let OplogEntry::Start {
-            timestamp,
-            function_name,
-            durable_function_type,
-            ..
-        } = *entry
-        else {
-            unreachable!("claim_start only claims Start entries");
-        };
-        Ok(CustomStartClaimOutcome::Claimed(ClaimedConcurrentStart {
-            handle,
-            function_name,
-            durable_function_type,
-            timestamp,
-        }))
     }
 }
 
@@ -1127,517 +653,19 @@ pub(crate) enum CustomStartClaimOutcome {
     /// invocation is new and must be recorded live.
     ReplayEnded,
     /// No `Start` carries the requested invocation id before the replay target, but the claiming
-    /// Store already continued live locally, so the invocation is new for that Store.
+    /// Store already continued live locally, or the `Start` belongs to a deleted replay region, so
+    /// the invocation is new for that Store.
     StoreAlreadyLive,
 }
 
 /// The `parent_start_index` a durable call's `Start` entry is recorded with when the caller does
 /// not open its own durable scope: the scope explicitly encoded in the durable function type
 /// (batched / transaction `Some(begin_index)`), or `None` for top-level calls. This mirrors the
-/// derivation on the write side (`persist_durable_function_invocation` and the accessor start
-/// path), so identity-based claims can reproduce the recorded value.
+/// derivation on the write side, so claims can reproduce the recorded value.
 pub(super) fn parent_start_index_of(function_type: &DurableFunctionType) -> Option<OplogIndex> {
     match function_type {
         DurableFunctionType::WriteRemoteBatched(Some(idx))
         | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
         _ => None,
-    }
-}
-
-/// Whether a recorded `Start` request payload equals the expected request *value*. The comparison
-/// must be by value, never by serialized bytes: payload types can contain `HashMap`s (e.g. the
-/// header map of a P3 HTTP request head), whose serialization order depends on the process-random
-/// hasher seed, so bytes recorded before a restart do not reproduce. Uncached external payloads
-/// are downloaded before comparison; falling back to oplog order could pair concurrent calls with
-/// different requests and deliver the wrong recorded response.
-pub(super) async fn recorded_request_payload_matches(
-    oplog: &dyn Oplog,
-    recorded: &OplogPayload<HostRequest>,
-    expected: &RequestClaimIdentity,
-) -> Result<bool, String> {
-    match recorded {
-        OplogPayload::Inline(value) => request_claim_identity_matches(value, expected),
-        OplogPayload::SerializedInline {
-            cached: Some(cached),
-            ..
-        }
-        | OplogPayload::External {
-            cached: Some(cached),
-            ..
-        } => request_claim_identity_matches(cached, expected),
-        OplogPayload::SerializedInline {
-            bytes,
-            cached: None,
-        } => golem_common::serialization::deserialize::<HostRequest>(bytes)
-            .map_err(|err| format!("failed to deserialize inline request payload: {err}"))
-            .and_then(|value| request_claim_identity_matches(&value, expected)),
-        OplogPayload::External { cached: None, .. } => oplog
-            .download_payload(recorded.clone())
-            .await
-            .and_then(|value| request_claim_identity_matches(&value, expected)),
-    }
-}
-
-fn request_claim_identity_matches(
-    value: &HostRequest,
-    expected: &RequestClaimIdentity,
-) -> Result<bool, String> {
-    match expected {
-        RequestClaimIdentity::Exact(expected) => Ok(value == expected.as_ref()),
-        RequestClaimIdentity::EntityInvocation(expected) => {
-            let HostRequest::EntityInvocation(request) = value else {
-                return Ok(false);
-            };
-            let metadata = desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
-                .map_err(|error| {
-                format!("failed to decode entity invocation request metadata: {error}")
-            })?;
-            Ok(expected.matches(&metadata, &request.input))
-        }
-        RequestClaimIdentity::ToolInvocation(expected) => match value {
-            HostRequest::EntityInvocation(request) => {
-                let Some(expected) = &expected.accepted else {
-                    return Ok(false);
-                };
-                let metadata =
-                    desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
-                        .map_err(|error| {
-                            format!("failed to decode entity invocation request metadata: {error}")
-                        })?;
-                Ok(ambient_tool_invocation_identity_matches(
-                    expected,
-                    &metadata,
-                    &request.input,
-                ))
-            }
-            HostRequest::GolemToolInvocationRejected(request) => Ok(request.attempt_ordinal
-                == expected.rejected.attempt_ordinal
-                && request.tool_name == expected.rejected.tool_name.as_str()
-                && request.command_path == expected.rejected.command_path
-                && request.input == expected.rejected.input
-                && request.input_decode_failure == expected.rejected.input_decode_failure
-                && request.has_stdin == expected.rejected.has_stdin
-                && request.has_stdout == expected.rejected.has_stdout
-                && request.has_stderr == expected.rejected.has_stderr
-                && request.call_mode == expected.rejected.call_mode),
-            _ => Ok(false),
-        },
-    }
-}
-
-fn ambient_tool_invocation_identity_matches(
-    expected: &EntityInvocationRequestIdentity,
-    request: &EntityInvocationRequest,
-    input: &TypedSchemaValue,
-) -> bool {
-    let (None, AgentEntity::Tool(expected_tool), EntityInvocationPlanReference::Root { plan }) =
-        (&expected.plan_position, &expected.entity, &request.plan)
-    else {
-        return expected.matches(request, input);
-    };
-    let Some(final_position) = plan.len().checked_sub(1) else {
-        return false;
-    };
-    let Ok(final_layer) = plan.layer(final_position as u32) else {
-        return false;
-    };
-    if final_layer.activation().entity() != AgentEntity::Tool(expected_tool.clone()) {
-        return false;
-    }
-
-    let mut layer_identity = expected.clone();
-    layer_identity.entity = request.entity.clone();
-    layer_identity.matches(request, input)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use golem_common::model::AgentId;
-    use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
-    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
-    use golem_common::model::deployment::DeploymentRevision;
-    use golem_common::model::entity::{
-        AgentEntity, EntityActivation, EntityActivationPolicy, EntityCallMode,
-        EntityInvocationDescriptor, EntityInvocationPlan, EntityInvocationPlanLayer,
-        EntityInvocationPlanPositionIdentity, EntityInvocationPlanReference,
-        EntityInvocationRequest, ExecutableTarget, FilesystemCapability, ToolInputDecodeFailure,
-        ToolInvocationDescriptor, ToolInvocationRejectedIdentity, ToolMiddlewareName,
-        ToolOutputContract,
-    };
-    use golem_common::model::json::NormalizedJsonValue;
-    use golem_common::model::oplog::payload::types::SerializableToolRpcError;
-    use golem_common::model::oplog::{
-        HostRequestEntityInvocation, HostRequestGolemToolInvocationRejected,
-    };
-    use golem_common::model::tool::{
-        CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner,
-        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
-    };
-    use golem_common::schema::tool::{CommandTree, Tool};
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
-    use test_r::test;
-
-    fn input(value: &str) -> TypedSchemaValue {
-        TypedSchemaValue::new(
-            SchemaGraph::anonymous(SchemaType::string()),
-            SchemaValue::String(value.to_string()),
-        )
-    }
-
-    fn tool_definition() -> Tool {
-        Tool {
-            version: "1.0.0".to_string(),
-            requires_filesystem: false,
-            commands: CommandTree { nodes: Vec::new() },
-            schema: SchemaGraph::empty(),
-        }
-    }
-
-    fn tool_activation(name: &str) -> EntityActivation {
-        let component_id = ComponentId::new();
-        let component_revision = ComponentRevision::try_from(7_u64).unwrap();
-        let deployment_revision = DeploymentRevision::try_from(11_u64).unwrap();
-        EntityActivation::new(
-            ExecutableTarget::new(component_id, component_revision),
-            deployment_revision,
-            EntityActivationPolicy::Tool {
-                mcp_import: None,
-                provision: ToolProvisionConfig::default(),
-                binding: Box::new(CompiledToolBinding {
-                    deployment_revision,
-                    release_id: None,
-                    owner: ToolBindingOwner::AgentType {
-                        agent_type_name: AgentTypeName("Example".to_string()),
-                    },
-                    tool_name: ToolName::try_from(name).unwrap(),
-                    version: "1.0.0".to_string(),
-                    metadata_version: "0.1.0".to_string(),
-                    metadata_digest: Default::default(),
-                    account_id: AccountId::new(),
-                    account_email: AccountEmail::new("owner@example.com"),
-                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
-                    config_keys_readable: ConfigKeyScope::All,
-                    secret_keys_readable: SecretKeyScope::All,
-                    secret_keys_revealable: SecretKeyScope::All,
-                    filesystem_access: ToolFilesystemAccess::Unset,
-                    source: ToolSource::Component {
-                        component_id,
-                        component_revision,
-                        component_name: ComponentName("tools:test".to_string()),
-                    },
-                }),
-            },
-            FilesystemCapability::Incapable,
-        )
-        .unwrap()
-    }
-
-    fn middleware_activation(name: &str) -> EntityActivation {
-        EntityActivation::new(
-            ExecutableTarget::new(
-                ComponentId::new(),
-                ComponentRevision::try_from(9_u64).unwrap(),
-            ),
-            DeploymentRevision::try_from(12_u64).unwrap(),
-            EntityActivationPolicy::ToolMiddleware {
-                middleware_name: ToolMiddlewareName::try_from(name).unwrap(),
-                provision: ToolProvisionConfig::default(),
-                config_keys_readable: ConfigKeyScope::All,
-                secret_keys_readable: SecretKeyScope::All,
-                secret_keys_revealable: SecretKeyScope::All,
-                filesystem_access: ToolFilesystemAccess::Unset,
-            },
-            FilesystemCapability::Incapable,
-        )
-        .unwrap()
-    }
-
-    fn accepted_tool_claim_and_recording() -> (
-        RequestClaimIdentity,
-        EntityInvocationRequest,
-        TypedSchemaValue,
-    ) {
-        let recorded_input = input("needle");
-        let calling_principal = Principal::Agent(AgentPrincipal {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "Example(\"owner\")".to_string(),
-            },
-        });
-        let operation = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
-            attempt_ordinal: 4,
-            command_path: vec!["search".to_string()],
-            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["recorded"],
-            )
-            .unwrap()
-            .args,
-            has_stdin: true,
-            has_stdout: false,
-            declares_stdout: false,
-            has_stderr: true,
-            declares_stderr: true,
-            output_contract: ToolOutputContract {
-                result: None,
-                errors: Vec::new(),
-            },
-        });
-        let request = EntityInvocationRequest {
-            entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
-            call_mode: EntityCallMode::Synchronous,
-            operation: operation.clone(),
-            principal: calling_principal.clone(),
-            plan: EntityInvocationPlanReference::Root {
-                plan: EntityInvocationPlan::new(vec![
-                    EntityInvocationPlanLayer::Middleware {
-                        activation: middleware_activation("audit"),
-                        parameters: input("settings"),
-                        expected_definition: None,
-                        presented_definition: None,
-                        next_effective_definition: tool_definition(),
-                        compatibility: None,
-                    },
-                    EntityInvocationPlanLayer::Tool {
-                        activation: tool_activation("grep"),
-                    },
-                ])
-                .unwrap(),
-            },
-            assume_idempotence: true,
-            authority_wallet: Vec::new(),
-        };
-        let accepted = EntityInvocationRequestIdentity {
-            entity: AgentEntity::Tool(ToolName::try_from("grep").unwrap()),
-            call_mode: request.call_mode,
-            operation: (&operation).into(),
-            plan_position: None,
-            input: recorded_input.clone(),
-        };
-        let rejected = ToolInvocationRejectedIdentity {
-            attempt_ordinal: 4,
-            tool_name: ToolName::try_from("grep").unwrap(),
-            command_path: vec!["search".to_string()],
-            input: Some(recorded_input.clone()),
-            input_decode_failure: None,
-            has_stdin: true,
-            has_stdout: false,
-            has_stderr: true,
-            call_mode: EntityCallMode::Synchronous,
-        };
-        (
-            RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
-                accepted: Some(accepted),
-                rejected,
-            })),
-            request,
-            recorded_input,
-        )
-    }
-
-    fn serialized_entity_request(
-        metadata: &EntityInvocationRequest,
-        input: TypedSchemaValue,
-    ) -> HostRequest {
-        HostRequest::EntityInvocation(HostRequestEntityInvocation {
-            metadata: desert_rust::serialize_to_byte_vec(metadata).unwrap(),
-            input,
-            stream_session_idempotency_key: IdempotencyKey::new("claim-stream-session".to_string()),
-        })
-    }
-
-    #[test]
-    fn ambient_root_tool_claim_matches_recorded_leaf_and_keeps_other_identity_strict() {
-        let (expected, request, recorded_input) = accepted_tool_claim_and_recording();
-        let recorded = serialized_entity_request(&request, recorded_input.clone());
-        assert!(request_claim_identity_matches(&recorded, &expected).unwrap());
-
-        let mut wrong_leaf = request.clone();
-        wrong_leaf.plan = EntityInvocationPlanReference::Root {
-            plan: EntityInvocationPlan::new(vec![
-                EntityInvocationPlanLayer::Middleware {
-                    activation: middleware_activation("audit"),
-                    parameters: input("settings"),
-                    expected_definition: None,
-                    presented_definition: None,
-                    next_effective_definition: tool_definition(),
-                    compatibility: None,
-                },
-                EntityInvocationPlanLayer::Tool {
-                    activation: tool_activation("sed"),
-                },
-            ])
-            .unwrap(),
-        };
-        assert!(
-            !request_claim_identity_matches(
-                &serialized_entity_request(&wrong_leaf, recorded_input.clone()),
-                &expected,
-            )
-            .unwrap()
-        );
-        assert!(
-            !request_claim_identity_matches(
-                &serialized_entity_request(&request, input("different")),
-                &expected,
-            )
-            .unwrap()
-        );
-
-        let mut wrong_principal = request.clone();
-        wrong_principal.principal = Principal::Agent(AgentPrincipal {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "Example(\"other\")".to_string(),
-            },
-        });
-        assert!(
-            request_claim_identity_matches(
-                &serialized_entity_request(&wrong_principal, recorded_input.clone()),
-                &expected,
-            )
-            .unwrap()
-        );
-
-        let mut descendant = request.clone();
-        descendant.entity = AgentEntity::Tool(ToolName::try_from("grep").unwrap());
-        descendant.plan = EntityInvocationPlanReference::Descendant {
-            root_start_index: OplogIndex::from_u64(31),
-            position: 1,
-        };
-        assert!(
-            !request_claim_identity_matches(
-                &serialized_entity_request(&descendant, recorded_input.clone()),
-                &expected,
-            )
-            .unwrap()
-        );
-
-        let mut descendant_expected = expected.clone();
-        let RequestClaimIdentity::ToolInvocation(identity) = &mut descendant_expected else {
-            unreachable!();
-        };
-        identity.accepted.as_mut().unwrap().plan_position =
-            Some(EntityInvocationPlanPositionIdentity {
-                root_start_index: OplogIndex::from_u64(31),
-                position: 2,
-            });
-        assert!(
-            !request_claim_identity_matches(
-                &serialized_entity_request(&descendant, recorded_input),
-                &descendant_expected,
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn tool_rejection_claim_ignores_selected_error_but_matches_logical_attempt() {
-        let tool_name = ToolName::try_from("grep").unwrap();
-        let expected =
-            RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
-                accepted: None,
-                rejected: ToolInvocationRejectedIdentity {
-                    attempt_ordinal: 3,
-                    tool_name: tool_name.clone(),
-                    command_path: vec!["search".to_string()],
-                    input: Some(input("needle")),
-                    input_decode_failure: None,
-                    has_stdin: true,
-                    has_stdout: false,
-                    has_stderr: true,
-                    call_mode: EntityCallMode::Asynchronous,
-                },
-            }));
-        let request =
-            HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
-                attempt_ordinal: 3,
-                tool_name: tool_name.into_inner(),
-                command_path: vec!["search".to_string()],
-                input: Some(input("needle")),
-                input_decode_failure: None,
-                has_stdin: true,
-                has_stdout: false,
-                has_stderr: true,
-                call_mode: EntityCallMode::Asynchronous,
-                error: SerializableToolRpcError::Denied("recorded decision".to_string()),
-            });
-
-        assert!(request_claim_identity_matches(&request, &expected).unwrap());
-
-        let HostRequest::GolemToolInvocationRejected(mut mismatched_ordinal) = request.clone()
-        else {
-            unreachable!();
-        };
-        mismatched_ordinal.attempt_ordinal = 4;
-        assert!(
-            !request_claim_identity_matches(
-                &HostRequest::GolemToolInvocationRejected(mismatched_ordinal),
-                &expected,
-            )
-            .unwrap()
-        );
-
-        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request.clone() else {
-            unreachable!();
-        };
-        mismatched.has_stdout = true;
-        assert!(
-            !request_claim_identity_matches(
-                &HostRequest::GolemToolInvocationRejected(mismatched),
-                &expected,
-            )
-            .unwrap()
-        );
-
-        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request.clone() else {
-            unreachable!();
-        };
-        mismatched.has_stderr = false;
-        assert!(
-            !request_claim_identity_matches(
-                &HostRequest::GolemToolInvocationRejected(mismatched),
-                &expected,
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn malformed_tool_rejection_claim_distinguishes_decode_failure_class() {
-        let expected =
-            RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
-                accepted: None,
-                rejected: ToolInvocationRejectedIdentity {
-                    attempt_ordinal: 0,
-                    tool_name: ToolName::try_from("grep").unwrap(),
-                    command_path: Vec::new(),
-                    input: None,
-                    input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaGraph),
-                    has_stdin: false,
-                    has_stdout: false,
-                    has_stderr: false,
-                    call_mode: EntityCallMode::Synchronous,
-                },
-            }));
-        let request =
-            HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
-                attempt_ordinal: 0,
-                tool_name: "grep".to_string(),
-                command_path: Vec::new(),
-                input: None,
-                input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
-                has_stdin: false,
-                has_stdout: false,
-                has_stderr: false,
-                call_mode: EntityCallMode::Synchronous,
-                error: SerializableToolRpcError::RemoteInternalError(
-                    "selected error is not claim identity".to_string(),
-                ),
-            });
-
-        assert!(!request_claim_identity_matches(&request, &expected).unwrap());
     }
 }

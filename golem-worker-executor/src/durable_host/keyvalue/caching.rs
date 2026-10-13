@@ -28,7 +28,7 @@ use wasmtime::component::{Accessor, HasSelf, Resource};
 use crate::durable_host::authorization::targets::kv_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{
@@ -642,6 +642,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureGetResult>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "get");
@@ -673,6 +674,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureExistsResult>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "exists");
@@ -706,6 +708,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         v: Resource<OutgoingValue>,
         ttl_ms: Option<u32>,
     ) -> anyhow::Result<Resource<FutureResult>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "set");
@@ -751,6 +754,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureGetOrSetResult>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "get_or_set");
@@ -802,6 +806,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureResult>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "delete");

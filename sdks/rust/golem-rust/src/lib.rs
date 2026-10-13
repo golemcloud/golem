@@ -996,6 +996,11 @@ pub fn oplog_commit(replicas: u8) {
     host_api::oplog_commit(replicas)
 }
 
+/// Read full self metadata. Requires view permission on the running agent,
+/// admitted by the effective permission card and permitted by `initialCard`.
+/// Stored environment and configuration fields are not filtered by the per-key
+/// permissions used for WASI reads. Pure initialization does not call this API.
+/// Permission denials and backend failures remain typed `AgentOperationError`s.
 pub fn get_self_metadata() -> Result<AgentMetadata, AgentOperationError> {
     host_api::get_self_metadata().map(Into::into)
 }

@@ -92,7 +92,7 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
     use golem_rust::{WebSocketError, WebSocketMessage, WebsocketConnection};
 
     async fn run_websocket() -> Result<(), WebSocketError> {
-        let ws = WebsocketConnection::connect("wss://example.com/chat", None)?;
+        let ws = WebsocketConnection::connect("wss://example.com/chat", None, None)?;
         println!("Connected");
         ws.send(&WebSocketMessage::Text("Hello, server!".to_string()))?;
         loop {
@@ -145,7 +145,7 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 
     ```moonbit
     pub async fn ExampleAgent::run(self: Self) -> Unit raise @common.AgentError {
-      let conn = match @websocket_client.WebsocketConnection::connect("wss://example.com/chat", None) {
+      let conn = match @websocket_client.WebsocketConnection::connect("wss://example.com/chat", None, None) {
         Ok(c) => c
         Err(e) => raise @common.AgentError::InvalidInput("Connect failed: \{Repr(e)}")
       }
@@ -161,12 +161,114 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 </Tabs.Tab>
 </Tabs>
 
+## Runtime reconstruction and session loss
+
+A physical WebSocket session does not survive runtime reconstruction, whether caused by suspension, restart, or crash. Choose a reconstruction policy when you connect:
+
+- `reconnect-automatically` is the default when the option is absent. The first live access to a reconstructed successful handle opens a replacement connection. Your application must tolerate a new physical session.
+- `report-connection-loss` prevents replacement I/O on that handle. The first live `send`, `receive`, `receive-with-timeout`, or `close` returns the typed `session-lost` error and makes the handle terminal. Further accesses return that loss; they do not reconnect. Dropping the handle only releases it locally.
+
+Both policies replay recorded outcomes unchanged, including messages, timeouts, send results, and close results. Neither changes retry behavior for an ordinary live network disconnect. Session loss is **not proof that an earlier send never reached the peer**. Use application acknowledgments, deduplication, or reconciliation before resending effects.
+
+Incomplete non-idempotent durable scopes still trap through the central recovery guard before the reconstruction policy applies. An `End` entry alone does not override an unfinished scope. An atomic-region rollback can remove the recorded connect from the replay path; executing that connect again then legitimately opens a new session under either policy.
+
+### SDK policy and error forms
+
+TypeScript accepts `ConnectOptions.reconstructionPolicy`:
+
+```typescript
+const ws = await connectWebsocket("wss://example.com/chat", {
+  reconstructionPolicy: "report-connection-loss",
+});
+// Catch WebsocketError from send, receive, receiveWithTimeout, or close:
+// err.tag === "session-lost"
+```
+
+Rust takes a third `Option<websocket::WebSocketReconstructionPolicy>` argument. Import the policy from the `websocket` module:
+
+```rust
+use golem_rust::{websocket::WebSocketReconstructionPolicy, WebsocketConnection};
+
+let ws = WebsocketConnection::connect(
+    "wss://example.com/chat",
+    None,
+    Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
+)?;
+// Match WebSocketError::SessionLost from live access.
+```
+
+Effect accepts the same `reconstructionPolicy` option. `Websocket.isSessionLost(error)` recognizes structural tags, not class identity: a `SocketError` contains a `SocketReadError` or `SocketWriteError` in `reason`, with the plain payloadless `{ _tag: "SessionLost" }` in `reason.cause`. Explicit close through the writer propagates loss to the writer and fails the reader's deferred with the same error. The scope finalizer closes best-effort and does not surface close failures.
+
+### Supervise one Effect session generation at a time
+
+Use one scope for each connection generation. Start the reader before acquiring the initialization writer, and race reader failure against initialization and traffic writes. This example sends an application initialization message before ordinary traffic; a real protocol may also require an acknowledgment before traffic begins.
+
+```typescript
+import { Effect, Fiber } from "effect"
+import { Websocket } from "@golemcloud/effect-golem"
+
+const generation = Effect.scoped(
+  Effect.gen(function* () {
+    const socket = yield* Websocket.connect("wss://example.com/chat", {
+      reconstructionPolicy: "report-connection-loss",
+    })
+    const reader = yield* Effect.forkChild(
+      socket.runString((message) => {
+        console.log("Received:", message)
+      }),
+    )
+    const writes = Effect.gen(function* () {
+      const write = yield* socket.writer
+      yield* write(JSON.stringify({ type: "initialize" }))
+      yield* write(JSON.stringify({ type: "traffic", text: "Hello" }))
+      yield* Fiber.join(reader)
+    })
+    // Observe reader loss even while initialization or traffic is writing.
+    yield* Effect.raceFirst(Fiber.join(reader), writes).pipe(
+      Effect.ensuring(Fiber.interrupt(reader)),
+    )
+  }),
+)
+
+const supervise = Effect.gen(function* () {
+  for (;;) {
+    const lost = yield* generation.pipe(
+      Effect.as(false),
+      Effect.catchIf(Websocket.isSessionLost, () => Effect.succeed(true)),
+    )
+    if (!lost) return
+    // The old reader has been interrupted and joined and its scope closed.
+    // Reconcile application effects before starting the next generation.
+    // Re-running generation explicitly connects and initializes before traffic.
+  }
+})
+```
+
+`raceFirst` cancels and waits for the losing branch, and `Fiber.interrupt` waits for the old reader to finish. Do not retain the old writer or automatically forward its queued traffic to the next connection. Reconciliation and the decision to start another generation belong to the guest application, not to a production callback or host configuration.
+
 ## WIT interface reference
 
 The underlying package is `golem:websocket@1.5.0`; its `golem:websocket/client@1.5.0` interface defines the `websocket-connection` resource type with the following methods:
 
-- **`connect`** — opens a WebSocket connection to the given URL, with optional headers
+- **`connect`** — opens a WebSocket connection to the given URL, with optional headers and an optional reconstruction policy
 - **`send`** — sends a text or binary message
 - **`receive`** — asynchronously waits for the next message
 - **`receive-with-timeout`** — waits up to the given number of milliseconds and returns `none` on expiry
 - **`close`** — initiates a graceful close handshake
+
+The root WIT definition in `wit/deps/golem-websocket/websocket.wit` declares:
+
+```wit
+enum reconstruction-policy {
+  reconnect-automatically,
+  report-connection-loss,
+}
+
+connect: static func(
+  url: string,
+  headers: option<list<tuple<string, string>>>,
+  reconstruction-policy: option<reconstruction-policy>
+) -> result<websocket-connection, error>;
+```
+
+The `error` variant includes the payloadless `session-lost` case. On a lost reconstructed handle, `close` reports this loss without a handshake rather than reporting a graceful close.

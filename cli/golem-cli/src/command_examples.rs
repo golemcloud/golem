@@ -332,7 +332,13 @@ pub const AGENT_OPLOG: &str = "Examples:
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment'
 
   # In structured formats, each oplog entry is emitted as a separate document
-  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'";
+  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'
+
+  # Explore the oplog in an interactive viewer served locally (loads pages on demand, opens the browser)
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --serve
+
+  # Write a self-contained HTML viewer of the oplog and open it in the browser
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --html oplog.html --open";
 
 pub const AGENT_REVERT: &str = "Examples:
   # Undo the agent's last N invocations
@@ -628,7 +634,13 @@ pub const SERVER_RUN: &str = "Examples:
   golem-cli server run --data-dir ./my-data --agent-filesystem-root ./agent-fs
 
   # Write actual port assignments to a JSON file (handy for scripts)
-  golem-cli server run --ports-file ./ports.json";
+  golem-cli server run --ports-file ./ports.json
+
+  # Run with a configuration file, e.g. Postgres storage and a secret admin token
+  golem-cli server run --config ./golem-server.toml
+
+  # Print the default configuration as a starting point for a configuration file
+  golem --dump-config-default-toml";
 
 pub const SERVER_CLEAN: &str = "Examples:
   # Wipe the data directory of the discovered application manifest
@@ -639,7 +651,10 @@ pub const SERVER_CLEAN: &str = "Examples:
   golem-cli server clean --yes
 
   # Ignore any discovered manifest and wipe the platform default data directory
-  golem-cli server clean -X";
+  golem-cli server clean -X
+
+  # Wipe the data directory of a server that runs with a configuration file
+  golem-cli server clean --config ./golem-server.toml";
 
 // Account commands ---------------------------------------------------------------------------------
 

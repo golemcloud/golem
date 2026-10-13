@@ -852,6 +852,60 @@ describe('tool guest exports', () => {
     expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe('HELLO');
   });
 
+  it('rejects lossy direct wire input before calling the handler', async () => {
+    const duplicateMap = {
+      tag: 'map',
+      entries: [
+        { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'first' } },
+        { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'last' } },
+      ],
+    } as const;
+    const cases = [
+      [z.map(z.string(), z.string()), duplicateMap],
+      [z.record(z.string(), z.string()), duplicateMap],
+      [
+        z.record(z.string(), z.string()),
+        {
+          tag: 'map',
+          entries: [
+            { key: { tag: 'string', value: '2' }, value: { tag: 'string', value: 'two' } },
+            { key: { tag: 'string', value: '1' }, value: { tag: 'string', value: 'one' } },
+          ],
+        },
+      ],
+      [s.text(), { tag: 'text', text: 'bonjour', language: 'fr' }],
+      [s.binary(), { tag: 'binary', bytes: Uint8Array.of(17), mimeType: 'image/png' }],
+    ] as const;
+    for (const [schema, value] of cases) {
+      ToolRegistry.clearForTests();
+      const handler = vi.fn(async () => ok(undefined));
+      toolDefinition('lossy-input')
+        .body((body) => body.positional('payload', schema).returns(z.void()))
+        .implement({ 'lossy-input': handler });
+      const registered = ToolRegistry.get('lossy-input')!;
+      const inputModel = registered.extended.canonicalInputModel(registered.extended.root);
+      expect(inputModel.codec.direct).toBeDefined();
+      const input = { graph: inputModel.codec.graph, value: v.record([value]) };
+      await expect(registered.invoker([], input, {})).rejects.toMatchObject({
+        tag: 'invalid-input',
+      });
+      await expect(
+        tool.invoke(
+          'lossy-input',
+          [],
+          typedSchemaValueToWit(input),
+          undefined,
+          undefined,
+          undefined,
+          {
+            tag: 'anonymous',
+          },
+        ),
+      ).rejects.toMatchObject({ tag: 'invalid-input' });
+      expect(handler).not.toHaveBeenCalled();
+    }
+  });
+
   it('maps unknown tools, command paths, and invalid canonical values to exact tool errors', async () => {
     toolDefinition('echo')
       .body((body) => body.positional('message', z.string()).returns(z.void()))

@@ -237,6 +237,7 @@ object StreamSession {
     @volatile var pendingDescriptor: String = null
     @volatile var pendingAttempt: String = null
     @volatile var pendingResume = false
+    @volatile var pendingAttachOperation = "resume"
     @volatile var everAccepted = false
     val idempotencyKey = UUID.randomUUID.toString
     val reconnecting = new AtomicBoolean(false)
@@ -459,12 +460,16 @@ object StreamSession {
     def closeNormally(): Unit =
       Option(socket).foreach(_.sendClose(WebSocket.NORMAL_CLOSURE, "complete"))
 
-    def prepareResumeDescriptor(): Unit = {
+    def prepareResumeDescriptor(operation: String = "resume"): Unit = {
       if (sessionToken == null) throw BridgeException("accepted session has no resume token")
-      val cursors = Json.arr(session.cursors.values().asScala.toVector.sorted.map(Json.string))
+      val cursors = if (pendingResume && !accepted)
+        Json.requireField(Json.parse(pendingDescriptor).fold(e => throw BridgeException(e), identity), "outputCursors")
+          .fold(e => throw BridgeException(e), identity)
+      else Json.arr(session.cursors.values().asScala.toVector.sorted.map(Json.string))
       pendingAttempt = UUID.randomUUID.toString
+      pendingAttachOperation = operation
       pendingDescriptor = StreamSessionProtocol.message("resumeAttach", Vector(
-        "attemptId" -> Json.string(pendingAttempt), "operation" -> Json.string("resume"),
+        "attemptId" -> Json.string(pendingAttempt), "operation" -> Json.string(operation),
         "outputCursors" -> cursors, "sessionToken" -> Json.string(sessionToken)))
       pendingResume = true
       accepted = false
@@ -541,8 +546,10 @@ object StreamSession {
             val message = Json.requireField(json, "message").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
             val retryable = Json.requireField(json, "retryable").flatMap(Json.asBoolean).fold(e => throw BridgeException(e), identity)
             val error = BridgeException(s"$code: $message")
-            if (everAccepted && retryable) {
-              try prepareResumeDescriptor()
+            val pendingAttach = everAccepted && pendingResume && !accepted
+            val takeover = pendingAttach && pendingAttachOperation == "resume" && code == "invalid-attachment-state"
+            if (takeover || (everAccepted && retryable && code != "invalid-attachment-state")) {
+              try prepareResumeDescriptor(if (takeover) "takeover" else if (accepted) "resume" else pendingAttachOperation)
               catch { case problem: Throwable => fatal(problem); return }
               Option(socket).foreach(_.abort())
               reconnectAction.get()()
