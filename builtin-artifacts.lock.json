@@ -14,23 +14,23 @@
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.15",
-      "sha256": "193f322b666681f7ba708f4873a98f9b3ebd772d7fdda392f0229d37d339bbd8"
+      "version": "0.0.16",
+      "sha256": "817c68fafd59d9f643af3395e51338367bcd3e3917bf9331d095272c8b86f1f6"
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.13",
-      "sha256": "a5974719843a75b6561aa37392b1f4f7c721eeda08c80a835d3e2b981b948d9f"
+      "version": "0.0.14",
+      "sha256": "335f0b3a7cd4bcda2428b775e301ccb36ce2ebb1e09dfee35c8edf3c41f2009f"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
-      "version": "0.0.4",
-      "sha256": "24cab53bdf7bb6080de6dc03778e4c14b44279c93b82642adf6248dd1fa24d68"
+      "version": "0.0.5",
+      "sha256": "b7d15c3fcdedd922d77884f91dfe8eb81b70ba3b189961dbb7eca989f81183bf"
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.12",
-      "sha256": "6f24f0da4ae69986102cb1cc1408f42ce502de8fc8505f9a41d5a71908778254"
+      "version": "0.0.13",
+      "sha256": "8ee7743b95db06fd1b0c9780ba2ac9c3590707fc31d217b498c075e315904043"
     },
     "web_fetch": {
       "component": "web-fetch",

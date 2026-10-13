@@ -339,9 +339,10 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
   export (`guest.call_invoke`) so the body re-executes from recorded inputs; its durable host
   calls are replayed from the owner oplog, so no completed external effect is performed again.
   `drive_access` (`entity.rs`) releases the recorded terminal only after that reconstruction
-  validates against the claim (`StartClaim::owned_tool_invocation` in
+  validates against the claim (`StartClaim::tool_invocation` in
   `durable_host/replay_state/claims.rs` matches the accepted `GolemEntityInvoke` or a recorded
-  `GolemToolInvocationRejected` by `parent_start_index` and `ToolInvocationClaimIdentity`). The
+  `GolemToolInvocationRejected` by `parent_start_index` and the invocation id of the dispatching
+  guest import). The
   test oracle is "no repeated external effect", not "no second guest call". One exception:
   `execute_accepted_tool_call_inner` first checks `recorded_terminal_access`; a terminal whose
   `body_execution` is `Skipped` (admission was rejected before the body ran, e.g. an attachment

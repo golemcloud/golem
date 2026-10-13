@@ -37,12 +37,11 @@ pub use operation::{
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
     DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, StreamSession,
-    strip_typed_streams,
 };
 use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::entity::{
@@ -101,11 +100,9 @@ use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationVa
 use golem_common::model::component::ComponentName;
 use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole};
 use golem_common::model::entity::{
-    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationPlanReference, EntityInvocationRequestIdentity, InvocationExecutionMode,
-    NamedToolErrorSchema, ToolInputDecodeFailure, ToolInvocationClaimIdentity,
-    ToolInvocationDescriptor, ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity,
-    ToolOutputContract,
+    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
+    InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
+    ToolInvocationDescriptor, ToolOutputContract,
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{
@@ -1313,81 +1310,6 @@ impl ToolCallTarget {
                 AgentEntity::ToolMiddleware(_) => {
                     Err(anyhow!("middleware plan has no terminal tool"))
                 }
-            },
-        }
-    }
-
-    fn accepted_identity(
-        &self,
-    ) -> anyhow::Result<(
-        AgentEntity,
-        Option<golem_common::model::entity::EntityInvocationPlanPositionIdentity>,
-    )> {
-        match self {
-            Self::Ambient(rpc) => Ok((AgentEntity::Tool(rpc.tool_name.clone()), None)),
-            Self::Underlying(underlying) => {
-                let position = underlying.position.position() + 1;
-                let entity = underlying
-                    .position
-                    .plan()
-                    .layer(position)
-                    .map_err(anyhow::Error::msg)?
-                    .activation()
-                    .entity();
-                Ok((
-                    entity,
-                    Some(
-                        golem_common::model::entity::EntityInvocationPlanPositionIdentity {
-                            root_start_index: underlying.position.root_start_index(),
-                            position,
-                        },
-                    ),
-                ))
-            }
-        }
-    }
-}
-
-impl ToolInvocationAttempt {
-    fn claim_identity(
-        &self,
-        command_path: &[String],
-        has_stdin: bool,
-        has_stdout: bool,
-        has_stderr: bool,
-        call_mode: EntityCallMode,
-    ) -> ToolInvocationClaimIdentity {
-        let (entity, plan_position) = self
-            .target
-            .accepted_identity()
-            .expect("validated tool call target");
-        let input = self.input.as_ref().ok().map(strip_typed_streams);
-        ToolInvocationClaimIdentity {
-            accepted: input.clone().map(|input| EntityInvocationRequestIdentity {
-                entity,
-                call_mode,
-                operation: EntityInvocationDescriptorIdentity::Tool(
-                    ToolInvocationDescriptorIdentity {
-                        attempt_ordinal: self.attempt_ordinal,
-                        command_path: command_path.to_vec(),
-                        has_stdin,
-                        has_stdout,
-                        has_stderr,
-                    },
-                ),
-                plan_position,
-                input,
-            }),
-            rejected: ToolInvocationRejectedIdentity {
-                attempt_ordinal: self.attempt_ordinal,
-                tool_name: self.target.tool_name().expect("validated tool call target"),
-                command_path: command_path.to_vec(),
-                input,
-                input_decode_failure: self.input.as_ref().err().copied(),
-                has_stdin,
-                has_stdout,
-                has_stderr,
-                call_mode,
             },
         }
     }
@@ -4352,16 +4274,12 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    let has_stdin = stdin.is_some();
     if accessor.with(|mut access| !access.get().state.durable_call_is_live()) {
-        let identity =
-            attempt.claim_identity(&command_path, has_stdin, has_stdout, has_stderr, call_mode);
         match EntityInvocationDurability::replay_tool_access(
             accessor,
             accessor.getter(),
             attempt.parent.clone(),
             &attempt.key_context,
-            identity,
         )
         .await?
         {
@@ -6116,6 +6034,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         futures: Vec<Resource<FutureInvokeResultEntry>>,
     ) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6149,6 +6068,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
         Option<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
         Option<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
     )> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let accessor = accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(accessor.getter());
         let accessor = &accessor;
         let underlying = accessor
@@ -6292,6 +6212,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<UnderlyingInvokeResultEntry>,
     ) -> anyhow::Result<Result<Option<TypedSchemaValue>, UnderlyingError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let accessor = accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(accessor.getter());
         let (plan, response_edge) = accessor.with(|mut access| {
             let entry = access.get().table().get(&self_)?;
@@ -6376,6 +6297,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         input: TypedSchemaValue,
         stdin: Option<Resource<ToolStdinEntry>>,
     ) -> anyhow::Result<Result<(), ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6423,6 +6345,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6443,6 +6366,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         stdout: Option<Resource<ToolOutputEntry>>,
         stderr: Option<Resource<ToolOutputEntry>>,
     ) -> anyhow::Result<Resource<FutureInvokeResultEntry>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()
@@ -6503,6 +6427,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
     ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         accessor.with(|mut access| {
             access
                 .get()

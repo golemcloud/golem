@@ -32,6 +32,7 @@ import {
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
 import { Principal } from "../src/Principal.js"
+import * as Ids from "../src/Ids.js"
 
 const anonymous = { tag: "anonymous" } as const
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
@@ -331,6 +332,102 @@ describe("snapshotting", () => {
   // -------------------------------------------------------------------------
   // Auto round-trip
   // -------------------------------------------------------------------------
+
+  it.each(["direct", "ref"])(
+    "auto: %s state preserves PromiseId, unions and marker collisions",
+    async (kind) => {
+      const schema = Schema.Struct({
+        promise: Ids.PromiseId,
+        controls: Schema.Array(Schema.Union([Schema.String, Schema.BigInt])),
+        collision: Schema.Unknown,
+        transformed: Schema.NumberFromString,
+      })
+      const initial: typeof schema.Type = {
+        promise: {
+          agentId: {
+            componentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
+            agentId: "waiting-agent",
+          },
+          oplogIdx: 9007199254740993n,
+        },
+        controls: ["9007199254740993", 9007199254740993n, 0n, -123n],
+        collision: Object.fromEntries([
+          ["$golemSnapshot", ["bigint", "42"]],
+          ["__proto__", { $golemSnapshot: ["object", []], nested: [123n] }],
+          ["single", { $golemSnapshot: ["object", []] }],
+        ]),
+        transformed: 7,
+      }
+      const spec = defineAgent({
+        name: "PromiseSnapshot",
+        id: {},
+        snapshotting: Snapshot.define({ schema, policy: Snapshot.policy.default }),
+        methods: { check: method({ input: {}, success: Schema.Void }) },
+      })
+      const check = (state: typeof schema.Type) =>
+        Effect.sync(() => {
+          expect(state).toEqual(initial)
+          expect(Object.hasOwn(state.collision as object, "__proto__")).toBe(true)
+        })
+      if (kind === "direct") {
+        spec.implement({
+          init: () => Effect.succeed(initial),
+          methods: (state) => ({ check: () => check(state) }),
+        })
+      } else {
+        spec.implement({
+          init: () => Ref.make(initial),
+          methods: (ref) => ({ check: () => Ref.get(ref).pipe(Effect.flatMap(check)) }),
+          snapshot: Snapshot.ref(),
+        })
+      }
+      await guest.initialize("PromiseSnapshot", wire(), anonymous)
+      await guest.invoke("check", wire(), anonymous)
+      const snapshot = await dispatchSaveSnapshot()
+      const persisted = JSON.parse(new TextDecoder().decode(snapshot.payload))
+      expect(persisted.state.promise.oplogIdx).toEqual({
+        $golemSnapshot: ["bigint", "9007199254740993"],
+      })
+      expect(persisted.state.promise.agentId.componentId.uuid.highBits).toEqual({
+        $golemSnapshot: ["bigint", "18446744073709551615"],
+      })
+      expect(persisted.state.transformed).toBe("7")
+      await __resetAgents()
+      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "PromiseSnapshot"]])
+      __setParseAgentIdForTest(() => ["PromiseSnapshot", typed(wire()), undefined])
+      await dispatchLoadSnapshot(snapshot)
+      await guest.invoke("check", wire(), anonymous)
+    },
+  )
+
+  it.each([
+    ["bigint", "01"],
+    ["bigint", "-0"],
+    ["bigint", "+1"],
+    ["bigint", "1e3"],
+    ["bigint", "1\n"],
+    ["bigint", ""],
+    ["bigint", "1.0"],
+    ["bigint", 9007199254740992],
+    ["bigint"],
+    ["bigint", "1", "extra"],
+    ["unknown", "1"],
+    [
+      "object",
+      [
+        ["x", 1],
+        ["x", 2],
+      ],
+    ],
+    ["object", [[1, 2]]],
+    ["object", [["x"]]],
+  ])("auto: rejects malformed snapshot state tag %j", async (...tag) => {
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "DirectSnapshotAgent"]])
+    __setParseAgentIdForTest(() => ["DirectSnapshotAgent", typed(wire()), undefined])
+    await expect(
+      dispatchLoadSnapshot(encodeJsonEnvelope(anonymous, { $golemSnapshot: tag })),
+    ).rejects.toThrow(SnapshotEnvelopeError)
+  })
 
   it.effect("auto: save → load round-trips state and uses JSON envelope", () =>
     Effect.gen(function* () {
