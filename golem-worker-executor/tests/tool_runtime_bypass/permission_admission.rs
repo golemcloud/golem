@@ -409,55 +409,14 @@ impl EnvironmentStateService for GatedEnvironmentStateService {
     }
 }
 
-/// Holds the response to one effect until the test lets it through, so the test can act while
-/// the guest that announced the effect waits.
-#[derive(Default)]
-struct EffectHold {
-    hold: Mutex<
-        Option<(
-            String,
-            tokio::sync::oneshot::Sender<()>,
-            tokio::sync::oneshot::Receiver<()>,
-        )>,
-    >,
-}
-
-impl EffectHold {
-    fn hold(&self, path: &str) -> GateHandle {
-        let (arrived_tx, arrived_rx) = tokio::sync::oneshot::channel();
-        let (respond_tx, respond_rx) = tokio::sync::oneshot::channel();
-        *self.hold.lock().unwrap() = Some((path.to_string(), arrived_tx, respond_rx));
-        GateHandle {
-            entered: Some(arrived_rx),
-            release: Some(respond_tx),
-        }
-    }
-
-    async fn pass(&self, path: &str) {
-        let held = {
-            let mut slot = self.hold.lock().unwrap();
-            match slot.as_ref() {
-                Some((held_path, _, _)) if held_path == path => slot.take(),
-                _ => None,
-            }
-        };
-        if let Some((_, arrived, respond)) = held {
-            let _ = arrived.send(());
-            let _ = respond.await;
-        }
-    }
-}
-
 #[derive(Clone)]
 struct EffectRecorder {
     effects: Arc<Mutex<Vec<String>>>,
     deployment_gate: Arc<DeploymentLookupGate>,
-    effect_hold: Arc<EffectHold>,
 }
 
 async fn start_effect_server(
     deployment_gate: Arc<DeploymentLookupGate>,
-    effect_hold: Arc<EffectHold>,
 ) -> anyhow::Result<(
     u16,
     tokio_util::task::AbortOnDropHandle<()>,
@@ -471,7 +430,6 @@ async fn start_effect_server(
         .with_state(EffectRecorder {
             effects: effects.clone(),
             deployment_gate,
-            effect_hold,
         });
     let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -484,8 +442,7 @@ async fn record_effect(
     Path(path): Path<String>,
 ) -> StatusCode {
     recorder.deployment_gate.on_effect(&path);
-    recorder.effects.lock().unwrap().push(path.clone());
-    recorder.effect_hold.pass(&path).await;
+    recorder.effects.lock().unwrap().push(path);
     StatusCode::NO_CONTENT
 }
 
@@ -501,7 +458,6 @@ struct PermissionFixture {
     effects: Arc<Mutex<Vec<String>>>,
     cards: Arc<PermissionCards>,
     deployment_gate: Arc<DeploymentLookupGate>,
-    effect_hold: Arc<EffectHold>,
     _effect_server: tokio_util::task::AbortOnDropHandle<()>,
 }
 
@@ -520,9 +476,8 @@ async fn permission_fixture(
     let environment = Arc::new(TestEnvironmentStateService::default());
     let cards = Arc::new(PermissionCards::default());
     let deployment_gate = Arc::new(DeploymentLookupGate::default());
-    let effect_hold = Arc::new(EffectHold::default());
     let (effect_port, effect_server, effects) =
-        start_effect_server(deployment_gate.clone(), effect_hold.clone()).await?;
+        start_effect_server(deployment_gate.clone()).await?;
     environment.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
@@ -642,7 +597,6 @@ async fn permission_fixture(
         effects,
         cards,
         deployment_gate,
-        effect_hold,
         _effect_server: effect_server,
     })
 }
@@ -858,25 +812,51 @@ fn entity_starts<'a>(
         })
 }
 
-/// Returns the entity invocation `Start`s that have no `End` or `Cancelled`, and fails when one
-/// has more than one terminal.
+const ENTITY_INVOKE: &str = "golem::entity::invoke";
+
+fn is_invocation_rejected(function_name: &str) -> bool {
+    function_name.ends_with("invocation-rejected")
+}
+
+/// The durable records of tool calls rejected at admission.
+fn rejection_starts(oplog: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
+    oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if is_invocation_rejected(&start.function_name) => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn terminal_count(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> usize {
+    oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
+                || matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == start)
+        })
+        .count()
+}
+
+/// Returns the entity invocation and invocation-rejected `Start`s that have no `End` or
+/// `Cancelled`, and fails when one has more than one terminal.
 fn unterminated_entity_starts(oplog: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
     oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke" => {
+            PublicOplogEntry::Start(start)
+                if start.function_name == ENTITY_INVOKE
+                    || is_invocation_rejected(&start.function_name) =>
+            {
                 Some(entry.oplog_index)
             }
             _ => None,
         })
         .filter(|start| {
-            let terminals = oplog
-                .iter()
-                .filter(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == *start)
-                        || matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == *start)
-                })
-                .count();
+            let terminals = terminal_count(oplog, *start);
             assert!(
                 terminals <= 1,
                 "entity invocation {start} has {terminals} terminals"
@@ -884,6 +864,34 @@ fn unterminated_entity_starts(oplog: &[PublicOplogEntryWithIndex]) -> Vec<OplogI
             terminals == 0
         })
         .collect()
+}
+
+/// Fails when a positional record (`Start`, `End` or `Cancelled`) follows the last
+/// `AgentInvocationFinished` before the next invocation starts.
+fn assert_no_positional_records_after_last_finished(oplog: &[PublicOplogEntryWithIndex]) {
+    let Some(finished) = oplog
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+    else {
+        panic!("no invocation has finished");
+    };
+    for entry in oplog[finished + 1..]
+        .iter()
+        .take_while(|entry| !matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    {
+        assert!(
+            !matches!(
+                entry.entry,
+                PublicOplogEntry::Start(_)
+                    | PublicOplogEntry::End(_)
+                    | PublicOplogEntry::Cancelled(_)
+            ),
+            "positional record {} follows AgentInvocationFinished at {}: {:?}",
+            entry.oplog_index,
+            oplog[finished].oplog_index,
+            entry.entry
+        );
+    }
 }
 
 async fn wait_for_effect(fixture: &PermissionFixture, prefix: &str) -> String {
@@ -1003,46 +1011,105 @@ async fn assert_recorded_outcomes_survive_restart(
     history.assert_preserved(fixture).await
 }
 
-/// Waits until every entity invocation in the owner oplog has a terminal, then checks that the
-/// one `permission-probe read /public` started while its admission was pending was either
-/// rejected before the leaf started or admitted and settled with exactly one leaf effect.
+/// Waits until the invocation has finished and every entity invocation and rejection record in
+/// the owner oplog has a terminal. Then checks that the `permission-probe read /public` started
+/// while its admission was pending was either rejected with a durable invocation-rejected record,
+/// or admitted and settled with exactly one leaf effect, and that nothing positional was recorded
+/// after the invocation finished.
 async fn assert_pending_admission_settled(
     fixture: &PermissionFixture,
-    middleware_starts_if_admitted: usize,
+    finished_invocations_before: usize,
 ) -> anyhow::Result<()> {
     let settled = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let oplog = owner_oplog(fixture).await?;
-            if unterminated_entity_starts(&oplog).is_empty() {
+            let finished = oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count();
+            if finished > finished_invocations_before
+                && unterminated_entity_starts(&oplog).is_empty()
+            {
                 break Ok::<_, anyhow::Error>(oplog);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .expect("every entity invocation settles")?;
+    .expect("the invocation and every entity invocation settle")?;
     match entity_starts(&settled, PERMISSION_PROBE).count() {
         0 => {
+            assert_eq!(
+                rejection_starts(&settled).len(),
+                1,
+                "a pending admission that never reached the leaf must leave a durable rejection"
+            );
             assert!(
                 permission_effects(fixture).is_empty(),
                 "a rejected admission reached the provider"
             );
-            Ok(())
         }
         1 => {
-            assert_eq!(
-                entity_starts(&settled, PERMISSION_MIDDLEWARE).count(),
-                middleware_starts_if_admitted
-            );
             assert_eq!(
                 permission_effects(fixture),
                 vec!["permission/read/public"],
                 "an admitted call must settle with exactly one leaf effect"
             );
-            Ok(())
         }
         leaf_starts => panic!("one pending call started {leaf_starts} leaf invocations"),
     }
+    assert_no_positional_records_after_last_finished(&settled);
+    Ok(())
+}
+
+/// Waits for a `wasi:logging` line containing `marker` from the owner.
+async fn wait_for_log_marker(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<
+        golem_api_grpc::proto::golem::worker::LogEvent,
+    >,
+    marker: &str,
+) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(event) = events.recv().await {
+            if format!("{event:?}").contains(marker) {
+                return;
+            }
+        }
+        panic!("the owner log stream ended before `{marker}`");
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the owner did not log `{marker}`"))
+}
+
+/// Checks, while an admission is held, that the guest has passed its last import before
+/// returning but the owner has neither settled the entity invocations nor finished the
+/// invocation.
+async fn assert_unsettled_while_admission_is_held(
+    fixture: &PermissionFixture,
+    finished_invocations_before: usize,
+    unterminated: &[&str],
+) -> anyhow::Result<()> {
+    let oplog = owner_oplog(fixture).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        finished_invocations_before,
+        "the invocation finished while one of its admissions was still pending"
+    );
+    for name in unterminated {
+        let starts = entity_starts(&oplog, name).collect::<Vec<_>>();
+        assert_eq!(starts.len(), 1, "expected one `{name}` invocation");
+        assert_eq!(
+            terminal_count(&oplog, starts[0]),
+            0,
+            "`{name}` settled while its Underlying admission was still pending"
+        );
+    }
+    assert_eq!(entity_starts(&oplog, PERMISSION_PROBE).count(), 0);
+    assert!(rejection_starts(&oplog).is_empty());
+    Ok(())
 }
 
 #[test]
@@ -1441,9 +1508,16 @@ async fn recorded_admission_and_denials_replay_unchanged_after_grants_change(
     Ok(())
 }
 
+fn finished_invocations(oplog: &[PublicOplogEntryWithIndex]) -> usize {
+    oplog
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .count()
+}
+
 #[test]
 #[timeout("3m")]
-async fn middleware_return_during_pending_underlying_admission_settles_and_replays(
+async fn middleware_exit_during_pending_underlying_admission_records_the_rejection(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_runtime_bypass_owner")] owner: &PrecompiledComponent,
@@ -1457,31 +1531,45 @@ async fn middleware_return_during_pending_underlying_admission_settles_and_repla
             owner,
             provider,
             vec![
-                owner_grant("read", "/pending/public"),
+                owner_grant("read", "/exit/public"),
                 owner_grant("read", "/public"),
             ],
         )
         .await?,
     );
-    // While the middleware waits for the `pending-starting` response, a card install is queued.
-    // The Underlying admission the middleware starts next is its first authority boundary after
-    // the queued event, so it drains the install, and the registry check of that card is held.
-    let mut announced = fixture.effect_hold.hold("pending-starting");
+    let mut log = fixture.executor.capture_output(&fixture.owner_id).await?;
+    let finished_before = finished_invocations(&owner_oplog(&fixture).await?);
+    // While the middleware waits at its promise checkpoint, a card install is queued. The
+    // Underlying admission the middleware starts after the promise completes is its first
+    // authority boundary after the queued event, so it drains the install, and the registry
+    // check of that card is held.
     let key = IdempotencyKey::fresh();
     let call = tokio::spawn({
         let fixture = fixture.clone();
         let key = key.clone();
-        async move { probe(&fixture, &key, "read", "/pending/public", None).await }
+        async move { probe(&fixture, &key, "read", "/exit/public", None).await }
     });
-    announced.entered().await?;
+    let checkpoint = wait_for_effect(&fixture, "exit-ready/").await;
     let pending_card = tool_card(Vec::new());
     let mut gate = fixture.cards.hold_check(pending_card.card_id());
     install_card(&fixture, pending_card).await?;
-    announced.release();
+    fixture
+        .executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: fixture.owner_id.clone(),
+                oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
+            },
+            Vec::new(),
+        )
+        .await?;
     gate.entered().await?;
-    let oplog = owner_oplog(&fixture).await?;
-    assert_eq!(entity_starts(&oplog, PERMISSION_MIDDLEWARE).count(), 1);
-    assert_eq!(entity_starts(&oplog, PERMISSION_PROBE).count(), 0);
+    // The middleware started the call detached from its task. Its only remaining import before
+    // `task.return` and exit is this log line; the held admission can only be polled again after
+    // the guest yields, which it does by exiting.
+    wait_for_log_marker(&mut log, "exit-returning").await;
+    assert_unsettled_while_admission_is_held(&fixture, finished_before, &[PERMISSION_MIDDLEWARE])
+        .await?;
     gate.release();
 
     let outcome = tokio::time::timeout(Duration::from_secs(60), call)
@@ -1490,16 +1578,16 @@ async fn middleware_return_during_pending_underlying_admission_settles_and_repla
     assert_eq!(
         outcome,
         Outcome::Result("returned-early".to_string()),
-        "the middleware must return while the Underlying admission is pending"
+        "the middleware must exit while the Underlying admission is pending"
     );
-    assert_pending_admission_settled(&fixture, 1).await?;
+    assert_pending_admission_settled(&fixture, finished_before).await?;
 
     assert_recorded_outcomes_survive_restart(
         &fixture,
         &[(
             key,
             "read",
-            "/pending/public",
+            "/exit/public",
             None,
             Outcome::Result("returned-early".to_string()),
         )],
@@ -1508,14 +1596,14 @@ async fn middleware_return_during_pending_underlying_admission_settles_and_repla
     assert_eq!(
         probe_fresh(&fixture, "read", "/public", None).await?,
         ok("read:/public"),
-        "the owner must keep serving new work after replaying the early return"
+        "the owner must keep serving new work after replaying the early exit"
     );
     Ok(())
 }
 
 #[test]
 #[timeout("3m")]
-async fn guest_return_during_pending_ambient_invoke_and_await_admission_settles_and_replays(
+async fn guest_exit_during_pending_ambient_invoke_and_await_admission_settles_and_replays(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_runtime_bypass_owner")] owner: &PrecompiledComponent,
@@ -1532,11 +1620,13 @@ async fn guest_return_during_pending_ambient_invoke_and_await_admission_settles_
         )
         .await?,
     );
+    let mut log = fixture.executor.capture_output(&fixture.owner_id).await?;
+    let finished_before = finished_invocations(&owner_oplog(&fixture).await?);
     // The owner method announces `ambient-starting` and then starts `invoke-and-await`; the
     // admission's activation lookup is the next live tool deployment lookup.
     let mut gate = fixture.deployment_gate.hold_after_ambient_start();
     let key = IdempotencyKey::fresh();
-    let method = "start_permission_probe_and_return";
+    let method = "start_permission_probe_and_exit";
     let call = tokio::spawn({
         let fixture = fixture.clone();
         let key = key.clone();
@@ -1555,9 +1645,13 @@ async fn guest_return_during_pending_ambient_invoke_and_await_admission_settles_
         }
     });
     gate.entered().await?;
-    let oplog = owner_oplog(&fixture).await?;
+    // The owner started the call detached from its task. Its only remaining import before
+    // `task.return` and exit is this log line; the held admission can only be polled again after
+    // the guest yields, which it does by exiting.
+    wait_for_log_marker(&mut log, "ambient-returning").await;
+    assert_unsettled_while_admission_is_held(&fixture, finished_before, &[]).await?;
     assert_eq!(
-        entity_starts(&oplog, PERMISSION_MIDDLEWARE).count(),
+        entity_starts(&owner_oplog(&fixture).await?, PERMISSION_MIDDLEWARE).count(),
         0,
         "the held lookup must precede the admission of the ambient call"
     );
@@ -1568,9 +1662,9 @@ async fn guest_return_during_pending_ambient_invoke_and_await_admission_settles_
         .expect("the owner invocation settles")??;
     assert_eq!(
         result, "returned-early",
-        "the guest must return while the ambient admission is pending"
+        "the guest must exit while the ambient admission is pending"
     );
-    assert_pending_admission_settled(&fixture, 1).await?;
+    assert_pending_admission_settled(&fixture, finished_before).await?;
 
     let history = crash_and_recover(&fixture).await?;
     let replayed = fixture
@@ -1589,7 +1683,227 @@ async fn guest_return_during_pending_ambient_invoke_and_await_admission_settles_
     assert_eq!(
         probe_fresh(&fixture, "read", "/public", None).await?,
         ok("read:/public"),
-        "the owner must keep serving new work after replaying the early return"
+        "the owner must keep serving new work after replaying the early exit"
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+async fn crash_during_an_admitted_call_repairs_it_and_denies_later_descendants(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_runtime_bypass_owner")] owner: &PrecompiledComponent,
+    #[tagged_as("tool_runtime_bypass_provider")] provider: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let fixture =
+        Arc::new(permission_fixture(last_unique_id, deps, owner, provider, Vec::new()).await?);
+    let root = CardId::new();
+    let scope = scope_card(
+        root,
+        vec![
+            concrete_owner_grant(&fixture, "read", "/recover/public"),
+            concrete_owner_grant(&fixture, "read", "/held/public"),
+            concrete_owner_grant(&fixture, "read", "/public"),
+        ],
+        Vec::new(),
+    );
+    let key = IdempotencyKey::fresh();
+    let call = tokio::spawn({
+        let fixture = fixture.clone();
+        let key = key.clone();
+        let scope = scope.clone();
+        async move { probe(&fixture, &key, "read", "/recover/public", Some(scope)).await }
+    });
+    // The leaf of the first Underlying call performs its effect and then waits at a promise.
+    let checkpoint = wait_for_effect(&fixture, "held-ready/").await;
+    assert_eq!(
+        permission_effects(&fixture),
+        vec!["permission/read/held/public"]
+    );
+    let oplog = owner_oplog(&fixture).await?;
+    let leaf = entity_starts(&oplog, PERMISSION_PROBE).collect::<Vec<_>>();
+    assert_eq!(leaf.len(), 1, "the admitted leaf must have a durable Start");
+    assert_eq!(terminal_count(&oplog, leaf[0]), 0);
+
+    // Withdraw the inherited scope that admitted the leaf, then crash mid-execution.
+    revoke_card(&fixture, root).await?;
+    crash_and_recover(&fixture).await?;
+    fixture
+        .executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: fixture.owner_id.clone(),
+                oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
+            },
+            Vec::new(),
+        )
+        .await?;
+    let outcome = match tokio::time::timeout(Duration::from_secs(60), call)
+        .await
+        .expect("the interrupted call settles")?
+    {
+        Ok(outcome) => outcome,
+        Err(_) => probe(&fixture, &key, "read", "/recover/public", Some(scope)).await?,
+    };
+    assert_eq!(
+        outcome,
+        Outcome::Result("first=ok:read:/held/public;second=denied".to_string()),
+        "the recorded admission must complete and the new descendant must be denied"
+    );
+    assert_eq!(
+        permission_effects(&fixture),
+        vec!["permission/read/held/public"],
+        "recovery repeated the leaf effect or admitted the new descendant"
+    );
+    let oplog = owner_oplog(&fixture).await?;
+    assert_eq!(
+        entity_starts(&oplog, PERMISSION_PROBE).collect::<Vec<_>>(),
+        leaf,
+        "recovery must complete the admitted leaf under its original Start"
+    );
+    assert_eq!(terminal_count(&oplog, leaf[0]), 1);
+    assert_eq!(
+        rejection_starts(&oplog).len(),
+        1,
+        "the descendant started after recovery must leave a durable rejection"
+    );
+    assert_eq!(unterminated_entity_starts(&oplog), Vec::new());
+    assert_no_positional_records_after_last_finished(&oplog);
+    Ok(())
+}
+
+/// Invokes a no-argument owner method under `scope` and returns its string result.
+async fn invoke_owner_method_with_scope(
+    fixture: &PermissionFixture,
+    method: &str,
+    scope: &ScopeCard,
+) -> anyhow::Result<String> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+        invocation_session_result,
+    };
+    let (_, input) = data_value!().into_parts();
+    let result = fixture
+        .executor
+        .invoke_agent_session(InvocationStart {
+            agent_id: Some(fixture.owner_id.clone().into()),
+            method_name: Some(method.to_string()),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            mode: AgentInvocationMode::Await as i32,
+            schedule_at: None,
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            component_owner_account_id: Some(fixture.owner_component.account_id.into()),
+            environment_id: Some(fixture.owner_component.environment_id.into()),
+            auth_ctx: Some(fixture.executor.auth_ctx().into()),
+            context: None,
+            principal: None,
+            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
+            scope_card: Some(scope.try_into().map_err(anyhow::Error::msg)?),
+            origin_invocation: None,
+            external_tool: None,
+        })
+        .await?;
+    let Some(invocation_session_result::Result::MethodResult(value)) = result.result else {
+        anyhow::bail!("unexpected owner method result: {:?}", result.result);
+    };
+    match SchemaValue::try_from(value).map_err(anyhow::Error::msg)? {
+        SchemaValue::String(value) => Ok(value),
+        other => anyhow::bail!("unexpected owner method value: {other:?}"),
+    }
+}
+
+/// Tool and middleware code behaves as if it were inlined in the owner agent, so a scope
+/// revocation consumed by a middleware Store must have the same effect on that Store's
+/// Underlying calls as on the owner's later ambient calls. The property is that the two
+/// outcomes are equal, whichever outcome the scope policy selects.
+#[test]
+#[timeout("3m")]
+async fn scope_revocation_consumed_by_middleware_gives_ambient_and_underlying_the_same_outcome(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_runtime_bypass_owner")] owner: &PrecompiledComponent,
+    #[tagged_as("tool_runtime_bypass_provider")] provider: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let fixture = Arc::new(
+        permission_fixture(
+            last_unique_id,
+            deps,
+            owner,
+            provider,
+            vec![
+                owner_grant("read", "/wait-delete/public"),
+                owner_grant("read", "/public"),
+                owner_grant("delete", "/public"),
+            ],
+        )
+        .await?,
+    );
+    let root = CardId::new();
+    let scope = scope_card(
+        root,
+        Vec::new(),
+        vec![concrete_owner_grant(&fixture, "delete", "/public")],
+    );
+    let call = tokio::spawn({
+        let fixture = fixture.clone();
+        let scope = scope.clone();
+        async move {
+            invoke_owner_method_with_scope(&fixture, "underlying_then_ambient_delete", &scope).await
+        }
+    });
+    // The middleware waits at a promise. The revocation is queued while every Store of the owner
+    // is blocked, and the middleware Store consumes it at its Underlying admission.
+    let checkpoint = wait_for_effect(&fixture, "wait-ready/").await;
+    revoke_card(&fixture, root).await?;
+    fixture
+        .executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: fixture.owner_id.clone(),
+                oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
+            },
+            Vec::new(),
+        )
+        .await?;
+    let result = tokio::time::timeout(Duration::from_secs(60), call)
+        .await
+        .expect("the owner invocation settles")??;
+    let (underlying, ambient) = result
+        .strip_prefix("underlying=")
+        .and_then(|rest| rest.split_once(";ambient="))
+        .ok_or_else(|| anyhow::anyhow!("unexpected owner result: {result}"))?;
+    assert_eq!(
+        underlying, ambient,
+        "the middleware Underlying delete and the owner's ambient delete must get the same outcome after the scope revocation"
+    );
+    let deletes = permission_effects(&fixture)
+        .iter()
+        .filter(|effect| *effect == "permission/delete/public")
+        .count();
+    assert_eq!(
+        deletes,
+        if underlying == "ok:delete:/public" {
+            2
+        } else {
+            0
+        },
+        "the provider effects must match the outcomes ({result})"
+    );
+    let oplog = owner_oplog(&fixture).await?;
+    assert!(
+        oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::CardRevokedCascade(params) if params.revoked_card_ids.contains(&root)
+        )),
+        "the scope root revocation must be consumed during the invocation"
+    );
+    assert_eq!(unterminated_entity_starts(&oplog), Vec::new());
     Ok(())
 }

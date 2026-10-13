@@ -391,8 +391,10 @@ fn permission_result(
 /// Rewrites permission-probe calls according to the outer path argument:
 /// `/as-delete<rest>` forwards `delete <rest>`, `/alias<rest>` forwards `read <rest>`,
 /// `/twice<rest>` forwards `read <rest>` before and after a promise checkpoint, and
-/// `/pending<rest>` announces `pending-starting`, then starts `read <rest>` and returns
-/// `returned-early` while that call is still being admitted, without awaiting it. Any other path is
+/// `/wait-delete<rest>` waits at a promise checkpoint and then forwards `delete <rest>`,
+/// `/recover<rest>` forwards `read /held<rest>` and then `read <rest>`, and `/exit<rest>` waits at
+/// a promise checkpoint, starts `read <rest>` detached from the task, logs `exit-returning` and
+/// returns `returned-early` while that call is still being admitted. Any other path is
 /// forwarded unchanged. The result describes the inner outcome instead of propagating it.
 #[universal_tool_middleware(name = "runtime-bypass-permission")]
 async fn permission_layer(
@@ -434,22 +436,119 @@ async fn permission_layer(
         let second = describe_permission_outcome(underlying.invoke(read(), inner, None).await);
         return permission_result(format!("first={first};second={second}"));
     }
-    if let Some(rest) = path.strip_prefix("/pending") {
-        announce("pending-starting").await;
+    if let Some(rest) = path.strip_prefix("/recover") {
+        let held = format!("/held{rest}");
+        let first = describe_permission_outcome(
+            underlying
+                .invoke(read(), with_permission_path(&input, &held), None)
+                .await,
+        );
+        let second = describe_permission_outcome(
+            underlying
+                .invoke(read(), with_permission_path(&input, rest), None)
+                .await,
+        );
+        return permission_result(format!("first={first};second={second}"));
+    }
+    if let Some(rest) = path.strip_prefix("/wait-delete") {
+        let promise = golem_rust::create_promise();
+        announce(&format!("wait-ready/{}", promise.oplog_idx)).await;
+        golem_rust::await_promise(&promise).await;
+        let outcome = underlying
+            .invoke(
+                vec!["delete".to_string()],
+                with_permission_path(&input, rest),
+                None,
+            )
+            .await;
+        return permission_result(describe_permission_outcome(outcome));
+    }
+    if let Some(rest) = path.strip_prefix("/exit") {
+        let promise = golem_rust::create_promise();
+        announce(&format!("exit-ready/{}", promise.oplog_idx)).await;
+        golem_rust::await_promise(&promise).await;
         let inner = with_permission_path(&input, rest);
-        let mut call = Box::pin(async move { underlying.invoke(read(), inner, None).await });
-        let pending = std::future::poll_fn(|context| {
-            std::task::Poll::Ready(call.as_mut().poll(context).is_pending())
-        })
-        .await;
-        if !pending {
-            return permission_result("completed-before-return".to_string());
+        let underlying: &'static UnderlyingTool = Box::leak(Box::new(underlying));
+        if detached::start(underlying.invoke(read(), inner, None)).is_none() {
+            return permission_result("not-pending".to_string());
         }
-        spawn_local(async move {
-            let _ = call.await;
-        });
+        log_marker("exit-returning");
         return permission_result("returned-early".to_string());
     }
     let outcome = underlying.invoke(command_path, input, stdin).await;
     permission_result(describe_permission_outcome(outcome))
+}
+
+/// Starts the first canonical ABI step of an asynchronous import and leaves the call running
+/// without any task-local bookkeeping.
+///
+/// wit-bindgen registers a pending subtask with the current task through the `wasip3_task`
+/// interop ABI, and keeps the task from exiting while a registration is outstanding. This polls
+/// `future` once under a stand-in `wasip3_task` that only records the subtask handle, then leaks
+/// the future and its lowered arguments. The calling task can then return and exit while the
+/// subtask is unresolved, which the Component Model allows. Returns the pending subtask handle,
+/// or `None` when the call completed or did not start during the first poll.
+mod detached {
+    use core::ffi::c_void;
+    use core::future::Future;
+    use core::task::{Context, Waker};
+
+    #[repr(C)]
+    struct Wasip3Task {
+        version: u32,
+        ptr: *mut c_void,
+        waitable_register: unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            unsafe extern "C" fn(*mut c_void, u32),
+            *mut c_void,
+        ) -> *mut c_void,
+        waitable_unregister: unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void,
+    }
+
+    unsafe extern "C" {
+        fn wasip3_task_set(task: *mut Wasip3Task) -> *mut Wasip3Task;
+    }
+
+    unsafe extern "C" fn record_registration(
+        ptr: *mut c_void,
+        waitable: u32,
+        _callback: unsafe extern "C" fn(*mut c_void, u32),
+        _callback_ptr: *mut c_void,
+    ) -> *mut c_void {
+        unsafe { *ptr.cast::<Option<u32>>() = Some(waitable) };
+        core::ptr::null_mut()
+    }
+
+    unsafe extern "C" fn ignore_unregistration(_ptr: *mut c_void, _waitable: u32) -> *mut c_void {
+        core::ptr::null_mut()
+    }
+
+    pub fn start<F: Future>(future: F) -> Option<u32> {
+        let mut future = Box::pin(future);
+        let mut registered: Option<u32> = None;
+        let mut task = Wasip3Task {
+            version: 1,
+            ptr: (&mut registered as *mut Option<u32>).cast(),
+            waitable_register: record_registration,
+            waitable_unregister: ignore_unregistration,
+        };
+        let previous = unsafe { wasip3_task_set(&mut task) };
+        let pending = future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending();
+        unsafe { wasip3_task_set(previous) };
+        core::mem::forget(future);
+        if pending { registered } else { None }
+    }
+}
+
+/// Emits a log line through `wasi:logging`, which does not pass an authority boundary.
+fn log_marker(message: &str) {
+    golem_rust::bindings::wasi::logging::logging::log(
+        golem_rust::bindings::wasi::logging::logging::Level::Info,
+        "permission-probe",
+        message,
+    );
 }

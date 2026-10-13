@@ -103,6 +103,11 @@ struct PermissionProbeImpl;
 impl PermissionProbe for PermissionProbeImpl {
     async fn read(&self, path: String) -> Result<String, ProbeError> {
         announce_effect(&format!("permission/read{path}")).await;
+        if path.starts_with("/held") {
+            let promise = golem_rust::create_promise();
+            announce_effect(&format!("held-ready/{}", promise.oplog_idx)).await;
+            golem_rust::await_promise(&promise).await;
+        }
         Ok(format!("read:{path}"))
     }
 
