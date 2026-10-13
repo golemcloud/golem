@@ -882,6 +882,34 @@ mod tests {
         assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn local_server_retained_repository_key_read_failure_makes_no_replacement_attempt() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let data = tempfile::tempdir().unwrap();
+        let config = config_file("[filesystem_snapshots]\ntype = \"Enabled\"");
+        let key = data.path().join(super::KEY_FILE).into_boxed_path();
+        std::fs::write(&key, [0xff]).unwrap();
+        // A replacement attempt needs a temporary file in the data directory, which a read-only
+        // directory refuses with an error other than the read failure.
+        std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = super::prepare(data.path(), config.path(), None, no_environment());
+        std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = result.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to read the retained repository key"),
+            "{error:#}"
+        );
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::InvalidData,
+        );
+        assert_eq!(std::fs::read(&key).unwrap(), [0xff]);
+        assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
+    }
+
     #[test]
     fn local_server_retained_repository_key_is_the_same_for_concurrent_starts() {
         let data = tempfile::tempdir().unwrap();
