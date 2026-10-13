@@ -42,23 +42,21 @@ use golem_common::model::oplog::public_oplog_entry::{
     SuspendParams, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 
-/// The WIT `start-parameters` carry the invocation id in a `uuid` record: `high-bits` holds the
-/// anchor and `low-bits` the ordinal.
 fn durable_invocation_id_to_wit(
     id: golem_common::base_model::oplog::DurableInvocationId,
-) -> wire::Uuid {
-    wire::Uuid {
-        high_bits: id.anchor.as_u64(),
-        low_bits: id.ordinal,
+) -> oplog::DurableInvocationId {
+    oplog::DurableInvocationId {
+        anchor: id.anchor.as_u64(),
+        ordinal: id.ordinal,
     }
 }
 
 fn durable_invocation_id_from_wit(
-    id: wire::Uuid,
+    id: oplog::DurableInvocationId,
 ) -> golem_common::base_model::oplog::DurableInvocationId {
     golem_common::base_model::oplog::DurableInvocationId::new(
-        golem_common::base_model::OplogIndex::from_u64(id.high_bits),
-        id.low_bits,
+        golem_common::base_model::OplogIndex::from_u64(id.anchor),
+        id.ordinal,
     )
 }
 
