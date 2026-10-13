@@ -16,8 +16,9 @@
 //!
 //! The interface is wired into the linker for every agent component. Tool
 //! discovery is implemented as a durable environment-state read. Tool
-//! invocation authorization is enforced here before the invocation backend,
-//! which is implemented separately on top of sidecar instances.
+//! invocation authorization is enforced here for every admission, including
+//! middleware underlying calls, before the invocation backend, which is
+//! implemented separately on top of sidecar instances.
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
@@ -1245,7 +1246,7 @@ fn caller_tool_owner(
 
 struct PreparedToolCall {
     stdin: Option<Resource<ToolStdinEntry>>,
-    permit: Option<LiveAuthorizationPermit>,
+    permit: LiveAuthorizationPermit,
     operation: operation::ProvisionalOwnerToolOperation,
     plan: EntityInvocationPlanReference,
 }
@@ -1870,71 +1871,89 @@ where
         }
     };
 
-    let permit = if let ToolCallTarget::Ambient(rpc) = &target {
-        let permission_target = accessor.with(|mut access| {
-            let component = access.get().owner_component_metadata();
-            let owner = caller_tool_owner(
-                &component.account_email,
-                &component.application_name,
-                &component.environment_name,
-                &component.component_name,
-                &rpc.tool_name,
-            );
-            let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
-            tool_target(
-                owner,
-                &command_path,
-                descriptor.args.clone(),
-                Some(&effective_definition),
-            )
-        });
-        let permission_target = match permission_target {
-            Ok(target) => target,
-            Err(error) => {
-                return Ok(rejected_tool_call(
-                    &tool_name,
-                    attempt_ordinal,
-                    &command_path,
-                    Some(input),
-                    None,
-                    has_stdin,
-                    stdout_requested,
-                    stderr_requested,
-                    call_mode,
-                    SerializableToolRpcError::ProtocolError(error.to_string()),
-                    stdin,
-                ));
-            }
-        };
-        Some(
-            match authorize_live_permissions_at_serialized_access(
-                accessor,
-                accessor.getter(),
-                &[permission_target],
-            )
-            .await?
-            {
-                Ok(permit) => permit,
-                Err(error) => {
-                    return Ok(rejected_tool_call(
-                        &tool_name,
-                        attempt_ordinal,
-                        &command_path,
-                        Some(input),
-                        None,
-                        has_stdin,
-                        stdout_requested,
-                        stderr_requested,
-                        call_mode,
-                        SerializableToolRpcError::Denied(error.to_string()),
-                        stdin,
-                    ));
-                }
-            },
+    // Every live admission is authorized, including middleware `Underlying` calls: the
+    // capability only makes the next layer reachable, so the command and arguments that layer
+    // receives after boundary projection must also be permitted under the logical tool name.
+    let permission_target = accessor.with(|mut access| {
+        let component = access.get().owner_component_metadata();
+        let owner = caller_tool_owner(
+            &component.account_email,
+            &component.application_name,
+            &component.environment_name,
+            &component.component_name,
+            &tool_name,
+        );
+        let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
+        tool_target(
+            owner,
+            &command_path,
+            descriptor.args.clone(),
+            Some(&effective_definition),
         )
-    } else {
-        None
+    });
+    let permission_target = match permission_target {
+        Ok(target) => target,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::ProtocolError(error.to_string()),
+                stdin,
+            ));
+        }
     };
+    let permit = match authorize_live_permissions_at_serialized_access(
+        accessor,
+        accessor.getter(),
+        &[permission_target],
+    )
+    .await?
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::Denied(error.to_string()),
+                stdin,
+            ));
+        }
+    };
+
+    // Authorization may await, and the middleware handler can return in the meantime. The
+    // capability must still be active when the child operation is registered, which is the
+    // admission point; a use that loses this race is rejected, never admitted after revocation.
+    if let ToolCallTarget::Underlying(underlying) = &target
+        && let Err(error) = underlying.admit()
+    {
+        return Ok(rejected_tool_call(
+            &tool_name,
+            attempt_ordinal,
+            &command_path,
+            Some(input),
+            None,
+            has_stdin,
+            stdout_requested,
+            stderr_requested,
+            call_mode,
+            SerializableToolRpcError::Denied(error.to_string()),
+            stdin,
+        ));
+    }
 
     let descriptor = EntityInvocationDescriptor::Tool(descriptor);
     let operation = accessor.with(|mut access| {
@@ -4471,6 +4490,21 @@ where
     .await
 }
 
+/// Counts a guest tool admission as tail work without depending on the guest scheduler to keep
+/// its task alive. Supported SDK runtimes retain or cancel pending imports before normal task
+/// exit; this guard also defends admission ordering for raw-ABI or custom-scheduler guests.
+/// Every guest admission entry point holds the returned activity until that handoff, and drops it
+/// before awaiting the execution result, which may wait for the parent's end.
+fn tool_admission_activity<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> crate::durable_host::tail_work::TailActivity
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    accessor.with(|mut access| access.get().tail_work_tracker().activity())
+}
+
 async fn release_capable_tool_cohort<U, D, Ctx>(
     accessor: &Accessor<U, D>,
     get_ctx: fn(&mut U) -> &mut DurableWorkerCtx<Ctx>,
@@ -5360,6 +5394,7 @@ where
     let stdin_rep = stdin.as_ref().map(Resource::rep);
     let stdout_rep = stdout.as_ref().map(Resource::rep);
     let stderr_rep = stderr.as_ref().map(Resource::rep);
+    let admission_activity = tool_admission_activity(accessor);
     let dispatch = dispatch_tool_call(
         accessor,
         ToolCallTarget::Ambient(rpc),
@@ -5386,6 +5421,7 @@ where
             }
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
+                drop(admission_activity);
                 let mut results =
                     await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
                 results.pop().expect("one tool invocation has one result")
@@ -6180,6 +6216,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             (None, None)
         };
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_attempt(
             accessor,
             attempt,
@@ -6209,6 +6246,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
                 spawn_tool_execution(accessor, *accepted, stdout, stderr).await?,
             ),
         };
+        drop(admission_activity);
         let result = accessor.with(|mut access| {
             access.get().table().push(UnderlyingInvokeResultEntry {
                 state,
@@ -6345,6 +6383,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let rpc = tool_rpc_resource(accessor, &self_)?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),
@@ -6415,6 +6454,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         let stdin_rep = stdin.as_ref().map(Resource::rep);
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let _admission_activity = tool_admission_activity(accessor);
         let dispatch = dispatch_tool_call(
             accessor,
             ToolCallTarget::Ambient(rpc),

@@ -563,8 +563,13 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let owner =
-            store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
+        let (owner, invocation_scope_card) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.owned_agent_id.clone(),
+                ctx.current_invocation_scope_card(),
+            )
+        });
         let calling_principal = Principal::Agent(AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         });
@@ -634,6 +639,7 @@ impl EntityInvocationDurability {
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(metadata.authority_wallet)
+        .with_invocation_scope_card(invocation_scope_card)
         .with_span_started(span_started);
         Ok(Self {
             handle,
@@ -744,6 +750,7 @@ impl EntityInvocationDurability {
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(scope.authority_wallet().to_vec())
+        .with_invocation_scope_card(scope.invocation_scope_card().cloned())
         .with_span_started(
             scope
                 .span_started()
