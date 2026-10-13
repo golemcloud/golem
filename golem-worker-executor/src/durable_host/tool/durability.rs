@@ -30,7 +30,48 @@ use golem_common::model::oplog::{
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::future::Future;
 use std::pin::Pin;
-use wasmtime::component::{Accessor, HasSelf};
+use wasmtime::component::{Accessor, AccessorTask, HasData, HasSelf};
+
+struct RestoreAttachmentWrite {
+    writer: AttachmentWriter,
+    bytes: Vec<u8>,
+    start: golem_common::model::OplogIndex,
+    replay: crate::durable_host::replay_state::ReplayState,
+    activity: crate::durable_host::tail_work::TailActivity,
+    permit: crate::durable_host::concurrent::LiveCallPermit,
+    result: tokio::sync::oneshot::Sender<Result<(), WorkerExecutorError>>,
+}
+
+impl<U: 'static, D: HasData> AccessorTask<U, D> for RestoreAttachmentWrite {
+    async fn run(self, _accessor: &Accessor<U, D>) -> wasmtime::Result<()> {
+        let _activity = self.activity;
+        let _permit = self.permit;
+        let result = async {
+            let source = self
+                .replay
+                .await_tool_attachment_acceptance(self.start)
+                .await?;
+            self.replay
+                .validate_tool_attachment_regenerated_bytes(source, &self.bytes)
+                .await?;
+            self.writer
+                .restore_write(self.bytes, source)
+                .await
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "cannot restore accepted attachment at {}: {error}",
+                        self.start
+                    ))
+                })?;
+            self.replay
+                .complete_tool_attachment_reconstruction(self.start);
+            Ok::<_, WorkerExecutorError>(())
+        }
+        .await;
+        let _ = self.result.send(result.clone());
+        result.map_err(Into::into)
+    }
+}
 
 pub(super) async fn write<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
@@ -95,28 +136,23 @@ where
                     "invalid tool output write outcome at {start}"
                 );
                 if response.outcome == ToolAttachmentWriteOutcome::Accepted {
-                    let source_end = accessor.with(|mut access| {
-                        access
-                            .get()
-                            .state
-                            .replay_state
-                            .accepted_tool_attachment_write_end(start)
-                    })?;
-                    writer
-                        .restore_write(bytes, source_end)
-                        .await
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "cannot restore accepted tool output at {start}: {error:?}"
-                            )
-                        })?;
-                    accessor.with(|mut access| {
-                        access
-                            .get()
-                            .state
-                            .replay_state
-                            .complete_tool_attachment_reconstruction(start)
+                    let (result, restored) = tokio::sync::oneshot::channel();
+                    let task = accessor.with(|mut access| {
+                        let ctx = access.get();
+                        RestoreAttachmentWrite {
+                            writer,
+                            bytes,
+                            start,
+                            replay: ctx.state.replay_state.clone(),
+                            activity: ctx.tail_work_tracker().activity(),
+                            permit: crate::durable_host::concurrent::LiveCallPermit::new(
+                                ctx.state.live_host_call_counter(),
+                            ),
+                            result,
+                        }
                     });
+                    accessor.spawn(task);
+                    restored.await??;
                 } else if response.outcome == ToolAttachmentWriteOutcome::HostResourceExhausted {
                     let end = accessor.with(|mut access| {
                         access
@@ -536,7 +572,7 @@ where
     Ok(result)
 }
 
-fn failure_to_model(failure: &ByteStreamFailure) -> model::ByteStreamFailure {
+pub(super) fn failure_to_model(failure: &ByteStreamFailure) -> model::ByteStreamFailure {
     match failure {
         ByteStreamFailure::Cancelled => model::ByteStreamFailure::Cancelled,
         ByteStreamFailure::Abandoned => model::ByteStreamFailure::Abandoned,
@@ -665,12 +701,16 @@ fn cause_from_model(cause: model::ByteStreamCloseCause) -> ByteStreamCloseCause 
         model::ByteStreamCloseCause::Finished => ByteStreamCloseCause::Finished,
         model::ByteStreamCloseCause::ConsumerCancelled => ByteStreamCloseCause::ConsumerCancelled,
         model::ByteStreamCloseCause::Failed(failure) => {
-            ByteStreamCloseCause::Failed(match failure {
-                model::ByteStreamFailure::Cancelled => ByteStreamFailure::Cancelled,
-                model::ByteStreamFailure::Abandoned => ByteStreamFailure::Abandoned,
-                model::ByteStreamFailure::ResourceExhausted => ByteStreamFailure::ResourceExhausted,
-                model::ByteStreamFailure::Failed(message) => ByteStreamFailure::Failed(message),
-            })
+            ByteStreamCloseCause::Failed(failure_from_model(failure))
         }
+    }
+}
+
+pub(super) fn failure_from_model(failure: model::ByteStreamFailure) -> ByteStreamFailure {
+    match failure {
+        model::ByteStreamFailure::Cancelled => ByteStreamFailure::Cancelled,
+        model::ByteStreamFailure::Abandoned => ByteStreamFailure::Abandoned,
+        model::ByteStreamFailure::ResourceExhausted => ByteStreamFailure::ResourceExhausted,
+        model::ByteStreamFailure::Failed(message) => ByteStreamFailure::Failed(message),
     }
 }

@@ -712,7 +712,8 @@ pub trait ToolStreamingCaller {
     async fn direct_stdin_write_order(&self) -> Vec<String>;
     async fn identical_stdin_write_order(&self) -> Vec<String>;
     async fn identical_stdin_wait_order(&self) -> Vec<String>;
-    async fn retain_tool_output(&self, cancel_read: bool);
+    async fn retain_tool_output(&self, cancel_read: bool, cancel_ready: bool);
+    async fn retain_failed_tool_output(&self);
     async fn consume_retained_tool_output(&self) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
@@ -3690,7 +3691,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         output
     }
 
-    async fn retain_tool_output(&self, cancel_read: bool) {
+    async fn retain_tool_output(&self, cancel_read: bool, cancel_ready: bool) {
         use std::future::{Future, poll_fn};
         use std::task::Poll;
 
@@ -3730,6 +3731,45 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         raw_result(&invocation)
             .await
             .expect("complete producer before retaining its output");
+        if cancel_ready {
+            let mut pending = Box::pin(stdout.read(Vec::with_capacity(1)));
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            let (status, bytes) = pending.as_mut().cancel();
+            assert_eq!(format!("{status:?}"), "Cancelled");
+            assert!(bytes.is_empty());
+            drop(pending);
+        }
+        *self.retained_output.borrow_mut() = Some(stdout);
+    }
+
+    async fn retain_failed_tool_output(&self) {
+        assert!(self.retained_output.borrow().is_none());
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("stream-failure-success"),
+            Some(raw_stdin(Vec::new())),
+            Some(target),
+            None,
+        );
+        let mut bytes = Vec::new();
+        loop {
+            match stdout.next().await {
+                Some(Ok(chunk)) => bytes.extend(chunk),
+                Some(Err(ByteStreamFailure::Failed(message))) => {
+                    assert_eq!(message, "stream producer failed");
+                    break;
+                }
+                other => panic!("expected provider failure, got {other:?}"),
+            }
+        }
+        assert_eq!(bytes, b"marker:");
+        raw_result(&invocation).await.expect("tool result succeeds");
         *self.retained_output.borrow_mut() = Some(stdout);
     }
 

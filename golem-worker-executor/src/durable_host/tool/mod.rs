@@ -22,6 +22,7 @@
 pub(crate) mod attachment;
 pub(crate) mod boundary;
 mod durability;
+mod input;
 mod mcp;
 pub(crate) mod operation;
 mod streams;
@@ -6259,7 +6260,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 producer: Some(producer),
                 completion_only: false,
             })?;
-            match StreamReader::new(&mut access, consumer.into_stream_producer()) {
+            let input = input::AttachmentInputProducer::new(consumer, accessor.getter(), ctx)?;
+            match StreamReader::new(&mut access, input) {
                 Ok(reader) => Ok((target, reader)),
                 Err(error) => {
                     access.get().table().delete(target)?;

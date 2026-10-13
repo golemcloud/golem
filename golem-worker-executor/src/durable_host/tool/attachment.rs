@@ -19,7 +19,7 @@ use crate::services::active_agents::{ActiveAgents, MemoryGrant};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::attachment::{AcceptedAttachmentWriteEnd, ToolAttachmentId};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -394,6 +394,8 @@ struct AttachmentState {
     identity: Option<ToolAttachmentId>,
     mode: AttachmentMode,
     chunks: VecDeque<BufferedChunk>,
+    observed_writes: BTreeSet<golem_common::model::OplogIndex>,
+    observed_terminal: Option<golem_common::model::OplogIndex>,
     buffered_bytes: usize,
     accepted_completion_bytes: usize,
     accepted_bytes: u64,
@@ -430,6 +432,8 @@ impl ByteAttachment {
                 identity: None,
                 mode: AttachmentMode::Pending,
                 chunks: VecDeque::new(),
+                observed_writes: BTreeSet::new(),
+                observed_terminal: None,
                 buffered_bytes: 0,
                 accepted_completion_bytes: 0,
                 accepted_bytes: 0,
@@ -459,6 +463,8 @@ impl ByteAttachment {
                 identity: None,
                 mode: AttachmentMode::Discard,
                 chunks: VecDeque::new(),
+                observed_writes: BTreeSet::new(),
+                observed_terminal: None,
                 buffered_bytes: 0,
                 accepted_completion_bytes: 0,
                 accepted_bytes: 0,
@@ -1373,7 +1379,7 @@ impl AttachmentWriter {
         // The recorded selection, not resident endpoint timing, owns the replay transition.
         state.terminal = Some(cause);
         state.terminal_pending = false;
-        state.terminal_item_delivered = false;
+        state.terminal_item_delivered = state.observed_terminal == Some(end);
         state.host_resource_exhausted = host_resource_exhausted;
         state.terminal_end = Some(end);
         let reader = state.reader_waker.take();
@@ -1407,8 +1413,59 @@ impl AttachmentWriter {
         &self,
         bytes: Vec<u8>,
         source_end: AcceptedAttachmentWriteEnd,
-    ) -> Result<(), StreamWriteError> {
-        self.attachment.write(bytes, Some(source_end)).await
+    ) -> anyhow::Result<()> {
+        let attachment = &self.attachment;
+        {
+            let mut state = attachment.state.lock().unwrap();
+            state.accepted_bytes = state.accepted_bytes.saturating_add(bytes.len() as u64);
+            if matches!(
+                state.mode,
+                AttachmentMode::Pending | AttachmentMode::Completion { .. }
+            ) {
+                state.accepted_completion_bytes += bytes.len();
+            }
+            if state.observed_writes.contains(&source_end.0) {
+                return Ok(());
+            }
+        }
+        let bytes = bytes.into_boxed_slice().into_vec();
+        let AttachmentReservationOutcome::Reserved(reservation) =
+            attachment.memory.reserve(bytes.len()).await
+        else {
+            anyhow::bail!("historical attachment memory admission is not available");
+        };
+        let charge = AttachmentCharge::new(reservation, attachment.charged_bytes.clone());
+        let mut state = attachment.state.lock().unwrap();
+        if state.observed_writes.contains(&source_end.0) {
+            return Ok(());
+        }
+        anyhow::ensure!(!state.owner_fenced, "historical attachment owner is fenced");
+        anyhow::ensure!(
+            state.buffered_bytes.saturating_add(bytes.len()) <= attachment.limit.saturating_mul(2),
+            "historical attachment exceeds its queue and offered-item bound"
+        );
+        let position = state
+            .chunks
+            .iter()
+            .position(|chunk| chunk.source_end.is_some_and(|end| end.0 > source_end.0))
+            .unwrap_or(state.chunks.len());
+        state.buffered_bytes += bytes.len();
+        state.chunks.insert(
+            position,
+            BufferedChunk {
+                bytes,
+                charge,
+                published: Arc::new(AtomicBool::new(true)),
+                source_end: Some(source_end),
+            },
+        );
+        let reader = state.reader_waker.take();
+        drop(state);
+        attachment.changed.notify_waiters();
+        if let Some(reader) = reader {
+            reader.wake();
+        }
+        Ok(())
     }
 
     pub(crate) fn finish(&self) -> Result<(), StreamWriteError> {
@@ -1576,6 +1633,29 @@ pub(crate) struct AttachmentController {
 }
 
 impl AttachmentController {
+    pub(super) fn observe_terminal(&self, end: golem_common::model::OplogIndex) {
+        let mut state = self.attachment.state.lock().unwrap();
+        state.observed_terminal = Some(end);
+        if state.terminal_end == Some(end) {
+            state.terminal_item_delivered = true;
+        }
+    }
+
+    pub(super) fn observe_write(&self, end: AcceptedAttachmentWriteEnd) {
+        let mut state = self.attachment.state.lock().unwrap();
+        state.observed_writes.insert(end.0);
+        if let Some(position) = state
+            .chunks
+            .iter()
+            .position(|chunk| chunk.source_end == Some(end))
+        {
+            let chunk = state.chunks.remove(position).unwrap();
+            state.buffered_bytes -= chunk.bytes.len();
+        }
+        drop(state);
+        self.attachment.changed.notify_waiters();
+    }
+
     pub(crate) async fn prepare_live_memory_accounting(&self) -> bool {
         self.attachment.prepare_live_memory_accounting().await
     }

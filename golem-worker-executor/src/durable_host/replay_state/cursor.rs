@@ -2681,6 +2681,76 @@ impl ReplayState {
             })
     }
 
+    pub(crate) async fn validate_tool_attachment_regenerated_bytes(
+        &self,
+        source: golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+        bytes: &[u8],
+    ) -> Result<(), WorkerExecutorError> {
+        use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
+        let reads: Vec<_> = self.cursor.tool_attachment_reconstruction.lock().unwrap()
+            .history.observations.iter().filter_map(|(index, read)| {
+                (read.reobserves.is_none() && matches!(read.outcome,
+                    ToolAttachmentReadOutcome::TypedChunk(end) | ToolAttachmentReadOutcome::RawBytes { end, .. } if end == source
+                )).then_some(*index)
+            }).collect();
+        for index in reads {
+            let (_, read, payload) = self.hydrate_tool_attachment_observation(index).await?;
+            let expected = match read.outcome {
+                ToolAttachmentReadOutcome::TypedChunk(_) => Some(bytes),
+                ToolAttachmentReadOutcome::RawBytes { offset, length, .. } => {
+                    usize::try_from(offset)
+                        .ok()
+                        .zip(usize::try_from(length).ok())
+                        .and_then(|(offset, length)| {
+                            offset
+                                .checked_add(length)
+                                .and_then(|end| bytes.get(offset..end))
+                        })
+                }
+                _ => unreachable!(),
+            };
+            if expected.is_none() || payload.as_deref() != expected {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "recorded attachment bytes equal regenerated source range",
+                    format!(
+                        "attachment observation at {index} differs from accepted write at {}",
+                        source.0
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Prefetched terminals identify outcomes, but do not authorize their resident effects.
+    pub(crate) async fn await_tool_attachment_acceptance(
+        &self,
+        start: OplogIndex,
+    ) -> Result<
+        golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+        WorkerExecutorError,
+    > {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let end = self.accepted_tool_attachment_write_end(start)?;
+            self.run_owned_cursor_op(move |state| async move {
+                state
+                    .with_tx(async |tx| {
+                        tx.try_get_oplog_entry(|_| false).await?;
+                        Ok(())
+                    })
+                    .await
+            })
+            .await?;
+            if self.last_replayed_index() >= end.0 {
+                return Ok(end);
+            }
+            progress.await;
+        }
+    }
+
     /// Marks an accepted output write's regenerated arguments validated and its resident
     /// output restored. This must precede the write's acknowledgment delivery gate.
     pub fn complete_tool_attachment_reconstruction(&self, start: OplogIndex) {

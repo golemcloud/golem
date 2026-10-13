@@ -7651,6 +7651,29 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+    use golem_common::model::oplog::attachment::ToolAttachmentReadObservation;
+
+    let primary_reads = |entries: &[PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::ToolAttachmentRead(read) => {
+                    let observation =
+                        ToolAttachmentReadObservation::from_value(read.observation.value())
+                            .expect("decode attachment observation");
+                    matches!(
+                        observation.observation,
+                        StreamConsumerObservation::Guest {
+                            parent_start_index: None
+                        }
+                    )
+                    .then_some((observation, read.payload.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
@@ -7688,11 +7711,11 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
             metadata.tools,
         )),
     );
-    for cancel_read in [false, true] {
+    for (cancel_read, cancel_ready) in [(false, false), (true, false), (false, true)] {
         for crash_before_read in [false, true] {
             let agent = agent_id!(
                 "ToolStreamingCaller",
-                format!("retained-output-{cancel_read}-{crash_before_read}")
+                format!("retained-output-{cancel_read}-{cancel_ready}-{crash_before_read}")
             );
             let worker = executor
                 .start_agent(&caller_component.id, agent.clone())
@@ -7702,9 +7725,17 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
                     &caller_component,
                     &agent,
                     "retain_tool_output",
-                    data_value!(cancel_read),
+                    data_value!(cancel_read, cancel_ready),
                 )
                 .await?;
+            let retained = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            let reads = primary_reads(&retained);
+            assert_eq!(
+                reads.len(),
+                1,
+                "only the consumed marker owns a read record"
+            );
+            assert_eq!(reads[0].1.as_deref(), Some(b"marker:".as_slice()));
             if crash_before_read {
                 drop(executor);
                 executor = start_with_overrides(deps, &context, overrides.clone()).await?;
@@ -7740,8 +7771,74 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
                 PublicOplogEntry::Start(params)
                     if params.function_name == "golem::tool::streams::tool-output-writer::write"
             )).count(), 3, "reconstruction must retain the original output writes");
+            let reads = primary_reads(&oplog);
+            assert_eq!(reads.len(), 4, "three consumed chunks and one EOF");
+            assert_eq!(
+                reads.iter().map(|read| read.1.clone()).collect::<Vec<_>>(),
+                vec![
+                    Some(b"marker:".to_vec()),
+                    Some(vec![0, 255, 19]),
+                    Some(b"retained-tail".to_vec()),
+                    None,
+                ]
+            );
+            for (ordinal, (read, _)) in reads.iter().enumerate() {
+                assert_eq!(read.ordinal, ordinal as u64);
+                assert_eq!(read.logical_invocation, reads[0].0.logical_invocation);
+                assert!(read.reobserves.is_none());
+            }
             executor.delete_worker(&worker).await?;
         }
+    }
+    for crash_before_eof in [false, true] {
+        let agent = agent_id!(
+            "ToolStreamingCaller",
+            format!("retained-error-{crash_before_eof}")
+        );
+        let worker = executor
+            .start_agent(&caller_component.id, agent.clone())
+            .await?;
+        executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "retain_failed_tool_output",
+                data_value!(),
+            )
+            .await?;
+        if crash_before_eof {
+            drop(executor);
+            executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+            assert_eq!(executor.instance_load_count(&worker), 0);
+        }
+        let bytes: Vec<u8> = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "consume_retained_tool_output",
+                data_value!(),
+            )
+            .await?
+            .into_typed()?;
+        assert!(
+            bytes.is_empty(),
+            "a consumed failure must be followed by EOF"
+        );
+        let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let reads = primary_reads(&oplog);
+        use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
+        assert_eq!(
+            reads
+                .iter()
+                .filter(|(read, _)| matches!(read.outcome, ToolAttachmentReadOutcome::Error { .. }))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            reads.last().unwrap().0.outcome,
+            ToolAttachmentReadOutcome::Eof { .. }
+        ));
+        executor.delete_worker(&worker).await?;
     }
     Ok(())
 }

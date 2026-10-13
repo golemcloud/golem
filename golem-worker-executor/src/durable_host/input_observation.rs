@@ -68,38 +68,47 @@ impl InputObservationDelivery {
             },
             outcome = prepare => outcome?,
         };
-        let observer: InputReadObserver = Box::new(move |consumption| {
-            if consumption == TerminalConsumption::NotDelivered {
-                if let Some(barrier) = barrier {
+        let observer: InputReadObserver = if let Some(barrier) = barrier {
+            Box::new(move |consumption| {
+                let _ownership = (self.activity, self.live_call_permit, settled);
+                if consumption == TerminalConsumption::NotDelivered {
                     barrier.fail(
                         "cancelled native stream read cannot retain its recorded guest delivery",
                     );
                     return Err(self.replay.fail_stream_observation(recorded_index.unwrap()));
                 }
-                return Ok(());
-            }
-            if let Some(barrier) = barrier {
                 barrier.acknowledge();
-                return Ok(());
-            }
-            let receipt = prepared.unwrap()();
-            let (done, receiver) = oneshot::channel();
-            tokio::spawn(async move {
-                let outcome = match receipt {
-                    Ok(receipt) => receipt.await,
-                    Err(error) => Err(error),
-                };
-                drop(self.activity);
-                let _ = done.send(outcome);
-                let _ = settled.send(());
-            });
-            let _ = self.cleanup_sink.send(DropEvent::AwaitCompletionMarker {
-                receipt: Some(MarkerReceipt::pending(receiver)),
-                trap_context: self.trap_context,
-                live_call_permit: Some(self.live_call_permit),
-            });
-            Ok(())
-        });
+                Ok(())
+            })
+        } else {
+            // Preparation is complete. Only future guest demand can reserve the append;
+            // retaining an unconsumed item must not prevent invocation settlement.
+            let tracker = self.activity.tracker();
+            drop(self.activity);
+            Box::new(move |consumption| {
+                if consumption == TerminalConsumption::NotDelivered {
+                    return Ok(());
+                }
+                let activity = tracker.activity();
+                let receipt = prepared.unwrap()();
+                let (done, receiver) = oneshot::channel();
+                tokio::spawn(async move {
+                    let outcome = match receipt {
+                        Ok(receipt) => receipt.await,
+                        Err(error) => Err(error),
+                    };
+                    drop(activity);
+                    let _ = done.send(outcome);
+                    let _ = settled.send(());
+                });
+                let _ = self.cleanup_sink.send(DropEvent::AwaitCompletionMarker {
+                    receipt: Some(MarkerReceipt::pending(receiver)),
+                    trap_context: self.trap_context,
+                    live_call_permit: Some(self.live_call_permit),
+                });
+                Ok(())
+            })
+        };
         match result.send(Ok(observer)) {
             Err(Ok(observer)) if !(self.runtime_teardown)() => {
                 observer(TerminalConsumption::NotDelivered)?;
