@@ -198,12 +198,18 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
         operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 7,
             command_path: vec!["files".to_string(), "search".to_string()],
-            args: crate::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["--ignore-case", "needle"],
-            )
-            .unwrap()
-            .args,
+            args: vec![
+                crate::model::card::ToolArgPattern::LongFlag {
+                    name: crate::model::card::ToolIdentifier("ignore-case".into()),
+                    value: None,
+                },
+                crate::model::card::ToolArgPattern::Positional(
+                    crate::model::card::ToolInvocationValue::Literal("needle".into()),
+                ),
+                crate::model::card::ToolArgPattern::Positional(
+                    crate::model::card::ToolInvocationValue::Opaque,
+                ),
+            ],
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
@@ -443,12 +449,10 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
         operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 7,
             command_path: vec!["files".to_string(), "search".to_string()],
-            args: crate::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["--recorded-rendering"],
-            )
-            .unwrap()
-            .args,
+            args: vec![crate::model::card::ToolArgPattern::LongFlag {
+                name: crate::model::card::ToolIdentifier("recorded-rendering".into()),
+                value: None,
+            }],
             has_stdin: true,
             has_stdout: false,
             declares_stdout: false,
@@ -480,10 +484,10 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
     };
     let mut differently_pinned = request.clone();
     let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
-    descriptor.args =
-        crate::model::card::ToolInvocationPattern::from_command_and_args(&[], &["--new-rendering"])
-            .unwrap()
-            .args;
+    descriptor.args = vec![crate::model::card::ToolArgPattern::LongFlag {
+        name: crate::model::card::ToolIdentifier("new-rendering".into()),
+        value: None,
+    }];
     descriptor.declares_stdout = true;
     descriptor.declares_stderr = true;
 

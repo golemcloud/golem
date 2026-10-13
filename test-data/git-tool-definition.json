@@ -1,0 +1,1759 @@
+{
+  "version": "0.1.10",
+  "requires_filesystem": true,
+  "commands": {
+    "nodes": [
+      {
+        "name": "git",
+        "aliases": [],
+        "doc": {
+          "summary": "Run local Git workflows.",
+          "description": "A local-only Git command subset backed by isomorphic-git. Supports repository inspection, staging, commits, branches, checkout, and local identity configuration. It never fetches, pulls, pushes, or opens a remote. The shared tool interface requires long names for short-only Git options and accepts inherited -C after a subcommand. Called from a shell it starts in the shell's current directory; any other caller starts at / unless it passes --cwd.",
+          "examples": [
+            {
+              "title": "Inspect a repository",
+              "body": "git -C workspace status --short"
+            },
+            {
+              "title": "Work in the shell's directory",
+              "body": "cd workspace\ngit status --short"
+            },
+            {
+              "title": "Stage and commit a path",
+              "body": "git -C workspace add -- src/main.ts\ngit -C workspace commit -m \"Update main\""
+            }
+          ]
+        },
+        "globals": {
+          "options": [
+            {
+              "long": "cwd",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Directory the caller is in.",
+                "description": "Where Git starts before any -C is applied. A shell supplies its current directory; other callers start at /.",
+                "examples": []
+              },
+              "value_name": "PATH",
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "string",
+                  "value": {}
+                }
+              },
+              "default": {
+                "kind": "string",
+                "value": "/"
+              },
+              "required": false,
+              "env_var": "PWD"
+            },
+            {
+              "long": "working-directory",
+              "short": "C",
+              "aliases": [],
+              "doc": {
+                "summary": "Run as if Git started in PATH.",
+                "description": "May be repeated. Each relative PATH is resolved from the result of the previous -C, matching Git; the first one from the directory the caller is in.",
+                "examples": []
+              },
+              "value_name": "PATH",
+              "shape": {
+                "kind": "repeatable-list",
+                "value": {
+                  "repetition": {
+                    "kind": "repeated"
+                  },
+                  "item_type": {
+                    "kind": "string",
+                    "value": {}
+                  }
+                }
+              },
+              "default": null,
+              "required": false,
+              "env_var": null
+            }
+          ],
+          "flags": []
+        },
+        "subcommands": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "body": null
+      },
+      {
+        "name": "init",
+        "aliases": [],
+        "doc": {
+          "summary": "Create an empty repository.",
+          "description": "Creates a normal working-tree repository in the selected directory.",
+          "examples": [
+            {
+              "title": "Initialize",
+              "body": "git init -b main workspace"
+            }
+          ]
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [
+              {
+                "name": "directory",
+                "doc": {
+                  "summary": "Directory to initialize; defaults to the effective working directory.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "DIRECTORY",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              }
+            ],
+            "tail": null
+          },
+          "options": [
+            {
+              "long": "initial-branch",
+              "short": "b",
+              "aliases": [],
+              "doc": {
+                "summary": "Name the initial branch.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "BRANCH",
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "string",
+                  "value": {}
+                }
+              },
+              "default": null,
+              "required": false,
+              "env_var": null
+            }
+          ],
+          "flags": [],
+          "constraints": [],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "summary",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  },
+                  {
+                    "name": "paths",
+                    "body": {
+                      "kind": "list",
+                      "value": {
+                        "element": {
+                          "kind": "string",
+                          "value": {}
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": false,
+            "destructive": false,
+            "idempotent": true,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "status",
+        "aliases": [],
+        "doc": {
+          "summary": "Show index and worktree changes.",
+          "description": "Returns structured entries plus Git porcelain-v1 output. Paths are literal paths, not pathspec expressions.",
+          "examples": []
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [],
+            "tail": {
+              "name": "paths",
+              "doc": {
+                "summary": "Limit status to literal repository paths.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "PATH",
+              "item_type": {
+                "kind": "string",
+                "value": {}
+              },
+              "min": 0,
+              "max": null,
+              "separator": null,
+              "verbatim": false,
+              "accepts_stdio": false
+            }
+          },
+          "options": [
+            {
+              "long": "porcelain",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Use stable porcelain output. Only v1 is supported.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "VERSION",
+              "shape": {
+                "kind": "optional-scalar",
+                "value": {
+                  "kind": "string",
+                  "value": {}
+                }
+              },
+              "default": {
+                "kind": "string",
+                "value": "v1"
+              },
+              "required": false,
+              "env_var": null
+            }
+          ],
+          "flags": [
+            {
+              "long": "short",
+              "short": "s",
+              "aliases": [],
+              "doc": {
+                "summary": "Request compact status output.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            },
+            {
+              "long": "null",
+              "short": "z",
+              "aliases": [],
+              "doc": {
+                "summary": "Terminate output records with NUL.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "entries",
+                    "body": {
+                      "kind": "list",
+                      "value": {
+                        "element": {
+                          "kind": "record",
+                          "value": {
+                            "fields": [
+                              {
+                                "name": "path",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              },
+                              {
+                                "name": "index",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              },
+                              {
+                                "name": "worktree",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              },
+                              {
+                                "name": "code",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "stdout",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": true,
+            "destructive": false,
+            "idempotent": true,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "diff",
+        "aliases": [],
+        "doc": {
+          "summary": "Compare repository snapshots.",
+          "description": "With no references, compares the index to the worktree. --cached compares HEAD to the index. One reference compares that tree to the worktree; two compare tree to tree. Output limits fail explicitly rather than truncate patches.",
+          "examples": [
+            {
+              "title": "Staged changes",
+              "body": "git diff --cached"
+            },
+            {
+              "title": "One path",
+              "body": "git diff -- src/main.ts"
+            }
+          ]
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [
+              {
+                "name": "from",
+                "doc": {
+                  "summary": "Starting branch, tag, HEAD, or full object ID.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "FROM",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              },
+              {
+                "name": "to",
+                "doc": {
+                  "summary": "Ending branch, tag, HEAD, or full object ID.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "TO",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              }
+            ],
+            "tail": {
+              "name": "paths",
+              "doc": {
+                "summary": "Literal paths to compare; pathspec magic is unsupported.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "PATH",
+              "item_type": {
+                "kind": "string",
+                "value": {}
+              },
+              "min": 0,
+              "max": null,
+              "separator": "--",
+              "verbatim": true,
+              "accepts_stdio": false
+            }
+          },
+          "options": [
+            {
+              "long": "unified",
+              "short": "U",
+              "aliases": [],
+              "doc": {
+                "summary": "Show LINES of unified context.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "LINES",
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "f64",
+                  "value": {
+                    "restrictions": {
+                      "min": {
+                        "kind": "float-bits",
+                        "value": 0
+                      },
+                      "max": {
+                        "kind": "float-bits",
+                        "value": 4652007308841189376
+                      }
+                    }
+                  }
+                }
+              },
+              "default": {
+                "kind": "f64",
+                "value": 3.0
+              },
+              "required": false,
+              "env_var": null
+            }
+          ],
+          "flags": [
+            {
+              "long": "cached",
+              "short": null,
+              "aliases": [
+                "staged"
+              ],
+              "doc": {
+                "summary": "Compare HEAD with the index.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            },
+            {
+              "long": "name-only",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Return only changed path names.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            },
+            {
+              "long": "stat",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Return a diffstat instead of a patch.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "implies",
+              "value": {
+                "lhs_quant": "all",
+                "lhs": [
+                  {
+                    "kind": "present",
+                    "value": "to"
+                  }
+                ],
+                "rhs_quant": "all",
+                "rhs": [
+                  {
+                    "kind": "present",
+                    "value": "from"
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "forbids",
+              "value": {
+                "lhs_quant": "all",
+                "lhs": [
+                  {
+                    "kind": "present",
+                    "value": "name-only"
+                  }
+                ],
+                "rhs": [
+                  {
+                    "kind": "present",
+                    "value": "stat"
+                  }
+                ]
+              }
+            }
+          ],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "patch",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  },
+                  {
+                    "name": "stat",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  },
+                  {
+                    "name": "paths",
+                    "body": {
+                      "kind": "list",
+                      "value": {
+                        "element": {
+                          "kind": "string",
+                          "value": {}
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "hasChanges",
+                    "body": {
+                      "kind": "bool",
+                      "value": {}
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": true,
+            "destructive": false,
+            "idempotent": true,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "log",
+        "aliases": [],
+        "doc": {
+          "summary": "Show commit history.",
+          "description": "Reads history from HEAD or a documented branch, tag, or full object ID.",
+          "examples": []
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [
+              {
+                "name": "ref",
+                "doc": {
+                  "summary": "History starting point; defaults to HEAD.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "REF",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              }
+            ],
+            "tail": null
+          },
+          "options": [
+            {
+              "long": "max-count",
+              "short": "n",
+              "aliases": [],
+              "doc": {
+                "summary": "Limit the number of commits returned.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "COUNT",
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "f64",
+                  "value": {
+                    "restrictions": {
+                      "min": {
+                        "kind": "float-bits",
+                        "value": 0
+                      }
+                    }
+                  }
+                }
+              },
+              "default": {
+                "kind": "f64",
+                "value": 20.0
+              },
+              "required": false,
+              "env_var": null
+            }
+          ],
+          "flags": [
+            {
+              "long": "oneline",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Format each commit on one line.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "commits",
+                    "body": {
+                      "kind": "list",
+                      "value": {
+                        "element": {
+                          "kind": "record",
+                          "value": {
+                            "fields": [
+                              {
+                                "name": "oid",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              },
+                              {
+                                "name": "message",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              },
+                              {
+                                "name": "authorName",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              },
+                              {
+                                "name": "authorEmail",
+                                "body": {
+                                  "kind": "string",
+                                  "value": {}
+                                }
+                              },
+                              {
+                                "name": "timestamp",
+                                "body": {
+                                  "kind": "f64",
+                                  "value": {}
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "stdout",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": true,
+            "destructive": false,
+            "idempotent": true,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "branch",
+        "aliases": [],
+        "doc": {
+          "summary": "List, create, or safely delete local branches.",
+          "description": "Deletion rejects the current branch and branches not merged into HEAD. Force deletion is not supported.",
+          "examples": []
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [
+              {
+                "name": "name",
+                "doc": {
+                  "summary": "Branch to create or delete; omit to list branches.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "BRANCH",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              },
+              {
+                "name": "start-point",
+                "doc": {
+                  "summary": "Commit used to create the branch; defaults to HEAD.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "START_POINT",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              }
+            ],
+            "tail": null
+          },
+          "options": [],
+          "flags": [
+            {
+              "long": "delete",
+              "short": "d",
+              "aliases": [],
+              "doc": {
+                "summary": "Delete a fully merged branch.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "implies",
+              "value": {
+                "lhs_quant": "all",
+                "lhs": [
+                  {
+                    "kind": "present",
+                    "value": "start-point"
+                  }
+                ],
+                "rhs_quant": "all",
+                "rhs": [
+                  {
+                    "kind": "present",
+                    "value": "name"
+                  }
+                ]
+              }
+            }
+          ],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "list",
+              "value": {
+                "element": {
+                  "kind": "record",
+                  "value": {
+                    "fields": [
+                      {
+                        "name": "name",
+                        "body": {
+                          "kind": "string",
+                          "value": {}
+                        }
+                      },
+                      {
+                        "name": "current",
+                        "body": {
+                          "kind": "bool",
+                          "value": {}
+                        }
+                      },
+                      {
+                        "name": "oid",
+                        "body": {
+                          "kind": "option",
+                          "value": {
+                            "inner": {
+                              "kind": "string",
+                              "value": {}
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": false,
+            "destructive": true,
+            "idempotent": false,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "add",
+        "aliases": [],
+        "doc": {
+          "summary": "Stage worktree changes.",
+          "description": "Stages explicit literal paths and directories, all changes with -A, or tracked changes with -u. Explicit ignored untracked paths are rejected.",
+          "examples": []
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [],
+            "tail": {
+              "name": "paths",
+              "doc": {
+                "summary": "Literal files or directories to stage.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "PATH",
+              "item_type": {
+                "kind": "string",
+                "value": {}
+              },
+              "min": 0,
+              "max": null,
+              "separator": null,
+              "verbatim": false,
+              "accepts_stdio": false
+            }
+          },
+          "options": [],
+          "flags": [
+            {
+              "long": "all",
+              "short": "A",
+              "aliases": [],
+              "doc": {
+                "summary": "Stage all additions, changes, and deletions.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            },
+            {
+              "long": "update",
+              "short": "u",
+              "aliases": [],
+              "doc": {
+                "summary": "Stage changes and deletions to tracked paths.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "forbids",
+              "value": {
+                "lhs_quant": "all",
+                "lhs": [
+                  {
+                    "kind": "present",
+                    "value": "all"
+                  }
+                ],
+                "rhs": [
+                  {
+                    "kind": "present",
+                    "value": "update"
+                  }
+                ]
+              }
+            }
+          ],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "summary",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  },
+                  {
+                    "name": "paths",
+                    "body": {
+                      "kind": "list",
+                      "value": {
+                        "element": {
+                          "kind": "string",
+                          "value": {}
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": false,
+            "destructive": false,
+            "idempotent": true,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "commit",
+        "aliases": [],
+        "doc": {
+          "summary": "Record the staged tree.",
+          "description": "Uses user.name and user.email from local configuration for the committer. Repeated -m values form separate paragraphs.",
+          "examples": []
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [],
+            "tail": null
+          },
+          "options": [
+            {
+              "long": "message",
+              "short": "m",
+              "aliases": [],
+              "doc": {
+                "summary": "Commit message paragraph; may be repeated.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "MESSAGE",
+              "shape": {
+                "kind": "repeatable-list",
+                "value": {
+                  "repetition": {
+                    "kind": "repeated"
+                  },
+                  "item_type": {
+                    "kind": "string",
+                    "value": {}
+                  }
+                }
+              },
+              "default": null,
+              "required": true,
+              "env_var": null
+            },
+            {
+              "long": "author",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Override the author while retaining the configured committer.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "NAME <EMAIL>",
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "string",
+                  "value": {}
+                }
+              },
+              "default": null,
+              "required": false,
+              "env_var": null
+            }
+          ],
+          "flags": [
+            {
+              "long": "allow-empty",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Create a commit even when the tree is unchanged.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "oid",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  },
+                  {
+                    "name": "summary",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": false,
+            "destructive": false,
+            "idempotent": false,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "checkout",
+        "aliases": [],
+        "doc": {
+          "summary": "Switch branches or restore paths.",
+          "description": "Branch switching preserves permissible local changes and rejects overwrites. Paths after -- are destructively restored from the index. Force checkout and file/directory shape transitions are unsupported.",
+          "examples": [
+            {
+              "title": "Create a branch",
+              "body": "git checkout -b fix-validation"
+            },
+            {
+              "title": "Restore a path",
+              "body": "git checkout -- src/main.ts"
+            }
+          ]
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [
+              {
+                "name": "ref",
+                "doc": {
+                  "summary": "Branch, tag, HEAD, or full object ID to check out.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "REF",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              }
+            ],
+            "tail": {
+              "name": "paths",
+              "doc": {
+                "summary": "Literal paths to restore destructively from the index.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "PATH",
+              "item_type": {
+                "kind": "string",
+                "value": {}
+              },
+              "min": 0,
+              "max": null,
+              "separator": "--",
+              "verbatim": true,
+              "accepts_stdio": false
+            }
+          },
+          "options": [
+            {
+              "long": "new-branch",
+              "short": "b",
+              "aliases": [],
+              "doc": {
+                "summary": "Create and switch to a new branch.",
+                "description": "",
+                "examples": []
+              },
+              "value_name": "BRANCH",
+              "shape": {
+                "kind": "scalar",
+                "value": {
+                  "kind": "string",
+                  "value": {}
+                }
+              },
+              "default": null,
+              "required": false,
+              "env_var": null
+            }
+          ],
+          "flags": [
+            {
+              "long": "detach",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Check out a commit with detached HEAD.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": false,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "summary",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  },
+                  {
+                    "name": "paths",
+                    "body": {
+                      "kind": "list",
+                      "value": {
+                        "element": {
+                          "kind": "string",
+                          "value": {}
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": false,
+            "destructive": true,
+            "idempotent": false,
+            "open_world": false
+          }
+        }
+      },
+      {
+        "name": "config",
+        "aliases": [],
+        "doc": {
+          "summary": "Read or set local commit identity.",
+          "description": "Supports only user.name and user.email in the repository-local configuration.",
+          "examples": []
+        },
+        "globals": {
+          "options": [],
+          "flags": []
+        },
+        "subcommands": [],
+        "body": {
+          "positionals": {
+            "fixed": [
+              {
+                "name": "key",
+                "doc": {
+                  "summary": "user.name or user.email.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "KEY",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": true,
+                "accepts_stdio": false
+              },
+              {
+                "name": "value",
+                "doc": {
+                  "summary": "New value; omit to read the current value.",
+                  "description": "",
+                  "examples": []
+                },
+                "value_name": "VALUE",
+                "type_": {
+                  "kind": "string",
+                  "value": {}
+                },
+                "default": null,
+                "required": false,
+                "accepts_stdio": false
+              }
+            ],
+            "tail": null
+          },
+          "options": [],
+          "flags": [
+            {
+              "long": "local",
+              "short": null,
+              "aliases": [],
+              "doc": {
+                "summary": "Use repository-local configuration.",
+                "description": "",
+                "examples": []
+              },
+              "shape": {
+                "kind": "bool-flag",
+                "value": {
+                  "default": true,
+                  "negatable": false
+                }
+              },
+              "env_var": null
+            }
+          ],
+          "constraints": [],
+          "stdin": null,
+          "stdout": null,
+          "stderr": null,
+          "result": {
+            "type_": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "key",
+                    "body": {
+                      "kind": "string",
+                      "value": {}
+                    }
+                  },
+                  {
+                    "name": "value",
+                    "body": {
+                      "kind": "option",
+                      "value": {
+                        "inner": {
+                          "kind": "string",
+                          "value": {}
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "updated",
+                    "body": {
+                      "kind": "bool",
+                      "value": {}
+                    }
+                  }
+                ]
+              }
+            },
+            "doc": {
+              "summary": "",
+              "description": "",
+              "examples": []
+            },
+            "formatters": [
+              {
+                "name": "default",
+                "doc": {
+                  "summary": "",
+                  "description": "",
+                  "examples": []
+                }
+              }
+            ],
+            "default_formatter": "default"
+          },
+          "errors": [
+            {
+              "name": "git-error",
+              "doc": {
+                "summary": "",
+                "description": "",
+                "examples": []
+              },
+              "kind": "runtime-error",
+              "exit_code": 1,
+              "payload": {
+                "kind": "string",
+                "value": {}
+              }
+            }
+          ],
+          "annotations": {
+            "read_only": false,
+            "destructive": false,
+            "idempotent": true,
+            "open_world": false
+          }
+        }
+      }
+    ]
+  },
+  "schema": {
+    "root": {
+      "kind": "record",
+      "value": {
+        "fields": []
+      }
+    }
+  }
+}

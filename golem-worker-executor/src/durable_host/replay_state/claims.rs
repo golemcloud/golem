@@ -1369,12 +1369,9 @@ mod tests {
         let operation = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 4,
             command_path: vec!["search".to_string()],
-            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["recorded"],
-            )
-            .unwrap()
-            .args,
+            args: vec![golem_common::model::card::ToolArgPattern::Positional(
+                golem_common::model::card::ToolInvocationValue::Literal("recorded".into()),
+            )],
             has_stdin: true,
             has_stdout: false,
             declares_stdout: false,
