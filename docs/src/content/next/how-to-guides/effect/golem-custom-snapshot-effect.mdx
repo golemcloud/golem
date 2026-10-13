@@ -188,7 +188,7 @@ migrate the state.
 
 ## Update Checklist
 
-1. Keep the agent `mode` durable. An ephemeral agent takes no snapshots.
+1. Keep the agent `mode` durable. An ephemeral agent takes no snapshots, and the SDK refuses an ephemeral agent that declares `snapshotting`, with an error that names the agent.
 2. Declare all persisted state in the schema passed to `Snapshot.define`.
 3. Select an explicit policy appropriate to recovery frequency.
 4. Select `Snapshot.ref<Saved>()` and route all state reads and writes through its `Ref`.

@@ -875,6 +875,14 @@ export const registerAgent = <
     let compiledSnapshot: CompiledSnapshot | null = null
     let snapshotting: AgentCommon.Snapshotting = { tag: "disabled" }
     if (metadata.snapshotting !== undefined) {
+      if (metadata.mode === "ephemeral") {
+        return yield* Effect.fail(
+          new InvalidSnapshotError(
+            `agent '${metadata.name}' is ephemeral and declares snapshotting, but ephemeral ` +
+              "agents take no snapshots. Remove the snapshotting option or make the agent durable.",
+          ),
+        )
+      }
       const cs = yield* compileSnapshot(metadata.name, metadata.snapshotting)
       if (
         cs.kind === "multipart" &&
