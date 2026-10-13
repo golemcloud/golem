@@ -1456,6 +1456,7 @@ impl AttachmentConsumer {
         RawAttachmentStreamProducer {
             consumer: Some(self),
             in_flight_charge: None,
+            remainder: Bytes::new(),
             finished: false,
         }
     }
@@ -1746,6 +1747,7 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
 pub(crate) struct RawAttachmentStreamProducer {
     consumer: Option<AttachmentConsumer>,
     in_flight_charge: Option<AttachmentCharge>,
+    remainder: Bytes,
     finished: bool,
 }
 
@@ -1760,7 +1762,9 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
-        drop(self.in_flight_charge.take());
+        if self.remainder.is_empty() {
+            drop(self.in_flight_charge.take());
+        }
         if self.finished {
             return Poll::Ready(Ok(StreamResult::Dropped));
         }
@@ -1775,6 +1779,22 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
         if remaining == Some(0) {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+
+        if !self.remainder.is_empty() {
+            if attachment.state.lock().unwrap().owner_fenced {
+                self.finished = true;
+                self.remainder = Bytes::new();
+                self.in_flight_charge = None;
+                return Poll::Ready(Err(wasmtime::Error::msg(
+                    "owner generation fenced tool attachment",
+                )));
+            }
+            let length = remaining
+                .unwrap_or(self.remainder.len())
+                .min(self.remainder.len());
+            dst.set_buffer(self.remainder.split_to(length));
             return Poll::Ready(Ok(StreamResult::Completed));
         }
 
@@ -1828,7 +1848,11 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
         match produced {
             Produced::Item(bytes, charge) => {
                 self.in_flight_charge = Some(charge);
-                dst.set_buffer(Bytes::from(bytes));
+                self.remainder = Bytes::from(bytes);
+                let length = remaining
+                    .unwrap_or(self.remainder.len())
+                    .min(self.remainder.len());
+                dst.set_buffer(self.remainder.split_to(length));
                 attachment.changed.notify_waiters();
                 Poll::Ready(Ok(StreamResult::Completed))
             }
@@ -3216,8 +3240,6 @@ mod tests {
 
         struct ObservedProducer {
             inner: RawAttachmentStreamProducer,
-            bounded: bool,
-            remainder: Bytes,
             registered: bool,
             defer: bool,
             events: Arc<Mutex<Vec<(usize, TerminalConsumption)>>>,
@@ -3250,24 +3272,12 @@ mod tests {
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
-                // A test-only adapter bounds buffers without changing the attachment.
-                let result = if !self.remainder.is_empty() && !finish {
-                    dst.set_buffer(std::mem::take(&mut self.remainder));
-                    Poll::Ready(Ok(StreamResult::Completed))
-                } else {
-                    Pin::new(&mut self.inner).poll_produce(
-                        cx,
-                        store.as_context_mut(),
-                        dst.reborrow(),
-                        finish,
-                    )
-                };
-                if self.bounded && result.is_ready() && !finish {
-                    let mut bytes = dst.take_buffer();
-                    let accepted = bytes.split_to(capacity.min(bytes.len()));
-                    self.remainder = bytes;
-                    dst.set_buffer(accepted);
-                }
+                let result = Pin::new(&mut self.inner).poll_produce(
+                    cx,
+                    store.as_context_mut(),
+                    dst.reborrow(),
+                    finish,
+                );
                 if result.is_ready() {
                     self.registered = false;
                     self.ready.store(true, Ordering::Release);
@@ -3285,7 +3295,10 @@ mod tests {
                 "leftover",
                 "(call $report (call $read (local.get $s) (i32.const 8) (i32.const 2)) (i32.load16_u (i32.const 8))) (call $report (call $read (local.get $s) (i32.const 8) (i32.const 2)) (i32.load16_u (i32.const 8))) (call $drop (local.get $s))",
                 false,
-                vec![(2, TerminalConsumption::Delivered)],
+                vec![
+                    (2, TerminalConsumption::Delivered),
+                    (2, TerminalConsumption::Delivered),
+                ],
             ),
             (
                 "underfilled",
@@ -3330,9 +3343,8 @@ mod tests {
                 vec![],
             ),
         ] {
-            for bounded in [false, true] {
-                let wat = format!(
-                    r#"(component
+            let wat = format!(
+                r#"(component
               (import "report" (func $report (param "result" u32) (param "bytes" u32)))
               (import "ready" (func $ready (result u32)))
               (core func $report (canon lower (func $report)))
@@ -3361,87 +3373,85 @@ mod tests {
                 (export "report" (func $report))))))
               (func (export "run") async (param "s" $s)
                 (canon lift (core func $m "run") (memory $memory "mem"))))"#
-                );
-                let component = Component::new(&engine, wat).unwrap();
-                let reports = Arc::new(Mutex::new(Vec::new()));
-                let reported = reports.clone();
-                let ready = Arc::new(AtomicBool::new(false));
-                let ready_for_guest = ready.clone();
-                let mut linker = Linker::new(&engine);
-                linker
-                    .root()
-                    .func_wrap("ready", move |_, (): ()| {
-                        Ok((u32::from(ready_for_guest.load(Ordering::Acquire)),))
-                    })
-                    .unwrap();
-                linker
-                    .root()
-                    .func_wrap("report", move |_, values: (u32, u32)| {
-                        reported.lock().unwrap().push(values);
-                        Ok(())
-                    })
-                    .unwrap();
-                let (producer, consumer, _) = pair(8);
-                assert!(producer.configure_live());
-                producer.write(vec![0x13, 0xa7, 0x42, 0xe9]).await.unwrap();
-                let events = Arc::new(Mutex::new(Vec::new()));
-                let polls = Arc::new(Mutex::new(Vec::new()));
-                let mut store = Store::new(&engine, ());
-                let instance = linker
-                    .instantiate_async(&mut store, &component)
-                    .await
-                    .unwrap();
-                let reader = StreamReader::new(
-                    &mut store,
-                    ObservedProducer {
-                        inner: consumer.into_raw_stream_producer(),
-                        bounded,
-                        remainder: Bytes::new(),
-                        registered: false,
-                        defer,
-                        events: events.clone(),
-                        polls: polls.clone(),
-                        ready,
-                    },
-                )
+            );
+            let component = Component::new(&engine, wat).unwrap();
+            let (producer, consumer, _) = pair(8);
+            assert!(producer.configure_live());
+            producer.write(vec![0x13, 0xa7, 0x42, 0xe9]).await.unwrap();
+            let attachment = producer.attachment.clone();
+            let reports = Arc::new(Mutex::new(Vec::new()));
+            let reported = reports.clone();
+            let ready = Arc::new(AtomicBool::new(false));
+            let ready_for_guest = ready.clone();
+            let mut linker = Linker::new(&engine);
+            linker
+                .root()
+                .func_wrap("ready", move |_, (): ()| {
+                    Ok((u32::from(ready_for_guest.load(Ordering::Acquire)),))
+                })
                 .unwrap();
-                let result = instance
-                    .get_typed_func::<(StreamReader<u8>,), ()>(&mut store, "run")
-                    .unwrap()
-                    .call_async(&mut store, (reader,))
-                    .await;
-                if name == "teardown" || name == "pending-drop" {
-                    let error = result.unwrap_err();
-                    println!("native observer {name} bounded={bounded}: trap={error:?}");
-                    if name == "pending-drop" {
-                        assert!(format!("{error:?}").contains("cannot remove busy stream"));
+            linker
+                .root()
+                .func_wrap("report", move |_, values: (u32, u32)| {
+                    if name == "leftover" && reported.lock().unwrap().is_empty() {
+                        assert_eq!(attachment.activity().charged_bytes, 4);
                     }
-                } else {
-                    result.unwrap();
+                    reported.lock().unwrap().push(values);
+                    Ok(())
+                })
+                .unwrap();
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let polls = Arc::new(Mutex::new(Vec::new()));
+            let mut store = Store::new(&engine, ());
+            let instance = linker
+                .instantiate_async(&mut store, &component)
+                .await
+                .unwrap();
+            let reader = StreamReader::new(
+                &mut store,
+                ObservedProducer {
+                    inner: consumer.into_raw_stream_producer(),
+                    registered: false,
+                    defer,
+                    events: events.clone(),
+                    polls: polls.clone(),
+                    ready,
+                },
+            )
+            .unwrap();
+            let result = instance
+                .get_typed_func::<(StreamReader<u8>,), ()>(&mut store, "run")
+                .unwrap()
+                .call_async(&mut store, (reader,))
+                .await;
+            if name == "teardown" || name == "pending-drop" {
+                let error = result.unwrap_err();
+                println!("native observer {name}: trap={error:?}");
+                if name == "pending-drop" {
+                    assert!(format!("{error:?}").contains("cannot remove busy stream"));
                 }
-                drop(store);
-                println!(
-                    "native observer {name} bounded={bounded}: guest={:?} callbacks={:?} polls={:?}",
-                    reports.lock().unwrap(),
-                    events.lock().unwrap(),
-                    polls.lock().unwrap()
-                );
-                let expected_reports = match name {
-                    "leftover" => vec![(32, 0xa713), (32, 0xe942)],
-                    "underfilled" => vec![(64, 0xe942a713)],
-                    "zero-cancel" => vec![(u32::MAX, 0), (2, 0)],
-                    "positive-cancel" => vec![(u32::MAX, 0), (34, 0xa713)],
-                    "readiness" => vec![(0, 0)],
-                    "readiness-cancel" => vec![(u32::MAX, 0), (2, 0)],
-                    _ => vec![],
-                };
-                assert_eq!(*reports.lock().unwrap(), expected_reports, "{name}");
-                let mut expected = expected.clone();
-                if bounded && name == "leftover" {
-                    expected.push((2, TerminalConsumption::Delivered));
-                }
-                assert_eq!(*events.lock().unwrap(), expected, "{name}");
+            } else {
+                result.unwrap();
             }
+            drop(store);
+            assert_eq!(producer.attachment.activity().charged_bytes, 0, "{name}");
+            println!(
+                "native observer {name}: guest={:?} callbacks={:?} polls={:?}",
+                reports.lock().unwrap(),
+                events.lock().unwrap(),
+                polls.lock().unwrap()
+            );
+            let expected_reports = match name {
+                "leftover" => vec![(32, 0xa713), (32, 0xe942)],
+                "underfilled" => vec![(64, 0xe942a713)],
+                "zero-cancel" => vec![(u32::MAX, 0), (2, 0)],
+                "positive-cancel" => vec![(u32::MAX, 0), (34, 0xa713)],
+                "readiness" => vec![(0, 0)],
+                "readiness-cancel" => vec![(u32::MAX, 0), (2, 0)],
+                _ => vec![],
+            };
+            assert_eq!(*reports.lock().unwrap(), expected_reports, "{name}");
+            assert_eq!(*events.lock().unwrap(), expected, "{name}");
         }
     }
 

@@ -1501,6 +1501,22 @@ impl Streaming for StreamingImpl {
         if mode.starts_with("http-") {
             return stream_through_http(mode, stdin, stdout).await;
         }
+        if let Some(size) = mode.strip_prefix("piped-unread-source:") {
+            let size: usize = size.parse().expect("source chunk size");
+            for byte in [0x13, 0xa7, 0x42] {
+                stdout.write(vec![byte; size]).await.expect("source write");
+            }
+            wait_at_promise_checkpoint("piped-source-three-accepted").await;
+            stdout.finish().await.expect("source finish");
+            return Ok(StreamSummary {
+                chunks_read: 0,
+                bytes_read: 0,
+                output_closed: false,
+            });
+        }
+        if mode == "piped-unread-sink" {
+            wait_at_promise_checkpoint("piped-sink-before-read").await;
+        }
         if mode == "principal" {
             let output_closed =
                 !write_chunk(&mut stdout, principal_class(&principal).as_bytes().to_vec()).await;

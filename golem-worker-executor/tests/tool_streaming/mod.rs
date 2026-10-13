@@ -6844,6 +6844,174 @@ async fn detached_and_fire_and_forget_traps_fail_the_owner_without_entity_termin
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const CAPACITY: u32 = 64;
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = CAPACITY as usize;
+                config.retry.max_attempts = 0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let agent = agent_id!("ToolStreamingCaller", "piped-unread");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([(
+                "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+                port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "recover_piped_unread_output",
+        data_value!(CAPACITY),
+    );
+    let synchronize = async {
+        let mut held = Vec::new();
+        for _ in 0..2 {
+            let checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv())
+                .await?
+                .expect("promise checkpoint server stopped");
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+            held.push(checkpoint);
+        }
+        held.sort_by(|left, right| left.name.cmp(&right.name));
+        assert_eq!(held[0].name, "piped-sink-before-read");
+        assert_eq!(held[1].name, "piped-source-three-accepted");
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let writes: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::streams::tool-output-writer::write" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            writes.len(),
+            3,
+            "three full chunks accepted before the sink reads"
+        );
+        for start in &writes {
+            assert!(entries.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == *start
+            )));
+        }
+        let loads = executor.instance_load_count(&worker);
+        let mut regeneration = executor.gate_next_replay_access_admission(
+            &worker,
+            "tool-output-writer::write",
+            ReplayAdmissionStage::BeforeScope,
+        );
+        executor.simulated_crash(&worker).await?;
+        tokio::time::timeout(Duration::from_secs(30), regeneration.entered()).await?;
+        assert!(executor.instance_load_count(&worker) > loads);
+        regeneration.release();
+        let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if executor.owner_replay_is_live(&owner).await? {
+                    break Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        // Both promises remain unresolved while reconstruction reaches the live frontier.
+        for checkpoint in held {
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: checkpoint.oplog_idx,
+                    },
+                    Vec::new(),
+                )
+                .await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    let (result, ()) = tokio::try_join!(invocation, synchronize)?;
+    server.abort();
+    let output: Vec<u8> = result.into_typed()?;
+    let expected: Vec<u8> = [0x13, 0xa7, 0x42]
+        .into_iter()
+        .flat_map(|byte| std::iter::repeat_n(byte, CAPACITY as usize))
+        .collect();
+    assert_eq!(output, expected);
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::streams::tool-output-writer::write"
+            ))
+            .count(),
+        6,
+        "source and sink each write exactly three chunks"
+    );
+    executor.delete_worker(&worker).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn large_tool_output_reconstructs_with_one_chunk_capacity(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

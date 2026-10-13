@@ -704,6 +704,7 @@ pub trait ToolStreamingCaller {
     async fn native_config(&self, key: String) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
+    async fn recover_piped_unread_output(&self, chunk_size: u32) -> Vec<u8>;
     async fn retain_tool_output(&self, cancel_read: bool);
     async fn consume_retained_tool_output(&self) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
@@ -3435,6 +3436,30 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         .await
         .expect("invoke native config probe");
         String::from_utf8(read_all(stdout).await).unwrap()
+    }
+
+    async fn recover_piped_unread_output(&self, chunk_size: u32) -> Vec<u8> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (source_target, source_stdout) = tool_host::create_output();
+        let source = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input(&format!("piped-unread-source:{chunk_size}")),
+            Some(closed_raw_stdin()),
+            Some(source_target),
+            None,
+        );
+        let (sink_target, sink_stdout) = tool_host::create_output();
+        let sink = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("piped-unread-sink"),
+            Some(pump_tool_stdin(source_stdout)),
+            Some(sink_target),
+            None,
+        );
+        let output = read_all(sink_stdout).await;
+        raw_result(&source).await.expect("source result");
+        raw_result(&sink).await.expect("sink result");
+        output
     }
 
     async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8> {
