@@ -491,6 +491,36 @@ mcp:
 
 The MCP tool must also have a top-level implementation declaration and a `components.my-app:tool-owner.tools.search` binding. No agent is required. The implementation and owner components may differ; `include`/`exclude` selects exported commands. A remote declaration requires an environment grant, which application deployment automatically reconciles when the deploy actor has permission.
 
+## Tool Client Dependencies
+
+Prefer `dependencies.tools` for typed clients used by a component. Keep its
+language template; `golem build` automatically generates the
+clients in that language, like agent clients selected by `dependencies.agents`.
+For a custom template, set `componentTemplates.<template-name>.guestLanguage`
+and apply that template to the consumer.
+No additional `bridge.<language>.internal.tools` selection is needed.
+
+```yaml
+components:
+  my-app:consumer:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
+      tools: [search]
+    tools:
+      search: {}
+```
+
+The dependency selects client generation, while the component or agent binding
+exposes the tool at runtime. Neither entry supplies the other. A binding alone
+does not generate a client. Configure runtime permissions and consumer compiler
+imports separately. A local tool dependency builds its provider before the
+consumer; a component cannot depend on its own guest bridge SDK. Use the SDK's
+definition-owned client for a tool defined in the same component.
+
+Use explicit internal bridge selection only for a separate generation target,
+such as another language or output directory. Load `golem-generating-tool-clients`
+for built-in release and MCP import examples.
+
 ## Bridge SDK Generation
 
 Generate typed client SDKs for calling agents from external code. The `agents` field accepts `"*"` (all agents), or a list of agent type names or component names (namespace:name).
@@ -790,6 +820,7 @@ This table shows where each property can be defined:
 
 ## Related Skills
 
+- Load `golem-generating-tool-clients` to select built-in releases or MCP imports, generate typed clients, and configure consumer imports separately from deployment bindings
 - Load `golem-profiles-and-environments` for detailed guidance on CLI profiles, app environments, component presets, and how they interact
 - Load `golem-deployment-version` for the `version:` source (git tag/hash, static, env var) and the `versionCheck` uniqueness policy
 

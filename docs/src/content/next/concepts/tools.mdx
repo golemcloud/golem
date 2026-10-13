@@ -87,6 +87,8 @@ Tool calls are part of the agent's durable execution. Every tool call executes e
 | `web-fetch` | Read-only HTTP GET of a web page |
 | `path-policy` | Middleware with per-directory read, write, and delete rules for the file tools |
 
+To call an existing built-in tool from an agent, follow [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients). It shows release selection, generation, consumer imports, and the deployment binding. The same guide covers MCP imported tools without copying their schemas.
+
 ## Writing a tool
 
 A tool is defined like a command-line program with types: commands, positional arguments, options and flags, input and output streams, a typed result, and declared errors. This tool has one command that takes a value and returns it:
