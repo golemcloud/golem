@@ -1623,7 +1623,7 @@ test "parse_agents with snapshotting every_n" {
 }
 
 ///|
-test "parse_agents with ephemeral and snapshotting" {
+test "parse_agents rejects ephemeral with snapshotting" {
   let content =
     #|#derive.agent("ephemeral", snapshotting="periodic(50)")
     #|pub(all) struct MyAgent {
@@ -1633,9 +1633,32 @@ test "parse_agents with ephemeral and snapshotting" {
     #|pub fn MyAgent::new() -> MyAgent {
     #|  { value: "" }
     #|}
+  let result = capture_agent_parse_error(fn() raise AgentParseError {
+    parse_agents([("agent.mbt", content)])
+  })
+  match result {
+    Err(AgentParseError(msg)) =>
+      assert_eq(
+        msg, "Agent 'MyAgent' is ephemeral and declares snapshotting, but ephemeral agents take no snapshots. Remove the snapshotting option or make the agent durable.",
+      )
+    Ok(_) => abort("Expected parse_agents to fail on ephemeral + snapshotting")
+  }
+}
+
+///|
+test "parse_agents accepts ephemeral with disabled snapshotting" {
+  let content =
+    #|#derive.agent("ephemeral", snapshotting="disabled")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
   let agents = parse_agents([("agent.mbt", content)])
   debug_inspect(agents[0].mode, content="Ephemeral")
-  debug_inspect(agents[0].snapshotting, content="Periodic(50)")
+  debug_inspect(agents[0].snapshotting, content="Disabled")
 }
 
 ///|
