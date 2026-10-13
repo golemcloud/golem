@@ -626,20 +626,30 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let Some(worker) = store.with(|mut access| {
+    let Some((worker, card_service, unchecked_root_ids)) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
-        ctx.state
-            .is_live()
-            .then(|| ctx.public_state.worker().clone())
+        ctx.state.is_live().then(|| {
+            (
+                ctx.public_state.worker().clone(),
+                ctx.state.card_service.clone(),
+                ctx.state
+                    .inherited_invocation_scope
+                    .as_ref()
+                    .and_then(crate::durable_host::InheritedInvocationScope::unchecked_root_ids),
+            )
+        })
     }) else {
         return Ok(());
     };
     let revoked =
         crate::durable_host::owner_revoked_card_ids(&*worker.get_last_known_status().await);
+    let root_states = match unchecked_root_ids {
+        Some(root_ids) => Some(card_service.check_cards(root_ids).await?),
+        None => None,
+    };
     store.with(|mut access| {
-        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked);
-    });
-    Ok(())
+        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked, root_states)
+    })
 }
 
 /// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent
