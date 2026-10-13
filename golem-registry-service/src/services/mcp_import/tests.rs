@@ -419,6 +419,7 @@ impl Fixture {
 
     async fn client(&mut self) -> GrpcRegistryService {
         let port = crate::grpc::start_grpc_server(
+            (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
             &crate::config::GrpcApiConfig {
                 port: 0,
                 ..Default::default()

@@ -272,6 +272,7 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
         .assert_string("revoked");
 
     let port = crate::grpc::start_grpc_server(
+        (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
         &crate::config::GrpcApiConfig {
             port: 0,
             ..Default::default()

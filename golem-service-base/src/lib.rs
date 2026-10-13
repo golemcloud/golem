@@ -25,6 +25,7 @@ pub mod mcp;
 pub mod metrics;
 pub mod migration;
 pub mod model;
+pub mod net;
 pub mod observability;
 pub mod poem;
 pub mod replayable_stream;
