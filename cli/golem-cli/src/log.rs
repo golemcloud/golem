@@ -308,12 +308,74 @@ pub fn keep_running_on_closed_output() {
 }
 
 /// Ends the process with [`CLOSED_OUTPUT_EXIT_CODE`], as SIGPIPE would, once the reader of
-/// stdout or stderr has gone. Returns only for a command that keeps running.
+/// stdout or stderr has gone. Puts the terminal back in the state that it had when the command
+/// started. Returns only for a command that keeps running.
 pub fn end_for_closed_output() {
     if !KEEP_RUNNING_ON_CLOSED_OUTPUT.load(Ordering::Relaxed) {
+        restore_terminal_settings();
         std::process::exit(CLOSED_OUTPUT_EXIT_CODE.into());
     }
 }
+
+#[cfg(unix)]
+struct SavedTerminal {
+    descriptor: fn() -> std::os::fd::BorrowedFd<'static>,
+    settings: rustix::termios::Termios,
+}
+
+#[cfg(unix)]
+static SAVED_TERMINAL: std::sync::Mutex<Option<SavedTerminal>> = std::sync::Mutex::new(None);
+
+/// Saves the settings of the terminal that the command runs in, for
+/// [`end_for_closed_output`] to put back. A prompt changes them and cannot put them back when
+/// the process ends at once. With no terminal on stdin, stderr or stdout, nothing is saved.
+#[cfg(unix)]
+pub fn save_terminal_settings() {
+    use rustix::termios::{isatty, tcgetattr};
+
+    let descriptors: [fn() -> std::os::fd::BorrowedFd<'static>; 3] = [
+        rustix::stdio::stdin,
+        rustix::stdio::stderr,
+        rustix::stdio::stdout,
+    ];
+    for descriptor in descriptors {
+        if isatty(descriptor())
+            && let Ok(settings) = tcgetattr(descriptor())
+        {
+            if let Ok(mut saved) = SAVED_TERMINAL.lock() {
+                *saved = Some(SavedTerminal {
+                    descriptor,
+                    settings,
+                });
+            }
+            return;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn save_terminal_settings() {}
+
+/// Puts the saved settings back, unless the process is not in the foreground of the terminal:
+/// changing the settings from the background would stop the process.
+#[cfg(unix)]
+fn restore_terminal_settings() {
+    use rustix::termios::{OptionalActions, tcgetpgrp, tcsetattr};
+
+    let Ok(saved) = SAVED_TERMINAL.try_lock() else {
+        return;
+    };
+    let Some(saved) = saved.as_ref() else {
+        return;
+    };
+    let terminal = (saved.descriptor)();
+    if tcgetpgrp(terminal).is_ok_and(|foreground| foreground == rustix::process::getpgrp()) {
+        let _ = tcsetattr(terminal, OptionalActions::Now, &saved.settings);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_terminal_settings() {}
 
 /// What happened to bytes written to a standard stream.
 #[derive(Debug, PartialEq, Eq)]

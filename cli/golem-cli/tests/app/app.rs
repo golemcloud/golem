@@ -115,6 +115,69 @@ async fn assert_the_server_keeps_running_without_a_reader(closed: ClosedStream) 
     );
 }
 
+/// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
+/// stdout leaves. The pipeline runs in a pseudo-terminal, and `stty -a` shows the settings that
+/// the terminal has after the CLI has ended.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display().to_string();
+    let config_dir = ctx.config_dir.path().display().to_string();
+    let working_dir = ctx.working_dir.clone();
+
+    let leave_for_session = ctx.cwd_path_join("reader-leaves");
+    let output = tokio::task::spawn_blocking(move || {
+        // The reader of stdout stays until the test creates the file.
+        let script = format!(
+            "stty icanon echo; '{golem_cli}' --config-dir '{config_dir}' profile new \
+             | {{ while [ ! -e '{leave}' ]; do sleep 0.2; done; }}; \
+             echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a",
+            leave = leave_for_session.display()
+        );
+        let mut command = std::process::Command::new("bash");
+        command
+            .current_dir(working_dir)
+            .env("TERM", "xterm-256color")
+            .args(["-c", &script]);
+        use expectrl::Expect;
+        let mut session = expectrl::Session::spawn(command).expect("failed to spawn bash");
+        session.set_expect_timeout(Some(Duration::from_secs(60)));
+        session
+            .expect("create a new profile interactively")
+            .expect("the prompt did not appear");
+        std::fs::write(&leave_for_session, "").unwrap();
+        let exit = session
+            .expect(expectrl::Regex("EXIT=[0-9]+"))
+            .expect("the CLI did not end")
+            .as_bytes()
+            .to_vec();
+        let rest = session.expect(expectrl::Eof).expect("no end of output");
+        (
+            String::from_utf8_lossy(&exit).to_string(),
+            String::from_utf8_lossy(rest.as_bytes()).to_string(),
+        )
+    })
+    .await
+    .unwrap();
+
+    let (exit, output) = output;
+    println!("{exit}\n{output}");
+    assert!(exit.ends_with("EXIT=141"), "{exit}");
+    let flags: Vec<&str> = output.split_whitespace().collect();
+    assert!(
+        flags.contains(&"icanon"),
+        "the terminal is not in canonical mode after the CLI ended"
+    );
+    assert!(
+        flags.contains(&"echo"),
+        "the terminal does not echo after the CLI ended"
+    );
+}
+
 #[test]
 #[timeout("2m")]
 async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracing: &Tracing) {
