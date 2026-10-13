@@ -77,6 +77,20 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
         ).isFailure
       )
     },
+    test("sets use list carriers and decode with set semantics") {
+      val codec      = ConcreteCodec.derived[Set[Int]]
+      val nested     = ConcreteCodec.derived[Option[Set[Int]]]
+      val value      = Set(3, 7)
+      val duplicates = ConcreteCodec.derived[List[Int]].encodeValue(List(3, 7, 3))
+      assertTrue(
+        codec.decode(codec.encodeValue(value)) == value,
+        codec.decode(codec.encodeValue(Set.empty)) == Set.empty[Int],
+        codec.decode(duplicates) == value,
+        nested.decode(nested.encodeValue(Some(value))) == Some(value),
+        SchemaWire.schemaGraphFromWit(codec.graph) == IntoSchema[Set[Int]].graph,
+        SchemaWire.schemaValueFromWit(codec.encodeValue(value)) == IntoSchema[Set[Int]].toValue(value)
+      )
+    },
     test("byte arrays use the HTTP contract's unsigned byte list") {
       val codec    = ConcreteCodec.derived[Array[Byte]]
       val value    = Array[Byte](0, -1, 127, -128)

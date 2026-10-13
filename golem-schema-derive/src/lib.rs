@@ -14,7 +14,8 @@
 
 //! Derive macros for the Golem schema model.
 //!
-//! Two derive macros are provided:
+//! [`Schema`] derives both schema-model conversions and the direct wire traits.
+//! The conversion traits are also available as individual derives:
 //!
 //! - [`IntoSchema`] — emits an implementation of
 //!   `golem_common::schema::conversion::IntoSchema`. It registers the type into a
@@ -111,23 +112,29 @@ pub fn derive_poem_schema(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Derives `IntoSchema`, `FromSchema`, `IntoWire`, `FromWire`, and `WireSchema`.
+/// Requires the schema crate's `guest` feature for the direct wire traits.
 #[proc_macro_derive(Schema, attributes(schema))]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let into_schema = expand::expand_into_schema(input.clone());
-    let from_schema = expand::expand_from_schema(input);
-
-    match (into_schema, from_schema) {
-        (Ok(into_schema), Ok(from_schema)) => quote::quote! {
-            #into_schema
-            #from_schema
-        }
-        .into(),
-        (Err(err), Ok(_)) | (Ok(_), Err(err)) => err.into_compile_error().into(),
-        (Err(mut first), Err(second)) => {
-            first.combine(second);
-            first.into_compile_error().into()
+    let expansions = [
+        expand::expand_into_schema(input.clone()),
+        expand::expand_from_schema(input.clone()),
+        codegen::wire::expand(&input, true),
+        codegen::wire::expand(&input, false),
+        codegen::wire::expand_schema(&input),
+    ];
+    let mut output = proc_macro2::TokenStream::new();
+    let mut errors: Option<syn::Error> = None;
+    for expansion in expansions {
+        match expansion {
+            Ok(tokens) => output.extend(tokens),
+            Err(error) => match &mut errors {
+                Some(errors) => errors.combine(error),
+                None => errors = Some(error),
+            },
         }
     }
+    errors.map_or(output, syn::Error::into_compile_error).into()
 }

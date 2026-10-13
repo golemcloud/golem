@@ -80,6 +80,7 @@ private[wire] object ConcreteCodecMacro {
         case '[List[t]]            => '{ ConcreteCodec.list(${ build[t](registry, next) }) }
         case '[Vector[t]]          =>
           '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Vector[t]](_.toVector, _.toList) }
+        case '[Set[t]]      => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Set[t]](_.toSet, _.toList) }
         case '[Seq[t]]      => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Seq[t]](identity, _.toList) }
         case '[Array[Byte]] => '{ ConcreteCodec.bytes }
         case '[Array[t]]    =>
