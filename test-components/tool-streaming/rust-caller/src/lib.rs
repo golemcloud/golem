@@ -3068,6 +3068,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .fields
             .iter()
             .map(|field| match field.name.as_str() {
+                "cwd" => SchemaValue::String("/".to_string()),
                 "working-directory" => SchemaValue::List {
                     elements: vec![SchemaValue::String(cwd.clone())],
                 },

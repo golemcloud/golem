@@ -2111,7 +2111,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.11\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.12\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2361,7 +2361,7 @@ exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin b
 [tasks.run-benchmark-suite-orb]
 description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
 script_runner = "@duckscript"
-env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.6" }
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.11" }
 script = '''
 exec --fail-on-error docker info
 exec --fail-on-error cargo make --profile ci build-release

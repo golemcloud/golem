@@ -15322,7 +15322,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
                         assert_eq!(fields[0], "0".repeat(40));
                         let oid = fields[1].to_string();
                         assert_eq!(fields[2].split('\0').next(), Some("refs/heads/fresh"));
-                        assert!(command.contains("atomic"));
+                        assert!(!command.contains("atomic"));
                         assert_eq!(&bytes[line_len..line_len + 4], b"0000");
                         let pack = bytes[line_len + 4..].to_vec();
                         assert_eq!(&pack[..4], b"PACK");
@@ -15412,6 +15412,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     initialize_git_harness(&harness, "main").await?;
     let clone_fields = |url: String, directory: &str| {
         BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
             ("working-directory", string_list(&["/workspace"])),
             ("repository", SchemaValue::String(url)),
             ("directory", optional_string(Some(directory))),
@@ -15570,6 +15571,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.git_definition,
         "status",
         BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
             ("working-directory", string_list(&["/workspace/recovered"])),
             ("paths", string_list(&[])),
             ("short", SchemaValue::Bool(true)),
@@ -15616,6 +15618,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.git_definition,
         "add",
         BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
             ("working-directory", string_list(&["/workspace/repo"])),
             ("paths", string_list(&["file.txt"])),
             ("all", SchemaValue::Bool(false)),
@@ -15632,6 +15635,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             &harness.git_definition,
             "commit",
             BTreeMap::from([
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("working-directory", string_list(&["/workspace/repo"])),
                 ("message", string_list(&["push fixture"])),
                 ("author", optional_string(None)),
@@ -15648,6 +15652,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.git_definition,
         "push",
         BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
             ("working-directory", string_list(&["/workspace/repo"])),
             (
                 "remote",
@@ -15661,7 +15666,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
             ("force", SchemaValue::Bool(false)),
             ("force-with-lease", SchemaValue::Bool(false)),
             ("lease", optional_string(None)),
-            ("atomic", SchemaValue::Bool(true)),
+            ("atomic", SchemaValue::Bool(false)),
         ]),
     )
     .await?;
@@ -15674,6 +15679,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         &harness.git_definition,
         "clone",
         BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
             ("working-directory", string_list(&["/workspace"])),
             (
                 "repository",
@@ -15705,6 +15711,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         );
     }
     let interrupted_fields = BTreeMap::from([
+        ("cwd", SchemaValue::String("/".to_string())),
         ("working-directory", string_list(&["/workspace/repo"])),
         (
             "remote",
@@ -15718,7 +15725,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         ("force", SchemaValue::Bool(false)),
         ("force-with-lease", SchemaValue::Bool(false)),
         ("lease", optional_string(None)),
-        ("atomic", SchemaValue::Bool(true)),
+        ("atomic", SchemaValue::Bool(false)),
         ("authentication", SchemaValue::Option { inner: None }),
     ]);
     let push_path = vec!["push".to_string()];
@@ -15773,6 +15780,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         "an accepted receive-pack POST must not be blindly retried"
     );
     let status_fields = BTreeMap::from([
+        ("cwd", SchemaValue::String("/".to_string())),
         ("working-directory", string_list(&["/workspace/repo"])),
         ("paths", string_list(&[])),
         ("short", SchemaValue::Bool(true)),
@@ -16032,6 +16040,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
             &harness.git_definition,
             "ls-remote",
             BTreeMap::from([
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("working-directory", string_list(&["/workspace/repo"])),
                 ("authentication", secret.clone()),
                 (
@@ -16103,6 +16112,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
         &harness.git_definition,
         "config",
         BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
             ("working-directory", string_list(&["/workspace/repo"])),
             ("local", SchemaValue::Bool(true)),
             (

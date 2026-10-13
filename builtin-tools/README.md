@@ -101,12 +101,15 @@ Relative symlinks are supported. File-to-directory checkout transitions are also
 the pinned library cannot apply them safely.
 
 Recovery and active cancellation of real HTTP transfers are not release-ready. The retained
-partial-download restart test exposes guest-observation ordering in the durable HTTP stream; the
-related owning-layer work is [Wasmtime #11](https://github.com/golemcloud/wasmtime/pull/11) and
-[Golem #4094](https://github.com/golemcloud/golem/pull/4094), currently aimed at durable-session
-inputs rather than a verified HTTP fix. Node HTTP unfinished-response cleanup needs an upstream
-`wasm-rquickjs` fix as well. This change supplies no SDK generator patch or runtime version update,
-and does not claim that either dependency fixes the HTTP reproducer.
+partial-download test completes an authenticated smart-HTTP probe and an ordinary tool clone,
+then times out after a controlled worker restart. It does not reach active HTTP cancellation,
+push roundtrip, or push-response-loss checks. A completion-delivery replay error appears during
+executor shutdown; its relation to the timeout is not established. The candidate uses
+`wasm-rquickjs` 0.4.11's upstream Node HTTP unfinished-response cleanup fix, without an SDK
+generator patch, and Golem's merged WebSocket host integration. Related stream-observation work
+in [Wasmtime #11](https://github.com/golemcloud/wasmtime/pull/11) and
+[Golem #4124](https://github.com/golemcloud/golem/pull/4124) does not establish HTTP clone recovery.
+Publication waits for the complete recovery and active-cancellation checks to pass.
 
 ### Git differential test prerequisites
 
