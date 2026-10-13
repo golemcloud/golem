@@ -1278,3 +1278,263 @@ func TestClosingAStreamStopsTheStreamsItsUnreadItemsCarried(t *testing.T) {
 		t.Fatalf("outer terminal=%v, inner queued=%d, exposed=%v", terminal, innerQ, innerExposed)
 	}
 }
+
+// A resume can announce a stream the client has never seen returned, and the
+// server can send that stream's items before the value that returns it: the
+// stream holds them until the value gives it its item type.
+func TestAStreamHoldsItsItemsUntilAValueReturnsIt(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			outputItem(c, 6, 0, "i0", 7)
+			outputItem(c, 6, 1, "i1", 8)
+			outputEnd(c, 6, 2, "i2", map[string]any{"kind": "ok"})
+			c.send("outputStreamItem", map[string]any{
+				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "ok"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-resumed
+	inner, ok, err := out.Next(ctx)
+	if err != nil || !ok {
+		t.Fatalf("outer item %v %v", ok, err)
+	}
+	values, err := inner.Collect(ctx)
+	if err != nil || !reflect.DeepEqual(values, []uint32{7, 8}) {
+		t.Fatalf("inner stream %v, %v", values, err)
+	}
+	if _, ok, err := out.Next(ctx); ok || err != nil {
+		t.Fatalf("the outer stream did not end: %v %v", ok, err)
+	}
+}
+
+// A stream that is never returned cannot make the session hold frames
+// without bound: the held bytes have a session-wide budget.
+func TestHeldFramesHaveABudget(t *testing.T) {
+	s := &session{}
+	o := &outputStream{s: s}
+	if err := o.hold(heldFrame{bytes: maxHeldBytes}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.hold(heldFrame{bytes: 1}); err == nil || !strings.Contains(err.Error(), "never returned") {
+		t.Fatalf("got %v", err)
+	}
+	o.dropHeld()
+	if s.heldBytes != 0 {
+		t.Fatalf("held bytes after a drop: %d", s.heldBytes)
+	}
+}
+
+// The reader closes the outer stream before a resume. The inner stream's items
+// are held, and the replayed outer item types the inner stream while the outer
+// one is stopped: the held items keep the inner stream's sequence in step.
+func TestHeldFramesOfAStreamAStoppedStreamTypesKeepItsSequence(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.expect("streamCancel")
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			outputItem(c, 6, 0, "i0", 7)
+			outputItem(c, 6, 1, "i1", 8)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			outputItem(c, 6, 2, "i2", 9)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := out.core.src.(*remoteSource[AgentStream[uint32]]).out.s
+	_ = out.Close()
+	<-resumed
+	time.Sleep(300 * time.Millisecond)
+	s.mu.Lock()
+	err = s.err
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatalf("session failed: %v", err)
+	}
+}
+
+// A replayed backlog longer than a stream's queue may arrive before the outer
+// item that returns the stream.
+func TestALongBacklogMayArriveBeforeTheItemThatReturnsItsStream(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			time.Sleep(100 * time.Millisecond)
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			for i := range maxQueuedItems + 1 {
+				outputItem(c, 6, uint64(i), "i"+itoa(uint64(i)), 1)
+			}
+			c.send("outputStreamItem", map[string]any{
+				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-resumed
+	_, _, err = out.Next(ctx)
+	if err != nil {
+		t.Fatalf("outer item: %v", err)
+	}
+}
+
+// The reader of a connection the session has left does not take the frames the
+// current connection's reader is about to release.
+func TestAStaleReaderLeavesTheReleaseListAlone(t *testing.T) {
+	s := &session{}
+	c1, c2 := &sessionConn{}, &sessionConn{}
+	x := &outputStream{s: s, held: []heldFrame{{binary: []byte{1}}}, typed: true}
+	s.conn = c2
+	s.boundNow = []*outputStream{x}
+	if err := s.releaseHeld(c1); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.boundNow) == 0 {
+		t.Fatalf("a stale reader cleared the release list; x still holds %d frames", len(x.held))
+	}
+}
+
+// A stream no value ever returned does not keep a finished invocation from
+// finishing: it was never the caller's, and its held frames are dropped.
+func TestAStreamNeverReturnedDoesNotKeepTheInvocationOpen(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.expect("streamCancel")
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			outputItem(c, 6, 0, "i0", 7)
+			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "ok"})
+			outputEnd(c, 5, 0, "", map[string]any{"kind": "cancelled", "reason": "consumer-drop"})
+			finished(c)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := out.core.src.(*remoteSource[AgentStream[uint32]]).out.s
+	_ = out.Close()
+	<-resumed
+	time.Sleep(300 * time.Millisecond)
+	s.mu.Lock()
+	err = s.err
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatalf("session failed: %v", err)
+	}
+}
+
+// A stream returned on the first connection by an item still unread at the
+// drop is unreachable after the resume until the item is replayed: its
+// backlog, longer than a queue, is held rather than blocking the read loop.
+func TestAnUnreachableStreamHoldsItsBacklogUntilItsItemIsReplayed(t *testing.T) {
+	resumed := make(chan struct{})
+	var key any
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			key = start.m["idempotencyKey"]
+			accept(c, start, "sess")
+			streamResult(c, 2, "out", nestedU32StreamGraph)
+			c.send("outputStreamItem", map[string]any{
+				"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(3, "inner")}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			time.Sleep(200 * time.Millisecond)
+			c.drop()
+		},
+		func(c *fakeConn) {
+			resume := c.expect("resumeAttach")
+			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
+			close(resumed)
+			for i := range maxQueuedItems + 1 {
+				outputItem(c, 6, uint64(i), "i"+itoa(uint64(i)), 1)
+			}
+			c.send("outputStreamItem", map[string]any{
+				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
+				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+			})
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, server.agent(t), "nested", schema.RecordValue{},
+		DecodeStream(DecodeStream(DecodeU32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-resumed
+	_, _, err = out.Next(ctx)
+	if err != nil {
+		t.Fatalf("outer item: %v", err)
+	}
+}

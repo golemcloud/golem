@@ -107,6 +107,12 @@ type session struct {
 	// way to a queue, by entry id; detach unbinds them with the queued ones.
 	inflight     map[uint64]schema.SchemaValue
 	nextInflight uint64
+
+	// boundNow lists the streams a received value has just made reachable
+	// again while they held frames; the read loop releases those frames.
+	boundNow []*outputStream
+	// heldBytes is the size of the frames all streams hold.
+	heldBytes int
 }
 
 type sessionResult struct {
@@ -405,6 +411,9 @@ func (s *session) read(c *sessionConn) {
 		} else {
 			err = s.handleBinary(c, data)
 		}
+		if err == nil {
+			err = s.releaseHeld(c)
+		}
 		if err != nil {
 			s.fail(err)
 			return
@@ -469,6 +478,7 @@ func (s *session) detach() error {
 		unbindStreams(value)
 		delete(s.inflight, id)
 	}
+	s.boundNow = nil
 	if s.accepted {
 		return s.prepareResume()
 	}
@@ -983,6 +993,9 @@ func (s *session) bindOutputs(ref schema.Ref, t schema.SchemaType, v schema.Sche
 		if item == nil {
 			return nil, protocolErrorf("a returned stream has no item type")
 		}
+		if !out.takesFrames() && len(out.held) > 0 {
+			s.boundNow = append(s.boundNow, out)
+		}
 		out.bound = true
 		out.typed = true
 		out.item = ref.At(*item)
@@ -1010,13 +1023,7 @@ func (s *session) outputOn(channel uint32) (*outputStream, error) {
 	if !ok || s.directions[token] != "output" {
 		return nil, protocolErrorf("channel %d is not an output", channel)
 	}
-	// A stream that was returned once keeps its item type while a resume
-	// replays the value that returned it, so its own items may arrive first.
-	out := s.outputs[token]
-	if !out.typed {
-		return nil, protocolErrorf("an item arrived for a stream that was never returned")
-	}
-	return out, nil
+	return s.outputs[token], nil
 }
 
 func (s *session) receiveItem(c *sessionConn, m message) error {
@@ -1070,6 +1077,11 @@ func (s *session) bindItem(c *sessionConn, m message) (*outputStream, outEntry, 
 		s.mu.Unlock()
 		return nil, outEntry{}, err
 	}
+	if !out.takesFrames() {
+		err := out.hold(heldFrame{item: m, bytes: heldFrameOverhead + len(m["value"])})
+		s.mu.Unlock()
+		return nil, outEntry{}, err
+	}
 	if out.lane != laneJSON {
 		s.mu.Unlock()
 		return nil, outEntry{}, protocolErrorf("a %s stream's item arrived as JSON", out.lane)
@@ -1092,6 +1104,40 @@ func (s *session) bindItem(c *sessionConn, m message) (*outputStream, outEntry, 
 	}, nil
 }
 
+// releaseHeld handles, in arrival order, the frames that streams held until
+// a received value reached them again. It runs on the read goroutine
+// before the next frame, so the frames keep their place in the stream.
+func (s *session) releaseHeld(c *sessionConn) error {
+	for {
+		s.mu.Lock()
+		// A reader of a connection the session has left must not touch the
+		// list the current connection's reader releases.
+		if s.conn != c || len(s.boundNow) == 0 {
+			s.mu.Unlock()
+			return nil
+		}
+		out := s.boundNow[0]
+		s.boundNow = s.boundNow[1:]
+		frames := out.held
+		out.dropHeld()
+		s.mu.Unlock()
+		for _, f := range frames {
+			var err error
+			switch {
+			case f.item != nil:
+				err = s.receiveItem(c, f.item)
+			case f.end != nil:
+				err = s.receiveEnd(c, f.end)
+			default:
+				err = s.handleBinary(c, f.binary)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func (s *session) handleBinary(c *sessionConn, data []byte) error {
 	f, err := decodeBinary(data)
 	if err != nil {
@@ -1107,6 +1153,11 @@ func (s *session) handleBinary(c *sessionConn, data []byte) error {
 		return protocolErrorf("a binary frame arrived before the invocation was accepted")
 	}
 	out, err := s.outputOn(f.channel)
+	if err == nil && !out.takesFrames() {
+		err = out.hold(heldFrame{binary: data, bytes: heldFrameOverhead + len(data)})
+		s.mu.Unlock()
+		return err
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return err
@@ -1193,6 +1244,11 @@ func (s *session) receiveEnd(c *sessionConn, m message) error {
 		return nil
 	}
 	out, err := s.outputOn(channel)
+	if err == nil && !out.takesFrames() {
+		err = out.hold(heldFrame{end: m, bytes: heldFrameOverhead})
+		s.mu.Unlock()
+		return err
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return err
@@ -1274,7 +1330,16 @@ func (s *session) receiveFinished(m message) error {
 		}
 		s.mu.Lock()
 		resultSent := s.resultSent
-		open := slices.ContainsFunc(slices.Collect(mapValues(s.outputs)), func(o *outputStream) bool { return !o.terminal })
+		// A stream no delivered value reaches is not the caller's: its held
+		// frames are dropped instead of waiting for its end.
+		open := slices.ContainsFunc(slices.Collect(mapValues(s.outputs)), func(o *outputStream) bool {
+			return o.takesFrames() && !o.terminal
+		})
+		for _, o := range s.outputs {
+			if !o.takesFrames() {
+				o.dropHeld()
+			}
+		}
 		s.mu.Unlock()
 		if !resultSent {
 			return protocolErrorf("the invocation finished before its result")

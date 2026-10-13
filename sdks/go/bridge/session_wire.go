@@ -44,7 +44,15 @@ const (
 	maxQueuedItems   = 256
 	maxQueuedBytes   = 16 << 20
 	maxSessionQueued = 32 << 20
-	maxUnacked       = 16 << 20
+	// maxHeldBytes bounds the frames a session holds for streams without an
+	// item type: after a resume a stream the client never saw returned
+	// replays its backlog before the value that returns it, but a server that
+	// never returns the stream cannot make the client keep its frames forever.
+	maxHeldBytes = 128 << 20
+	// heldFrameOverhead is what a held frame counts beyond its payload, so
+	// that many small frames also use up the budget.
+	heldFrameOverhead = 1 << 10
+	maxUnacked        = 16 << 20
 )
 
 // protocolError is a message the server should never have sent. It ends the

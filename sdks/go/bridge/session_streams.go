@@ -358,6 +358,11 @@ type outputStream struct {
 	// its item type; it stays set while a resume unbinds the stream.
 	typed   bool
 	exposed bool
+	// held keeps the frames that arrived while no value reached the stream
+	// (see takesFrames): after a resume the server replays every stream at
+	// once, so a stream's items can come before the replayed value that
+	// returns it.
+	held []heldFrame
 
 	queue  []outEntry
 	queued int
@@ -409,6 +414,46 @@ func (o *outputStream) expose() error {
 	}
 	o.exposed = true
 	return nil
+}
+
+// takesFrames reports whether the stream's frames go to its queue: it has an
+// item type and a value bound it, the reader has it, or it is stopped (offer
+// then discards them in sequence). Otherwise nobody can reach the stream yet,
+// and it holds its frames: queueing them could fill a queue nobody reads and
+// block the read loop before the value that reaches the stream arrives.
+// Called with s.mu held.
+func (o *outputStream) takesFrames() bool {
+	return o.typed && (o.bound || o.exposed || o.stopped)
+}
+
+// heldFrame is a frame a stream nobody reaches yet keeps: an item or an end
+// message, or a binary frame, with its size on the wire.
+type heldFrame struct {
+	item   message
+	end    message
+	binary []byte
+	bytes  int
+}
+
+// hold keeps a frame until a value reaches the stream. Holding does not
+// block the read loop, since the value that types the stream comes later on
+// the same connection; the session's held bytes are bounded by maxHeldBytes
+// instead. Called with s.mu held.
+func (o *outputStream) hold(f heldFrame) error {
+	if o.s.heldBytes+f.bytes > maxHeldBytes {
+		return protocolErrorf("items arrived for a stream that was never returned")
+	}
+	o.s.heldBytes += f.bytes
+	o.held = append(o.held, f)
+	return nil
+}
+
+// dropHeld forgets the held frames. Called with s.mu held.
+func (o *outputStream) dropHeld() {
+	for _, f := range o.held {
+		o.s.heldBytes -= f.bytes
+	}
+	o.held = nil
 }
 
 // offer queues what the server sent, waiting while the queue is full.
@@ -576,6 +621,8 @@ func (o *outputStream) stopLocked(reason string) {
 	}
 	o.stopped = true
 	o.stopReason = reason
+	// Held frames stay: once the stream is typed they go through offer, which
+	// discards them for a stopped stream but keeps its sequence in step.
 	for len(o.queue) > 0 {
 		releaseCarried(o.queue[0].value, reason)
 		o.pop()
@@ -594,6 +641,8 @@ func (o *outputStream) stopLocked(reason string) {
 // resume prepares the stream for a new attachment: what was queued but not
 // read is dropped, to be replayed from the last cursor. Called with s.mu held.
 func (o *outputStream) resume() {
+	// Held frames are replayed by the server too.
+	o.dropHeld()
 	// The server replays the queued items, so the streams they bound are
 	// unbound again: an item binds its streams once the reader receives it.
 	for _, e := range o.queue {
