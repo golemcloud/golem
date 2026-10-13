@@ -932,61 +932,61 @@ impl TestContext {
             .spawn()
             .unwrap();
 
-        let mut read_before_close = Vec::new();
-        let mut open_stream: Pin<Box<dyn AsyncRead + Send>> = match closed {
-            ClosedStream::Stdout => {
-                let mut stdout = child.stdout.take().unwrap();
-                let mut buffer = [0u8; 4096];
-                match when {
-                    CloseWhen::AtSpawn => {}
-                    CloseWhen::Quiet => loop {
-                        match tokio::time::timeout(Duration::from_secs(5), stdout.read(&mut buffer))
-                            .await
-                        {
-                            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
-                            Ok(Ok(_)) => {}
-                        }
-                    },
-                    CloseWhen::AfterBytes(bytes) => {
-                        tokio::time::timeout(Duration::from_secs(120), async {
-                            while read_before_close.len() < bytes {
-                                let count = stdout.read(&mut buffer).await.unwrap();
-                                assert!(
-                                    count > 0,
-                                    "the CLI ended after {} of {bytes} bytes",
-                                    read_before_close.len()
-                                );
-                                read_before_close.extend_from_slice(&buffer[..count]);
-                            }
-                        })
-                        .await
-                        .expect("the CLI did not print enough output before the reader left");
-                    }
-                }
-                drop(stdout);
-                Box::pin(child.stderr.take().unwrap())
-            }
-            ClosedStream::Stderr => {
-                assert!(matches!(when, CloseWhen::AtSpawn));
-                drop(child.stderr.take());
-                Box::pin(child.stdout.take().unwrap())
-            }
+        let stdout: Pin<Box<dyn AsyncRead + Send>> = Box::pin(child.stdout.take().unwrap());
+        let stderr: Pin<Box<dyn AsyncRead + Send>> = Box::pin(child.stderr.take().unwrap());
+        let (mut closing, other) = match closed {
+            ClosedStream::Stdout => (stdout, stderr),
+            ClosedStream::Stderr => (stderr, stdout),
         };
+        // The other pipe is drained meanwhile, so that it never blocks the CLI.
+        let other = tokio::spawn(async move {
+            let mut other = other;
+            let mut bytes = Vec::new();
+            other.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
 
-        let mut open_bytes = Vec::new();
-        open_stream.read_to_end(&mut open_bytes).await.unwrap();
+        let mut read_before_close = Vec::new();
+        let mut buffer = [0u8; 4096];
+        match when {
+            CloseWhen::AtSpawn => {}
+            CloseWhen::Quiet => loop {
+                match tokio::time::timeout(Duration::from_secs(5), closing.read(&mut buffer)).await
+                {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                    Ok(Ok(_)) => {}
+                }
+            },
+            CloseWhen::AfterBytes(bytes) => {
+                tokio::time::timeout(Duration::from_secs(120), async {
+                    while read_before_close.len() < bytes {
+                        let count = closing.read(&mut buffer).await.unwrap();
+                        assert!(
+                            count > 0,
+                            "the CLI ended after {} of {bytes} bytes",
+                            read_before_close.len()
+                        );
+                        read_before_close.extend_from_slice(&buffer[..count]);
+                    }
+                })
+                .await
+                .expect("the CLI did not print enough output before the reader left");
+            }
+        }
+        drop(closing);
 
+        let other = other.await.unwrap();
         let status = child.wait().await.unwrap();
         match closed {
             ClosedStream::Stdout => RawOutput {
                 status,
                 stdout: read_before_close,
-                stderr: open_bytes,
+                stderr: other,
             },
             ClosedStream::Stderr => RawOutput {
                 status,
-                stdout: open_bytes,
-                stderr: Vec::new(),
+                stdout: other,
+                stderr: read_before_close,
             },
         }
     }
