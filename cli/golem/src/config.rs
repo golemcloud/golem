@@ -1711,42 +1711,46 @@ mod tests {
 
     #[test]
     fn manifest_local_server_values_are_used_when_cli_args_are_absent() {
-        let manifest = local_server(LocalServer {
-            system_memory_override: std::num::NonZeroU64::new(2147483648),
-            router_addr: Some("127.0.0.2".to_string()),
-            router_port: Some(9882),
-            custom_request_port: Some(9008),
-            mcp_port: Some(9009),
-            ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
-            data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
-            agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            let manifest = local_server(LocalServer {
+                system_memory_override: std::num::NonZeroU64::new(2147483648),
+                router_addr: Some("127.0.0.2".to_string()),
+                router_port: Some(9882),
+                custom_request_port: Some(9008),
+                mcp_port: Some(9009),
+                ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
+                data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
+                agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
+            });
+
+            let config = load(Some(&manifest), &RunArgs::default()).unwrap();
+
+            assert_eq!(config.router.address, "127.0.0.2");
+            assert_eq!(config.router.port, 9882);
+            assert_eq!(config.worker_service.custom_request_port, 9008);
+            assert_eq!(config.worker_service.mcp_port, 9009);
+            assert_eq!(
+                config.worker_executor.memory.system_memory_override,
+                Some(2147483648)
+            );
+            assert_eq!(
+                config.ports_file,
+                Some(PathBuf::from("/tmp/test-app/.golem/ports.json"))
+            );
+            assert_eq!(config.data_dir, PathBuf::from("/tmp/test-app/.golem/data"));
+            assert_eq!(
+                blob_root(&config.worker_executor.blob_storage),
+                Path::new("/tmp/test-app/.golem/data/blobs")
+            );
+            assert_eq!(
+                config.worker_executor.filesystem_storage.mode,
+                FilesystemStorageMode::Directory {
+                    root: Path::new("/tmp/test-app/.golem/agents").into()
+                }
+            );
+            Ok(())
         });
-
-        let config = load(Some(&manifest), &RunArgs::default()).unwrap();
-
-        assert_eq!(config.router.address, "127.0.0.2");
-        assert_eq!(config.router.port, 9882);
-        assert_eq!(config.worker_service.custom_request_port, 9008);
-        assert_eq!(config.worker_service.mcp_port, 9009);
-        assert_eq!(
-            config.worker_executor.memory.system_memory_override,
-            Some(2147483648)
-        );
-        assert_eq!(
-            config.ports_file,
-            Some(PathBuf::from("/tmp/test-app/.golem/ports.json"))
-        );
-        assert_eq!(config.data_dir, PathBuf::from("/tmp/test-app/.golem/data"));
-        assert_eq!(
-            blob_root(&config.worker_executor.blob_storage),
-            Path::new("/tmp/test-app/.golem/data/blobs")
-        );
-        assert_eq!(
-            config.worker_executor.filesystem_storage.mode,
-            FilesystemStorageMode::Directory {
-                root: Path::new("/tmp/test-app/.golem/agents").into()
-            }
-        );
     }
 
     #[test]
@@ -1848,14 +1852,18 @@ mod tests {
 
     #[test]
     fn missing_config_file_is_an_error() {
-        let run_args = RunArgs {
-            config: Some(PathBuf::from("/nonexistent/golem.toml")),
-            ..run_args_with_data_dir("/data")
-        };
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            let run_args = RunArgs {
+                config: Some(PathBuf::from("/nonexistent/golem.toml")),
+                ..run_args_with_data_dir("/data")
+            };
 
-        let error = jail_error(load(None, &run_args));
+            let error = jail_error(load(None, &run_args));
 
-        assert!(error.contains("/nonexistent/golem.toml"), "{error}");
+            assert!(error.contains("/nonexistent/golem.toml"), "{error}");
+            Ok(())
+        });
     }
 
     #[test]
