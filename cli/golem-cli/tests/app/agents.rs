@@ -1,4 +1,6 @@
-use crate::app::{CLOSED_OUTPUT_EXIT, TestContext, cmd, flag, merge_into_manifest};
+use crate::app::{
+    CLOSED_OUTPUT_EXIT, CloseWhen, ClosedStream, TestContext, cmd, flag, merge_into_manifest,
+};
 use crate::{crate_path, workspace_path};
 use std::path::PathBuf;
 
@@ -3464,34 +3466,11 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
     assert!(outputs.success_or_dump());
 }
 
-#[test]
-#[timeout("15 minutes")]
-async fn tool_invoke_stdout_contains_only_raw_bytes() {
-    let mut ctx = TestContext::new();
+/// Starts the server and deploys a component with the tool `raw-output`. Its commands `emit`
+/// and `flood` write to the raw stdout of the tool, and `flood-diagnostics` writes to its raw
+/// stderr. The two flood commands write more than a pipe holds.
+async fn deploy_raw_output_tool(ctx: &mut TestContext) {
     let app_name = "tool-raw-stdout";
-
-    let failed = ctx
-        .cli_with_input(
-            [
-                cmd::TOOL,
-                cmd::INVOKE,
-                "--component",
-                "tool-raw-stdout:provider",
-                "raw-output",
-                "--stdout",
-                "--",
-                "emit",
-            ],
-            &[],
-        )
-        .await;
-    assert!(!failed.success());
-    assert!(failed.stdout().is_empty());
-    assert!(
-        !failed.stderr.is_empty(),
-        "failure diagnostics must reach stderr"
-    );
-
     ctx.start_server().await;
     fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
     ctx.cd(app_name);
@@ -3544,6 +3523,9 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
             pub trait RawOutput {
                 async fn emit(&self, stdout: OutputStream);
                 fn repeat(&self, text: String, count: u32) -> String;
+                async fn flood(&self, stdout: OutputStream);
+                #[arg(diagnostics, channel = "stderr")]
+                async fn flood_diagnostics(&self, diagnostics: OutputStream);
             }
 
             struct RawOutputImpl;
@@ -3557,6 +3539,22 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
                 fn repeat(&self, text: String, count: u32) -> String {
                     text.repeat(count as usize)
                 }
+
+                async fn flood(&self, mut stdout: OutputStream) {
+                    write_more_than_a_pipe_holds(&mut stdout).await;
+                }
+
+                async fn flood_diagnostics(&self, mut diagnostics: OutputStream) {
+                    write_more_than_a_pipe_holds(&mut diagnostics).await;
+                }
+            }
+
+            async fn write_more_than_a_pipe_holds(stream: &mut OutputStream) {
+                for _ in 0..64 {
+                    if stream.write(vec![b'x'; 65536]).await.is_err() {
+                        break;
+                    }
+                }
             }
         "# },
     )
@@ -3566,6 +3564,36 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
     assert!(outputs.success_or_dump());
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn tool_invoke_stdout_contains_only_raw_bytes() {
+    let mut ctx = TestContext::new();
+
+    let failed = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(!failed.success());
+    assert!(failed.stdout().is_empty());
+    assert!(
+        !failed.stderr.is_empty(),
+        "failure diagnostics must reach stderr"
+    );
+
+    deploy_raw_output_tool(&mut ctx).await;
 
     let help = ctx
         .cli_with_input(
@@ -3690,6 +3718,55 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
         !output.stdout().is_empty(),
         "file mode retains its report on stdout"
     );
+}
+
+/// The reader of the raw stdout or the raw stderr of `tool invoke` takes the first bytes and
+/// leaves while the tool goes on writing. The end of the process comes from the failed write of
+/// the raw output.
+#[test]
+#[timeout("15 minutes")]
+async fn a_reader_that_leaves_the_raw_output_of_tool_invoke_ends_the_command_with_the_exit_code_of_sigpipe()
+ {
+    let mut ctx = TestContext::new();
+    deploy_raw_output_tool(&mut ctx).await;
+
+    for (raw_stream, command, closed) in [
+        ("--stdout", "flood", ClosedStream::Stdout),
+        ("--stderr", "flood-diagnostics", ClosedStream::Stderr),
+    ] {
+        let output = tokio::time::timeout(
+            Duration::from_secs(90),
+            ctx.cli_closing_output(
+                [
+                    cmd::TOOL,
+                    cmd::INVOKE,
+                    "--component",
+                    "tool-raw-stdout:provider",
+                    "raw-output",
+                    raw_stream,
+                    "--",
+                    command,
+                ],
+                closed,
+                CloseWhen::AfterBytes(16),
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("tool invoke {raw_stream} kept running after the reader had left")
+        });
+        let open_stream = match closed {
+            ClosedStream::Stdout => output.stderr_text(),
+            ClosedStream::Stderr => String::from_utf8_lossy(output.stdout()).into_owned(),
+        };
+        assert_eq!(
+            output.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "tool invoke {raw_stream} after the reader left did not end with the exit code of SIGPIPE: {open_stream}"
+        );
+        assert!(!open_stream.contains("panicked"));
+        assert!(!open_stream.contains("Broken pipe"));
+    }
 }
 
 /// End-to-end test for the Rust guest agent bridge: a provider component
