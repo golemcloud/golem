@@ -81,6 +81,7 @@ use crate::services::environment_state::{
     ToolActivationOutcome, ToolDiscoveryError, get_accessible_tool_from_deployment,
     get_accessible_tools_from_deployment,
 };
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::{HasActiveAgents, HasNativeToolCatalog, HasWorker};
 use crate::worker::entity_invocation::{RetainedEntityStore, RetainedNativeContext};
 use crate::worker::instance::EntityInvocationBody;
@@ -1620,7 +1621,7 @@ where
         {
             let binding_owner = binding_owner.clone();
             let deployment = deployment.clone();
-            return tokio::task::spawn_blocking(move || {
+            return join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
                 tool_activation_from_mcp(
                     source,
                     observation.protocol_version,
@@ -1630,7 +1631,7 @@ where
                     &binding_owner,
                 )
                 .map(|activation| ToolActivationOutcome::Ready(Box::new(activation)))
-            })
+            }))
             .await
             .map_err(|error| {
                 ToolDiscoveryError::Retrieval(WorkerExecutorError::runtime(error.to_string()))

@@ -26,6 +26,7 @@ use crate::durable_host::concurrent::{
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
 use crate::services::oplog::OplogOps;
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
 use crate::worker::owner_lane::OwnerInvocationId;
 use crate::workerctx::WorkerCtx;
@@ -1485,10 +1486,12 @@ pub(crate) async fn encode_tool_terminal(
     terminal: SerializableToolOperationTerminal,
     context: &'static str,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
-    let result = tokio::task::spawn_blocking(move || terminal.into_typed_schema_value())
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(format!("{context} task failed: {error}")))?
-        .map_err(|error| WorkerExecutorError::runtime(format!("{context}: {error}")))?;
+    let result = join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
+        terminal.into_typed_schema_value()
+    }))
+    .await
+    .map_err(|error| WorkerExecutorError::runtime(format!("{context} task failed: {error}")))?
+    .map_err(|error| WorkerExecutorError::runtime(format!("{context}: {error}")))?;
     Ok(HostResponseEntityInvocation { result: Ok(result) })
 }
 
