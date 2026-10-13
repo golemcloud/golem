@@ -283,6 +283,16 @@ type CreateParameters struct {
 	InstanceId                   golem_core_types.Uuid
 }
 
+// Identifies a durable call by its place in a call order.
+//
+// `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
+// entity invocation or the parent custom durable invocation that made it. `ordinal` is the
+// place of the call among the calls numbered under `anchor`, starting at 0.
+type DurableInvocationId struct {
+	Anchor  uint64
+	Ordinal uint64
+}
+
 const (
 	SpanKindInternal uint8 = 0
 	SpanKindClient   uint8 = 1
@@ -331,7 +341,7 @@ type StartParameters struct {
 	Timestamp           wasi_clocks_0_3_0_system_clock.Instant
 	ParentStartIndex    witTypes.Option[uint64]
 	FunctionName        string
-	InvocationId        witTypes.Option[golem_core_types.Uuid]
+	InvocationId        witTypes.Option[DurableInvocationId]
 	ObservationalOwner  witTypes.Option[uint64]
 	Request             witTypes.Option[golem_core_types.TypedSchemaValue]
 	DurableFunctionType WrappedFunctionType
@@ -1275,7 +1285,7 @@ type RawStartParameters struct {
 	Timestamp           wasi_clocks_0_3_0_system_clock.Instant
 	ParentStartIndex    witTypes.Option[uint64]
 	FunctionName        string
-	InvocationId        witTypes.Option[golem_core_types.Uuid]
+	InvocationId        witTypes.Option[DurableInvocationId]
 	ObservationalOwner  witTypes.Option[uint64]
 	Request             witTypes.Option[OplogPayload]
 	DurableFunctionType WrappedFunctionType
@@ -3421,8 +3431,8 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 			case witTypes.OptionSome:
 				payload := (payload).InvocationId.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4))) = int8(int32(1))
-				*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4))) = int64((payload).HighBits)
-				*(*int64)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = int64((payload).LowBits)
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4))) = int64((payload).Anchor)
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = int64((payload).Ordinal)
 
 			default:
 				panic("unreachable")
@@ -8240,14 +8250,14 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 					panic("unreachable")
 				}
 				value480 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4))))
-				var option481 witTypes.Option[golem_core_types.Uuid]
+				var option481 witTypes.Option[DurableInvocationId]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4)))) {
 				case 0:
 
-					option481 = witTypes.None[golem_core_types.Uuid]()
+					option481 = witTypes.None[DurableInvocationId]()
 				case 1:
 
-					option481 = witTypes.Some[golem_core_types.Uuid](golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4))))})
+					option481 = witTypes.Some[DurableInvocationId](DurableInvocationId{Anchor: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4)))), Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4))))})
 				default:
 					panic("unreachable")
 				}
@@ -48475,14 +48485,14 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 						panic("unreachable")
 					}
 					value217 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4))))
-					var option218 witTypes.Option[golem_core_types.Uuid]
+					var option218 witTypes.Option[DurableInvocationId]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4)))) {
 					case 0:
 
-						option218 = witTypes.None[golem_core_types.Uuid]()
+						option218 = witTypes.None[DurableInvocationId]()
 					case 1:
 
-						option218 = witTypes.Some[golem_core_types.Uuid](golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4))))})
+						option218 = witTypes.Some[DurableInvocationId](DurableInvocationId{Anchor: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4)))), Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4))))})
 					default:
 						panic("unreachable")
 					}
@@ -88730,14 +88740,14 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 						panic("unreachable")
 					}
 					value217 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 1*4))))
-					var option218 witTypes.Option[golem_core_types.Uuid]
+					var option218 witTypes.Option[DurableInvocationId]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4)))) {
 					case 0:
 
-						option218 = witTypes.None[golem_core_types.Uuid]()
+						option218 = witTypes.None[DurableInvocationId]()
 					case 1:
 
-						option218 = witTypes.Some[golem_core_types.Uuid](golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))})
+						option218 = witTypes.Some[DurableInvocationId](DurableInvocationId{Anchor: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 2*4)))), Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))})
 					default:
 						panic("unreachable")
 					}

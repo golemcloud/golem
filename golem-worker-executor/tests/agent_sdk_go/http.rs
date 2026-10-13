@@ -69,7 +69,6 @@ fn ended_starts(oplog: &[PublicOplogEntryWithIndex], function_name: &str) -> Vec
 }
 
 #[test]
-#[ignore = "more than ten concurrent outgoing requests from goroutines never start sending, and the invocation hangs"]
 #[tracing::instrument]
 #[timeout("5m")]
 async fn go_parallel_http_from_goroutines_replays(
