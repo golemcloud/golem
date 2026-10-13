@@ -612,7 +612,34 @@ where
         entity_parent_start_index,
         expired_scope_root_ids,
     )
-    .await
+    .await?;
+    synchronize_owner_authority_access(store, get_ctx).await
+}
+
+/// Accessor form of `DurableWorkerCtx::synchronize_owner_authority`.
+async fn synchronize_owner_authority_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let Some(worker) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        ctx.state
+            .is_live()
+            .then(|| ctx.public_state.worker().clone())
+    }) else {
+        return Ok(());
+    };
+    let revoked =
+        crate::durable_host::owner_revoked_card_ids(&*worker.get_last_known_status().await);
+    store.with(|mut access| {
+        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked);
+    });
+    Ok(())
 }
 
 /// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent
