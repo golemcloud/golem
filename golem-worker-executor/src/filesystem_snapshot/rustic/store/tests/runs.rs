@@ -838,6 +838,42 @@ async fn a_restore_of_a_name_whose_deduped_pack_a_prune_marked_gives_the_whole_t
 
 #[test]
 #[timeout("60s")]
+async fn a_restore_whose_marked_pack_is_gone_while_an_index_file_marks_it_gives_corrupt_in_the_first_run()
+ {
+    // The packs of `p-2` are gone, and an index file still marks them. A load of the index again
+    // lists each pack that was gone, as a marked pack, so the run did not race a prune, and the
+    // answer is `Corrupt`.
+    let (inner, scope, _tree, _, unused) = marked_dedup().await;
+    let packs = blobs(&*inner, &scope.0, "data/").await;
+    futures::future::join_all(
+        packs
+            .iter()
+            .map(|path| inner.delete("test", "test", (*scope.0).clone(), Path::new(path))),
+    )
+    .await
+    .into_iter()
+    .collect::<anyhow::Result<Vec<()>>>()
+    .unwrap();
+    let store = store(
+        inner.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::from_secs(3600)),
+    );
+    let slots = SharedSlots::new(1);
+    let into = Scratch::new();
+
+    let restored = store
+        .restore(&scope, &name("p-2"), into.path(), &slots)
+        .await;
+
+    assert!(
+        matches!(restored, Err(RestoreFailure::Corrupt(_))),
+        "{restored:?}"
+    );
+    assert_eq!((unused, slots.counts().0), (true, 1));
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_marked_pack_after_a_load_that_missed_an_index_file_gives_the_whole_tree_in_the_first_run()
  {
     // The first listing of the restore holds an index file that is gone at its read, and the
