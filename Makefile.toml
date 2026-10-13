@@ -1501,9 +1501,28 @@ script = { file = "./local-run/start.sh" }
 
 ## ** GENERATE CONFIGS **
 
+[tasks.build-golem-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+command = "cargo"
+args = ["build", "-p", "golem", "--bin", "golem"]
+
+[tasks.generate-golem-server-configs]
+private = true
+description = "Generates the default and example config files of `golem server run`"
+dependencies = ["build-golem-non-ci"]
+script_runner = "@duckscript"
+script = '''
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+toml = exec --fail-on-error ${golem} --dump-config-default-toml
+writefile cli/golem/config/golem-server.toml ${toml.stdout}
+env_var = exec --fail-on-error ${golem} --dump-config-default-env-var
+writefile cli/golem/config/golem-server.sample.env ${env_var.stdout}
+'''
+
 [tasks.generate-configs]
 description = "Generates default and example config files"
-dependencies = ["build-shard-manager-kubernetes"]
+dependencies = ["build-shard-manager-kubernetes", "generate-golem-server-configs"]
 
 script = '''
 export RUST_BACKTRACE=1
@@ -1542,7 +1561,9 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.toml \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
-    golem-worker-executor/config/worker-executor.sample.env
+    golem-worker-executor/config/worker-executor.sample.env \
+    cli/golem/config/golem-server.toml \
+    cli/golem/config/golem-server.sample.env
 '''
 
 ## ** CHECK UNUSED DEPS **
@@ -2101,7 +2122,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.5\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.6\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2115,7 +2136,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.5\",\"npm@10.9.9+golem.5\",\"npx@10.9.9+golem.5\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.6\",\"npm@10.9.9+golem.6\",\"npx@10.9.9+golem.6\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2123,7 +2144,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.5\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.6\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2139,7 +2160,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.12\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.13\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json

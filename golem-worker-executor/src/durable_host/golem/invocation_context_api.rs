@@ -289,11 +289,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
         let handle;
         let started;
-        match begun
-            .matching_request(HostRequestNoInput {})
-            .resolve(self)
-            .await?
-        {
+        match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
                 started = guest_span_started(self, attributes);
                 handle = begun
@@ -418,7 +414,7 @@ where
     let begun =
         DurableCallSession::<Pair, NotCancellable>::begin(ctx, DurableFunctionType::ReadLocal)
             .await?;
-    let mut handle = match begun.matching_request(request.clone()).resolve(ctx).await? {
+    let mut handle = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => begun.start_live(ctx, request).await?,
         ResolvedCall::Replay(handle) => handle,
     };
@@ -478,7 +474,7 @@ async fn set_guest_span_attributes<Ctx: WorkerCtx>(
         DurableFunctionType::ReadLocal,
     )
     .await?;
-    let mut handle = match begun.matching_request(request.clone()).resolve(ctx).await? {
+    let mut handle = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => begun.start_live(ctx, request).await?,
         ResolvedCall::Replay(handle) => handle,
     };

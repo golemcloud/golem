@@ -116,7 +116,7 @@ oplog_entry! {
         raw {
             parent_start_index: Option<OplogIndex>,
             function_name: payload::host_functions::HostFunctionName,
-            invocation_id: Option<Uuid>,
+            invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
@@ -125,7 +125,7 @@ oplog_entry! {
         public {
             parent_start_index: Option<OplogIndex>,
             function_name: String,
-            invocation_id: Option<Uuid>,
+            invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,

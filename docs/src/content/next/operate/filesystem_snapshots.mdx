@@ -34,33 +34,39 @@ The local `golem server run` command on macOS uses `Apfs` at `<data_dir>/agents`
 golem server run --data-dir .golem/data
 ```
 
-The `--agent-filesystem-root` option changes the default root. Explicit filesystem TOML and environment settings override these defaults. On other platforms, the local server keeps `Temporary` storage and disabled filesystem snapshots by default.
+The `--agent-filesystem-root` option changes the default root. On other platforms, the local server keeps `Temporary` storage and disabled filesystem snapshots by default.
 
 Use `Apfs` for local development and tests only. It works on the Mac's existing APFS volume, whether the volume is case-sensitive or case-insensitive. It needs no special volume, disk image or privilege. Production still needs Linux 5.8 or later with XFS and reflink.
 
 The executor creates the root directory if it does not exist and refuses startup when native file cloning is unavailable. Do not run two executors with the same root.
 
-To override the local defaults, set the normal executor configuration in `config/worker-executor.toml`:
+To override the local defaults, set the executor settings in the `worker_executor` section of the server configuration file, and pass the file with `--config`:
 
 ```toml
-[filesystem_storage.mode]
+[worker_executor.filesystem_storage.mode]
 type = "Apfs"
 
-[filesystem_storage.mode.config]
+[worker_executor.filesystem_storage.mode.config]
 root = ".golem/agents"
 
-[filesystem_snapshots]
+[worker_executor.filesystem_snapshots]
 type = "Enabled"
 ```
 
-The local server reads the filesystem settings from this optional file, relative to the working directory. It does not search parent directories. An existing file with invalid TOML prevents startup. Then it applies the `GOLEM__` environment variables, which override the file. You can use these variables instead of the file:
+```shell
+golem server run --data-dir .golem/data --config golem-server.toml
+```
+
+The `GOLEM__WORKER_EXECUTOR__` environment variables override the file. You can use these variables instead of the file:
 
 ```shell
-export GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=Apfs
-export GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT="$PWD/.golem/agents"
-export GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE=Apfs
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT="$PWD/.golem/agents"
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
 golem server run --data-dir .golem/data
 ```
+
+The `--agent-filesystem-root` option overrides both. A storage mode that the file or an environment variable selects does not keep the root of the replaced mode, so set `root` together with `type`.
 
 There is no second switch for local filesystem snapshots. The macOS local server sets `filesystem_snapshots` to `Enabled` by default. A standalone executor must configure it. Setting `Enabled` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
 

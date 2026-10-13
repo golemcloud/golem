@@ -3086,22 +3086,29 @@ pub mod card {
 }
 
 pub mod server {
-    use crate::config::{
-        DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
-    };
-    use anyhow::Context;
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
+        /// TOML configuration file for the server. It has a `router` section and one section per
+        /// service (`registry_service`, `shard_manager`, `worker_service`, `worker_executor`,
+        /// `component_compilation_service`) with the same shape as that service's own config.
+        /// `GOLEM__<SECTION>__<FIELD>` environment variables override the file, and the flags
+        /// below override both.
+        #[clap(long, value_name = "FILE")]
+        pub config: Option<PathBuf>,
+
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
-        /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
-        /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
+        /// Overrides worker_executor.memory.system_memory_override and
+        /// localServer.systemMemoryOverride. The executor reserves 20% for host overhead. This is
+        /// not a hard RSS limit.
         #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
-        /// Address to serve the main API on, defaults to 0.0.0.0
+        /// IPv4 address to serve the main API on, defaults to 127.0.0.1. The server refuses an
+        /// address that is not loopback while the configuration uses a well-known default secret,
+        /// such as the local admin token.
         #[clap(long)]
         pub router_addr: Option<String>,
 
@@ -3158,60 +3165,22 @@ pub mod server {
         pub agent_filesystem_root: Option<PathBuf>,
     }
 
-    impl RunArgs {
-        pub fn with_env_overrides(self) -> anyhow::Result<Self> {
-            self.with_env_overrides_from(|name| std::env::var(name))
-        }
-
-        fn with_env_overrides_from(
-            mut self,
-            get_env: impl FnOnce(&str) -> Result<String, std::env::VarError>,
-        ) -> anyhow::Result<Self> {
-            if self.system_memory_override.is_none() {
-                const NAME: &str = "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE";
-                match get_env(NAME) {
-                    Ok(value) => {
-                        self.system_memory_override = Some(
-                            golem_common::config::byte_size::parse_positive(&value)
-                                .map_err(anyhow::Error::msg)
-                                .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
-                        );
-                    }
-                    Err(std::env::VarError::NotPresent) => {}
-                    Err(err) => return Err(err).with_context(|| format!("Failed to read {NAME}")),
-                }
-            }
-            Ok(self)
-        }
-
-        pub fn router_addr(&self) -> &str {
-            self.router_addr.as_deref().unwrap_or("0.0.0.0")
-        }
-
-        pub fn router_port(&self) -> u16 {
-            self.router_port.unwrap_or(DEFAULT_LOCAL_ROUTER_PORT)
-        }
-
-        pub fn custom_request_port(&self) -> u16 {
-            self.custom_request_port
-                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT)
-        }
-        pub fn mcp_port(&self) -> u16 {
-            self.mcp_port.unwrap_or(DEFAULT_LOCAL_MCP_PORT)
-        }
-    }
-
     #[derive(Debug, Subcommand)]
     pub enum ServerSubcommand {
-        /// Run golem server for local development. This is a long-running process and emits human-readable log output; the global `--format` flag is ignored. Use `--ports-file` to capture the bound ports as machine-readable JSON.
+        /// Run golem server. Without `--config` it uses the local development configuration. This is a long-running process and emits human-readable log output; the global `--format` flag is ignored. Use `--ports-file` to capture the bound ports as machine-readable JSON.
         #[command(after_help = crate::command_examples::SERVER_RUN)]
         Run {
             #[clap(flatten)]
             args: RunArgs,
         },
-        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses localServer.dataDir from the discovered manifest, or the platform default when no manifest is loaded. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
+        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses the data directory that `server run` with the same `--config` file, `GOLEM__` environment variables and manifest would use: `data_dir`, then localServer.dataDir from the discovered manifest, then the platform default. Refuses when a store of the configuration, such as a Postgres database or S3 blob storage, keeps state outside the data directory. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
         #[command(after_help = crate::command_examples::SERVER_CLEAN)]
-        Clean,
+        Clean {
+            /// The `server run --config` file of the server. Its `data_dir`, overridden by the
+            /// `GOLEM__DATA_DIR` environment variable, selects the directory to delete.
+            #[clap(long, value_name = "FILE")]
+            config: Option<PathBuf>,
+        },
     }
 }
 
