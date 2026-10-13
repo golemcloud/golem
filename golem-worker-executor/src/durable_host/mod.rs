@@ -11048,8 +11048,8 @@ struct PrivateDurableWorkerState {
     /// invocation. It bounds the entity's effective surface but is not exposed as a wallet handle.
     inherited_invocation_scope: Option<InheritedInvocationScope>,
     /// Cards the owner worker has revoked. Revocation events are drained by whichever of the
-    /// owner's Stores reaches a boundary first, so an entity Store excludes these cards from its
-    /// surface instead of relying on draining every event itself.
+    /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
+    /// surfaces instead of relying on draining every event itself.
     owner_revoked_card_ids: HashSet<CardId>,
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
