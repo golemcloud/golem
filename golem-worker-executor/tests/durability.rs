@@ -1999,8 +1999,8 @@ async fn snapshot_count(
         .count())
 }
 
-/// With a policy that takes a snapshot after each invocation, an ephemeral agent whose definition
-/// enables snapshots takes none, and a durable agent of the same component still takes snapshots.
+/// With an executor policy that takes a snapshot after each invocation, an ephemeral agent with
+/// snapshot hooks takes none, and a durable agent of the same component still takes snapshots.
 /// The executor keeps no filesystem snapshots, so each snapshot checks the tree of its agent after
 /// the save hook: a check count of zero shows that no snapshot of the ephemeral agent ran.
 #[test]

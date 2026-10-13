@@ -1150,6 +1150,39 @@ mod tests {
         assert!(msg.contains("get"));
     }
 
+    #[test]
+    fn validate_rejects_ephemeral_agent_with_enabled_snapshotting() {
+        for config in [
+            SnapshottingConfig::Default(Empty {}),
+            SnapshottingConfig::Periodic(SnapshottingPeriodic {
+                duration_nanos: 1_000_000_000,
+            }),
+            SnapshottingConfig::EveryNInvocation(SnapshottingEveryNInvocation { count: 5 }),
+        ] {
+            let agent = AgentTypeSchema {
+                snapshotting: Snapshotting::Enabled(config.clone()),
+                ..mock_agent_type(AgentMode::Ephemeral, vec![mock_method("do", None)])
+            };
+            let msg = agent
+                .validate()
+                .expect_err("ephemeral agents with snapshotting must be rejected");
+            assert!(
+                msg.contains("Agent type 'Test' is ephemeral"),
+                "{config:?}: {msg}"
+            );
+            assert!(msg.contains("snapshot"), "{config:?}: {msg}");
+        }
+    }
+
+    #[test]
+    fn validate_accepts_durable_agent_with_enabled_snapshotting() {
+        let agent = AgentTypeSchema {
+            snapshotting: Snapshotting::Enabled(SnapshottingConfig::Default(Empty {})),
+            ..mock_agent_type(AgentMode::Durable, vec![mock_method("do", None)])
+        };
+        assert!(agent.validate().is_ok());
+    }
+
     // -----------------------------------------------------------------------
     // Read-only / cache-policy codec round-trip (issue #3393)
     //

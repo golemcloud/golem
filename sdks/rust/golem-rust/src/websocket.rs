@@ -18,6 +18,7 @@ use crate::bindings::golem::websocket::client::{
 
 pub use crate::bindings::golem::websocket::client::{
     CloseInfo as WebSocketCloseInfo, Error as WebSocketError, Message as WebSocketMessage,
+    ReconstructionPolicy as WebSocketReconstructionPolicy,
 };
 
 /// A WebSocket connection with both blocking and async receive methods.
@@ -28,8 +29,13 @@ pub struct WebsocketConnection {
 impl WebsocketConnection {
     /// Connect to a WebSocket server at the given URL (ws:// or wss://).
     /// Optional headers for auth, subprotocols, etc.
-    pub fn connect(url: &str, headers: Option<Vec<(String, String)>>) -> Result<Self, Error> {
-        RawWebsocketConnection::connect(url, headers.as_deref()).map(|inner| Self { inner })
+    pub fn connect(
+        url: &str,
+        headers: Option<Vec<(String, String)>>,
+        reconstruction_policy: Option<WebSocketReconstructionPolicy>,
+    ) -> Result<Self, Error> {
+        RawWebsocketConnection::connect(url, headers.as_deref(), reconstruction_policy)
+            .map(|inner| Self { inner })
     }
 
     /// Send a message (text or binary).

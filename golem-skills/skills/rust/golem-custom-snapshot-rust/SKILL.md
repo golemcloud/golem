@@ -41,7 +41,7 @@ The `snapshotting` attribute accepts these values:
 | `"every(N)"` | `snapshotting = "every(1)"` | Snapshot every N successful function calls (use `"every(1)"` for every invocation) |
 | `"periodic(duration)"` | `snapshotting = "periodic(30s)"` | Snapshot at most once per time interval (uses `humantime` durations) |
 
-An ephemeral agent takes no snapshots, whatever its `snapshotting` value. Snapshots are for durable agents only.
+Snapshots are for durable agents only. An ephemeral agent takes no snapshots, and the SDK refuses an ephemeral agent definition whose `snapshotting` value is not disabled, with an error that names the agent.
 
 ```rust
 #[agent_definition(mount = "/periodic/{name}", snapshotting = "periodic(30s)")]

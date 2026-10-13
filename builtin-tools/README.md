@@ -39,7 +39,7 @@ container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `b
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
-`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.10` supports local
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.11` supports local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
 workflows. It exposes no remote commands. The runtime provides WASI HTTP, and a separate integration
 probe verifies that explicitly injecting `isomorphic-git/http/web` uses durable WASI HTTP calls
@@ -85,6 +85,12 @@ manifest must select each exact tool release under `tools.<name>.release` and ea
 release under `tools.middleware.<name>.release`. Native tools compiled into the host use separate
 registry/executor startup inventories and are ambient, so they have no top-level release
 declaration. See `golem-native-tool/README.md` for that path.
+
+The default tools are the exception: the CLI selects, grants and binds them for every deployment.
+An environment chooses them with `tools.defaults`: all of them by default, `[]` for none, or a
+list of names. `bash` is the only one; see `bash/README.md`.
+The list is `DEFAULT_TOOLS` in `golem-common/src/base_model/tool.rs`. An entry there must name a
+release that `BUILTIN_EXPORTS` provisions, at the same version.
 
 For example, this selects the built-in `read-file` release and makes it available to an agent:
 
@@ -173,7 +179,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.10
+      version: 0.1.11
 
 agents:
   CodingAgent:

@@ -512,7 +512,7 @@ tools:
   bash:
     release: { account: builtin-tool-owner@golem.cloud, name: bash, version: "0.2.1" }
   tsc:
-    release: { account: builtin-tool-owner@golem.cloud, name: tsc, version: "5.9.2+golem.4" }
+    release: { account: builtin-tool-owner@golem.cloud, name: tsc, version: "5.9.2+golem.5" }
 agents:
   CodingAgent:
     tools:

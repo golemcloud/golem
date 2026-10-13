@@ -322,6 +322,8 @@ object AgentDefinitionMacro {
       case Left(err) =>
         report.errorAndAbort(s"Invalid snapshotting on @agentDefinition for ${typeSymbol.fullName}: $err")
     }
+    if (!router && isEphemeral && snapshottingValue != Snapshotting.Disabled)
+      report.errorAndAbort(HttpAgentValidation.ephemeralSnapshotting(agentTypeName))
     val snapshottingExpr: Expr[Snapshotting] = snapshottingValue match {
       case Snapshotting.Disabled                                    => '{ Snapshotting.Disabled }
       case Snapshotting.Enabled(SnapshottingConfig.Default)         => '{ Snapshotting.Enabled(SnapshottingConfig.Default) }
