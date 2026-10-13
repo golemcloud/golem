@@ -153,6 +153,26 @@ golem agent oplog --from 100 'CounterAgent("my-counter")'
 
 Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the agent.
 
+### Viewing the oplog in a browser
+
+The oplog can be explored in an **interactive HTML viewer** instead of the terminal. The viewer groups the entries by invocation, merges each durable host call's **start** and **end** entries into one foldable row with its duration, nests the entries executed by tool entities under the tool invocation, and marks the regions skipped by a **jump** or a **revert**. It can filter by entry category, log level or index range, search the content of the entries, decode typed payloads, binary and snapshot data, and it shows per-invocation and per-type statistics.
+
+The `--serve` parameter starts a local server that hosts the viewer and opens it in the default browser:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --serve
+```
+
+The served viewer loads the oplog **page by page** through the API, so it works for oplogs of any size. It can run a **Lucene query** on the server (the same syntax as `--query`, see below), load the context around a query hit, jump to any oplog index, and **follow** a running agent by polling for new entries. `--from` and `--query` select the initial position and query of the viewer. Use `--port` to choose the port and `--no-open` to skip opening the browser. The server runs until it is interrupted.
+
+The `--html` parameter writes a **self-contained HTML file** instead, with every selected entry embedded in the page:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --html oplog.html --open
+```
+
+The generated file has no external dependencies, so it can be opened directly from disk or shared. `--open` opens it in the default browser. Because the page embeds all entries, it is meant for oplogs of moderate size; use `--from` or `--query` to narrow the selection, or `--serve` for large oplogs. The static viewer can also load a dump produced by `--format json` through its _Load JSON_ button.
+
 ### Searching for oplog entries
 
 The same command can also be used to **search** for oplog entries, using the `--query` parameter. This parameter requires a query using **lucene query syntax**. The following syntax elements are supported:
