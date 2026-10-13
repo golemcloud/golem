@@ -333,8 +333,8 @@ enum CloseWhen {
     AfterBytes(usize),
 }
 
-#[derive(Clone, Copy)]
-enum ClosedStream {
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ClosedStream {
     Stdout,
     Stderr,
 }
@@ -565,7 +565,7 @@ struct TestContext {
     startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
     server_log: Option<PathBuf>,
-    server_stdout_closed: bool,
+    server_closed_stream: Option<ClosedStream>,
     server_args: Vec<String>,
     env: HashMap<String, String>,
 }
@@ -659,7 +659,7 @@ impl TestContext {
             server_args: Vec::new(),
             server_process: None,
             server_log,
-            server_stdout_closed: false,
+            server_closed_stream: None,
             env,
         };
 
@@ -1321,13 +1321,21 @@ impl TestContext {
                 .stderr(Stdio::from(log_file_stderr));
         }
 
-        if self.server_stdout_closed {
-            command.stdout(Stdio::piped());
+        match self.server_closed_stream {
+            Some(ClosedStream::Stdout) => {
+                command.stdout(Stdio::piped());
+            }
+            Some(ClosedStream::Stderr) => {
+                command.stderr(Stdio::piped());
+            }
+            None => {}
         }
 
         let mut server_process = command.spawn().unwrap();
-        if self.server_stdout_closed {
-            drop(server_process.stdout.take());
+        match self.server_closed_stream {
+            Some(ClosedStream::Stdout) => drop(server_process.stdout.take()),
+            Some(ClosedStream::Stderr) => drop(server_process.stderr.take()),
+            None => {}
         }
         self.server_process = Some(server_process);
 

@@ -1,7 +1,7 @@
 use crate::app::{
-    CLOSED_OUTPUT_EXIT, TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
-    extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
-    placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
+    CLOSED_OUTPUT_EXIT, ClosedStream, TestContext, check_component_metadata, cmd,
+    copy_placeholder_wasm, extracted_component_metadata_path_hash, extracted_metadata_json, flag,
+    pattern, placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
     seed_full_extracted_metadata,
 };
 use crate::{Tracing, workspace_path};
@@ -102,19 +102,40 @@ async fn exit_code_with_closed(
     (outputs.exit_code(), outputs.stderr_text())
 }
 
-#[test]
-#[timeout("2m")]
-async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracing: &Tracing) {
+async fn assert_the_server_keeps_running_without_a_reader(closed: ClosedStream) {
     let mut ctx = TestContext::new();
-    ctx.server_stdout_closed = true;
+    ctx.server_closed_stream = Some(closed);
     ctx.start_server().await;
 
     tokio::time::sleep(Duration::from_secs(5)).await;
     let server = ctx.server_process.as_mut().unwrap();
     assert!(
         server.try_wait().unwrap().is_none(),
-        "the server ended after the reader of its stdout had gone"
+        "the server ended after the reader of one of its outputs had gone"
     );
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stdout_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stdout).await;
+}
+
+#[test]
+#[timeout("2m")]
+async fn the_server_keeps_running_when_the_reader_of_its_stderr_has_gone(_tracing: &Tracing) {
+    assert_the_server_keeps_running_without_a_reader(ClosedStream::Stderr).await;
+}
+
+#[test]
+async fn a_verbose_command_ends_with_the_exit_code_of_sigpipe_when_the_reader_of_stderr_has_gone(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    // The command writes only to stdout, but its diagnostics go to stderr.
+    let (code, stderr) =
+        exit_code_with_closed(&ctx, Closed::Stderr, &["-vvv", cmd::COMPLETION, "bash"]).await;
+    assert_eq!(code, Some(CLOSED_OUTPUT_EXIT), "{stderr}");
 }
 
 #[test]

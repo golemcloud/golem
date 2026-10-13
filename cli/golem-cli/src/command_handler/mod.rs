@@ -155,6 +155,17 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     ) -> ExitCode {
         let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(command) => {
+                // A server must outlive the reader of its console. Any other command ends once
+                // nobody reads its output. The rule is set before anything can write a
+                // diagnostic.
+                #[cfg(feature = "server-commands")]
+                let is_server = matches!(command.subcommand, GolemCliSubcommand::Server { .. });
+                #[cfg(not(feature = "server-commands"))]
+                let is_server = false;
+                if is_server {
+                    keep_running_on_closed_output();
+                }
+
                 let raw_outputs = raw_tool_outputs(&command.subcommand);
                 let _raw_output_guard = raw_outputs.map(|(raw_stdout, raw_stderr)| {
                     RawOutputReservation::new(raw_stdout, raw_stderr)
@@ -182,15 +193,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
-                // A server must outlive the reader of its console. Any other command ends once
-                // nobody reads its output.
-                #[cfg(feature = "server-commands")]
-                let is_server = matches!(command.subcommand, GolemCliSubcommand::Server { .. });
-                #[cfg(not(feature = "server-commands"))]
-                let is_server = false;
-                if is_server {
-                    keep_running_on_closed_output();
-                } else {
+                if !is_server {
                     watch_for_closed_stdout();
                 }
 

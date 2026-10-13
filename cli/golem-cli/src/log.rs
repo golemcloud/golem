@@ -264,16 +264,30 @@ pub enum TracingWriter {
 
 impl Write for TracingWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        match self {
+        let result = match self {
             Self::Stderr(writer) => writer.write(buffer),
             Self::Sink(writer) => writer.write(buffer),
+        };
+        match result {
+            Err(error) if is_closed_pipe(&error) => {
+                end_for_closed_output();
+                Ok(buffer.len())
+            }
+            result => result,
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        match self {
+        let result = match self {
             Self::Stderr(writer) => writer.flush(),
             Self::Sink(writer) => writer.flush(),
+        };
+        match result {
+            Err(error) if is_closed_pipe(&error) => {
+                end_for_closed_output();
+                Ok(())
+            }
+            result => result,
         }
     }
 }
