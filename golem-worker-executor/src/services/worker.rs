@@ -4567,6 +4567,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct FakeOplogService {
         existing: Vec<OwnedAgentId>,
+        /// Agents whose oplog does not read.
+        unreadable: Vec<OwnedAgentId>,
         initial_entries: HashMap<(OwnedAgentId, AgentMode), OplogEntry>,
         fail_delete_once: AtomicBool,
         hide_identity_after_delete_attempt: bool,
@@ -4687,6 +4689,15 @@ mod tests {
             _idx: OplogIndex,
             _n: u64,
         ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+            if self.unreadable.contains(owned_agent_id) {
+                return Err(UnreadableOplog {
+                    agent_id: owned_agent_id.agent_id(),
+                    error: crate::services::oplog::OplogReadError::corruption(
+                        crate::services::oplog::OplogReadSource::Archive(1),
+                        "failed to decode compressed oplog chunk ending at 2",
+                    ),
+                });
+            }
             if self.hide_identity_after_delete_attempt
                 && self.delete_attempts.load(Ordering::Relaxed) > 0
             {
@@ -5170,6 +5181,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, vec![current]);
+    }
+
+    /// An agent whose oplog does not read is left as it is, in the index and in storage, and the
+    /// scan goes on to the other members: no retry of the scan would read that oplog.
+    #[test]
+    async fn recovery_scan_leaves_an_agent_whose_oplog_does_not_read_and_goes_on() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let unreadable = RunningWorker {
+            owned_agent_id: test_owned_agent_id("unreadable-archive"),
+            fingerprint: AgentFingerprint(Uuid::new_v4()),
+        };
+        let deleted = RunningWorker {
+            owned_agent_id: test_owned_agent_id("deleted-by-a-racing-delete"),
+            fingerprint: AgentFingerprint(Uuid::new_v4()),
+        };
+        for member in [&unreadable, &deleted] {
+            storage
+                .with_entity("worker", "add", "agent_id")
+                .add_to_set(KeyValueStorageNamespace::RunningWorkers, &shard_key, member)
+                .await
+                .unwrap();
+        }
+        let service = test_worker_service(
+            storage.clone(),
+            Arc::new(FakeOplogService {
+                unreadable: vec![unreadable.owned_agent_id.clone()],
+                ..FakeOplogService::default()
+            }),
+        );
+
+        let requested = StaleRequests::default();
+        let workers = service
+            .enum_workers_at_key(&shard_key, &requested.on_stale())
+            .await
+            .unwrap();
+        assert!(workers.is_empty());
+        assert_eq!(
+            requested.take(),
+            vec![(deleted.owned_agent_id, deleted.fingerprint)]
+        );
+        let remaining: Vec<RunningWorker> = storage
+            .with_entity("worker", "enum", "agent_id")
+            .members_of_set(KeyValueStorageNamespace::RunningWorkers, &shard_key)
+            .await
+            .unwrap();
+        assert_eq!(remaining, vec![unreadable]);
     }
 
     /// The distinction that matters more than the skip: an entry we could not *read* is not an
