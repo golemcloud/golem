@@ -1066,13 +1066,8 @@ where
         // live frames): the resume offset for `Range` requests.
         let mut delivered_bytes: u64 = 0;
 
-        // Open the parent batched scope. Children nest under its begin index.
-        // Concurrently consumed response bodies open scopes with identical durable identity, so
-        // the scope name is discriminated by the producing send's own `Start` index — recorded
-        // oplog state that is identical on the live and replay paths and, unlike the derived
-        // span id (a function of the owning agent's id), survives forking the oplog to another
-        // agent. Responses that did not come from `client::send` have no span and keep the plain
-        // scope name.
+        // Open the parent batched scope. Children nest under its begin index. Concurrently
+        // consumed response bodies are told apart by the invocation id of each `consume-body`.
         let mut stream = match DurableDemandStream::<
             P3HttpClientConsumeBody,
             P3HttpClientConsumeBodyChunk,
@@ -1082,12 +1077,6 @@ where
             durable_worker_ctx::<Ctx, U>,
             demand_rx,
             AccessClaimOptions {
-                scope_discriminator: response_span
-                    .as_ref()
-                    .map(|span| format!("consume-body:{}", span.send_start_index)),
-                request_identity: None,
-                entity_invocation_identity: None,
-                tool_invocation_identity: None,
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,
@@ -1965,6 +1954,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                         state.span.send_start_index,
                         state.observational_owner,
                         state.span.persisted,
+                        state.span.invocation_id,
                     )
                     .record(p3_send_span_finished(
                         &state.span,

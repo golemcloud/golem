@@ -56,19 +56,13 @@ tokio::task_local! {
     static ENTITY_CANCELLATION_MASKED: ();
 }
 
-/// The recorded function name of a batched-write durable scope `Start`. A discriminator makes the
-/// name unique among concurrent sibling scopes of the same durable function type; a discriminated
-/// claim never matches a plain-named scope and vice versa.
-pub(crate) fn batched_write_scope_name(discriminator: Option<&str>) -> HostFunctionName {
-    match discriminator {
-        Some(discriminator) => {
-            HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
-        }
-        None => HostFunctionName::Custom(PLAIN_BATCHED_WRITE_SCOPE_NAME.to_string()),
-    }
+/// The recorded function name of a batched-write durable scope `Start`. Replay tells concurrent
+/// scopes apart by the invocation id of the call that opened them.
+pub(crate) fn batched_write_scope_name() -> HostFunctionName {
+    HostFunctionName::Custom(BATCHED_WRITE_SCOPE_NAME.to_string())
 }
 
-const PLAIN_BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
+const BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
 
 /// The per-call quota an outbound durable call is charged against: the per-invocation call
 /// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
@@ -85,9 +79,8 @@ impl QuotaClass {
     /// which classes still have an unclaimed retained `Start` waiting for its owner (see
     /// `WorkerState::durable_call_is_fresh`), so the two must agree on the recorded kinds.
     ///
-    /// P2 HTTP (`wasi:http/outgoing-handler.handle`) is recorded as a plain batched-write scope,
-    /// a name it shares with rdbms transactions; a retained scope of that name therefore counts as
-    /// a possibly-HTTP one.
+    /// HTTP requests are recorded under a batched-write scope, a name they share with other
+    /// batched writes; a retained scope of that name therefore counts as a possibly-HTTP one.
     pub(crate) fn of_recorded_call(function_name: &HostFunctionName) -> Option<Self> {
         match function_name {
             HostFunctionName::P3HttpClientSend
@@ -96,9 +89,7 @@ impl QuotaClass {
             | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
             HostFunctionName::GolemRpcWasmRpcInvoke
             | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
-            HostFunctionName::Custom(name) if name == PLAIN_BATCHED_WRITE_SCOPE_NAME => {
-                Some(Self::Http)
-            }
+            HostFunctionName::Custom(name) if name == BATCHED_WRITE_SCOPE_NAME => Some(Self::Http),
             _ => None,
         }
     }
@@ -3298,7 +3289,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // and only stored when the scope continues replaying (not when recovery switches to live
             // and re-runs the body, which appends a fresh `End` live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = batched_write_scope_name(None);
+            let scope_name = batched_write_scope_name();
             // A scope opened after the live transition may still own a recorded scope `Start`
             // the cursor retained for it (see `WorkerState::durable_call_is_live`), so it claims
             // first and appends a new `Start` only once replay reports none remains.

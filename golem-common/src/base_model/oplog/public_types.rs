@@ -48,7 +48,17 @@ pub struct LogTraceContext {
 /// of the call among the calls numbered under `anchor`, starting at 0. Replay makes the calls in
 /// the same order, so a call gets the same id in every run.
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoSchema,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoSchema,
     FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
@@ -115,7 +125,9 @@ impl desert_rust::BinarySerializer for DurableInvocationId {
 
 #[cfg(feature = "full")]
 impl desert_rust::BinaryDeserializer for DurableInvocationId {
-    fn deserialize(context: &mut desert_rust::DeserializationContext<'_>) -> desert_rust::Result<Self> {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
         let anchor = OplogIndex::from_u64(read_var_u64(context)?);
         let ordinal = read_var_u64(context)?;
         Ok(Self { anchor, ordinal })

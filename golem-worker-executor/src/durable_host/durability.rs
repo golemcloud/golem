@@ -1905,7 +1905,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                     &function_type,
                     recorded_parent_start_index,
                     invocation_id,
-                    &request,
                     admission.store_continued_live,
                 )
                 .await?

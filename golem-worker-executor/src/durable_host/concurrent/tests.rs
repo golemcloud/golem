@@ -112,8 +112,7 @@ fn resolver_resolve_before_register_buffers() {
 #[test]
 fn resolver_missing_pending_is_dropped_not_buffered() {
     let mut resolver = ConcurrentReplayResolver::default();
-    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case,
-    // e.g. the guest-facing manual durability pair).
+    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case).
     assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     let mut rx = resolver.register(idx(1), None);
     assert!(rx.try_recv().is_err());

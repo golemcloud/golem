@@ -341,7 +341,14 @@ mod tests {
         );
         assert_ne!(
             hash,
-            request_hash(&source, generation, cut, None, Some((None, None, Uuid::nil()))).unwrap()
+            request_hash(
+                &source,
+                generation,
+                cut,
+                None,
+                Some((None, None, Uuid::nil()))
+            )
+            .unwrap()
         );
         let selected = StreamId(Uuid::from_u128(9));
         let empty = request_hash(&source, generation, cut, Some((selected, None)), None).unwrap();
