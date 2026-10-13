@@ -25,6 +25,15 @@ struct ReexportedSchemaType {
 struct ConvenienceSchemaType {
     name: String,
     count: u32,
+    choice: ConvenienceChoice<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Schema)]
+#[schema(named = "test.ConvenienceChoice")]
+enum ConvenienceChoice<T> {
+    Empty,
+    Value(T),
+    Retry { delay: u32, reason: Option<T> },
 }
 
 #[test]
@@ -53,15 +62,44 @@ fn derive_schema_through_golem_rust_reexports() {
 #[test]
 fn derive_schema_convenience_through_golem_rust_reexport() {
     let graph = try_into_schema_graph::<ConvenienceSchemaType>().expect("schema graph is valid");
-    assert_eq!(graph.defs.len(), 1);
+    let mut wire_graph =
+        golem_rust::decode_schema_graph(&golem_rust::schema::wit::direct::schema::<
+            ConvenienceSchemaType,
+        >())
+        .unwrap();
+    let mut graph = graph;
+    graph.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    wire_graph.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(wire_graph, graph);
 
-    let value = ConvenienceSchemaType {
-        name: "test".to_string(),
-        count: 42,
-    };
-    let encoded = value.to_value();
-    let decoded = ConvenienceSchemaType::from_value(&encoded).expect("value decodes");
-    assert_eq!(decoded, value);
+    for choice in [
+        ConvenienceChoice::Empty,
+        ConvenienceChoice::Value("selected".into()),
+        ConvenienceChoice::Retry {
+            delay: 19,
+            reason: None,
+        },
+        ConvenienceChoice::Retry {
+            delay: 7,
+            reason: Some("busy".into()),
+        },
+    ] {
+        let value = ConvenienceSchemaType {
+            name: "test".to_string(),
+            count: 42,
+            choice,
+        };
+        let encoded = value.to_value();
+        let decoded = ConvenienceSchemaType::from_value(&encoded).expect("value decodes");
+        assert_eq!(decoded, value);
+        let wire = golem_rust::schema::wit::direct::encode(&value).unwrap();
+        assert_eq!(golem_rust::decode_schema_value(wire).unwrap(), encoded);
+        let wire = golem_rust::schema::wit::direct::encode(&value).unwrap();
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<ConvenienceSchemaType>(wire).unwrap(),
+            value
+        );
+    }
 }
 
 #[test]

@@ -276,6 +276,11 @@ pub impl WireSchema for Bytes with fn append_wire_type(encoder) {
 }
 
 ///|
+pub impl WireSchema for @types.Uuid with fn append_wire_type(encoder) {
+  encoder.push(@types.SchemaTypeBody::UuidType)
+}
+
+///|
 pub impl WireSchema for @types.Datetime with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::DatetimeType)
 }

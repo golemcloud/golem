@@ -28,6 +28,7 @@ root = "../data/blob_storage"
 
 [component_service]
 component_cache_max_capacity = 1024
+current_component_cache_ttl = "1m"
 
 [durable_streams]
 long_poll_timeout = "30s"

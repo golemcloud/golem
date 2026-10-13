@@ -18,8 +18,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeRevision};
 use golem_worker_service::custom_api::model::OidcSession;
 use golem_worker_service::custom_api::oidc::model::{
-    AuthorizationCode, BearerToken, PendingOidcLogin, PendingPkceLogin, PkceAuthorizationCode,
-    PkceBearerCredential, PkceBinding, SessionId,
+    AuthorizationCode, BearerToken, McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin,
+    PendingPkceLogin, PkceAuthorizationCode, PkceBearerCredential, PkceBinding, SessionId,
 };
 use golem_worker_service::custom_api::oidc::session_store::SessionStore;
 use openidconnect::core::CoreIdTokenClaims;
@@ -36,8 +36,10 @@ use uuid::Uuid;
 
 inherit_test_dep!(#[tagged_as("redis")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("sqlite")] Arc<dyn SessionStore>);
+inherit_test_dep!(#[tagged_as("postgres")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("redis_fast_expiry")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("sqlite_fast_expiry")] Arc<dyn SessionStore>);
+inherit_test_dep!(#[tagged_as("postgres_fast_expiry")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("redis_tls")] Arc<dyn SessionStore>);
 inherit_test_dep!(
     #[tagged_as("redis_pair")]
@@ -45,6 +47,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("sqlite_pair")]
+    SessionStorePair
+);
+inherit_test_dep!(
+    #[tagged_as("postgres_pair")]
     SessionStorePair
 );
 inherit_test_dep!(
@@ -59,13 +65,17 @@ inherit_test_dep!(
     #[tagged_as("sqlite_bearer_write_failure")]
     BearerWriteFailureStores
 );
+inherit_test_dep!(
+    #[tagged_as("postgres_bearer_write_failure")]
+    BearerWriteFailureStores
+);
 
-define_matrix_dimension!(session_store: Arc<dyn SessionStore> -> "redis", "sqlite", "redis_tls");
-define_matrix_dimension!(session_store_fast_expiry: Arc<dyn SessionStore> -> "redis_fast_expiry", "sqlite_fast_expiry");
-define_matrix_dimension!(session_store_pair: SessionStorePair -> "redis_pair", "sqlite_pair", "redis_tls_pair");
-define_matrix_dimension!(bearer_write_failure_stores: BearerWriteFailureStores -> "redis_bearer_write_failure", "sqlite_bearer_write_failure");
+define_matrix_dimension!(session_store: Arc<dyn SessionStore> -> "redis", "sqlite", "postgres", "redis_tls");
+define_matrix_dimension!(session_store_fast_expiry: Arc<dyn SessionStore> -> "redis_fast_expiry", "sqlite_fast_expiry", "postgres_fast_expiry");
+define_matrix_dimension!(session_store_pair: SessionStorePair -> "redis_pair", "sqlite_pair", "postgres_pair", "redis_tls_pair");
+define_matrix_dimension!(bearer_write_failure_stores: BearerWriteFailureStores -> "redis_bearer_write_failure", "sqlite_bearer_write_failure", "postgres_bearer_write_failure");
 
-fn sample_pending_login() -> PendingOidcLogin {
+pub(crate) fn sample_pending_login() -> PendingOidcLogin {
     PendingOidcLogin {
         scheme_id: SecuritySchemeId::new(),
         original_uri: "https://example.com".to_string(),
@@ -89,7 +99,7 @@ fn sample_claims(expires_at: chrono::DateTime<Utc>) -> CoreIdTokenClaims {
     )
 }
 
-fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
+pub(crate) fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
     OidcSession {
         subject: "sub".into(),
         issuer: "issuer".into(),
@@ -106,7 +116,7 @@ fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
     }
 }
 
-fn sample_binding() -> PkceBinding {
+pub(crate) fn sample_binding() -> PkceBinding {
     PkceBinding {
         security_scheme_id: SecuritySchemeId::new(),
         security_scheme_revision: SecuritySchemeRevision::INITIAL,
@@ -115,7 +125,7 @@ fn sample_binding() -> PkceBinding {
     }
 }
 
-fn sample_pending_pkce(
+pub(crate) fn sample_pending_pkce(
     binding: PkceBinding,
     expires_at: chrono::DateTime<Utc>,
 ) -> PendingPkceLogin {
@@ -129,7 +139,7 @@ fn sample_pending_pkce(
     }
 }
 
-fn sample_authorization_code(
+pub(crate) fn sample_authorization_code(
     binding: PkceBinding,
     expires_at: chrono::DateTime<Utc>,
 ) -> PkceAuthorizationCode {
@@ -142,7 +152,10 @@ fn sample_authorization_code(
     }
 }
 
-fn sample_bearer(binding: PkceBinding, expires_at: chrono::DateTime<Utc>) -> PkceBearerCredential {
+pub(crate) fn sample_bearer(
+    binding: PkceBinding,
+    expires_at: chrono::DateTime<Utc>,
+) -> PkceBearerCredential {
     PkceBearerCredential {
         binding,
         principal: sample_session(Utc::now() + TimeDelta::hours(2)),
@@ -302,6 +315,100 @@ async fn take_nonexistent_pending_login_returns_none(
         fetched.is_none(),
         "Fetching nonexistent pending login should return None"
     );
+
+    Ok(())
+}
+
+fn sample_mcp_pending_auth() -> McpPendingAuth {
+    McpPendingAuth {
+        client_redirect_uri: "https://client.example/callback".into(),
+        client_state: Some("client-state".into()),
+    }
+}
+
+fn sample_mcp_proxy_code() -> McpProxyCodeEntry {
+    McpProxyCodeEntry {
+        id_token: "id-token".into(),
+        refresh_token: Some("refresh-token".into()),
+        expires_in: Some(3600),
+        token_type: "Bearer".into(),
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn mcp_pending_auth_store_and_take(
+    #[dimension(session_store)] store: &Arc<dyn SessionStore>,
+) -> anyhow::Result<()> {
+    let state = Uuid::now_v7().to_string();
+    store
+        .store_mcp_pending_auth(&state, sample_mcp_pending_auth())
+        .await?;
+
+    let fetched = store.take_mcp_pending_auth(&state).await?.unwrap();
+    assert_eq!(
+        fetched.client_redirect_uri,
+        "https://client.example/callback"
+    );
+    assert_eq!(fetched.client_state.as_deref(), Some("client-state"));
+    assert!(store.take_mcp_pending_auth(&state).await?.is_none());
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn mcp_proxy_code_store_and_take(
+    #[dimension(session_store)] store: &Arc<dyn SessionStore>,
+) -> anyhow::Result<()> {
+    let code = Uuid::now_v7().to_string();
+    store
+        .store_mcp_proxy_code(&code, sample_mcp_proxy_code())
+        .await?;
+
+    let fetched = store.take_mcp_proxy_code(&code).await?.unwrap();
+    assert_eq!(fetched.id_token, "id-token");
+    assert_eq!(fetched.refresh_token.as_deref(), Some("refresh-token"));
+    assert_eq!(fetched.expires_in, Some(3600));
+    assert_eq!(fetched.token_type, "Bearer");
+    assert!(store.take_mcp_proxy_code(&code).await?.is_none());
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn mcp_records_expire(
+    #[dimension(session_store_fast_expiry)] store: &Arc<dyn SessionStore>,
+) -> anyhow::Result<()> {
+    let state = Uuid::now_v7().to_string();
+    let code = Uuid::now_v7().to_string();
+    store
+        .store_mcp_pending_auth(&state, sample_mcp_pending_auth())
+        .await?;
+    store
+        .store_mcp_proxy_code(&code, sample_mcp_proxy_code())
+        .await?;
+
+    sleep(Duration::from_millis(200)).await;
+
+    assert!(store.take_mcp_pending_auth(&state).await?.is_none());
+    assert!(store.take_mcp_proxy_code(&code).await?.is_none());
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn take_with_request_key_containing_nul_returns_none(
+    #[dimension(session_store)] store: &Arc<dyn SessionStore>,
+) -> anyhow::Result<()> {
+    let key = "state\0suffix";
+    assert!(store.take_pending_oidc_login(key).await?.is_none());
+    assert!(store.take_mcp_pending_auth(key).await?.is_none());
+    assert!(store.take_mcp_proxy_code(key).await?.is_none());
+    assert!(store.take_pending_pkce_login(key).await?.is_none());
+    assert!(store.take_authorization_code(key).await?.is_none());
 
     Ok(())
 }

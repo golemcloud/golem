@@ -11,6 +11,7 @@ The repository currently has these migration roots:
 
 - `golem-registry-service/db/migration/{postgres,sqlite}/`
 - `golem-shard-manager/db/migration/{postgres,sqlite}/`
+- `golem-worker-service/db/migration/session_store/{postgres,sqlite}/`
 - `golem-worker-executor/db/migration/{indexed,keyvalue,scheduler}/{postgres,sqlite}/`
 
 Put the migration beside the subsystem that owns the schema. Do not create another migration root
@@ -31,11 +32,12 @@ root's query layer is shared:
 |---|---|---|
 | `golem-registry-service/db/migration/` | one impl expanded per backend by `#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]` | converge by default |
 | `golem-shard-manager/db/migration/` | same `trait_gen` pattern (`src/quota/quota_repo.rs`, `src/sharding/persistence/db.rs`) | converge by default |
+| `golem-worker-service/db/migration/session_store/` | same `trait_gen` pattern (`src/custom_api/oidc/session_store/db.rs`) | converge by default |
 | `golem-worker-executor/db/migration/{indexed,keyvalue,scheduler}/` | separate `postgres.rs` / `sqlite.rs` under `src/storage/<subsystem>/` (alongside `multi_sqlite.rs`, `redis.rs`, `memory.rs`) | diverge where the engine calls for it |
 
 ### Shared-query roots
 
-In the registry service and shard manager, each SQL literal is written once and expanded for both
+In the registry service, shard manager and worker-service session store, each SQL literal is written once and expanded for both
 pools, so a divergent schema would force the query layer to be split per dialect. Keep the resulting
 schema identical whenever possible. SQLite's type affinity accepts `UUID`, `TIMESTAMP`, `BIGINT`,
 `BYTEA`, and `NUMERIC` verbatim, so use them in both. Reach for an engine-specific type
@@ -77,7 +79,8 @@ Check both database directories and choose the same next number in each.
 
 Index and constraint naming follows the owning root:
 
-- `golem-registry-service` and `golem-shard-manager` use `<table>_<column(s)>_<idx|uk>` for indexes
+- `golem-registry-service`, `golem-shard-manager` and the worker-service `session_store` root use
+  `<table>_<column(s)>_<idx|uk>` for indexes
   (`_idx` regular, `_uk` unique) and `<table>_pk` for primary key constraints:
 
   ```sql
@@ -111,6 +114,8 @@ Examples of the relevant integration coverage:
   `golem-registry-service/db/migration/`.
 - `golem-shard-manager`'s `persistence` tests run each test through the `sqlite`, `postgres` and
   `etcd` matrix dimensions.
+- `golem-worker-service`'s `oidc` test binary runs the session store tests through the `sqlite` and
+  `postgres` matrix dimensions.
 - Worker-executor indexed/key-value storage tests include SQLite and PostgreSQL dimensions; select
   the storage test that exercises the changed schema.
 

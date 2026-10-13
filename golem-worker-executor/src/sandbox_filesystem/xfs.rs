@@ -1329,33 +1329,6 @@ unsafe fn quotactl_raw(
     }
 }
 
-fn space_from_values(
-    blocks: u64,
-    available_blocks: u64,
-    fragment_size: u64,
-    filesystem_objects: u64,
-    available_filesystem_objects: u64,
-) -> std::io::Result<FilesystemSpace> {
-    let total_bytes = blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "filesystem total capacity exceeds u64",
-        )
-    })?;
-    let available_bytes = available_blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "filesystem available capacity exceeds u64",
-        )
-    })?;
-    Ok(FilesystemSpace::Observed {
-        total_bytes,
-        available_bytes,
-        total_filesystem_objects: filesystem_objects,
-        available_filesystem_objects,
-    })
-}
-
 impl ManagedProvisioning {
     pub(super) async fn create_fresh(
         &self,
@@ -1546,20 +1519,23 @@ impl ManagedProvisioning {
         let assignment_result = assign_project(&root_fd, project_id).map_err(|error| {
             FilesystemStorageError::io("assign managed XFS project", &root, error)
         });
+        let native_root =
+            NativeRoot::from_directory(root, Arc::new(cap_std::fs::Dir::from_std_file(root_fd)));
+        let lease = LeaseState {
+            lifecycle: lifecycle.expect("managed XFS lifecycle owner must exist"),
+            cleanup: NativeCleanup::Managed(Box::new(ManagedProjectCleanup {
+                project: ProjectCleanup::new(
+                    self.clone(),
+                    project_id,
+                    cleanup_path,
+                    self.cleanup_retry.clone(),
+                ),
+                _parent: parent,
+            })),
+        };
         let created = SandboxFilesystem::new(
-            NativeRoot::new(root, root_fd),
-            LeaseState {
-                lifecycle: lifecycle.expect("managed XFS lifecycle owner must exist"),
-                cleanup: NativeCleanup::Managed(Box::new(ManagedProjectCleanup {
-                    project: ProjectCleanup::new(
-                        self.clone(),
-                        project_id,
-                        cleanup_path,
-                        self.cleanup_retry.clone(),
-                    ),
-                    _parent: parent,
-                })),
-            },
+            native_root,
+            lease,
             volume,
             QuotaAuthority::Project {
                 project_id,

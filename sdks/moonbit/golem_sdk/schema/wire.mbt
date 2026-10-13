@@ -701,6 +701,19 @@ pub impl FromWire for Bytes with fn read_wire(tree, index) {
 }
 
 ///|
+pub impl IntoWire for @types.Uuid with fn append_wire(self, encoder) {
+  encoder.push(@types.SchemaValueNode::UuidValue(self))
+}
+
+///|
+pub impl FromWire for @types.Uuid with fn read_wire(tree, index) {
+  match wire_node(tree, index) {
+    @types.SchemaValueNode::UuidValue(value) => value
+    _ => raise WireError::Invalid("expected uuid value")
+  }
+}
+
+///|
 pub impl IntoWire for @types.Datetime with fn append_wire(self, encoder) {
   encoder.push(@types.SchemaValueNode::DatetimeValue(self))
 }

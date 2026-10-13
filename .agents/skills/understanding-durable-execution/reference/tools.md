@@ -7,6 +7,28 @@ are relative to `golem-worker-executor/src/` unless stated.
 authorized once against the outer tool surface; middleware descendants retain that original
 calling principal rather than authorizing their transformed inner surfaces again.
 
+### Structural tool authorization
+
+`authorization/targets.rs::tool_target` constructs a canonical request from the effective tool
+definition and typed arguments. The permission owner stays in the calling component's namespace.
+Command aliases normalize for authorization only: the persisted `ToolInvocationDescriptor` keeps
+the original command path for replay claims. Argument strings are literal values; stream-bearing
+values are `Opaque`, never a policy wildcard, and authorization does not read them. Repeated
+options and count flags retain occurrences; the CLI tail separator is not a positional value.
+
+The common card algebra matches exact complete commands, unordered additive flag requirements,
+and an ordered positional prefix. Multiplicity uses distinct matching occurrences. A positive
+repeated-option constraint is existential, not an all-values allowlist; a denial catches a matching
+occurrence anywhere. Positive grants require definite coverage of opaque values; negative grants
+block possible matches. Anchored value globs distinguish `*` (no slash) from `**` (any character),
+both including empty strings. Size/work exhaustion returns an error, never an authorization.
+
+`permissions/mod.rs::normalize_tool_grants` normalizes all four vectors before runtime card,
+wallet, or scope derivation. Each derivation memoizes one `get_tool_model` observation per concrete
+tool name across those vectors; discovery is durable, so reconstruction uses the same effective
+definition. Stored parents are already canonical and are not reinterpreted. Without a definition,
+long names mean primary names and shorts are rejected; wildcard owners do not enumerate the catalog.
+
 ### Durable discovery
 
 `get_all_tools_model` and `get_tool_model` record

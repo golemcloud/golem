@@ -213,7 +213,11 @@ pub struct DefaultBlobStoreService {
 /// Gives the `BlobStoreError` of an error of the blob storage.
 ///
 /// [`BlobFailure::of`] tells a permanent error from a transient one. A transient error becomes
-/// [`BlobStoreError::TransientBackend`], so the executor retries the operation. Of the permanent
+/// [`BlobStoreError::TransientBackend`], so the executor retries the operation. A refusal of the
+/// storage (a [`BlobRefusedError`](golem_service_base::storage::blob::BlobRefusedError)) is not
+/// an error of the input of the guest, and a retry gets the same answer until an operator fixes
+/// the storage, so it becomes [`BlobStoreError::PermissionDenied`], which is permanent. Its
+/// message names the refusal and its cause. Of the permanent
 /// errors, a [`BlobMissingError`] becomes [`BlobStoreError::NotFound`], and a
 /// [`BlobRangeError`](golem_service_base::storage::blob::BlobRangeError) and a
 /// [`BlobNameError`] are errors of the input of the guest, so they become
@@ -239,6 +243,7 @@ pub struct DefaultBlobStoreService {
 fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
     match BlobFailure::of(&err) {
         BlobFailure::Transient => BlobStoreError::TransientBackend(err.to_string()),
+        BlobFailure::Refused(_) => BlobStoreError::PermissionDenied(format!("{err:#}")),
         BlobFailure::Permanent if err.is::<BlobMissingError>() => {
             BlobStoreError::NotFound(err.root_cause().to_string())
         }
@@ -1033,6 +1038,43 @@ mod tests {
                 )
                 .await
         }
+    }
+
+    /// A read that the storage refuses, here because the executor cannot search the blob root,
+    /// is not an error of the input of the guest and not one that a retry can pass. The guest
+    /// gets a permanent `PermissionDenied` that names the refusal.
+    #[cfg(unix)]
+    #[test]
+    async fn blob_store_error_makes_a_refusal_of_the_storage_a_permanent_permission_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let tempdir = TempDir::new().unwrap();
+        let storage = FileSystemBlobStorage::new(tempdir.path()).await.unwrap();
+        let namespace = BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId::new(),
+        };
+        let path = Path::new("container/object");
+        storage
+            .put_raw("test", "put-raw", namespace.clone(), path, &[1])
+            .await
+            .unwrap();
+        let set_mode = |mode| {
+            std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(mode)).unwrap()
+        };
+
+        set_mode(0o000);
+        let read = storage.get_raw("test", "get-raw", namespace, path).await;
+        set_mode(0o755);
+        let error = blob_store_error(read.unwrap_err());
+
+        assert_eq!(
+            (
+                matches!(&error, BlobStoreError::PermissionDenied(message)
+                    if message.starts_with("the blob storage refused the request (access denied)")),
+                classify_blob_store_error(&error)
+            ),
+            (true, HostFailureKind::Permanent),
+            "{error}"
+        );
     }
 
     /// `BlobFailure::of` has one downcast for `BlobNameError`, so each rule of a name is
