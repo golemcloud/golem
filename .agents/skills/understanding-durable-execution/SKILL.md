@@ -299,7 +299,18 @@ Archive transfers append and verify the destination before dropping the source. 
 failures therefore fail only that maintenance attempt: they are logged, never fail the agent,
 the authoritative source remains intact, and threshold, scheduled or sweep maintenance retries
 with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
-An archive read needed for replay still fails recovery rather than being treated as absent data.
+An oplog read that does not give the requested entries (an archive chunk that does not decode, a
+blob or indexed storage failure of an archive level, a gap) is never treated as absent data. It
+returns `UnreadableOplog` (`services/oplog/reader.rs`: the agent id and the `OplogReadError` with
+its source, such as `archive layer 1`), and the read paths of replay, status folding and recovery
+carry it up as `WorkerExecutorError::OplogUnreadable`. It fails that agent only, fail-stop: the
+start ends through `StartProblem::OplogUnreadable`, which passes the error in every column of the
+outcome table (no skipped or rejected record, no failed update), and the recovery path records it
+as a terminal `Error` entry, so the agent is `Failed` with the cause. Shard-assignment recovery
+(`get_running_workers_in_shards`, `recovered_status`) logs and skips an agent whose oplog does not
+read instead of failing the assignment, so the other agents recover. Nothing deletes or rewrites
+the unreadable data. The `try_*` reads of `Oplog` and `OplogService` stay the maintenance reads:
+they return every storage failure as text for the transfer and the sweep to retry.
 A write the shard-epoch fence refuses is not a storage failure: it ends the transfer as
 `OplogError::Fenced`, latches the oplog's fence and is never retried, because the oplog now
 belongs to the shard's new owner (see "Resharding, revocation and the oplog epoch fence").
