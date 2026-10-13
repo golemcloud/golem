@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
-use crate::model::card::StoredCard;
+use crate::model::card::{ScopeCard, StoredCard};
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
@@ -983,6 +983,11 @@ pub struct EntityInvocationScope {
     /// Wallet snapshot pinned in the immutable entity invocation `Start`.
     #[serde(skip)]
     authority_wallet: Vec<StoredCard>,
+    /// Invocation scope card active in the calling Store when this invocation was started or
+    /// reconstructed. The calling Store reinstalls its scope from recorded data during replay,
+    /// so the scope is resident state and is not part of the entity invocation `Start`.
+    #[serde(skip)]
+    invocation_scope_card: Option<ScopeCard>,
     /// Resident tracing context restored from the immutable entity invocation `Start`.
     #[serde(skip)]
     span_started: Option<ResidentEntitySpan>,
@@ -1041,6 +1046,7 @@ impl EntityInvocationScope {
             logical_key_positions,
             stream_session_idempotency_key,
             authority_wallet: Vec::new(),
+            invocation_scope_card: None,
             span_started: None,
         })
     }
@@ -1052,6 +1058,15 @@ impl EntityInvocationScope {
 
     pub fn authority_wallet(&self) -> &[StoredCard] {
         &self.authority_wallet
+    }
+
+    pub fn with_invocation_scope_card(mut self, invocation_scope_card: Option<ScopeCard>) -> Self {
+        self.invocation_scope_card = invocation_scope_card;
+        self
+    }
+
+    pub fn invocation_scope_card(&self) -> Option<&ScopeCard> {
+        self.invocation_scope_card.as_ref()
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {

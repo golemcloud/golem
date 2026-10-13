@@ -48,9 +48,9 @@ A custom durable operation has a replay-stable UUID, a semantic request, and one
 
 Golem derives the UUID from the top-level idempotency key, the parent custom invocation when nested, and a deterministic ordinal in that logical parent's namespace. Child operations do not shift later root identities when a completed parent is skipped during replay. The function metadata and request are recorded and validated independently.
 
-The live invocation is an affine resource: it can be finished only once. Dropping it without finishing removes observational ownership but does not write a matching `End` entry. Recovery therefore treats the custom operation as incomplete and retries its whole body.
+The live invocation is an affine resource: it can be finished only once. Dropping it without finishing removes observational ownership but does not write a matching `End` entry. If recovery later replays the incomplete custom operation, its whole body runs again.
 
-If a live attempt traps before it is finished, recovery retries the **whole custom operation**, not individual effects inside it. Library authors must therefore choose an appropriate function type and make repeated attempts safe, for example with an external idempotency key or transactional API.
+Dropping the resource does not trigger a retry. A deterministic trap outside an atomic region fails the agent without retry; inside an atomic region, the region is retried according to the applicable retry policy. When recovery replays an incomplete custom operation, it runs the **whole custom operation**, not individual effects inside it. Library authors must therefore choose an appropriate function type and make repeated attempts safe, for example with an external idempotency key or transactional API.
 
 Requests, responses, operation names, and observational host calls can be visible to oplog search, logs, metrics, and other observability tooling. Record useful names and schemas, but redact secrets and avoid putting unnecessary or unbounded payloads into observable values.
 

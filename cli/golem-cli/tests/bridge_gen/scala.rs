@@ -967,6 +967,22 @@ class StreamRuntimeTest extends munit.FunSuite {
     );
 }
 
+#[test]
+fn stream_resume_rejection_takes_over_scala_session() {
+    let pkg = GeneratedPackage::new(agent(
+        "RecoveryAgent",
+        "scala",
+        vec![],
+        vec![method("run", vec![], None)],
+        vec![],
+        AgentMode::Durable,
+    ));
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        include_str!("scala_session_recovery.scala"),
+    );
+}
+
 /// The generated project lays out the static runtime and the per-agent client
 /// in the expected packages.
 #[test]
