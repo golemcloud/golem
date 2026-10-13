@@ -404,3 +404,47 @@ async fn build_mixed_language_app() {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 }
+
+// Verifies that Go templates can be added after the first build, whose
+// `go mod tidy` has rewritten go.mod and go.sum: an agent template to the
+// existing component, then a second component, which also moves the first into
+// its own directory. The application builds after each step.
+#[test]
+async fn go_templates_added_after_a_build_build() {
+    let mut ctx = TestContext::new();
+    let app_name = "go-templates-after-build";
+    let second_component = format!("{app_name}:go-second");
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go/json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "go",
+            flag::COMPONENT_NAME,
+            &second_component,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert_multi_component_layout(ctx.cwd_path(), GuestLanguage::Go);
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+}

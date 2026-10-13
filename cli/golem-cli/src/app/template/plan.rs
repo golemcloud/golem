@@ -348,6 +348,13 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 validate_yaml,
                 edit::golem_yaml::merge_documents,
             )?),
+            "go.mod" => Some(merge_with_validation(
+                current,
+                new,
+                edit::go_mod::validate,
+                edit::go_mod::merge_documents,
+            )?),
+            "go.sum" => Some(edit::go_mod::merge_go_sum(current, new)?),
             "main.go" => Some(merge_with_validation(
                 current,
                 new,

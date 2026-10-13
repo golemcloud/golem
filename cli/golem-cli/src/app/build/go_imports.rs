@@ -16,6 +16,7 @@
 //! modules: every import outside the standard library, from every package of
 //! the module.
 
+use crate::app::edit::main_go::import_paths;
 use std::collections::BTreeSet;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -48,7 +49,7 @@ pub fn module_imports(module_root: &Path) -> anyhow::Result<BTreeSet<String>> {
         }
         let source = std::fs::read_to_string(entry.path())?;
         imports.extend(
-            imports_of(&source)
+            import_paths(&source)
                 .into_iter()
                 .filter(|path| is_third_party(path)),
         );
@@ -63,132 +64,10 @@ fn is_third_party(path: &str) -> bool {
         .is_some_and(|first| first.contains('.'))
 }
 
-/// The import paths a Go source file declares, read from its import
-/// declarations after the package clause.
-pub fn imports_of(source: &str) -> Vec<String> {
-    let tokens = tokenize(source);
-    let mut imports = Vec::new();
-    let mut i = 0;
-    while matches!(tokens.get(i), Some(Token::Semi)) {
-        i += 1;
-    }
-    if tokens.get(i) != Some(&Token::Word("package".to_string())) {
-        return imports;
-    }
-    i += 2;
-    while matches!(tokens.get(i), Some(Token::Semi)) {
-        i += 1;
-    }
-    while tokens.get(i) == Some(&Token::Word("import".to_string())) {
-        i += 1;
-        if tokens.get(i) == Some(&Token::Open) {
-            i += 1;
-            while let Some(token) = tokens.get(i) {
-                match token {
-                    Token::Close => break,
-                    Token::Str(path) => imports.push(path.clone()),
-                    _ => {}
-                }
-                i += 1;
-            }
-        } else {
-            while let Some(token) = tokens.get(i) {
-                match token {
-                    Token::Str(path) => {
-                        imports.push(path.clone());
-                        break;
-                    }
-                    Token::Semi => break,
-                    _ => i += 1,
-                }
-            }
-        }
-        i += 1;
-        while matches!(tokens.get(i), Some(Token::Semi)) {
-            i += 1;
-        }
-    }
-    imports
-}
-
-#[derive(Debug, PartialEq)]
-enum Token {
-    Word(String),
-    Str(String),
-    Open,
-    Close,
-    Semi,
-    Other,
-}
-
-/// A lexer for the head of a Go file: words, string literals, parentheses and
-/// statement ends (newlines and semicolons). Comments are skipped.
-fn tokenize(source: &str) -> Vec<Token> {
-    let chars: Vec<char> = source.chars().collect();
-    let mut tokens = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            '/' if chars.get(i + 1) == Some(&'/') => {
-                while i < chars.len() && chars[i] != '\n' {
-                    i += 1;
-                }
-            }
-            '/' if chars.get(i + 1) == Some(&'*') => {
-                i += 2;
-                while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
-                    i += 1;
-                }
-                i += 2;
-            }
-            '\n' | ';' => {
-                tokens.push(Token::Semi);
-                i += 1;
-            }
-            '(' => {
-                tokens.push(Token::Open);
-                i += 1;
-            }
-            ')' => {
-                tokens.push(Token::Close);
-                i += 1;
-            }
-            '"' | '`' => {
-                let mut value = String::new();
-                i += 1;
-                while i < chars.len() && chars[i] != c {
-                    if c == '"' && chars[i] == '\\' {
-                        i += 1;
-                    }
-                    if let Some(&ch) = chars.get(i) {
-                        value.push(ch);
-                    }
-                    i += 1;
-                }
-                i += 1;
-                tokens.push(Token::Str(value));
-            }
-            c if c.is_alphanumeric() || c == '_' => {
-                let start = i;
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                    i += 1;
-                }
-                tokens.push(Token::Word(chars[start..i].iter().collect()));
-            }
-            c if c.is_whitespace() => i += 1,
-            _ => {
-                tokens.push(Token::Other);
-                i += 1;
-            }
-        }
-    }
-    tokens
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{imports_of, is_third_party};
+    use super::is_third_party;
+    use crate::app::edit::main_go::import_paths as imports_of;
     use test_r::test;
 
     #[test]

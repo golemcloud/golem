@@ -65,6 +65,49 @@ pub fn merge_imports(current: &str, update: &str) -> anyhow::Result<String> {
     Ok(output)
 }
 
+/// The import paths a Go source file declares, unquoted, in order. A file
+/// tree-sitter cannot fully parse still yields the imports it recognises: the
+/// compiler reports the syntax error, not this.
+pub fn import_paths(source: &str) -> Vec<String> {
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_go::LANGUAGE.into())
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let mut paths = Vec::new();
+    let mut cursor = root.walk();
+    for declaration in root.named_children(&mut cursor) {
+        if declaration.kind() != "import_declaration" {
+            continue;
+        }
+        let mut stack = vec![declaration];
+        let mut specs = Vec::new();
+        while let Some(node) = stack.pop() {
+            if node.kind() == "import_spec"
+                && let Some(path) = node.child_by_field_name("path")
+            {
+                specs.push((path.start_byte(), path.end_byte()));
+            }
+            let mut children = node.walk();
+            stack.extend(node.named_children(&mut children));
+        }
+        specs.sort();
+        for (start, end) in specs {
+            let literal = &source[start..end];
+            if literal.len() >= 2 {
+                paths.push(literal[1..literal.len() - 1].to_string());
+            }
+        }
+    }
+    paths
+}
+
 fn parse_go(source: &str) -> anyhow::Result<Tree> {
     let mut parser = Parser::new();
     parser

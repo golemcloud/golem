@@ -24,6 +24,8 @@
 //! `go mod tidy` reformats `go.mod` (block requires, tabs), so matching is by
 //! module path and structure, never exact text.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 /// Reconcile the SDK dependency in `content`:
 ///   - set the SDK module's `require` version to `version`;
 ///   - if `replace_path` is `Some`, ensure `replace <module> => <path>`;
@@ -79,6 +81,123 @@ pub fn reconcile_replace(content: &str, module: &str, target: Option<&str>) -> S
         out.push('\n');
     }
     out
+}
+
+/// A `go.mod` has one `module` directive; anything else is not one.
+pub fn validate(content: &str) -> anyhow::Result<()> {
+    let modules = content
+        .lines()
+        .filter(|line| line.trim().strip_prefix("module ").is_some())
+        .count();
+    if modules != 1 {
+        anyhow::bail!("expected one module directive, found {modules}");
+    }
+    Ok(())
+}
+
+/// Merge the dependencies `update` declares into `current`: each `require`,
+/// `replace` and `tool` entry of `update` whose module `current` does not
+/// name yet is added. An entry `current` already has keeps its version, since
+/// `go mod tidy` or the user may have moved it on; the next build's tidy makes
+/// the result consistent.
+pub fn merge_documents(current: &str, update: &str) -> anyhow::Result<String> {
+    let mut lines: Vec<String> = current.lines().map(|l| l.to_string()).collect();
+    let present = directive_entries(current);
+    for (kind, entries) in directive_entries(update) {
+        let known = present.get(&kind);
+        let missing: Vec<(String, String)> = entries
+            .into_iter()
+            .filter(|(key, _)| !known.is_some_and(|k| k.iter().any(|(have, _)| have == key)))
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        let block_end = block_end(&lines, &kind);
+        match block_end {
+            Some(end) => {
+                for (offset, (_, entry)) in missing.into_iter().enumerate() {
+                    lines.insert(end + offset, format!("\t{entry}"));
+                }
+            }
+            None => {
+                if !lines.last().is_none_or(|l| l.trim().is_empty()) {
+                    lines.push(String::new());
+                }
+                lines.push(format!("{kind} ("));
+                lines.extend(missing.into_iter().map(|(_, entry)| format!("\t{entry}")));
+                lines.push(")".to_string());
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Per directive kind (`require`, `replace`, `tool`): its entries as (the
+/// module the entry is about, the entry text without the keyword), from both
+/// the single-line and the block form.
+fn directive_entries(content: &str) -> BTreeMap<String, Vec<(String, String)>> {
+    const KINDS: [&str; 3] = ["require", "replace", "tool"];
+    let mut out: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut block: Option<&str> = None;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(kind) = block {
+            if trimmed == ")" {
+                block = None;
+            } else if let Some(module) = first_token(trimmed) {
+                if !module.starts_with("//") {
+                    out.entry(kind.to_string())
+                        .or_default()
+                        .push((module.to_string(), trimmed.to_string()));
+                }
+            }
+            continue;
+        }
+        for kind in KINDS {
+            if let Some(rest) = trimmed.strip_prefix(kind) {
+                let rest = rest.trim();
+                if rest == "(" {
+                    block = Some(kind);
+                } else if let Some(module) = first_token(rest)
+                    && rest.len() < trimmed.len()
+                {
+                    out.entry(kind.to_string())
+                        .or_default()
+                        .push((module.to_string(), rest.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The index of the closing `)` of the first `<kind> (` block, if any.
+fn block_end(lines: &[String], kind: &str) -> Option<usize> {
+    let start = lines
+        .iter()
+        .position(|l| l.trim().strip_prefix(kind).is_some_and(|r| r.trim() == "("))?;
+    lines[start..]
+        .iter()
+        .position(|l| l.trim() == ")")
+        .map(|offset| start + offset)
+}
+
+/// Merge two `go.sum` files: the union of their lines, sorted as the go
+/// command writes them.
+pub fn merge_go_sum(current: &str, update: &str) -> anyhow::Result<String> {
+    let lines: BTreeSet<&str> = current
+        .lines()
+        .chain(update.lines())
+        .map(str::trim_end)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let mut out = lines.into_iter().collect::<Vec<_>>().join("\n");
+    out.push('\n');
+    Ok(out)
 }
 
 /// A `require` entry for `module` — either `require <module> <ver>` (single) or
@@ -338,5 +457,43 @@ mod tests {
         let once = reconcile_sdk_dependency(&src, MOD, "v0.0.0", Some("/p"));
         let twice = reconcile_sdk_dependency(&once, MOD, "v0.0.0", Some("/p"));
         assert_eq!(once, twice);
+    }
+
+    /// A template added after the first build meets a go.mod that tidy has
+    /// rewritten: the template's own requires, replaces and tools are added,
+    /// and what the component already has keeps its version.
+    #[test]
+    fn merge_adds_what_the_update_declares_and_keeps_current_versions() {
+        let current = format!(
+            "module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.1.0\n\tgolang.org/x/sys v0.37.0 // indirect\n)\n\ntool github.com/bytecodealliance/componentize-go\n"
+        );
+        let update = format!(
+            "module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.0.0\n\t{CORE} v0.0.0\n)\n\nreplace {MOD} => /abs/golem\n\ntool github.com/bytecodealliance/componentize-go\n"
+        );
+        let merged = merge_documents(&current, &update).unwrap();
+        assert!(merged.contains(&format!("\t{MOD} v0.1.0\n")), "{merged}");
+        assert!(!merged.contains(&format!("{MOD} v0.0.0")), "{merged}");
+        assert!(merged.contains(&format!("\t{CORE} v0.0.0\n")), "{merged}");
+        assert!(
+            merged.contains("golang.org/x/sys v0.37.0 // indirect"),
+            "{merged}"
+        );
+        assert!(
+            merged.contains(&format!("\t{MOD} => /abs/golem\n")),
+            "{merged}"
+        );
+        assert_eq!(merged.matches("componentize-go").count(), 1, "{merged}");
+        validate(&merged).unwrap();
+        assert_eq!(merge_documents(&merged, &update).unwrap(), merged);
+    }
+
+    #[test]
+    fn merge_go_sum_is_the_sorted_union() {
+        let current = "b v1 h1:x=\na v1 h1:y=\n";
+        let update = "c v1 h1:z=\na v1 h1:y=\n";
+        assert_eq!(
+            merge_go_sum(current, update).unwrap(),
+            "a v1 h1:y=\nb v1 h1:x=\nc v1 h1:z=\n"
+        );
     }
 }
