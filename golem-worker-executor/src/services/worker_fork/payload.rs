@@ -294,6 +294,7 @@ mod tests {
                         parent_start_index: None,
                     },
                     ordinal: 0,
+                    read_attempt_ordinal: 3,
                     outcome: ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(
                         OplogIndex::from_u64(3),
                     )),

@@ -3584,6 +3584,7 @@ fn attachment_terminal_observation(guest: bool, parent: Option<OplogIndex>) -> O
                 StreamConsumerObservation::Host
             },
             ordinal: 0,
+            read_attempt_ordinal: 2,
             outcome: ToolAttachmentReadOutcome::Eof {
                 terminal_index: OplogIndex::from_u64(3),
             },
@@ -3704,7 +3705,7 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
     assert_eq!(bytes, Some(b"abc".to_vec()));
     assert_eq!(
         replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
-        Some((source, Some(source)))
+        Some((source, Some((source, 2))))
     );
     replay
         .register_replay_jump(vec![OplogRegion {
@@ -3761,6 +3762,7 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
         unreachable!()
     };
     observation.reobserves = Some(OplogIndex::from_u64(4));
+    observation.read_attempt_ordinal = 5;
     *payload = None;
     entries.push(reobservation);
     *oplog.entries.lock().unwrap() = entries;
@@ -3778,9 +3780,11 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
         .unwrap();
     assert_eq!(source, OplogIndex::from_u64(4));
     assert_eq!(bytes, Some(b"abc".to_vec()));
+    assert_eq!(read.read_attempt_ordinal, 5);
+    assert_eq!(read.reobserves, Some(source));
     assert_eq!(
         replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
-        Some((source, Some(OplogIndex::from_u64(5))))
+        Some((source, Some((OplogIndex::from_u64(5), 5))))
     );
     replay
         .set_replay_target(OplogIndex::from_u64(3))
@@ -3850,7 +3854,7 @@ async fn attachment_terminal_index_preserves_source_across_target_changes() {
             replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
             Some((
                 OplogIndex::from_u64(4),
-                (target == 5).then_some(OplogIndex::from_u64(5))
+                (target == 5).then_some((OplogIndex::from_u64(5), 2))
             )),
         );
     }

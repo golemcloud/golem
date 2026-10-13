@@ -2536,21 +2536,30 @@ impl CursorTx<'_> {
 }
 
 impl ReplayState {
-    /// Finds the original logical input and its retained physical replay boundary.
+    /// Finds the original logical input and its retained boundary's native read attempt.
     pub(crate) fn tool_attachment_observation(
         &self,
         attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
         invocation: &golem_common::model::IdempotencyKey,
         ordinal: u64,
-    ) -> Option<(OplogIndex, Option<OplogIndex>)> {
+    ) -> Option<(OplogIndex, Option<(OplogIndex, u64)>)> {
         let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
-        index
+        let (original, boundary) = index
             .logical_observations
             .get(&(attachment, invocation.clone(), ordinal))
-            .copied()
+            .copied()?;
+        Some((
+            original,
+            boundary.map(|boundary| {
+                (
+                    boundary,
+                    index.history.observations[&boundary].read_attempt_ordinal,
+                )
+            }),
+        ))
     }
 
-    /// Resolves a validated decreasing re-observation chain and downloads only its original body.
+    /// Downloads the original body while retaining the requested boundary's observation metadata.
     pub(crate) async fn hydrate_tool_attachment_observation(
         &self,
         mut source: OplogIndex,
@@ -2619,7 +2628,7 @@ impl ReplayState {
             .map_err(|error| {
                 WorkerExecutorError::runtime(format!("invalid attachment body: {error:?}"))
             })?;
-        Ok((source, read, bytes))
+        Ok((source, requested_read, bytes))
     }
 
     pub(crate) fn accepted_tool_attachment_write_end(

@@ -112,6 +112,7 @@ fn tool_attachment_read_contract_roundtrips() {
                 parent_start_index: Some(OplogIndex::from_u64(8)),
             },
             ordinal: 1,
+            read_attempt_ordinal: 4,
             outcome,
             reobserves,
         };

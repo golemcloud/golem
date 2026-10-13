@@ -96,9 +96,13 @@ pub enum ToolAttachmentReadOutcome {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct ToolAttachmentReadObservation {
     pub attachment: ToolAttachmentId,
+    /// The invocation that introduced the consumer binding, retained across method calls.
     pub logical_invocation: IdempotencyKey,
     pub observation: StreamConsumerObservation,
     pub ordinal: u64,
+    /// Native read attempt at this physical boundary. Zero cancellations leave gaps.
+    /// A re-observation can have a different attempt while retaining the logical value ordinal.
+    pub read_attempt_ordinal: u64,
     pub outcome: ToolAttachmentReadOutcome,
     pub reobserves: Option<OplogIndex>,
 }

@@ -2164,6 +2164,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             parent_start_index: Some(OplogIndex::from_u64(4)),
         },
         ordinal: 0,
+        read_attempt_ordinal: 2,
         outcome: ToolAttachmentReadOutcome::RawBytes {
             end: AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3)),
             offset: 0,
@@ -2175,6 +2176,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         observation: StreamConsumerObservation::Guest {
             parent_start_index: Some(OplogIndex::from_u64(6)),
         },
+        read_attempt_ordinal: 1,
         reobserves: Some(OplogIndex::from_u64(5)),
         ..attachment_read.clone()
     };

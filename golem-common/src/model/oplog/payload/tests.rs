@@ -44,6 +44,7 @@ mod tool_attachment {
                 parent_start_index: Some(index(3)),
             },
             ordinal: 3,
+            read_attempt_ordinal: 7,
             outcome: ToolAttachmentReadOutcome::RawBytes {
                 end: AcceptedAttachmentWriteEnd(index(7)),
                 offset: 3,
@@ -217,6 +218,7 @@ mod tool_attachment {
         history.observations.insert(index(10), read.clone());
         let mut replacement = read.clone();
         replacement.reobserves = Some(index(10));
+        replacement.read_attempt_ordinal = 2;
         replacement.observation = StreamConsumerObservation::Guest {
             parent_start_index: Some(index(16)),
         };
