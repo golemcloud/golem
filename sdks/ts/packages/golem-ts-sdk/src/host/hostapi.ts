@@ -169,6 +169,8 @@ export function resolveAgentIdStrict(
 
 /**
  * Get the current agent's metadata.
+ * Requires view permission on the running agent. Stored env/config fields
+ * are not filtered by the per-key permissions used for WASI reads.
  */
 export function getSelfMetadata(): AgentMetadata {
   return wrapAgentMetadata(rawGetSelfMetadata());

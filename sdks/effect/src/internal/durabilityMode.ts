@@ -22,7 +22,7 @@
  *
  * @since 1.5.0
  */
-import { Cause, Effect, Scope } from "effect"
+import { Cause, Effect, Predicate, Scope } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import { AgentHostClient } from "../host/AgentHostClient.js"
 import { DurabilityModeClient } from "../host/DurabilityModeClient.js"
@@ -35,34 +35,23 @@ import { OplogClient } from "../host/OplogClient.js"
 
 /**
  * Format an `Effect` failure (typed value, defect, or interruption) as
- * the `reason` argument to {@link AgentHostClient.trap}. Mirrors the
- * upstream `formatErrorForTrap` helper in
- * `sdks/ts/packages/golem-ts-sdk/src/host/guard.ts`: prefer a stack,
- * fall back to `name: message`, then `String(...)`.
+ * the `reason` argument to {@link AgentHostClient.trap}. Native errors
+ * retain their stacks; typed errors retain their messages; other values
+ * use string coercion.
  *
  * @internal
  */
 export const formatCauseForTrap = <E>(cause: Cause.Cause<E>): string => {
   for (const reason of cause.reasons) {
-    if (Cause.isFailReason(reason)) {
-      const e = reason.error as unknown
-      if (e instanceof Error) return e.stack ?? `${e.name}: ${e.message}`
-      try {
-        return String(e)
-      } catch {
-        return "<unprintable error>"
-      }
-    }
-    if (Cause.isDieReason(reason)) {
-      const e = reason.defect as unknown
-      if (e instanceof Error) return e.stack ?? `${e.name}: ${e.message}`
-      try {
-        return String(e)
-      } catch {
-        return "<unprintable defect>"
-      }
-    }
     if (Cause.isInterruptReason(reason)) return "interrupted"
+    const e = Cause.isFailReason(reason) ? reason.error : reason.defect
+    if (e instanceof Error) return e.stack ?? `${e.name}: ${e.message}`
+    try {
+      if (Predicate.hasProperty(e, "message") && Predicate.isString(e.message)) return e.message
+      return String(e)
+    } catch {
+      return Cause.isFailReason(reason) ? "<unprintable error>" : "<unprintable defect>"
+    }
   }
   return Cause.pretty(cause)
 }
