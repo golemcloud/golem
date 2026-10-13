@@ -168,7 +168,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "git-tool",
         artifact_id: "git_tool",
         export_name: "git",
-        release_version: "0.1.11",
+        release_version: "0.1.12",
         kind: BuiltinExportKind::Tool,
     },
 ];

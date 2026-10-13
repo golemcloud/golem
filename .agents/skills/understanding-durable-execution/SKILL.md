@@ -879,6 +879,17 @@ request. A shared slot receives the scope index when admission returns the handl
 no scope is installed in the durable context. Both replay consumption and live execution disarm
 the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
 
+P3 HTTP response frames remain batched parent/child durable calls, not consumer-journal records.
+Data and ordinary EOF settle their child delivery tokens at Wasmtime's per-read consumption
+observer. Producer readiness is too early: it can reverse a timer/EOF ordering during replay.
+The producer exposes at most the guest read's capacity and retains the frame's suffix; the first
+positive consumption records the frame's marker, and later suffix reads add no durable child.
+A fresh frame demand always parks, while an already buffered suffix is available inline on both
+paths. Explicit cancellation acknowledgements keep their producer handoff boundary before
+waiting for parent finalization, avoiding an observer/acknowledgement cycle. Trailers still settle
+the parent's token at the future's terminal observer. Tests: `tests/http.rs` cancellation and
+offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download recovery.
+
 ## Durable RPC exactly-once
 
 `RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
