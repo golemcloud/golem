@@ -740,7 +740,8 @@ impl S3BlobStorage {
                 Self::sdk_error_as_loggable_string,
                 false,
             )
-            .await?;
+            .await
+            .map_err(read_error)?;
 
             result.extend(response.contents().iter().cloned());
             if let Some(cont_token) = response.next_continuation_token() {
@@ -800,7 +801,8 @@ impl S3BlobStorage {
             Self::sdk_error_as_loggable_string,
             false,
         )
-        .await?;
+        .await
+        .map_err(read_error)?;
 
         Ok(!response.contents().is_empty())
     }
@@ -1099,10 +1101,12 @@ impl S3BlobStorage {
         }
     }
 
+    /// A listing sends a prefix that the backend built, so a refusal of it ([`read_refusal`]) is
+    /// final, as for a read.
     fn is_list_objects_v2_error_retriable(
-        _error: &SdkError<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error>,
+        error: &SdkError<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error>,
     ) -> bool {
-        true
+        read_refusal(error).is_none()
     }
 
     fn is_delete_object_error_retriable(

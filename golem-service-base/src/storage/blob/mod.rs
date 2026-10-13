@@ -1385,8 +1385,8 @@ impl std::fmt::Display for BlobRefusal {
 ///
 /// The backend attaches the error as a context to the error of the storage, so the cause stays in
 /// the chain. A retry gets the same answer until the operator fixes the storage, so the backend
-/// does not send the request again. The S3 backend gives it for a `GetObject` or a `HeadObject`
-/// answer with a 4xx status other than 408, 416 and 429 and without a code that asks for one more
+/// does not send the request again. The S3 backend gives it for a `GetObject`, a `HeadObject` or
+/// a `ListObjectsV2` answer with a 4xx status other than 408, 416 and 429 and without a code that asks for one more
 /// attempt, such as `RequestTimeout`. The filesystem backend gives it for a read, an existence
 /// check or a listing that fails with `PermissionDenied`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

@@ -3579,6 +3579,68 @@ async fn a_head_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
     );
 }
 
+/// Gives the failure of a listing, an existence check and a listing below a path of a storage
+/// that answers each `ListObjectsV2` with `answer` and each `HEAD` with a 404, and the number of
+/// requests that each call sends.
+async fn listing_failures(answer: fn() -> Answer) -> [(Option<BlobFailure>, usize); 3] {
+    let script = move |request: &SentRequest, _: usize| {
+        if request.method == "HEAD" {
+            Answer::new(404, "")
+        } else {
+            answer()
+        }
+    };
+    let failure = |error: anyhow::Error| BlobFailure::of(&error);
+
+    let (storage, requests) = scripted_storage("", script);
+    let list_dir = storage
+        .list_dir("test", "list-dir", namespace(), Path::new("dir"))
+        .await
+        .err()
+        .map(failure);
+    let list_dir = (list_dir, sent(&requests).len());
+
+    let (storage, requests) = scripted_storage("", script);
+    let exists = storage
+        .exists("test", "exists", namespace(), Path::new("dir"))
+        .await
+        .err()
+        .map(failure);
+    let exists = (
+        exists,
+        sent(&requests)
+            .iter()
+            .filter(|r| r.is_list_objects())
+            .count(),
+    );
+
+    let (storage, requests) = scripted_storage("", script);
+    let below = storage
+        .list_blobs_below("test", "list-blobs-below", namespace(), Path::new("dir"))
+        .await
+        .err()
+        .map(failure);
+    [list_dir, exists, (below, sent(&requests).len())]
+}
+
+#[test]
+async fn a_listing_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
+    // A listing sends a prefix that the backend built, so a refusal of it is a refusal of the
+    // executor, as for a read. A 500 keeps its retry.
+    assert_eq!(
+        [
+            listing_failures(|| Answer::new(403, ACCESS_DENIED)).await,
+            listing_failures(|| Answer::new(404, NO_SUCH_BUCKET)).await,
+            listing_failures(|| Answer::new(500, INTERNAL_ERROR)).await,
+        ],
+        [
+            [(Some(BlobFailure::Refused(BlobRefusal::AccessDenied)), 1); 3],
+            [(Some(BlobFailure::Refused(BlobRefusal::NoSuchBucket)), 1); 3],
+            [(Some(BlobFailure::Transient), 3); 3],
+        ]
+    );
+}
+
 #[test]
 async fn a_read_keeps_the_retry_of_an_answer_that_asks_for_one_more_attempt() {
     // 408 and 429 ask the client to send the request again, and so does a code of
