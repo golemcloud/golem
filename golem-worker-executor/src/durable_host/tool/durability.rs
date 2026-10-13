@@ -17,7 +17,6 @@ use crate::services::{HasActiveAgents, HasWorker};
 use crate::workerctx::{ReplayAdmissionStage, WorkerCtx};
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::attachment as model;
-use golem_common::model::oplog::host_functions::GolemToolOutputWrite;
 use golem_common::model::oplog::payload::tool_attachment::{
     ToolAttachmentWriteOutcome, ToolAttachmentWriteRequest,
 };
@@ -30,17 +29,23 @@ use std::future::Future;
 use std::pin::Pin;
 use wasmtime::component::{Accessor, HasSelf};
 
-pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
+pub(super) async fn write<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     writer: AttachmentWriter,
     controller: AttachmentController,
     bytes: Vec<u8>,
-) -> anyhow::Result<Result<(), StreamWriteError>> {
+) -> anyhow::Result<Result<(), StreamWriteError>>
+where
+    Pair: golem_common::model::oplog::HostPayloadPair<
+            Req = HostRequestToolAttachmentWrite,
+            Resp = HostResponseToolAttachmentWrite,
+        >,
+{
     let Some(identity) = writer.identity() else {
         return Ok(writer.write(bytes).await);
     };
     let request = ToolAttachmentWriteRequest::new(identity, &bytes);
-    let mut call = DurableCallSession::<GolemToolOutputWrite, Cancellable>::start_access(
+    let mut call = DurableCallSession::<Pair, Cancellable>::start_access(
         accessor,
         accessor.getter(),
         HostRequestToolAttachmentWrite {
@@ -189,7 +194,7 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
                         accessor.with(|mut access| access.get().create_interrupt_signal());
                     tokio::select! {
                         _ = hook.before_replay_access_start(
-                        "golem::tool::streams::tool-output-writer::write",
+                        Pair::FQFN,
                         ReplayAdmissionStage::AfterToolOutputAccepted,
                         ) => {},
                         interruption = interrupt => return Err(interruption.into()),
@@ -224,12 +229,18 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
     }
 }
 
-async fn complete_resource_exhaustion<U: Send + 'static, Ctx: WorkerCtx>(
+async fn complete_resource_exhaustion<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    mut call: DurableCallSession<GolemToolOutputWrite, Cancellable>,
+    mut call: DurableCallSession<Pair, Cancellable>,
     prepared: PreparedAttachmentTerminal,
     controller: AttachmentController,
-) -> anyhow::Result<Result<(), StreamWriteError>> {
+) -> anyhow::Result<Result<(), StreamWriteError>>
+where
+    Pair: golem_common::model::oplog::HostPayloadPair<
+            Req = HostRequestToolAttachmentWrite,
+            Resp = HostResponseToolAttachmentWrite,
+        >,
+{
     let failed = publication_failure(accessor, controller)?;
     let mut selection = None;
     let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
@@ -275,15 +286,21 @@ async fn complete_resource_exhaustion<U: Send + 'static, Ctx: WorkerCtx>(
     Ok(Err(error))
 }
 
-pub(super) async fn finish<U: Send + 'static, Ctx: WorkerCtx>(
+pub(super) async fn finish<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     writer: AttachmentWriter,
     controller: AttachmentController,
-) -> anyhow::Result<Result<(), StreamWriteError>> {
+) -> anyhow::Result<Result<(), StreamWriteError>>
+where
+    Pair: golem_common::model::oplog::HostPayloadPair<
+            Req = golem_common::model::oplog::HostRequestToolAttachmentEndpoint,
+            Resp = golem_common::model::oplog::HostResponseToolAttachmentTerminalResult,
+        >,
+{
     let Some(attachment) = writer.identity() else {
         return Ok(writer.finish());
     };
-    terminal::<golem_common::model::oplog::host_functions::GolemToolOutputFinish, U, Ctx>(
+    terminal::<Pair, U, Ctx>(
         accessor,
         writer,
         controller,
@@ -293,16 +310,22 @@ pub(super) async fn finish<U: Send + 'static, Ctx: WorkerCtx>(
     .await
 }
 
-pub(super) async fn fail<U: Send + 'static, Ctx: WorkerCtx>(
+pub(super) async fn fail<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     writer: AttachmentWriter,
     controller: AttachmentController,
     reason: ByteStreamFailure,
-) -> anyhow::Result<Result<(), StreamWriteError>> {
+) -> anyhow::Result<Result<(), StreamWriteError>>
+where
+    Pair: golem_common::model::oplog::HostPayloadPair<
+            Req = golem_common::model::oplog::HostRequestToolAttachmentFail,
+            Resp = golem_common::model::oplog::HostResponseToolAttachmentTerminalResult,
+        >,
+{
     let Some(attachment) = writer.identity() else {
         return Ok(writer.fail(reason));
     };
-    terminal::<golem_common::model::oplog::host_functions::GolemToolOutputFail, U, Ctx>(
+    terminal::<Pair, U, Ctx>(
         accessor,
         writer,
         controller,

@@ -1637,20 +1637,34 @@ pub(crate) struct AttachmentStreamProducer {
     finished: bool,
 }
 
-impl<D> StreamProducer<D> for AttachmentStreamProducer {
-    type Item = Result<Vec<u8>, ByteStreamFailure>;
-    type Buffer = VecBuffer<Self::Item>;
+pub(super) enum AttachmentStreamRead {
+    Chunk {
+        bytes: Vec<u8>,
+        source_end: Option<AcceptedAttachmentWriteEnd>,
+    },
+    Failure {
+        failure: ByteStreamFailure,
+        terminal_index: Option<golem_common::model::OplogIndex>,
+    },
+    Terminal {
+        result: StreamResult,
+        terminal_index: Option<golem_common::model::OplogIndex>,
+    },
+}
 
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
+impl AttachmentStreamProducer {
+    /// Dequeues one item while retaining its memory charge until the next poll or drop.
+    /// An adapter must finish using that item before polling for another one.
+    pub(super) fn poll_read(
+        &mut self,
         cx: &mut Context<'_>,
-        mut store: wasmtime::StoreContextMut<'a, D>,
-        mut dst: Destination<'a, Self::Item, Self::Buffer>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
+    ) -> Poll<wasmtime::Result<AttachmentStreamRead>> {
         drop(self.in_flight_charge.take());
         if self.finished {
-            return Poll::Ready(Ok(StreamResult::Dropped));
+            return Poll::Ready(Ok(AttachmentStreamRead::Terminal {
+                result: StreamResult::Dropped,
+                terminal_index: None,
+            }));
         }
         let attachment = self
             .consumer
@@ -1658,18 +1672,10 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
             .expect("attachment stream producer lost its consumer")
             .attachment
             .clone();
-        let remaining = dst.remaining(store.as_context_mut());
-        if finish {
-            return Poll::Ready(Ok(StreamResult::Cancelled));
-        }
-        if remaining == Some(0) {
-            return Poll::Ready(Ok(StreamResult::Completed));
-        }
 
         enum Produced {
-            Item(Result<Vec<u8>, ByteStreamFailure>, Option<AttachmentCharge>),
-            End,
-            Cancelled,
+            Item(AttachmentStreamRead, Option<AttachmentCharge>),
+            Terminal(StreamResult, Option<golem_common::model::OplogIndex>),
             OwnerFenced,
             Pending,
         }
@@ -1695,21 +1701,39 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
                 state.delivered_bytes = state
                     .delivered_bytes
                     .saturating_add(chunk.bytes.len() as u64);
-                Produced::Item(Ok(chunk.bytes), Some(chunk.charge))
+                Produced::Item(
+                    AttachmentStreamRead::Chunk {
+                        bytes: chunk.bytes,
+                        source_end: chunk.source_end,
+                    },
+                    Some(chunk.charge),
+                )
             } else if !terminal_visible {
                 state.reader_waker = Some(cx.waker().clone());
                 Produced::Pending
             } else {
                 match state.terminal.clone() {
-                    Some(ByteStreamCloseCause::Finished) => Produced::End,
+                    Some(ByteStreamCloseCause::Finished) => {
+                        Produced::Terminal(StreamResult::Dropped, state.terminal_end)
+                    }
                     Some(ByteStreamCloseCause::Failed(failure))
                         if !state.terminal_item_delivered =>
                     {
                         state.terminal_item_delivered = true;
-                        Produced::Item(Err(failure), None)
+                        Produced::Item(
+                            AttachmentStreamRead::Failure {
+                                failure,
+                                terminal_index: state.terminal_end,
+                            },
+                            None,
+                        )
                     }
-                    Some(ByteStreamCloseCause::Failed(_)) => Produced::End,
-                    Some(ByteStreamCloseCause::ConsumerCancelled) => Produced::Cancelled,
+                    Some(ByteStreamCloseCause::Failed(_)) => {
+                        Produced::Terminal(StreamResult::Dropped, state.terminal_end)
+                    }
+                    Some(ByteStreamCloseCause::ConsumerCancelled) => {
+                        Produced::Terminal(StreamResult::Cancelled, state.terminal_end)
+                    }
                     None => {
                         state.reader_waker = Some(cx.waker().clone());
                         Produced::Pending
@@ -1721,17 +1745,15 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
         match produced {
             Produced::Item(item, charge) => {
                 self.in_flight_charge = charge;
-                dst.set_buffer(VecBuffer::from(vec![item]));
                 attachment.changed.notify_waiters();
-                Poll::Ready(Ok(StreamResult::Completed))
+                Poll::Ready(Ok(item))
             }
-            Produced::End => {
+            Produced::Terminal(result, terminal_index) => {
                 self.finished = true;
-                Poll::Ready(Ok(StreamResult::Dropped))
-            }
-            Produced::Cancelled => {
-                self.finished = true;
-                Poll::Ready(Ok(StreamResult::Cancelled))
+                Poll::Ready(Ok(AttachmentStreamRead::Terminal {
+                    result,
+                    terminal_index,
+                }))
             }
             Produced::OwnerFenced => {
                 self.finished = true;
@@ -1740,6 +1762,41 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
                 )))
             }
             Produced::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<D> StreamProducer<D> for AttachmentStreamProducer {
+    type Item = Result<Vec<u8>, ByteStreamFailure>;
+    type Buffer = VecBuffer<Self::Item>;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: wasmtime::StoreContextMut<'a, D>,
+        mut dst: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        drop(self.in_flight_charge.take());
+        if self.finished {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        if finish {
+            return Poll::Ready(Ok(StreamResult::Cancelled));
+        }
+        if dst.remaining(store.as_context_mut()) == Some(0) {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+        match std::task::ready!(self.poll_read(cx))? {
+            AttachmentStreamRead::Chunk { bytes, .. } => {
+                dst.set_buffer(VecBuffer::from(vec![Ok(bytes)]));
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+            AttachmentStreamRead::Failure { failure, .. } => {
+                dst.set_buffer(VecBuffer::from(vec![Err(failure)]));
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+            AttachmentStreamRead::Terminal { result, .. } => Poll::Ready(Ok(result)),
         }
     }
 }

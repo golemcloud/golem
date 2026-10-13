@@ -5967,7 +5967,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
             let entry = access.get().table().get(&self_)?;
             Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
         })?;
-        durability::write(accessor, writer, controller, bytes).await
+        durability::write::<golem_common::model::oplog::host_functions::GolemToolOutputWrite, _, _>(
+            accessor, writer, controller, bytes,
+        )
+        .await
     }
 
     async fn finish(
@@ -5978,7 +5981,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
             let entry = access.get().table().get(&self_)?;
             Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
         })?;
-        durability::finish(accessor, writer, controller).await
+        durability::finish::<golem_common::model::oplog::host_functions::GolemToolOutputFinish, _, _>(
+            accessor, writer, controller,
+        )
+        .await
     }
 
     async fn fail(
@@ -5990,7 +5996,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
             let entry = access.get().table().get(&self_)?;
             Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
         })?;
-        durability::fail(accessor, writer, controller, reason).await
+        durability::fail::<golem_common::model::oplog::host_functions::GolemToolOutputFail, _, _>(
+            accessor, writer, controller, reason,
+        )
+        .await
     }
 }
 
