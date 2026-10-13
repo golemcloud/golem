@@ -569,7 +569,8 @@ impl BlobStorageBackend for FileSystemBlobStorage {
 
         Ok(
             tokio::task::spawn_blocking(move || list_names_in(&full_path, &namespace_root))
-                .await??,
+                .await?
+                .map_err(read_error)?,
         )
     }
 
@@ -586,7 +587,8 @@ impl BlobStorageBackend for FileSystemBlobStorage {
 
         Ok(
             tokio::task::spawn_blocking(move || list_files_below(&full_path, &namespace_root))
-                .await??,
+                .await?
+                .map_err(read_error)?,
         )
     }
 
@@ -619,9 +621,12 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&blob)?;
         self.ensure_path_is_inside_root(&directory)?;
 
-        if async_fs::metadata(&blob).await.is_ok() {
+        if read_metadata(&blob).await?.is_some() {
             Ok(ExistsResult::File)
-        } else if tokio::task::spawn_blocking(move || holds_an_entry(&directory)).await?? {
+        } else if tokio::task::spawn_blocking(move || holds_an_entry(&directory))
+            .await?
+            .map_err(read_error)?
+        {
             Ok(ExistsResult::Directory)
         } else {
             Ok(ExistsResult::DoesNotExist)

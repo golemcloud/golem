@@ -1338,3 +1338,54 @@ async fn a_read_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_err
         ([refused; 4], [refused; 4], [None; 4])
     );
 }
+
+#[test]
+async fn an_existence_check_or_a_listing_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error()
+ {
+    // An existence check or a listing that cannot search a directory cannot tell what is in it, so
+    // it gives a `BlobRefusedError` and not `DoesNotExist` or an untyped error.
+    let (_root, storage) = storage_with_blobs().await;
+    let directory = storage
+        .directory_of(
+            &namespace(),
+            &normalized_blob_path(Path::new("ranges")).unwrap(),
+        )
+        .unwrap();
+    let failure = |error: anyhow::Error| BlobFailure::of(&error);
+    let failures = async || {
+        [
+            storage
+                .exists("test", "exists", namespace(), Path::new("ranges/blob"))
+                .await
+                .err()
+                .map(failure),
+            storage
+                .exists("test", "exists", namespace(), Path::new("ranges"))
+                .await
+                .err()
+                .map(failure),
+            storage
+                .list_dir("test", "list-dir", namespace(), Path::new("ranges"))
+                .await
+                .err()
+                .map(failure),
+            storage
+                .list_blobs_below("test", "list-blobs-below", namespace(), Path::new("ranges"))
+                .await
+                .err()
+                .map(failure),
+        ]
+    };
+
+    set_mode(&directory, 0o000);
+    let unsearchable_directory = failures().await;
+    set_mode(&directory, 0o755);
+
+    assert_eq!(
+        (unsearchable_directory, failures().await),
+        (
+            [Some(BlobFailure::Refused(BlobRefusal::AccessDenied)); 4],
+            [None; 4]
+        )
+    );
+}
