@@ -560,12 +560,11 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 0,
             command_path: vec!["files".to_string(), "lookup".to_string()],
-            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["configured-secret-rendering"],
-            )
-            .unwrap()
-            .args,
+            args: vec![golem_common::model::card::ToolArgPattern::Positional(
+                golem_common::model::card::ToolInvocationValue::Literal(
+                    "configured-secret-rendering".into(),
+                ),
+            )],
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,

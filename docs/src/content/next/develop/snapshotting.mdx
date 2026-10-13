@@ -689,7 +689,9 @@ A restore downloads the whole filesystem snapshot before the agent's code runs. 
 
 ### Availability
 
-Filesystem snapshots are disabled by default. Only an executor whose agent filesystems are on XFS storage with reflink (the `ManagedXfs` or `ReflinkXfs` storage mode) can enable them. See [Filesystem Snapshots](/next/operate/filesystem_snapshots) for the operator setup.
+Filesystem snapshots require storage that makes copy-on-write copies. Production executors use XFS with reflink, through `ManagedXfs` or `ReflinkXfs`. Local development and tests on macOS can use `Apfs`, without per-agent disk limits or filesystem usage metering.
+
+The local `golem server run` command on macOS defaults to `Apfs` at `<data_dir>/agents` and enables filesystem snapshots. It keeps the snapshots in blob storage at `<data_dir>/blobs` and retains the repository key in `<data_dir>/filesystem-snapshots.repository-key`. Standalone executors and local servers on other platforms disable filesystem snapshots by default. An agent still needs a snapshotting policy. See [Filesystem Snapshots](/next/operate/filesystem_snapshots) for configuration and limitations.
 
 On an executor without filesystem snapshots, Golem writes a snapshot record only when the agent's files can come back with it:
 

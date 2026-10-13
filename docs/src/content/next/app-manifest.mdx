@@ -151,6 +151,29 @@ agents:
 
 For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
 
+### Initial tool permissions
+
+Bindings expose a tool; `initialCard` supplies runtime authority. Components and agents accept a card with `lowerBound` and `upperBound`, each containing `positive` and `negative` permission lists. For an agent with a bound Git tool:
+
+```yaml
+agents:
+  RepositoryAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative:
+          - "tool(?component/git) @ ?agent : invoke : status --short --null"
+      upperBound:
+        positive:
+          - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
+        negative: []
+```
+
+This tool-permission fragment permits `status` with a matching `cwd`, including additional flags, but rejects calls containing both `short` and `null` regardless of their order or other flags. It does not grant filesystem access; supply the separate resource permissions required by the tool. Initial cards must also fit the deployer's delegable authority.
+
+Use primary command and long-option names in manifests. Runtime derivation can resolve aliases against durably selected metadata, but initial-card validation has no such definition context. Values are attached with `=`; `*` and `**` are anchored value globs, while an entire resource of `*` permits any command. Positive repeated-option constraints require a matching occurrence, not that all occurrences are allowed. See [Tool permission patterns](/next/develop/tool-security#tool-permission-patterns) for quoting, positional prefixes, denials, and opaque streams.
+
 ### Tool middleware
 
 Tool middleware has its own namespace under `tools.middleware`, so `middleware` is reserved and cannot be used as a tool name. A declaration selects one locally discovered implementation, optionally using `component` to disambiguate it, or one published release. Configuration in the declaration is consumer-owned and is not copied from a publisher:
@@ -557,7 +580,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "localServer.agentFilesystemRoot",
   }}>
-    ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_segment>/`. The agent segment is the agent name with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters, then `-` and the BLAKE3 hash of the agent id.
+    ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_segment>/`. The agent segment is the agent name with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters, then `-` and the BLAKE3 hash of the agent id. On macOS, the local server keeps agent files on `Apfs` storage at this root, and the default root is `<data_dir>/agents`, where `<data_dir>` is the resolved `localServer.dataDir`.
   </Field>
 
   <Field meta={{

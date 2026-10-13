@@ -799,52 +799,39 @@ impl RenderFragment for ToolResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
         Ok(match self {
             Self::AnyInvocation => "*".to_string(),
+            Self::Request(_) => return Err("a tool request is not a permission pattern".into()),
             Self::Invocation(invocation) => {
-                let command = invocation.command_path.as_ref().map(|path| {
-                    path.iter()
+                let command = if invocation.command_path.is_empty() {
+                    ".".to_string()
+                } else {
+                    invocation
+                        .command_path
+                        .iter()
                         .map(|part| part.0.clone())
                         .collect::<Vec<_>>()
                         .join(".")
-                });
-                let args = invocation
-                    .args
-                    .iter()
-                    .map(render_tool_arg)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                match (command, args.is_empty()) {
-                    (Some(command), true) => command,
-                    (Some(command), false) => format!("{command} {args}"),
-                    (None, true) => "*".to_string(),
-                    (None, false) => args,
+                };
+                let mut parts = vec![command];
+                parts.extend(invocation.flags.iter().map(|flag| match &flag.value {
+                    Some(value) => format!("--{}={}", flag.name.0, render_tool_value(value)),
+                    None => format!("--{}", flag.name.0),
+                }));
+                if !invocation.positionals.is_empty() {
+                    parts.push("--".into());
+                    parts.extend(invocation.positionals.iter().map(render_tool_value));
                 }
+                parts.join(" ")
             }
         })
     }
 }
 
-fn render_tool_arg(arg: &ToolArgPattern) -> String {
-    match arg {
-        ToolArgPattern::ShortFlags { flags, value } => {
-            let flags = flags.iter().collect::<String>();
-            match value {
-                Some(value) => format!("-{flags}={}", render_tool_value(value)),
-                None => format!("-{flags}"),
-            }
-        }
-        ToolArgPattern::LongFlag { name, value } => match value {
-            Some(value) => format!("--{}={}", name.0, render_tool_value(value)),
-            None => format!("--{}", name.0),
-        },
-        ToolArgPattern::Positional(value) => render_tool_value(value),
-    }
-}
-
 fn render_tool_value(value: &ToolValuePattern) -> String {
-    match value {
-        ToolValuePattern::Literal(value) => value.0.clone(),
-        ToolValuePattern::Star => "*".to_string(),
-        ToolValuePattern::GlobStar => "**".to_string(),
+    let value = value.render_glob();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        format!("\"{value}\"")
+    } else {
+        value
     }
 }
 

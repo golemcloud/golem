@@ -17,6 +17,52 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::{DurationValuePayload, SchemaValue};
 
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::WireSchema for ::chrono::Duration {
+    fn wire_type_id() -> String {
+        <Self as IntoSchema>::type_id().0
+    }
+
+    fn append_schema(builder: &mut crate::schema::wit::direct::WireSchemaBuilder) -> i32 {
+        builder.push(crate::schema::wit::wire::SchemaTypeBody::DurationType)
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::IntoWire for ::chrono::Duration {
+    const NEEDS_PREPARATION: bool = false;
+
+    fn write_wire(
+        &self,
+        writer: &mut crate::schema::wit::direct::WireWriter,
+    ) -> Result<i32, crate::schema::wit::direct::WireError> {
+        Ok(
+            writer.push(crate::schema::wit::wire::SchemaValueNode::DurationValue(
+                crate::schema::wit::wire::DurationValuePayload {
+                    nanoseconds: self
+                        .num_nanoseconds()
+                        .unwrap_or(self.num_seconds() * 1_000_000_000),
+                },
+            )),
+        )
+    }
+}
+
+#[cfg(feature = "guest")]
+impl crate::schema::wit::direct::FromWire for ::chrono::Duration {
+    fn read_wire(
+        reader: &mut crate::schema::wit::direct::WireReader,
+        index: i32,
+    ) -> Result<Self, crate::schema::wit::direct::WireError> {
+        match reader.take(index)? {
+            crate::schema::wit::wire::SchemaValueNode::DurationValue(value) => {
+                Ok(Self::nanoseconds(value.nanoseconds))
+            }
+            _ => Err(crate::schema::wit::direct::WireError::Shape("duration")),
+        }
+    }
+}
+
 impl IntoSchema for ::chrono::Duration {
     fn type_id() -> TypeId {
         TypeId::new("chrono.Duration")
@@ -49,6 +95,25 @@ impl FromSchema for ::chrono::Duration {
 const NAIVE_DATE_FMT: &str = "%Y-%m-%d";
 const NAIVE_DATE_TIME_FMT: &str = "%Y-%m-%dT%H:%M:%S%.9f";
 const NAIVE_TIME_FMT: &str = "%H:%M:%S%.9f";
+
+#[cfg(feature = "guest")]
+crate::schema::wit::direct::wire_string!(
+    ::chrono::NaiveDate,
+    |value: &::chrono::NaiveDate| value.format(NAIVE_DATE_FMT).to_string(),
+    |value: &str| ::chrono::NaiveDate::parse_from_str(value, NAIVE_DATE_FMT)
+);
+#[cfg(feature = "guest")]
+crate::schema::wit::direct::wire_string!(
+    ::chrono::NaiveDateTime,
+    |value: &::chrono::NaiveDateTime| value.format(NAIVE_DATE_TIME_FMT).to_string(),
+    |value: &str| ::chrono::NaiveDateTime::parse_from_str(value, NAIVE_DATE_TIME_FMT)
+);
+#[cfg(feature = "guest")]
+crate::schema::wit::direct::wire_string!(
+    ::chrono::NaiveTime,
+    |value: &::chrono::NaiveTime| value.format(NAIVE_TIME_FMT).to_string(),
+    |value: &str| ::chrono::NaiveTime::parse_from_str(value, NAIVE_TIME_FMT)
+);
 
 impl IntoSchema for ::chrono::NaiveDate {
     fn type_id() -> TypeId {
