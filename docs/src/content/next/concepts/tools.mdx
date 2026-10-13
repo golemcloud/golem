@@ -263,6 +263,8 @@ A binding can also list the configuration keys and secrets a tool may read (`con
 
 **Middleware** wraps tool calls and runs on every call. You configure it in `golem.yaml`, and Golem enforces it; agent code cannot list, remove, or bypass it. Typical middleware approves or rejects calls based on their arguments, waits for human approval before an irreversible action, redacts output, writes audit records, or enforces rate limits. Because middleware runs inside the durable agent, an approval step can wait hours for a person and survive restarts.
 
+Middleware cannot widen what an agent may do. Each call that middleware passes to the next layer is checked against the calling agent's permissions again, with the command and arguments that the next layer receives. If middleware changes a command or its arguments, the agent needs permission for both the command it called and the command the middleware produces.
+
 ## Choosing where code runs
 
 <ThemedImage
