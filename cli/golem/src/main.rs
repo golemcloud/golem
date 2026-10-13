@@ -30,7 +30,7 @@ fn main() -> ExitCode {
         return match golem::config::dump_config(&flag) {
             Ok(_) => ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("Failed to dump config: {err:#}");
+                golem_cli::log::eprint_line(format!("Failed to dump config: {err:#}"));
                 ExitCode::FAILURE
             }
         };
