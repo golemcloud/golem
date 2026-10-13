@@ -261,23 +261,6 @@ fn is_pack_missing(error: &(dyn Error + 'static)) -> bool {
     missing_file_path(error).is_some_and(|path| path.starts_with(FileType::Pack.dirname()))
 }
 
-/// Gives the start of the hex id of the blob that a lookup in the index did not find, from a "not
-/// found in index" error of rustic. rustic keeps the id as the context of the error, and gives the
-/// context only in the text of the error, as the text between the backticks before `not found in
-/// index`. rustic writes an id there with its short display, the first 8 hex digits, so the text
-/// holds the start of the id and not the whole id.
-pub(super) fn missing_blob(error: &(dyn Error + 'static)) -> Option<Box<str>> {
-    chain(error).find_map(|error| {
-        let text = error.to_string();
-        let before = &text[..text.find("` not found in index")?];
-        let start = &before[before.rfind('`')? + 1..];
-        (!start.is_empty()
-            && start.len() <= 64
-            && start.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then(|| Box::from(start.to_ascii_lowercase()))
-    })
-}
-
 /// The text with which rustic begins an error of the kind `InputOutput`.
 const RUSTIC_LOCAL_IO: &str =
     "`rustic_core` experienced an error related to `input/output operations`.";
@@ -420,7 +403,7 @@ fn chain<'a>(error: &'a (dyn Error + 'static)) -> impl Iterator<Item = &'a (dyn 
 mod tests {
     use super::{
         BlobCallFailed, CallFailure, ConfigExists, FileMissing, LeaseExpired, OperationCancelled,
-        call_failure, is_config_exists, is_index_missing, is_pack_missing, may_land, missing_blob,
+        call_failure, is_config_exists, is_index_missing, is_pack_missing, may_land,
         missing_file_path, run_end, rustic_storage_end, storage_end,
     };
     use crate::filesystem_snapshot::rustic::runs::RunEnd;
@@ -428,7 +411,7 @@ mod tests {
         BlobMissingError, BlobNameError, BlobRangeError, BlobRefusal, BlobRefusedError,
     };
     use pretty_assertions::assert_eq;
-    use rustic_core::{ErrorKind, Id, RusticError};
+    use rustic_core::{ErrorKind, RusticError};
     use std::io;
     use std::path::Path;
     use test_r::test;
@@ -603,73 +586,6 @@ mod tests {
                 true,
                 None,
             )
-        );
-    }
-
-    #[test]
-    fn missing_blob_reads_the_start_of_the_id_of_the_forks_not_found_errors() {
-        let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            .parse::<Id>()
-            .unwrap();
-        // The errors as the fork makes them: `get_index_entry` for a data blob, and the tree
-        // load of the node streamer for a tree blob. The fork writes the context with the short
-        // display of the id.
-        let data = anyhow::Error::new(
-            RusticError::new(
-                ErrorKind::Internal,
-                "Blob ID `{id}` not found in index, but should be there.",
-            )
-            .attach_context("id", id.to_string()),
-        );
-        let tree = anyhow::Error::new(
-            RusticError::new(
-                ErrorKind::Internal,
-                "Tree ID `{tree_id}` not found in index",
-            )
-            .attach_context("tree_id", id.to_string()),
-        )
-        .context("ls the snapshot");
-        let other = anyhow::Error::new(RusticError::new(
-            ErrorKind::Internal,
-            "the data failed its check",
-        ));
-
-        assert_eq!(
-            [
-                missing_blob(data.as_ref()),
-                missing_blob(tree.as_ref()),
-                missing_blob(other.as_ref()),
-            ],
-            [
-                Some(Box::from("01234567")),
-                Some(Box::from("01234567")),
-                None
-            ]
-        );
-    }
-
-    #[test]
-    fn missing_blob_reads_only_a_hex_start_of_one_to_64_digits() {
-        let not_found = |id: &str| anyhow::anyhow!("Blob ID `{id}` not found in index");
-
-        assert_eq!(
-            [
-                "",
-                "xyz",
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "ABCD",
-            ]
-            .map(|id| missing_blob(not_found(id).as_ref())),
-            [
-                None,
-                None,
-                None,
-                Some(Box::from(
-                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                )),
-                Some(Box::from("abcd")),
-            ]
         );
     }
 
