@@ -169,3 +169,89 @@ async fn test_go_tools_e2e() {
         "{generated}"
     );
 }
+
+/// A Go component that lists the built-in `bash` release in its tool
+/// dependencies gets a generated Go client from `golem build`, without an
+/// explicit bridge selection, and an agent calls the tool through it.
+#[test]
+#[timeout("25 minutes")]
+async fn test_go_builtin_tool_client_from_dependency() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join("go-bash")).unwrap();
+    ctx.cd("go-bash");
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "go",
+            flag::COMPONENT_NAME,
+            "go-bash:consumer",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: go-bash
+        environments:
+          local:
+            server: local
+            componentPresets: debug
+        tools:
+          bash:
+            release:
+              account: builtin-tool-owner@golem.cloud
+              name: bash
+              version: "0.2.1"
+        components:
+          go-bash:consumer:
+            dir: module
+            templates: go
+            dependencies:
+              tools: [bash]
+            tools:
+              bash:
+                filesystemAccess: allowed
+    "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let consumer = ctx.cwd_path_join("module");
+    replace_go_component(&consumer, "runner", include_str!("go_bash_consumer.go"));
+    let go_mod = consumer.join("go.mod");
+    fs::write_str(
+        &go_mod,
+        fs::read_to_string(&go_mod).unwrap()
+            + indoc! {r#"
+
+                require golem.local/bridge/bash-tool-guest-client v0.0.0
+
+                replace golem.local/bridge/bash-tool-guest-client => ../golem-temp/bridge-sdk/go/internal/bash-tool-guest-client
+            "#},
+    )
+    .unwrap();
+
+    assert!(ctx.cli([flag::YES, cmd::BUILD]).await.success_or_dump());
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ScriptRunner(\"{}\")", Uuid::new_v4()),
+            "run-script",
+            "\"printf 'typed-bash:%s' \\\"$((7 * 3 + 19))\\\"\"",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_text().contains("typed-bash:40"),
+        "{}",
+        outputs.stdout_text()
+    );
+}

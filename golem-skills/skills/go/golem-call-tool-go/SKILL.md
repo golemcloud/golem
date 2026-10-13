@@ -1,6 +1,6 @@
 ---
 name: golem-call-tool-go
-description: "Calls a Golem tool from a Go agent. Use when invoking a tool with typed arguments, through its own definition or a generated guest tool client, streaming its stdin, stdout and stderr, handling declared tool errors, or calling a tool discovered at runtime."
+description: "Calls a Golem tool from a Go agent. Use when invoking a tool with typed arguments, through its own definition or a generated guest tool client (including generated built-in or MCP imported tool clients), streaming its stdin, stdout and stderr, handling declared tool errors, or calling a tool discovered at runtime."
 ---
 
 # Call a Golem Tool from Go
@@ -73,6 +73,46 @@ greeting, err := greeter.Greet.Call(func(a *greeter.GreetArgs) { a.Name = "ada" 
 ```
 
 Names follow the command path: `Tool` (with its identity type, e.g. `GreeterTool`), `Root` for the tool's own body, `Greet`, `StockShow` for `stock show`, with `<Command>Args` structs, `<Node>Globals` structs embedded in them, and `Err<Case>` error cases (`Err<Command><Case>` when two commands give one case different payloads). Defaults a Go literal can spell are filled in; set any other field yourself.
+
+### An existing built-in tool or MCP import
+
+Load `golem-generating-tool-clients` to select a built-in release or an MCP import. Declare it, add it to the Go component's `dependencies.tools`, and bind it separately; `golem build` generates the Go client without an explicit bridge selection. Do not copy the tool's schema into a `tool.DefineTool` of your own. For the built-in `bash` release `0.2.1`:
+
+```yaml
+tools:
+  bash:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: bash
+      version: "0.2.1"
+
+components:
+  example:caller:
+    dir: caller
+    templates: go
+    dependencies:
+      tools: [bash]
+    tools:
+      bash:
+        filesystemAccess: allowed
+```
+
+Point `go.mod` at `golem.local/bridge/bash-tool-guest-client` as above, then:
+
+```go
+import bash "golem.local/bridge/bash-tool-guest-client"
+
+result, err := bash.Run.Call(func(a *bash.RunArgs) { a.Script = "printf 'hello\\n'" })
+if err != nil {
+	return golem.Err[string, string](err.Error())
+}
+if result.ExitCode != 0 {
+	return golem.Err[string, string](result.Stderr)
+}
+return golem.Ok[string, string](result.Stdout)
+```
+
+`cwd` and `timeout` keep their declared defaults (`""` and `600`) unless the call sets `a.Cwd` or `a.Timeout`. The script's exit code is part of the result, not an error: check `ExitCode` when a nonzero exit should fail the method. For an MCP import, use the generated result type rather than assuming the call returns a string.
 
 ## A Tool Without Its Definition
 
