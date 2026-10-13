@@ -16,8 +16,9 @@
 //!
 //! The interface is wired into the linker for every agent component. Tool
 //! discovery is implemented as a durable environment-state read. Tool
-//! invocation authorization is enforced here before the invocation backend,
-//! which is implemented separately on top of sidecar instances.
+//! invocation authorization is enforced here for every admission, including
+//! middleware underlying calls, before the invocation backend, which is
+//! implemented separately on top of sidecar instances.
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
@@ -1245,7 +1246,7 @@ fn caller_tool_owner(
 
 struct PreparedToolCall {
     stdin: Option<Resource<ToolStdinEntry>>,
-    permit: Option<LiveAuthorizationPermit>,
+    permit: LiveAuthorizationPermit,
     operation: operation::ProvisionalOwnerToolOperation,
     plan: EntityInvocationPlanReference,
 }
@@ -1870,71 +1871,89 @@ where
         }
     };
 
-    let permit = if let ToolCallTarget::Ambient(rpc) = &target {
-        let permission_target = accessor.with(|mut access| {
-            let component = access.get().owner_component_metadata();
-            let owner = caller_tool_owner(
-                &component.account_email,
-                &component.application_name,
-                &component.environment_name,
-                &component.component_name,
-                &rpc.tool_name,
-            );
-            let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
-            tool_target(
-                owner,
-                &command_path,
-                descriptor.args.clone(),
-                Some(&effective_definition),
-            )
-        });
-        let permission_target = match permission_target {
-            Ok(target) => target,
-            Err(error) => {
-                return Ok(rejected_tool_call(
-                    &tool_name,
-                    attempt_ordinal,
-                    &command_path,
-                    Some(input),
-                    None,
-                    has_stdin,
-                    stdout_requested,
-                    stderr_requested,
-                    call_mode,
-                    SerializableToolRpcError::ProtocolError(error.to_string()),
-                    stdin,
-                ));
-            }
-        };
-        Some(
-            match authorize_live_permissions_at_serialized_access(
-                accessor,
-                accessor.getter(),
-                &[permission_target],
-            )
-            .await?
-            {
-                Ok(permit) => permit,
-                Err(error) => {
-                    return Ok(rejected_tool_call(
-                        &tool_name,
-                        attempt_ordinal,
-                        &command_path,
-                        Some(input),
-                        None,
-                        has_stdin,
-                        stdout_requested,
-                        stderr_requested,
-                        call_mode,
-                        SerializableToolRpcError::Denied(error.to_string()),
-                        stdin,
-                    ));
-                }
-            },
+    // Every live admission is authorized, including middleware `Underlying` calls: the
+    // capability only makes the next layer reachable, so the command and arguments that layer
+    // receives after boundary projection must also be permitted under the logical tool name.
+    let permission_target = accessor.with(|mut access| {
+        let component = access.get().owner_component_metadata();
+        let owner = caller_tool_owner(
+            &component.account_email,
+            &component.application_name,
+            &component.environment_name,
+            &component.component_name,
+            &tool_name,
+        );
+        let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
+        tool_target(
+            owner,
+            &command_path,
+            descriptor.args.clone(),
+            Some(&effective_definition),
         )
-    } else {
-        None
+    });
+    let permission_target = match permission_target {
+        Ok(target) => target,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::ProtocolError(error.to_string()),
+                stdin,
+            ));
+        }
     };
+    let permit = match authorize_live_permissions_at_serialized_access(
+        accessor,
+        accessor.getter(),
+        &[permission_target],
+    )
+    .await?
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            return Ok(rejected_tool_call(
+                &tool_name,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                stderr_requested,
+                call_mode,
+                SerializableToolRpcError::Denied(error.to_string()),
+                stdin,
+            ));
+        }
+    };
+
+    // Authorization may await, and the middleware handler can return in the meantime. The
+    // capability must still be active when the child operation is registered, which is the
+    // admission point; a use that loses this race is rejected, never admitted after revocation.
+    if let ToolCallTarget::Underlying(underlying) = &target
+        && let Err(error) = underlying.admit()
+    {
+        return Ok(rejected_tool_call(
+            &tool_name,
+            attempt_ordinal,
+            &command_path,
+            Some(input),
+            None,
+            has_stdin,
+            stdout_requested,
+            stderr_requested,
+            call_mode,
+            SerializableToolRpcError::Denied(error.to_string()),
+            stdin,
+        ));
+    }
 
     let descriptor = EntityInvocationDescriptor::Tool(descriptor);
     let operation = accessor.with(|mut access| {
