@@ -99,6 +99,9 @@ max_connections = 4
 cleanup_interval = "1h"
 retention = "1day"
 
+[registry_service.domain_registration]
+reserved_domains = []
+
 [registry_service.domain_registration.available_domains]
 type = "Unrestricted"
 
@@ -966,6 +969,9 @@ type = "Disabled"
 # [registry_service.deployment_events]
 # cleanup_interval = "1h"
 # retention = "1day"
+#
+# [registry_service.domain_registration]
+# reserved_domains = []
 #
 # [registry_service.domain_registration.available_domains]
 # type = "Unrestricted"
