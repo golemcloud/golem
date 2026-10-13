@@ -408,7 +408,8 @@ async fn build_mixed_language_app() {
 // Verifies that Go templates can be added after the first build, whose
 // `go mod tidy` has rewritten go.mod and go.sum: an agent template to the
 // existing component, then a second component, which also moves the first into
-// its own directory. The application builds after each step.
+// its own directory. The application builds after each step, and a rebuild with
+// no change does not run tidy.
 #[test]
 async fn go_templates_added_after_a_build_build() {
     let mut ctx = TestContext::new();
@@ -447,4 +448,10 @@ async fn go_templates_added_after_a_build_build() {
     assert_multi_component_layout(ctx.cwd_path(), GuestLanguage::Go);
     let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
+
+    // Nothing changed since: the build does not run go mod tidy again, so
+    // nothing a build writes counts as a change to the module's sources.
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stdout_contains("go mod tidy"));
 }

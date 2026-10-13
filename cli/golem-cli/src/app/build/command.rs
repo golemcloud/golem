@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::go_imports;
+use crate::app::build::go_inputs;
 use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
@@ -685,18 +685,9 @@ async fn ensure_go_dependencies(
     // go.sum, so the marker is checked against the CURRENT state but recorded
     // against the POST-tidy state — otherwise every build would see a changed
     // go.mod and re-run tidy forever. Tidy resolves requirements from the
-    // source imports, so a new third-party import also invalidates it.
+    // sources too, so any change to them also invalidates it (see go_inputs).
     let go_mod_deps_marker = |root: &Path| -> anyhow::Result<TaskResultMarker> {
-        let imports = go_imports::module_imports(root)?;
-        let imports_hash = blake3::hash(
-            imports
-                .into_iter()
-                .collect::<Vec<_>>()
-                .join("\n")
-                .as_bytes(),
-        )
-        .to_hex()
-        .to_string();
+        let inputs_hash = go_inputs::tidy_inputs_hash(root);
         let go_mod_hash = blake3::hash(&std::fs::read(root.join("go.mod"))?)
             .to_hex()
             .to_string();
@@ -715,7 +706,7 @@ async fn ensure_go_dependencies(
                 go_module_root: root,
                 go_mod_hash: &go_mod_hash,
                 go_sum_hash: go_sum_hash.as_deref(),
-                imports_hash: &imports_hash,
+                inputs_hash: &inputs_hash,
             },
         )
     };

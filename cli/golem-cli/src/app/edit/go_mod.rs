@@ -24,8 +24,6 @@
 //! `go mod tidy` reformats `go.mod` (block requires, tabs), so matching is by
 //! module path and structure, never exact text.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 /// Reconcile the SDK dependency in `content`:
 ///   - set the SDK module's `require` version to `version`;
 ///   - if `replace_path` is `Some`, ensure `replace <module> => <path>`;
@@ -83,72 +81,10 @@ pub fn reconcile_replace(content: &str, module: &str, target: Option<&str>) -> S
     out
 }
 
-/// Checks the structure of a `go.mod`: one `module` directive, blocks that
-/// open and close, and entries of the shape their directive takes (a module and
-/// a version for `require` and `exclude`, one path for `tool`, an `=>` for
-/// `replace`). It does not check versions or paths.
-pub fn validate(content: &str) -> anyhow::Result<()> {
-    let mut modules = 0;
-    let mut block: Option<String> = None;
-    for (number, tokens) in content.lines().map(tokens).enumerate() {
-        let line = number + 1;
-        if tokens.is_empty() {
-            continue;
-        }
-        if let Some(kind) = &block {
-            if tokens == [")"] {
-                block = None;
-            } else {
-                check_entry(kind, &tokens).map_err(|e| anyhow::anyhow!("line {line}: {e}"))?;
-            }
-            continue;
-        }
-        let kind = tokens[0].as_str();
-        let rest = &tokens[1..];
-        match kind {
-            "module" => {
-                modules += 1;
-                if rest.len() != 1 {
-                    anyhow::bail!("line {line}: module expects one path");
-                }
-            }
-            "go" | "toolchain" | "godebug" if !rest.is_empty() => {}
-            "require" | "exclude" | "replace" | "retract" | "tool" | "ignore" | "godebug"
-                if rest == ["("] =>
-            {
-                block = Some(kind.to_string());
-            }
-            "require" | "exclude" | "replace" | "retract" | "tool" | "ignore" => {
-                check_entry(kind, rest).map_err(|e| anyhow::anyhow!("line {line}: {e}"))?;
-            }
-            _ => anyhow::bail!("line {line}: unknown directive {kind}"),
-        }
-    }
-    if block.is_some() {
-        anyhow::bail!("a block is not closed");
-    }
-    if modules != 1 {
-        anyhow::bail!("expected one module directive, found {modules}");
-    }
-    Ok(())
-}
-
-fn check_entry(kind: &str, tokens: &[String]) -> anyhow::Result<()> {
-    let ok = match kind {
-        "require" | "exclude" => tokens.len() == 2,
-        "tool" | "ignore" => tokens.len() == 1,
-        "replace" => tokens.iter().any(|t| t == "=>"),
-        _ => !tokens.is_empty(),
-    };
-    if !ok {
-        anyhow::bail!("malformed {kind} entry");
-    }
-    Ok(())
-}
-
-/// The tokens of one `go.mod` line, as the go command reads them: separated by
-/// whitespace, with `//` starting a comment outside a quoted token, and with
-/// quoted tokens (`"…"` or `` `…` ``) kept whole, quotes included.
+/// The tokens of one `go.mod` line, as the go command's lexer reads them:
+/// separated by whitespace, `(` and `)` as tokens of their own, `//` starting
+/// a comment outside a quoted token, and quoted tokens (`"…"` or `` `…` ``)
+/// kept whole, quotes included.
 fn tokens(line: &str) -> Vec<String> {
     let bytes = line.as_bytes();
     let comment = |i: usize| bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/');
@@ -160,6 +96,9 @@ fn tokens(line: &str) -> Vec<String> {
             i += 1;
         } else if comment(i) {
             break;
+        } else if b == b'(' || b == b')' {
+            out.push((b as char).to_string());
+            i += 1;
         } else if b == b'"' || b == b'`' {
             let start = i;
             i += 1;
@@ -173,7 +112,12 @@ fn tokens(line: &str) -> Vec<String> {
             out.push(line[start..i].to_string());
         } else {
             let start = i;
-            while i < bytes.len() && !bytes[i].is_ascii_whitespace() && !comment(i) {
+            while i < bytes.len()
+                && !bytes[i].is_ascii_whitespace()
+                && bytes[i] != b'('
+                && bytes[i] != b')'
+                && !comment(i)
+            {
                 i += 1;
             }
             out.push(line[start..i].to_string());
@@ -182,118 +126,107 @@ fn tokens(line: &str) -> Vec<String> {
     out
 }
 
-/// Merge the dependencies `update` declares into `current`: each `require`,
-/// `replace` and `tool` entry of `update` whose module `current` does not
-/// name yet is added. An entry `current` already has keeps its version, since
-/// `go mod tidy` or the user may have moved it on; the next build's tidy makes
-/// the result consistent.
-pub fn merge_documents(current: &str, update: &str) -> anyhow::Result<String> {
-    let mut lines: Vec<String> = current.lines().map(|l| l.to_string()).collect();
-    let present = directive_entries(current);
-    for (kind, entries) in directive_entries(update) {
-        let known = present.get(&kind);
-        let missing: Vec<(String, String)> = entries
-            .into_iter()
-            .filter(|(key, _)| !known.is_some_and(|k| k.iter().any(|(have, _)| have == key)))
-            .collect();
-        if missing.is_empty() {
-            continue;
-        }
-        match block_end(&lines, &kind) {
-            Some(end) => {
-                for (offset, (_, entry)) in missing.into_iter().enumerate() {
-                    lines.insert(end + offset, format!("\t{entry}"));
-                }
-            }
-            None => {
-                if !lines.last().is_none_or(|l| l.trim().is_empty()) {
-                    lines.push(String::new());
-                }
-                lines.push(format!("{kind} ("));
-                lines.extend(missing.into_iter().map(|(_, entry)| format!("\t{entry}")));
-                lines.push(")".to_string());
-            }
-        }
+/// The value of a `go.mod` token: a quoted token unquoted as Go does, any
+/// other token as written.
+fn token_value(token: &str) -> Option<String> {
+    if token.starts_with('"') || token.starts_with('`') {
+        unquote(token)
+    } else {
+        Some(token.to_string())
     }
-    let mut out = lines.join("\n");
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    validate(&out)?;
-    Ok(out)
 }
 
-/// Per directive kind (`require`, `replace`, `tool`): its entries as (the
-/// module the entry is about, the entry's tokens joined by a space), from
-/// both the single-line and the block form.
-fn directive_entries(content: &str) -> BTreeMap<String, Vec<(String, String)>> {
-    const KINDS: [&str; 3] = ["require", "replace", "tool"];
-    let mut out: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    let mut block: Option<String> = None;
-    for tokens in content.lines().map(tokens) {
-        if tokens.is_empty() {
+/// The value of a Go string literal: a raw `` `…` `` literal as written, an
+/// interpreted `"…"` literal with its escapes decoded.
+fn unquote(literal: &str) -> Option<String> {
+    if let Some(raw) = literal.strip_prefix('`') {
+        return raw.strip_suffix('`').map(str::to_string);
+    }
+    let body = literal.strip_prefix('"')?.strip_suffix('"')?;
+    let mut bytes = Vec::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
             continue;
         }
-        if let Some(kind) = &block {
-            if tokens == [")"] {
-                block = None;
-            } else if KINDS.contains(&kind.as_str()) {
-                out.entry(kind.clone())
-                    .or_default()
-                    .push((tokens[0].clone(), tokens.join(" ")));
+        let hex = |chars: &mut std::str::Chars, n: usize| -> Option<u32> {
+            u32::from_str_radix(&chars.by_ref().take(n).collect::<String>(), 16).ok()
+        };
+        match chars.next()? {
+            'a' => bytes.push(0x07),
+            'b' => bytes.push(0x08),
+            'f' => bytes.push(0x0c),
+            'n' => bytes.push(b'\n'),
+            'r' => bytes.push(b'\r'),
+            't' => bytes.push(b'\t'),
+            'v' => bytes.push(0x0b),
+            '\\' => bytes.push(b'\\'),
+            '"' => bytes.push(b'"'),
+            'x' => bytes.push(u8::try_from(hex(&mut chars, 2)?).ok()?),
+            'u' => {
+                let mut buf = [0; 4];
+                bytes.extend_from_slice(
+                    char::from_u32(hex(&mut chars, 4)?)?
+                        .encode_utf8(&mut buf)
+                        .as_bytes(),
+                )
             }
-            continue;
-        }
-        if tokens.len() == 2 && tokens[1] == "(" {
-            block = Some(tokens[0].clone());
-        } else if KINDS.contains(&tokens[0].as_str()) && tokens.len() > 1 {
-            out.entry(tokens[0].clone())
-                .or_default()
-                .push((tokens[1].clone(), tokens[1..].join(" ")));
+            'U' => {
+                let mut buf = [0; 4];
+                bytes.extend_from_slice(
+                    char::from_u32(hex(&mut chars, 8)?)?
+                        .encode_utf8(&mut buf)
+                        .as_bytes(),
+                )
+            }
+            d @ '0'..='7' => {
+                let rest: String = chars.by_ref().take(2).collect();
+                bytes.push(u8::from_str_radix(&format!("{d}{rest}"), 8).ok()?);
+            }
+            _ => return None,
         }
     }
-    out
+    String::from_utf8(bytes).ok()
 }
 
-/// The index of the line that closes the first `<kind> (` block, if any.
-fn block_end(lines: &[String], kind: &str) -> Option<usize> {
-    let start = lines.iter().position(|l| tokens(l) == [kind, "("])?;
-    lines[start + 1..]
-        .iter()
-        .position(|l| tokens(l) == [")"])
-        .map(|offset| start + 1 + offset)
-}
-
-/// The local directories `replace` directives point to: targets that are a
-/// relative (`./`, `../`) or absolute path rather than a module path.
+/// The local directories the `replace` directives of a `go.mod` point to:
+/// targets that are a relative (`./`, `../`) or absolute path rather than a
+/// module path, as the go command tells them apart.
 pub fn local_replacements(content: &str) -> Vec<String> {
-    directive_entries(content)
-        .remove("replace")
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(_, entry)| {
-            let target = entry.split(" => ").nth(1)?.split(' ').next()?;
-            let target = target.trim_matches(|c| c == '"' || c == '`');
-            let local = target.starts_with("./")
-                || target.starts_with("../")
-                || std::path::Path::new(target).is_absolute();
-            local.then(|| target.to_string())
-        })
-        .collect()
-}
-
-/// Merge two `go.sum` files: the union of their lines, sorted as the go
-/// command writes them.
-pub fn merge_go_sum(current: &str, update: &str) -> anyhow::Result<String> {
-    let lines: BTreeSet<&str> = current
-        .lines()
-        .chain(update.lines())
-        .map(str::trim_end)
-        .filter(|l| !l.is_empty())
-        .collect();
-    let mut out = lines.into_iter().collect::<Vec<_>>().join("\n");
-    out.push('\n');
-    Ok(out)
+    let mut targets = Vec::new();
+    let mut in_block = false;
+    for tokens in content.lines().map(tokens) {
+        let entry: &[String] = match tokens.as_slice() {
+            [] => continue,
+            [kind, open] if kind == "replace" && open == "(" => {
+                in_block = true;
+                continue;
+            }
+            [close] if in_block && close == ")" => {
+                in_block = false;
+                continue;
+            }
+            _ if in_block => &tokens,
+            [kind, rest @ ..] if kind == "replace" => rest,
+            _ => continue,
+        };
+        let Some(arrow) = entry.iter().position(|t| t == "=>") else {
+            continue;
+        };
+        let Some(target) = entry.get(arrow + 1).and_then(|t| token_value(t)) else {
+            continue;
+        };
+        let local = ["./", "../", ".\\", "..\\"]
+            .iter()
+            .any(|prefix| target.starts_with(prefix))
+            || std::path::Path::new(&target).is_absolute();
+        if local {
+            targets.push(target);
+        }
+    }
+    targets
 }
 
 /// A `require` entry for `module` — either `require <module> <ver>` (single) or
@@ -555,72 +488,37 @@ mod tests {
         assert_eq!(once, twice);
     }
 
-    /// A template added after the first build meets a go.mod that tidy has
-    /// rewritten: the template's own requires, replaces and tools are added,
-    /// and what the component already has keeps its version.
+    /// Local replacement targets are told from module paths as the go command
+    /// does, in the single-line and block forms, quoted or not, with the
+    /// parentheses written against the keyword.
     #[test]
-    fn merge_adds_what_the_update_declares_and_keeps_current_versions() {
-        let current = format!(
-            "module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.1.0\n\tgolang.org/x/sys v0.37.0 // indirect\n)\n\ntool github.com/bytecodealliance/componentize-go\n"
-        );
-        let update = format!(
-            "module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.0.0\n\t{CORE} v0.0.0\n)\n\nreplace {MOD} => /abs/golem\n\ntool github.com/bytecodealliance/componentize-go\n"
-        );
-        let merged = merge_documents(&current, &update).unwrap();
-        assert!(merged.contains(&format!("\t{MOD} v0.1.0\n")), "{merged}");
-        assert!(!merged.contains(&format!("{MOD} v0.0.0")), "{merged}");
-        assert!(merged.contains(&format!("\t{CORE} v0.0.0\n")), "{merged}");
-        assert!(
-            merged.contains("golang.org/x/sys v0.37.0 // indirect"),
-            "{merged}"
-        );
-        assert!(
-            merged.contains(&format!("\t{MOD} => /abs/golem\n")),
-            "{merged}"
-        );
-        assert_eq!(merged.matches("componentize-go").count(), 1, "{merged}");
-        validate(&merged).unwrap();
-        assert_eq!(merge_documents(&merged, &update).unwrap(), merged);
-    }
+    fn local_replacements_are_relative_or_absolute_paths() {
+        let content = r#"module app
 
-    #[test]
-    fn merge_go_sum_is_the_sorted_union() {
-        let current = "b v1 h1:x=\na v1 h1:y=\n";
-        let update = "c v1 h1:z=\na v1 h1:y=\n";
+replace example.com/a => ../a // comment
+replace example.com/b v1.0.0 => example.com/fork v1.0.1
+replace(
+	example.com/c => "../my lib"
+	"example.com/d" => ./d
+	example.com/e => /abs/e
+)
+"#;
         assert_eq!(
-            merge_go_sum(current, update).unwrap(),
-            "a v1 h1:y=\nb v1 h1:x=\nc v1 h1:z=\n"
+            local_replacements(content),
+            vec!["../a", "../my lib", "./d", "/abs/e"]
         );
     }
 
-    /// A block closed by `) // comment`, followed by another block, takes the
-    /// new requirement inside itself; and a module directive may use any
-    /// whitespace.
     #[test]
-    fn merge_reads_comments_and_whitespace_as_go_does() {
-        let current = format!(
-            "module\tapp\n\nrequire (\n\t{MOD} v0.1.0 // sdk\n) // dependencies\n\ntool (\n\tgithub.com/bytecodealliance/componentize-go\n)\n"
+    fn tokens_split_parentheses_and_keep_quoted_tokens() {
+        assert_eq!(
+            tokens("require(a v1)"),
+            vec!["require", "(", "a", "v1", ")"]
         );
-        let update = format!("module app\n\nrequire (\n\t{MOD} v0.0.0\n\t{CORE} v0.0.0\n)\n");
-        let merged = merge_documents(&current, &update).unwrap();
-        assert!(
-            merged.contains(&format!("\t{CORE} v0.0.0\n) // dependencies")),
-            "{merged}"
+        assert_eq!(
+            tokens(r#"replace "a b" => `c d` // note"#),
+            vec!["replace", r#""a b""#, "=>", "`c d`"]
         );
-        assert!(
-            merged.contains("tool (\n\tgithub.com/bytecodealliance/componentize-go\n)"),
-            "{merged}"
-        );
-        validate(&merged).unwrap();
-    }
-
-    #[test]
-    fn validate_rejects_malformed_entries() {
-        assert!(validate("module app\n\ntool (\n\ta b\n)\n").is_err());
-        assert!(validate("module app\n\nrequire (\n\ta v1\n").is_err());
-        assert!(validate("require a v1\n").is_err());
-        assert!(
-            validate("module app // the app\n\ngo 1.27.1\n\nrequire a v1 // indirect\n").is_ok()
-        );
+        assert_eq!(tokens("module app/é"), vec!["module", "app/é"]);
     }
 }
