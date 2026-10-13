@@ -2355,6 +2355,62 @@ fn scripted_first_pack(
     })
 }
 
+#[test]
+#[timeout("120s")]
+async fn a_save_whose_first_pack_write_fails_while_the_backup_goes_on_runs_again_and_saves() {
+    // The tree fills two data packs. The storage refuses the write of the first pack, while the
+    // archiver still chunks the rest of the tree. The backup gives the error of the storage, so
+    // the run ends as a failed storage call, and the next run saves the tree.
+    let tree = Scratch::new();
+    let mut content = vec![0u8; 40 << 20];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut content);
+    write_tree(
+        tree.path(),
+        &[(
+            "a.bin",
+            Spec::File {
+                content: content.into_boxed_slice(),
+                mode: 0o644,
+            },
+        )],
+    );
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = scripted_first_pack(inner, Script::Refuse, |_, _| Script::Pass);
+    let store = store(storage.clone(), runs_policy(SHORT_WRITE_DEADLINE, 1));
+    let scope = new_scope();
+    let slots = SharedSlots::new(1);
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-packs"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots,
+        )
+        .await;
+    // The second run starts with a look at the config after the refused write. It writes each
+    // pack of the tree: two data packs and a tree pack. So the first pack went out while the
+    // archiver still read the tree.
+    let calls = storage.calls();
+    let is_pack_write =
+        |(op_label, path): &&(&str, String)| *op_label == "write" && path.starts_with("data");
+    let refused = calls.iter().position(|call| is_pack_write(&call)).unwrap();
+    let second_run = refused
+        + calls[refused..]
+            .iter()
+            .position(|(op_label, path)| *op_label == "stat" && path == "config")
+            .unwrap();
+    let packs_of_the_second_run = calls[second_run..].iter().filter(is_pack_write).count();
+    let restored = restored_listing(&store, &scope, &name("p-packs")).await;
+
+    assert!(saved.is_ok(), "{saved:?}");
+    assert_eq!(slots.counts().0, 2);
+    assert_eq!(restored.ok(), Some(listing(tree.path())));
+    assert_eq!(packs_of_the_second_run, 3, "{calls:?}");
+}
+
 /// Whether the storage saw a write of a pack.
 fn wrote_a_pack(storage: &ScriptedBlobStorage) -> bool {
     storage
