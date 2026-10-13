@@ -263,6 +263,9 @@ async fn write_db_compat_version(pool: &SqlitePool, db_compat_version: i64) -> a
     ))
     .await?;
 
+    #[cfg(test)]
+    tests::after_compat_table_created().await;
+
     tx.execute(
         sqlx::query(
             r#"
@@ -464,6 +467,36 @@ mod tests {
             .expect("failed to insert compat row");
     }
 
+    async fn compat_table_exists(db_path: &Path) -> bool {
+        let pool = sqlite_pool(db_path)
+            .await
+            .expect("failed to reopen sqlite pool");
+        let table_count = pool
+            .with_ro("test", "count_compat_tables")
+            .fetch_all_as::<(i64,), _>(
+                sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE name = ?;")
+                    .bind(COMPAT_TABLE_NAME),
+            )
+            .await
+            .expect("failed to count compat tables");
+        pool.close().await;
+        table_count[0].0 > 0
+    }
+
+    tokio::task_local! {
+        static COMPAT_TABLE_CREATED: tokio::sync::mpsc::UnboundedSender<()>;
+    }
+
+    /// Reports that the marker write has created its table and then never returns, when the
+    /// calling task runs inside the scope of `COMPAT_TABLE_CREATED`. Returns at once for every
+    /// other caller.
+    pub(super) async fn after_compat_table_created() {
+        if let Ok(created) = COMPAT_TABLE_CREATED.try_with(|created| created.clone()) {
+            let _ = created.send(());
+            std::future::pending::<()>().await;
+        }
+    }
+
     #[test]
     async fn preflight_allows_missing_registry_db() {
         let data_dir = TestDataDir::new();
@@ -519,23 +552,43 @@ mod tests {
             "a version that the table refuses must fail the write"
         );
 
-        let pool = sqlite_pool(&db_path)
-            .await
-            .expect("failed to reopen sqlite pool");
-        let table_count = pool
-            .with_ro("test", "count_compat_tables")
-            .fetch_all_as::<(i64,), _>(
-                sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE name = ?;")
-                    .bind(COMPAT_TABLE_NAME),
-            )
-            .await
-            .expect("failed to count compat tables");
-        pool.close().await;
-        assert_eq!(
-            table_count[0].0, 0,
+        assert!(
+            !compat_table_exists(&db_path).await,
             "the table must not outlive the failed transaction"
         );
 
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+    }
+
+    #[test]
+    async fn interrupted_marker_write_leaves_no_compat_table() {
+        let data_dir = TestDataDir::new();
+        let db_path = registry_db_path(&data_dir.path);
+
+        let pool = sqlite_pool(&db_path)
+            .await
+            .expect("failed to initialize sqlite pool");
+        let (created, mut table_created) = tokio::sync::mpsc::unbounded_channel();
+        tokio::select! {
+            result = COMPAT_TABLE_CREATED.scope(
+                created,
+                write_db_compat_version(&pool, CLI_CURRENT_DB_COMPAT_VERSION),
+            ) => panic!("the marker write ended before it was interrupted: {result:?}"),
+            _ = table_created.recv() => {}
+        }
+        pool.close().await;
+
+        assert!(
+            !compat_table_exists(&db_path).await,
+            "the table must not outlive the interrupted transaction"
+        );
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+
+        write_registry_db_compat(&data_dir.path)
+            .await
+            .expect("the marker write after the interrupted one failed");
         let result = preflight_registry_db_compat(&data_dir.path).await;
         assert!(result.is_ok(), "expected success, got: {result:?}");
     }
