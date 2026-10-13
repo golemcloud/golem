@@ -138,6 +138,8 @@ pub enum ReplayAdmissionStage {
     BeforeScope,
     /// After the scope `Start` is claimed but before the call's own `Start` is claimed.
     AfterScope,
+    /// After the call claimed its own `Start`, before it resolves the recorded result.
+    AfterStart,
     /// Before a deferred call is prepared, on both live execution and replay.
     BeforeDeferredStart,
     /// After the deferred call owns its `Start`, before resolution or live execution.

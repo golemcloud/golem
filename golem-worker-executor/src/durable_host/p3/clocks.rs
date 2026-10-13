@@ -15,6 +15,7 @@
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
     Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
+    reserve_invocation_id_before_await,
 };
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
 use crate::durable_host::suspendable_wait::{
@@ -127,6 +128,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         when: monotonic_clock::Mark,
     ) -> wasmtime::Result<()> {
+        reserve_invocation_id_before_await(store, super::durable_worker_ctx::<Ctx, U>)?;
         // A timer must return STARTED even when its deadline has passed. An inline live
         // delivery followed by a direct host call can deadlock replay when that call holds
         // the Store before the replayed timer reaches its guest-delivery boundary.

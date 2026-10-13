@@ -137,13 +137,20 @@ message CreateParameters {
   OwnerKind owner_kind = 16;
 }
 
+// Identifies a durable call by the oplog index of the record that numbers it and its place among
+// the calls numbered under that record.
+message DurableInvocationId {
+  uint64 anchor = 1;
+  uint64 ordinal = 2;
+}
+
 message StartParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 parent_start_index = 3;
   string function_name = 4;
   optional golem.schema.TypedSchemaValue request = 5;
   WrappedFunctionType durable_function_type = 6;
-  optional golem.common.UUID invocation_id = 7;
+  optional DurableInvocationId invocation_id = 7;
   optional uint64 observational_owner = 8;
   optional SpanStarted span_started = 9;
 }

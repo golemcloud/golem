@@ -22,8 +22,10 @@ use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
-    DurableDemandStream, ScopeReplayRecovery, demand_channel,
+    DurableDemandStream, InvocationIdSource, ScopeReplayRecovery, demand_channel,
+    reserve_import_invocation_id,
 };
+use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
@@ -987,11 +989,14 @@ pub(super) struct HttpConsumeBodyTask<Ctx> {
     /// the parent terminal, mirroring the P2 `end_http_request` span
     /// lifecycle. `None` for responses that did not come from `client::send`.
     response_state: Option<OpenP3HttpResponseState>,
+    /// The invocation id of the `consume-body` guest import that spawned the task.
+    invocation_id: InvocationIdSource,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> HttpConsumeBodyTask<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
@@ -999,6 +1004,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
         trailers_delivery: Arc<HttpTrailersDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
+        invocation_id: InvocationIdSource,
         activity: TailActivity,
     ) -> Self {
         Self {
@@ -1008,6 +1014,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
             trailers_tx,
             trailers_delivery,
             response_state,
+            invocation_id,
             activity,
             _phantom: PhantomData,
         }
@@ -1027,6 +1034,7 @@ where
             trailers_tx,
             trailers_delivery,
             mut response_state,
+            invocation_id,
             activity,
             ..
         } = self;
@@ -1098,13 +1106,8 @@ where
         // live frames): the resume offset for `Range` requests.
         let mut delivered_bytes: u64 = 0;
 
-        // Open the parent batched scope. Children nest under its begin index.
-        // Concurrently consumed response bodies open scopes with identical durable identity, so
-        // the scope name is discriminated by the producing send's own `Start` index — recorded
-        // oplog state that is identical on the live and replay paths and, unlike the derived
-        // span id (a function of the owning agent's id), survives forking the oplog to another
-        // agent. Responses that did not come from `client::send` have no span and keep the plain
-        // scope name.
+        // Open the parent batched scope. Children nest under its begin index. Concurrently
+        // consumed response bodies are told apart by the invocation id of each `consume-body`.
         let mut stream = match DurableDemandStream::<
             P3HttpClientConsumeBody,
             P3HttpClientConsumeBodyChunk,
@@ -1114,15 +1117,11 @@ where
             durable_worker_ctx::<Ctx, U>,
             demand_rx,
             AccessClaimOptions {
-                scope_discriminator: response_span
-                    .as_ref()
-                    .map(|span| format!("consume-body:{}", span.send_start_index)),
-                request_identity: None,
-                entity_invocation_identity: None,
-                tool_invocation_identity: None,
+                scope_function_name: Some(crate::durable_host::consume_body_scope_name()),
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,
+                invocation_id,
                 ..Default::default()
             },
             DemandDeliveryMode::Deferred,
@@ -1886,6 +1885,25 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                     return Ok((stream, upstream_trailers));
                 }
             };
+        // A consume-body inside a custom durable invocation is not claimed on replay, whichever
+        // invocation observed the send, so it takes no ordinal from the root counter.
+        let observed_by_custom_invocation = store
+            .as_context_mut()
+            .guest_task_context::<CustomInvocationContext>()?
+            .as_deref()
+            .and_then(CustomInvocationContext::current)
+            .is_some();
+        let invocation_id = if observed_by_custom_invocation {
+            InvocationIdSource::Reserved(None)
+        } else {
+            let mut store_ctx = store.as_context_mut();
+            reserve_import_invocation_id(
+                durable_worker_ctx::<Ctx, U>(store_ctx.data_mut()),
+                response_state
+                    .as_ref()
+                    .and_then(|state| state.observational_owner),
+            )?
+        };
 
         // We surface trailers through our own future, so discard the built-in
         // trailers future.
@@ -1943,6 +1961,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             trailers_tx,
             trailers_delivery,
             response_state,
+            invocation_id,
             activity,
         ));
         Ok((stream, trailers))
@@ -1973,6 +1992,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                         state.span.send_start_index,
                         state.observational_owner,
                         state.span.persisted,
+                        state.span.invocation_id,
                     )
                     .record(p3_send_span_finished(
                         &state.span,

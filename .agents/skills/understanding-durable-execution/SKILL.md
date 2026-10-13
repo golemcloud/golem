@@ -540,9 +540,9 @@ order and skips hints. Key kinds:
   its `Start` index; `End`/`Cancelled` is its *terminal*. A terminal is *visible* when it lies
   below the replay target and outside a `Jump`/`Revert`-skipped region
   (`has_visible_terminal` / `visible_terminal_record`, `replay_state/cursor.rs`). Request-less Start/End pairs are *scopes* (batched writes, transactions),
-  named `<scope:batched-write>` or, when the caller supplies a discriminator,
-  `<scope:batched-write:DISCRIMINATOR>`; a discriminated claim matches only its exact name and
-  never falls back to a plain sibling scope (`execute_access_scope_start`, `concurrent/call.rs`).
+  named `<scope:batched-write>`, `<scope:batched-write:consume-body>` (the scope of a P3 HTTP
+  response body) or `<scope:transaction>`; replay tells concurrent scopes apart by the invocation
+  id of the call that opened them.
 - `AgentInvocationStarted` / `AgentInvocationFinished` bracket one invocation;
   `PendingAgentInvocation` (hint) is the durable queue entry.
 - `CompletionDelivered` / `CompletionDiscarded` (hints, always after their `End`) record the
@@ -564,7 +564,7 @@ and the atomic-region logical counter is rebuilt from them (see RPC section).
 
 Span lifecycle is metadata on ordinary durable operations, not a second positional protocol.
 There are no standalone `StartSpan`, `FinishSpan`, or `SetSpanAttribute` entries. Replay first
-claims the operation by its normal function/owner/request identity, then the owning host path
+claims the operation by its invocation id, function name and owner, then the owning host path
 restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
 timestamps, parents, and links never select a claim, and the generic cursor performs no
 span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
@@ -588,9 +588,8 @@ guarded replay-tail transition and refresh authority capture. Snapshot calls rem
 resolving one as `Live` does not publish Store liveness or lift snapshot restrictions.
 
 Every nondeterministic host function goes through `begin_durable_function` /
-`end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls run inside a
-`DurableCallSession` (`concurrent/call.rs`); the serialized p2 path uses
-`persist_durable_function_invocation` / `read_persisted_durable_function_invocation` with the same
+`end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls and direct
+(Store-holding) calls run inside a `DurableCallSession` (`concurrent/call.rs`) with the same
 `Start`/`End` shape.
 
 Live (guest-facing accessor path): append `Start` eagerly → run the live action → append `End` (or
@@ -617,7 +616,7 @@ the duration. Otherwise an inline live timer could record its delivery before a 
 while replay returns `STARTED` and enters that Store-holding call before it can deliver the timer.
 The direct call would wait behind a guest boundary that its own Store ownership prevents.
 
-Replay: claim the matching `Start` (`StartClaim`, identity + optional request payload match),
+Replay: claim the matching `Start` (`StartClaim`: invocation id, function name and kind),
 resolve its terminal through `ConcurrentReplayResolver`, then classify with
 `classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:
 
@@ -672,6 +671,35 @@ scan-ahead: it routes concurrent completions to the right awaiter. It does not l
 to make different calls; when no matching `Start` exists, replay fails with a divergence error
 (after any active entity body that owns the cursor head has consumed it; see below).
 
+**Invocation ids.** Scan-ahead alone cannot tell apart concurrent calls with the same function:
+their host tasks reach the claim in an order that depends on host scheduling (a replayed 600 s
+watchdog `wait-for` could take the record of a completed 300 ms `wait-for` and fire at once). So
+every `Start` carries the invocation id of the guest call that recorded it
+(`Start.invocation_id`), and a claim (`StartClaim`, `replay_state/claims.rs`) requires the id, the
+function name and the kind (call or scope). Request payloads and scope names do not identify
+calls. The id (`DurableInvocationId`) is an anchor and an ordinal: the anchor is the oplog index of
+the current agent invocation (`AgentInvocationStarted`), entity invocation (`Start`) or parent
+custom durable invocation (`Start`), and the ordinal counts the calls numbered under that anchor.
+Root custom durable invocations share the counter with ordinary calls.
+
+- A concurrent guest import reserves its id (`reserve_invocation_id`, `durability.rs`) before the
+  guest can make another import call. `RuntimeStore` (`worker/suspension.rs`) records the Store's
+  newest guest import and refuses a later reservation, and all durable calls of one import share
+  its id. A host function that `await`s before its first durable call reserves at entry
+  (`reserve_invocation_id_before_await`); a task it spawns receives the id
+  (`InvocationIdSource::Reserved`).
+- A direct (Store-holding) call reserves the next ordinal when it begins
+  (`direct_call_invocation_id`, `durable_host/mod.rs`); it holds the Store, so it reserves in
+  guest call order.
+- A call recorded inside an open durable scope records the id of the call that opened the scope,
+  and a host-internal child records the id of its owner. Records the host adds for a call, such
+  as the span cleanup of a P3 HTTP send, carry the id of that call.
+- A tool invocation records the id of the guest import that dispatched it, on both the accepted
+  entity invocation `Start` and the rejection `Start`.
+- Calls observed by a custom invocation, calls while snapshotting, and calls outside an
+  invocation record no id. Replay never claims observed calls; calls without an id are claimed in
+  oplog order.
+
 **Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
 positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
 entitled to nothing it did not record. Kind and owner are validated before consumption:
@@ -681,8 +709,8 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   reader holds (an entity body waiting for admission, an accessor task behind a Store-holding
   direct call). The cursor commits past it and **retains** it (`CursorState::retained_starts`,
   in oplog order, together with its terminal once reached). The owner's later identity claim
-  checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching` and
-  `claim_start_matching_request`); a `CompletionDelivered` marker at the head may belong to a
+  checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching`); a
+  `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
 - A delivery barrier blocks physical advancement, not adoption of already-retained history.
   `with_claim_tx` first polls one gate waiter, then uses the restricted `RetainedClaims`
@@ -765,8 +793,8 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   remains (`claim_start_for_store`, which also returns `StoreAlreadyLive` for an incomplete entity
   that continued live locally). The primary runtime treats a cursor that became live between its
   liveness check and the claim as `ReplayEnded`, not divergence. Custom (guest manual) durability
-  follows the same per-Store admission: `begin_custom_durable_invocation` claims through
-  `claim_custom_start_for_store` and continues to live with the Store's own `ReplayToLiveRole`
+  follows the same per-Store admission: `begin_custom_durable_invocation` claims its `Start` by
+  invocation id through `claim_custom_start_for_store` and continues to live with the Store's own `ReplayToLiveRole`
   (`Primary` only for the primary agent runtime), so a completed-replay entity body can neither
   settle the primary fence nor fall through to fresh execution. Positional readers,
   authorization and snapshot decisions keep using `is_live()`.
