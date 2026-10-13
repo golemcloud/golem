@@ -563,7 +563,7 @@ and the atomic-region logical counter is rebuilt from them (see RPC section).
 
 Span lifecycle is metadata on ordinary durable operations, not a second positional protocol.
 There are no standalone `StartSpan`, `FinishSpan`, or `SetSpanAttribute` entries. Replay first
-claims the operation by its normal function/owner/request identity, then the owning host path
+claims the operation by its invocation id, function name and owner, then the owning host path
 restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
 timestamps, parents, and links never select a claim, and the generic cursor performs no
 span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
@@ -708,8 +708,8 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   reader holds (an entity body waiting for admission, an accessor task behind a Store-holding
   direct call). The cursor commits past it and **retains** it (`CursorState::retained_starts`,
   in oplog order, together with its terminal once reached). The owner's later identity claim
-  checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching` and
-  `claim_start_matching_request`); a `CompletionDelivered` marker at the head may belong to a
+  checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching`); a
+  `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
 - A delivery barrier blocks physical advancement, not adoption of already-retained history.
   `with_claim_tx` first polls one gate waiter, then uses the restricted `RetainedClaims`
