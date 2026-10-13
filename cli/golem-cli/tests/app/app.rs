@@ -115,29 +115,20 @@ async fn assert_the_server_keeps_running_without_a_reader(closed: ClosedStream) 
     );
 }
 
-/// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
-/// stdout leaves. The pipeline runs in a pseudo-terminal, and `stty -a` shows the settings that
-/// the terminal has after the CLI has ended.
+/// Runs a shell pipeline in a pseudo-terminal that is in canonical mode with echo, and asserts
+/// that its first command ends with the exit code of SIGPIPE and that `stty -a` shows a terminal
+/// in canonical mode with echo afterwards. When `wait_for` is given, the file is created once
+/// the text has appeared on the terminal.
 #[cfg(unix)]
-#[test]
-#[timeout("2m")]
-async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
-    _tracing: &Tracing,
+async fn assert_terminal_is_usable_after_closed_stdout(
+    ctx: &TestContext,
+    pipeline: String,
+    wait_for: Option<(&'static str, std::path::PathBuf)>,
 ) {
-    let ctx = TestContext::new();
-    let golem_cli = ctx.golem_cli_path.display().to_string();
-    let config_dir = ctx.config_dir.path().display().to_string();
     let working_dir = ctx.working_dir.clone();
-
-    let leave_for_session = ctx.cwd_path_join("reader-leaves");
-    let output = tokio::task::spawn_blocking(move || {
-        // The reader of stdout stays until the test creates the file.
-        let script = format!(
-            "stty icanon echo; '{golem_cli}' --config-dir '{config_dir}' profile new \
-             | {{ while [ ! -e '{leave}' ]; do sleep 0.2; done; }}; \
-             echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a",
-            leave = leave_for_session.display()
-        );
+    let (exit, output) = tokio::task::spawn_blocking(move || {
+        let script =
+            format!("stty icanon echo; {pipeline}; echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a");
         let mut command = std::process::Command::new("bash");
         command
             .current_dir(working_dir)
@@ -146,10 +137,12 @@ async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during
         use expectrl::Expect;
         let mut session = expectrl::Session::spawn(command).expect("failed to spawn bash");
         session.set_expect_timeout(Some(Duration::from_secs(60)));
-        session
-            .expect("create a new profile interactively")
-            .expect("the prompt did not appear");
-        std::fs::write(&leave_for_session, "").unwrap();
+        if let Some((text, file)) = wait_for {
+            session
+                .expect(text)
+                .unwrap_or_else(|error| panic!("'{text}' did not appear: {error}"));
+            std::fs::write(file, "").unwrap();
+        }
         let exit = session
             .expect(expectrl::Regex("EXIT=[0-9]+"))
             .expect("the CLI did not end")
@@ -164,7 +157,6 @@ async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during
     .await
     .unwrap();
 
-    let (exit, output) = output;
     println!("{exit}\n{output}");
     assert!(exit.ends_with("EXIT=141"), "{exit}");
     let flags: Vec<&str> = output.split_whitespace().collect();
@@ -176,6 +168,58 @@ async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during
         flags.contains(&"echo"),
         "the terminal does not echo after the CLI ended"
     );
+}
+
+/// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
+/// stdout leaves.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let leave = ctx.cwd_path_join("reader-leaves");
+
+    // The reader of stdout stays until the prompt has appeared.
+    let pipeline = format!(
+        "'{golem_cli}' --config-dir '{config_dir}' profile new \
+         | {{ while [ ! -e '{leave}' ]; do sleep 0.2; done; }}",
+        leave = leave.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(
+        &ctx,
+        pipeline,
+        Some(("create a new profile interactively", leave)),
+    )
+    .await;
+}
+
+/// The reader of stdout takes the terminal before the CLI starts, as a pager does: it sets raw
+/// mode, and it puts the terminal back before it leaves. The CLI opens no prompt, so the terminal
+/// must stay as the reader left it.
+#[cfg(unix)]
+#[test]
+#[timeout("2m")]
+async fn the_terminal_settings_stay_as_the_reader_of_stdout_left_them(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    let golem_cli = ctx.golem_cli_path.display();
+    let config_dir = ctx.config_dir.path().display();
+    let raw_mode_set = ctx.cwd_path_join("raw-mode-set");
+
+    // The CLI starts once the terminal is in raw mode. The reader takes the first byte of the
+    // output, so the CLI runs when the reader puts the terminal back and leaves. The rest of the
+    // output does not fit into the pipe, so the CLI ends at a failed write.
+    let pipeline = format!(
+        "{{ while [ ! -e '{raw_mode_set}' ]; do sleep 0.1; done; \
+            '{golem_cli}' --config-dir '{config_dir}' completion bash; }} \
+         | {{ stty raw -echo < /dev/tty; touch '{raw_mode_set}'; head -c 1 > /dev/null; \
+              stty sane < /dev/tty; }}",
+        raw_mode_set = raw_mode_set.display()
+    );
+    assert_terminal_is_usable_after_closed_stdout(&ctx, pipeline, None).await;
 }
 
 #[test]

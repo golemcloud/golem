@@ -342,13 +342,13 @@ fn decide_end(keep_running: bool, holds: usize, reader_gone_recorded: bool) -> E
 }
 
 fn end_process_for_closed_output() -> ! {
-    restore_terminal_settings();
+    leave_raw_mode();
     std::process::exit(CLOSED_OUTPUT_EXIT_CODE.into())
 }
 
 /// Ends the process with [`CLOSED_OUTPUT_EXIT_CODE`], as SIGPIPE would, once the reader of
-/// stdout or stderr has gone. Puts the terminal back in the state that it had when the command
-/// started. A command that holds work back gets [`CLOSED_OUTPUT_GRACE`] to finish it first: the
+/// stdout or stderr has gone. Switches off the raw mode that a prompt of the command switched
+/// on. A command that holds work back gets [`CLOSED_OUTPUT_GRACE`] to finish it first: the
 /// call records that the reader has gone and returns, and the writers drop their text. Returns
 /// also for a command that keeps running.
 pub fn end_for_closed_output() {
@@ -407,65 +407,18 @@ impl Drop for ClosedOutputHold {
     }
 }
 
+/// Switches the raw mode of the terminal off, if this process switched it on. A prompt switches
+/// it on and cannot switch it off when the process ends at once. A terminal mode that another
+/// program set, such as a pager that reads the output, stays as it is.
 #[cfg(unix)]
-struct SavedTerminal {
-    descriptor: fn() -> std::os::fd::BorrowedFd<'static>,
-    settings: rustix::termios::Termios,
-}
-
-#[cfg(unix)]
-static SAVED_TERMINAL: std::sync::Mutex<Option<SavedTerminal>> = std::sync::Mutex::new(None);
-
-/// Saves the settings of the terminal that the command runs in, for
-/// [`end_for_closed_output`] to put back. A prompt changes them and cannot put them back when
-/// the process ends at once. With no terminal on stdin, stderr or stdout, nothing is saved.
-#[cfg(unix)]
-pub fn save_terminal_settings() {
-    use rustix::termios::{isatty, tcgetattr};
-
-    let descriptors: [fn() -> std::os::fd::BorrowedFd<'static>; 3] = [
-        rustix::stdio::stdin,
-        rustix::stdio::stderr,
-        rustix::stdio::stdout,
-    ];
-    for descriptor in descriptors {
-        if isatty(descriptor())
-            && let Ok(settings) = tcgetattr(descriptor())
-        {
-            if let Ok(mut saved) = SAVED_TERMINAL.lock() {
-                *saved = Some(SavedTerminal {
-                    descriptor,
-                    settings,
-                });
-            }
-            return;
-        }
+fn leave_raw_mode() {
+    if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
+        let _ = crossterm::terminal::disable_raw_mode();
     }
 }
 
 #[cfg(not(unix))]
-pub fn save_terminal_settings() {}
-
-/// Puts the saved settings back, unless the process is not in the foreground of the terminal:
-/// changing the settings from the background would stop the process.
-#[cfg(unix)]
-fn restore_terminal_settings() {
-    use rustix::termios::{OptionalActions, tcgetpgrp, tcsetattr};
-
-    let Ok(saved) = SAVED_TERMINAL.try_lock() else {
-        return;
-    };
-    let Some(saved) = saved.as_ref() else {
-        return;
-    };
-    let terminal = (saved.descriptor)();
-    if tcgetpgrp(terminal).is_ok_and(|foreground| foreground == rustix::process::getpgrp()) {
-        let _ = tcsetattr(terminal, OptionalActions::Now, &saved.settings);
-    }
-}
-
-#[cfg(not(unix))]
-fn restore_terminal_settings() {}
+fn leave_raw_mode() {}
 
 /// What happened to bytes written to a standard stream.
 #[derive(Debug, PartialEq, Eq)]

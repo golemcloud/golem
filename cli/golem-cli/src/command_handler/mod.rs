@@ -51,7 +51,7 @@ use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExit
 use crate::log::{
     Output, RawOutputReservation, TracingSuppression, end_on_closed_pipe,
     keep_running_on_closed_output, log_anyhow_error, logln, print_bytes, print_line,
-    save_terminal_settings, set_log_output, watch_for_closed_stdout,
+    set_log_output, watch_for_closed_stdout,
 };
 use crate::model::format::Format;
 use crate::{command_name, init_tracing};
@@ -153,7 +153,6 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         command_parse_result: GolemCliCommandParseResult,
         hooks: Arc<Hooks>,
     ) -> ExitCode {
-        save_terminal_settings();
         let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(command) => {
                 // A server must outlive the reader of its console. Any other command ends once
