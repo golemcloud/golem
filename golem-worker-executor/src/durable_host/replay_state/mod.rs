@@ -25,10 +25,9 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableInvocationId,
-    AtomicOplogIndex, DurableFunctionType, EntityAttribution, HostRequest, HostResponse,
-    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
-    ScopeScanState,
+    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostRequest,
+    HostResponse, HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload,
+    OplogScopeProjection, ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -113,11 +112,9 @@ pub struct AgentInvocationStartedEntry {
     pub wallet_pin: InvocationWalletPin,
 }
 
-/// The outcome of [`ReplayState::claim_any_concurrent_start`]: the replay handle for the claimed
-/// call plus the identity (`function_name`, `durable_function_type`, `timestamp`) read from its
-/// `Start` entry. Callers that knew the identity up front use [`ReplayState::claim_concurrent_start`]
-/// and discard this; the dynamic guest-durability read uses these fields to reconstruct the
-/// persisted invocation it returns to the guest.
+/// A claimed `Start`: the replay handle for the claimed call plus the identity (`function_name`,
+/// `durable_function_type`, `timestamp`) read from its `Start` entry. A replayed custom durable
+/// invocation uses these fields to reconstruct the persisted invocation it returns to the guest.
 pub struct ClaimedConcurrentStart {
     pub handle: ReplayCallHandle,
     pub function_name: HostFunctionName,

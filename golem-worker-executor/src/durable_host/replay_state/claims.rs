@@ -67,11 +67,6 @@ pub(crate) enum StartClaim {
         /// The invocation id of the guest call that opened the scope; see [`Self::Unowned`].
         invocation_id: Option<DurableInvocationId>,
     },
-    /// Any top-level durable-call `Start`, whatever its function name and durable function type
-    /// (the dynamic guest-facing durability read learns the identity from the claimed entry
-    /// itself). The `Start` must carry a request (durable host calls always do; a request-less
-    /// `Start` is a scope `Start`) and must not be owned by another durable record.
-    AnyUnownedCall,
 }
 
 impl StartClaim {
@@ -226,9 +221,6 @@ impl StartClaim {
                 observational_owner: expected,
                 ..
             } => *expected = observational_owner,
-            Self::AnyUnownedCall => {
-                debug_assert!(observational_owner.is_none());
-            }
         }
         self
     }
@@ -249,7 +241,7 @@ impl StartClaim {
                 invocation_id: expected,
                 ..
             } => *expected = invocation_id,
-            Self::OwnedToolInvocation { .. } | Self::AnyUnownedCall => {
+            Self::OwnedToolInvocation { .. } => {
                 debug_assert!(invocation_id.is_none());
             }
         }
@@ -262,13 +254,8 @@ impl StartClaim {
             Self::Unowned { invocation_id, .. }
             | Self::Owned { invocation_id, .. }
             | Self::Scope { invocation_id, .. } => *invocation_id,
-            Self::OwnedToolInvocation { .. } | Self::AnyUnownedCall => None,
+            Self::OwnedToolInvocation { .. } => None,
         }
-    }
-
-    /// See [`StartClaim::AnyUnownedCall`].
-    pub(super) fn any_unowned_call() -> Self {
-        Self::AnyUnownedCall
     }
 
     /// The expected recorded host function name; `None` claims any name.
@@ -277,7 +264,7 @@ impl StartClaim {
             Self::Unowned { function_name, .. }
             | Self::Owned { function_name, .. }
             | Self::Scope { function_name, .. } => Some(function_name),
-            Self::OwnedToolInvocation { .. } | Self::AnyUnownedCall => None,
+            Self::OwnedToolInvocation { .. } => None,
         }
     }
 
@@ -301,7 +288,6 @@ impl StartClaim {
             | Self::Owned { function_type, .. }
             | Self::Scope { function_type, .. }
             | Self::OwnedToolInvocation { function_type, .. } => Some(function_type),
-            Self::AnyUnownedCall => None,
         }
     }
 
@@ -309,10 +295,7 @@ impl StartClaim {
     /// for durable-scope `Start`s.
     pub(super) fn carries_request(&self) -> bool {
         match self {
-            Self::Unowned { .. }
-            | Self::Owned { .. }
-            | Self::OwnedToolInvocation { .. }
-            | Self::AnyUnownedCall => true,
+            Self::Unowned { .. } | Self::Owned { .. } | Self::OwnedToolInvocation { .. } => true,
             Self::Scope { .. } => false,
         }
     }
@@ -333,7 +316,6 @@ impl StartClaim {
             Self::Scope {
                 parent_start_index, ..
             } => *parent_start_index,
-            Self::AnyUnownedCall => None,
         }
     }
 
@@ -350,7 +332,7 @@ impl StartClaim {
             Self::OwnedToolInvocation {
                 matching_request, ..
             } => Some(matching_request),
-            Self::Scope { .. } | Self::AnyUnownedCall => None,
+            Self::Scope { .. } => None,
         }
     }
 
@@ -372,7 +354,6 @@ impl StartClaim {
                 observational_owner,
                 ..
             } => *observational_owner,
-            Self::AnyUnownedCall => None,
         }
     }
 
@@ -383,10 +364,7 @@ impl StartClaim {
                 ..
             }
             | Self::OwnedToolInvocation { .. } => true,
-            Self::Unowned { .. }
-            | Self::Owned { .. }
-            | Self::Scope { .. }
-            | Self::AnyUnownedCall => false,
+            Self::Unowned { .. } | Self::Owned { .. } | Self::Scope { .. } => false,
         }
     }
 
@@ -424,9 +402,6 @@ impl StartClaim {
 
     fn expected_identity_description(&self) -> String {
         match self {
-            Self::AnyUnownedCall => {
-                "Start { request: Some(..), parent_start_index: None }".to_string()
-            }
             Self::Scope {
                 function_name,
                 function_type,
@@ -518,6 +493,7 @@ impl ReplayState {
     /// the described `Start` (consuming it and registering a resolver receiver atomically), and
     /// return the registered handle together with the claimed entry. Shared frame of every
     /// public claim wrapper below.
+    #[cfg(test)]
     async fn claim_start(
         &self,
         claim: StartClaim,
@@ -701,38 +677,6 @@ impl ReplayState {
             ))
             .await?;
         Ok(handle)
-    }
-
-    /// Positionally claims the next `Start` entry for a durable call **without** validating its
-    /// function name or durable function type, registering a resolver receiver keyed by the
-    /// `Start`'s index and returning the claimed entry's identity for the caller to inspect.
-    ///
-    /// This is the dynamic counterpart of an identity-based claim: it is used by callers
-    /// that learn the call identity from the claimed entry itself rather than knowing it up front —
-    /// notably the guest-facing `golem::durability` read, which returns the persisted invocation's
-    /// function name to the guest and therefore has no expected name to validate against.
-    ///
-    /// The `Start` consume and the resolver registration happen atomically under the cursor lock;
-    /// see [`CursorTx::claim_start_matching`].
-    pub async fn claim_any_concurrent_start(
-        &self,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        let (handle, entry) = self.claim_start(StartClaim::any_unowned_call()).await?;
-        let OplogEntry::Start {
-            timestamp,
-            function_name,
-            durable_function_type,
-            ..
-        } = *entry
-        else {
-            unreachable!("claim_start only claims Start entries");
-        };
-        Ok(ClaimedConcurrentStart {
-            handle,
-            function_name,
-            durable_function_type,
-            timestamp,
-        })
     }
 
     /// Claims the `Start` of a durable call owned by another durable record (its

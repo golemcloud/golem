@@ -1681,6 +1681,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &target_agent_id,
                         oplog_index_cut_off,
                         copied_scope_start,
+                        handle.invocation_id(),
                         forked_phantom_id,
                         handle.agent_auth_ctx(),
                     )

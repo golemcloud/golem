@@ -25,10 +25,10 @@ use crate::metrics::wasm::{
 };
 use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
+use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{OplogError, OplogOps};
-use crate::services::{HasOplog, HasWorker};
 use crate::worker::suspension::GuestImportInvocationId;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
@@ -37,11 +37,12 @@ use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRun
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, DurableInvocationId, HostRequest, HostResponse, OplogEntry, OplogErrorKind, OplogIndex,
+    DurableFunctionType, DurableInvocationId, HostRequest, HostResponse, OplogEntry,
+    OplogErrorKind, OplogIndex,
 };
 use golem_common::model::{
-    NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState,
-    RetryProperties, RetryVerdict, ThreadRng, Timestamp,
+    NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
+    RetryVerdict, ThreadRng, Timestamp,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -1266,20 +1267,6 @@ pub trait DurabilityHost: InFunctionRetryHost {
         span_finished: golem_common::model::oplog::SpanFinished,
     ) -> Result<(), WorkerExecutorError>;
 
-    /// Writes a record to the worker's oplog representing a durable function invocation
-    async fn persist_durable_function_invocation(
-        &self,
-        function_name: HostFunctionName,
-        request: &HostRequest,
-        response: &HostResponse,
-        function_type: DurableFunctionType,
-    );
-
-    /// Reads the next persisted durable function invocation from the oplog during replay
-    async fn read_persisted_durable_function_invocation(
-        &mut self,
-    ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError>;
-
     /// Classifies a failed host operation and delegates transient failures to the worker's retry
     /// policy. If that policy permits another attempt, the returned error should be propagated by
     /// the host function to trigger the retry.
@@ -2204,8 +2191,12 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         host_function: &str,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        let invocation_id = self.direct_call_invocation_id(function_type)?;
         DurableCallCoordinator::new(self)
-            .admit(DurableCallAdmission::new(function_type, host_function))
+            .admit(
+                DurableCallAdmission::new(function_type, host_function)
+                    .with_invocation_id(invocation_id),
+            )
             .await
             .map(DurableCallBoundary::begin_index)
     }
@@ -2216,9 +2207,11 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         host_function: &str,
         span_started: golem_common::model::oplog::SpanStarted,
     ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        let invocation_id = self.direct_call_invocation_id(function_type)?;
         DurableCallCoordinator::new(self)
             .admit_with_span(
-                DurableCallAdmission::new(function_type, host_function),
+                DurableCallAdmission::new(function_type, host_function)
+                    .with_invocation_id(invocation_id),
                 span_started,
             )
             .await
@@ -2256,109 +2249,6 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 Some(span_finished),
             )
             .await
-    }
-
-    async fn persist_durable_function_invocation(
-        &self,
-        function_name: HostFunctionName,
-        request: &HostRequest,
-        response: &HostResponse,
-        function_type: DurableFunctionType,
-    ) {
-        // The guest manages its own scope via separate `begin_durable_function` /
-        // `end_durable_function` calls, so this completed call does not open a scope here. Its
-        // parent is therefore only the scope explicitly encoded in the function type (batched /
-        // transaction `Some(begin_index)`); otherwise it is top-level. It must not be inferred from
-        // the set of temporally-open scopes, which may belong to unrelated concurrent operations.
-        let parent_start_index = match &function_type {
-            DurableFunctionType::WriteRemoteBatched(Some(idx))
-            | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
-            _ => None,
-        };
-        self.public_state
-            .worker()
-            .oplog()
-            .add_completed_host_call(
-                function_name,
-                request,
-                response,
-                function_type,
-                parent_start_index,
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to serialize and store durable function invocation: {err}")
-            });
-    }
-
-    async fn read_persisted_durable_function_invocation(
-        &mut self,
-    ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError> {
-        // A completed durable function invocation is persisted as a `Start` + `End` pair.
-        // Unlike the typed host-call readers, the guest learns the call's identity (function
-        // name, type, timestamp) from the persisted `Start` itself, so claim the next `Start`
-        // without an expected identity and await its matching `End` through the concurrent
-        // resolver. `Cancelled` is unexpected: durable invocations are always persisted as a
-        // completed pair.
-        let claimed = self.state.replay_state.claim_any_concurrent_start().await?;
-        let timestamp = claimed.timestamp;
-        let function_name = claimed.function_name.to_string();
-        let function_type = claimed.durable_function_type.clone();
-        let resolution = self
-            .state
-            .replay_state
-            .await_resolution(claimed.handle)
-            .await?;
-        match resolution {
-            Resolution::Completed { response, .. } => {
-                let response_payload = response.ok_or_else(|| {
-                    WorkerExecutorError::unexpected_oplog_entry(
-                        "End { response: Some(..) }",
-                        "End { response: None }".to_string(),
-                    )
-                })?;
-                let response = self
-                    .public_state
-                    .worker()
-                    .oplog()
-                    .download_payload(response_payload)
-                    .await
-                    .map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "End payload cannot be downloaded: {err}"
-                        ))
-                    })?;
-                Ok(PersistedDurableFunctionInvocation {
-                    timestamp,
-                    function_name,
-                    response,
-                    function_type,
-                    oplog_entry_version: OplogEntryVersion::V2,
-                })
-            }
-            Resolution::Cancelled { cancelled_idx, .. } => {
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "End",
-                    format!("Cancelled at {cancelled_idx}"),
-                ))
-            }
-            Resolution::CompletedButDiscarded {
-                end_idx,
-                marker_idx,
-                ..
-            } => {
-                // Discarded completions are recorded only on the accessor completion path;
-                // durable invocations are always persisted as a delivered `Start` + `End`
-                // pair, so a marker resolving here means the oplog does not match this code
-                // path.
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "End delivered to the guest",
-                    format!(
-                        "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
-                    ),
-                ))
-            }
-        }
     }
 
     async fn try_trigger_retry(
@@ -3122,21 +3012,6 @@ mod tests {
         ) -> Result<(), WorkerExecutorError> {
             self.end_durable_function(function_type, begin_index, forced_commit)
                 .await
-        }
-
-        async fn persist_durable_function_invocation(
-            &self,
-            _function_name: HostFunctionName,
-            _request: &HostRequest,
-            _response: &HostResponse,
-            _function_type: DurableFunctionType,
-        ) {
-        }
-
-        async fn read_persisted_durable_function_invocation(
-            &mut self,
-        ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError> {
-            Err(WorkerExecutorError::runtime("not implemented in mock"))
         }
 
         async fn try_trigger_retry(

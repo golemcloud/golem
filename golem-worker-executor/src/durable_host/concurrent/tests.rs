@@ -197,6 +197,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             observational_owner: None,
             entity_parent_start_index: None,
             atomic_lease: unregistered_atomic_lease(atomic_region, true),
+            invocation_id: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -1984,6 +1985,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -2001,6 +2003,7 @@ fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -2018,6 +2021,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -2043,6 +2047,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2050,6 +2055,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let error_a = {
@@ -2092,6 +2098,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2099,6 +2106,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
+        invocation_id: None,
     };
 
     let error_a = {
@@ -2159,6 +2167,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
     let terminal_error: anyhow::Error = TerminalCallError::new(
@@ -2215,6 +2224,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2222,6 +2232,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -2389,6 +2400,7 @@ fn call_execution_scope_owns_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     assert_eq!(scope.retry_from, idx(42));

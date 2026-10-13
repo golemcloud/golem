@@ -14,8 +14,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    DurableInvocationId,
-    AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest,
+    AgentError, DurableFunctionType, DurableInvocationId, FilesystemSnapshotName, HostRequest,
     HostRequestGolemToolInvocationRejected, HostRequestMonotonicClockDuration, HostRequestNoInput,
     HostRequestPollCount, HostResponseMonotonicClockTimestamp,
     HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
@@ -2354,29 +2353,9 @@ async fn identity_claim_includes_replay_target_after_full_scan_chunk() {
 }
 
 #[test]
-async fn claim_any_returns_claimed_identity() {
-    // The dynamic claim does not validate name/type; it returns the claimed Start's identity.
-    let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
-    let claimed = rs.claim_any_concurrent_start().await.unwrap();
-    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
-    assert_eq!(claimed.function_name, HostFunctionName::MonotonicClockNow);
-    assert_eq!(
-        claimed.durable_function_type,
-        DurableFunctionType::ReadLocal
-    );
-
-    match rs.await_resolution(claimed.handle).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => {
-            assert_eq!(end_idx, OplogIndex::from_u64(3));
-        }
-        other => panic!("expected Completed, got {other:?}"),
-    }
-}
-
-#[test]
 async fn typed_claim_mismatch_does_not_leak_pending() {
     // A typed claim whose expected type does not match the recorded Start must fail AND drop the
-    // resolver receiver that `claim_any_concurrent_start` registered, so no stale awaiter leaks.
+    // resolver receiver that the claim registered, so no stale awaiter leaks.
     let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
     let err = rs
         .claim_concurrent_start(
@@ -8802,11 +8781,6 @@ fn start_claim_expected_descriptions_are_stable() {
 
     let name = HostFunctionName::MonotonicClockNow;
     let request = HostRequest::NoInput(HostRequestNoInput {});
-
-    assert_eq!(
-        StartClaim::any_unowned_call().expected_description(),
-        "Start { request: Some(..), parent_start_index: None }"
-    );
 
     assert_eq!(
         StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
