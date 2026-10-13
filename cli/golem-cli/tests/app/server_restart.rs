@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::app::{TestContext, builtin_artifact_sources};
+use crate::app::{TestContext, builtin_artifact_sources, cmd, flag};
 use axum::Router;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use golem_cli::versions;
+use serde_json::{Value, json};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -32,6 +34,10 @@ const HELD_TOOL: BuiltinArtifact = BuiltinArtifact {
     id: "web_fetch",
     path: "builtin-tools/web-fetch.wasm",
 };
+
+const BUILT_IN_PLUGIN: &str = "golem-otlp-exporter";
+const BUILT_IN_TOOLS: [&str; 5] = ["bash", "read-file", "git", "web-fetch", "tsc"];
+const BUILT_IN_TOOL_OWNER: &str = "builtin-tool-owner@golem.cloud";
 
 struct BuiltinArtifact {
     id: &'static str,
@@ -128,7 +134,11 @@ fn make_available(held: &BuiltinArtifact, cache_dir: &Path) {
     std::fs::copy(source, cache_dir.join(format!("{sha256}.wasm"))).unwrap();
 }
 
-async fn registry_db_count(registry_db: &Path, query: &str) -> i64 {
+async fn registry_db_scalar<T>(registry_db: &Path, query: &str) -> T
+where
+    T: Send + Unpin,
+    (T,): for<'r> sqlx::FromRow<'r, SqliteRow>,
+{
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
@@ -138,12 +148,16 @@ async fn registry_db_count(registry_db: &Path, query: &str) -> i64 {
         )
         .await
         .unwrap();
-    let count = sqlx::query_scalar::<_, i64>(query)
+    let value = sqlx::query_scalar::<_, T>(query)
         .fetch_one(&pool)
         .await
         .unwrap();
     pool.close().await;
-    count
+    value
+}
+
+async fn registry_db_count(registry_db: &Path, query: &str) -> i64 {
+    registry_db_scalar(registry_db, query).await
 }
 
 impl TestContext {
@@ -203,6 +217,85 @@ impl TestContext {
             "the server finished its startup while it was interrupted"
         );
     }
+
+    /// Deploys an application without components that uses the built-in tools, then asks the
+    /// server for each of these tools and for the built-in plugin.
+    async fn assert_server_provides_built_ins(&self, registry_db: &Path) {
+        let mut tools = serde_json::Map::new();
+        for tool in BUILT_IN_TOOLS {
+            let version: String = registry_db_scalar(
+                registry_db,
+                &format!(
+                    "SELECT tool_version FROM tool_releases WHERE tool_name = '{tool}' AND component_id IS NOT NULL"
+                ),
+            )
+            .await;
+            tools.insert(
+                tool.to_string(),
+                json!({
+                    "release": {
+                        "account": BUILT_IN_TOOL_OWNER,
+                        "name": tool,
+                        "version": version,
+                    }
+                }),
+            );
+        }
+        let manifest = json!({
+            "manifestVersion": versions::sdk::MANIFEST,
+            "app": "restart-built-ins",
+            "tools": tools,
+            "environments": { "local": { "server": "local" } },
+        });
+        std::fs::write(
+            self.cwd_path_join("golem.yaml"),
+            serde_yaml::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let deployed = self.cli([cmd::DEPLOY, flag::YES]).await;
+        assert!(
+            deployed.success_or_dump(),
+            "an application that uses the built-in tools did not deploy"
+        );
+
+        for tool in BUILT_IN_TOOLS {
+            let output = self
+                .cli([flag::FORMAT, "json", cmd::TOOL, cmd::GET, tool])
+                .await;
+            assert!(
+                output.success_or_dump(),
+                "the server does not provide the built-in tool '{tool}'"
+            );
+            let owners = output
+                .stdout_json::<Value>()
+                .iter()
+                .map(|line| line["tool"]["ownerAccountEmail"].clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                owners,
+                vec![Value::from(BUILT_IN_TOOL_OWNER)],
+                "the tool '{tool}' of the deployment is not the built-in tool"
+            );
+        }
+
+        let output = self
+            .cli([flag::FORMAT, "json", cmd::PLUGIN, cmd::LIST])
+            .await;
+        assert!(output.success_or_dump());
+        let plugin_lists = output.stdout_json::<Value>();
+        let lists_built_in_plugin = plugin_lists
+            .iter()
+            .filter_map(|list| list["plugins"].as_array())
+            .flatten()
+            .any(|entry| {
+                entry["plugin"]["name"] == BUILT_IN_PLUGIN && entry["source"] == "Builtin"
+            });
+        assert!(
+            lists_built_in_plugin,
+            "the server does not list the built-in plugin '{BUILT_IN_PLUGIN}': {plugin_lists:?}"
+        );
+    }
 }
 
 #[test]
@@ -236,6 +329,7 @@ async fn server_restarts_in_data_dir_after_start_interrupted_before_any_built_in
         .await,
         1
     );
+    ctx.assert_server_provides_built_ins(&registry_db).await;
 }
 
 #[test]
@@ -290,4 +384,5 @@ async fn server_restarts_in_data_dir_after_start_interrupted_while_built_ins_are
         .await,
         5
     );
+    ctx.assert_server_provides_built_ins(&registry_db).await;
 }
