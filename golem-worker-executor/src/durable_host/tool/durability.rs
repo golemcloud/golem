@@ -150,7 +150,7 @@ pub(super) async fn write<U: Send + 'static, Ctx: WorkerCtx>(
             |_, enqueue| {
                 selected = Some(prepared.accept(enqueue));
             },
-            |publication| publication.publish(),
+            |publication, end| publication.publish(Some(model::AcceptedAttachmentWriteEnd(end))),
             move |error| {
                 failed_controller.fence_owner();
                 async move {

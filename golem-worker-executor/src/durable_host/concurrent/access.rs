@@ -49,7 +49,7 @@ pub(super) fn prepare_access_terminal_effect<R, C, F, E, EF>(
 where
     R: Send + 'static,
     C: Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
-    F: FnOnce(R) + Send + 'static,
+    F: FnOnce(R, OplogIndex) + Send + 'static,
     E: FnOnce(WorkerExecutorError) -> EF + Send + 'static,
     EF: Future<Output = ()> + Send + 'static,
 {
@@ -62,20 +62,24 @@ where
                 return;
             };
             let persisted = async {
-                append.await?;
-                commit.await
+                let index = append.await?;
+                commit.await?;
+                Ok::<_, WorkerExecutorError>(index)
             }
             .await;
-            if let Err(error) = persisted {
-                // Fence synchronously before releasing the reservation. Election may wait for
-                // cancellation cleanup to join this receipt, so resolve it before polling cleanup.
-                let cleanup = failed(error.clone());
-                drop(reservation);
-                let _ = complete.send(Err(error));
-                cleanup.await;
-            } else {
-                publish(reservation);
-                let _ = complete.send(Ok(()));
+            match persisted {
+                Ok(index) => {
+                    publish(reservation, index);
+                    let _ = complete.send(Ok(()));
+                }
+                Err(error) => {
+                    // Fence synchronously before releasing the reservation. Election may wait for
+                    // cancellation cleanup to join this receipt, so resolve it before polling cleanup.
+                    let cleanup = failed(error.clone());
+                    drop(reservation);
+                    let _ = complete.send(Err(error));
+                    cleanup.await;
+                }
             }
         })
         .map_err(WorkerExecutorError::runtime)?;

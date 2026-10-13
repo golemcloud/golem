@@ -2656,8 +2656,8 @@ async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
                     Ok(())
                 }
             },
-            move |publication: crate::durable_host::tool::attachment::AttachmentWritePublication| {
-                publication.publish();
+            move |publication: crate::durable_host::tool::attachment::AttachmentWritePublication, end| {
+                publication.publish(Some(golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(end)));
                 effect.fetch_add(1, Ordering::AcqRel);
             },
             move |_| {
@@ -2785,7 +2785,7 @@ async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
                 &tasks,
                 stopped_recordings.register().unwrap(),
                 async { panic!("closed metadata admission must not commit") },
-                |(): ()| panic!("closed metadata admission must not publish"),
+                |(): (), _| panic!("closed metadata admission must not publish"),
                 |_| async { panic!("refusal precedes acceptance and needs no failure cleanup") },
             )
             .is_err()

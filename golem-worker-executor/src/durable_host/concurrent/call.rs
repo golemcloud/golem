@@ -3910,7 +3910,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         R: Send + 'static,
         A: FnOnce(&Pair::Resp, Box<dyn FnOnce(R) + '_>),
-        F: FnOnce(R) + Send + 'static,
+        F: FnOnce(R, OplogIndex) + Send + 'static,
         E: FnOnce(WorkerExecutorError) -> EF + Send + 'static,
         EF: Future<Output = ()> + Send + 'static,
     {

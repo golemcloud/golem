@@ -18,7 +18,7 @@ use crate::preview2::golem::tool::host::{
 use crate::services::active_agents::{ActiveAgents, MemoryGrant};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
-use golem_common::model::oplog::attachment::ToolAttachmentId;
+use golem_common::model::oplog::attachment::{AcceptedAttachmentWriteEnd, ToolAttachmentId};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -286,6 +286,7 @@ struct BufferedChunk {
     bytes: Vec<u8>,
     charge: AttachmentCharge,
     published: Arc<AtomicBool>,
+    source_end: Option<AcceptedAttachmentWriteEnd>,
 }
 
 struct AttachmentCharge {
@@ -733,7 +734,7 @@ impl ByteAttachment {
             notified.as_mut().enable();
             match prepared.accept(std::convert::identity)? {
                 AttachmentWriteAcceptance::Accepted(publication) => {
-                    publication.publish();
+                    publication.publish(None);
                     return Ok(());
                 }
                 AttachmentWriteAcceptance::Discarded => return Ok(()),
@@ -999,6 +1000,7 @@ impl PreparedAttachmentWrite {
             bytes: self.bytes.take().unwrap(),
             charge: self.charge.take().unwrap(),
             published: published.clone(),
+            source_end: None,
         });
         state.buffered_bytes += len;
         state.accepted_bytes = state.accepted_bytes.saturating_add(len as u64);
@@ -1050,10 +1052,15 @@ pub(crate) struct AttachmentWritePublication {
 }
 
 impl AttachmentWritePublication {
-    pub(crate) fn publish(self) {
+    pub(crate) fn publish(self, source_end: Option<AcceptedAttachmentWriteEnd>) {
         let attachment = &self.operation.0;
         let reader = {
             let mut state = attachment.state.lock().unwrap();
+            if let Some(chunk) = state.chunks.back_mut() {
+                // The publication guard still owns the sole producer operation.
+                assert!(Arc::ptr_eq(&chunk.published, &self.published));
+                chunk.source_end = source_end;
+            }
             self.published.store(true, Ordering::Release);
             state.reader_waker.take()
         };
@@ -1763,7 +1770,7 @@ mod tests {
                 .await
                 .is_pending()
         );
-        publication.publish();
+        publication.publish(None);
         assert!(matches!(read.await, AttachmentRead::Item(Ok(bytes)) if bytes == vec![1, 2, 3, 4]));
         assert_eq!(producer.attachment.activity().charged_bytes, 0);
         assert!(matches!(
@@ -1793,11 +1800,11 @@ mod tests {
                 0 => {
                     producer.cancel().unwrap();
                     drop(consumer);
-                    publication.publish();
+                    publication.publish(None);
                 }
                 1 => {
                     producer.controller().fence_owner();
-                    publication.publish();
+                    publication.publish(None);
                 }
                 _ => drop(publication),
             }
@@ -1874,7 +1881,7 @@ mod tests {
                         .await
                         .is_err()
                 );
-                publication.publish();
+                publication.publish(None);
                 assert!(matches!(received.recv().await, Some(Ok(bytes)) if bytes == vec![1; 4]));
                 assert!(matches!(
                     received.recv().await,
@@ -1924,7 +1931,7 @@ mod tests {
                         .await
                         .is_err()
                 );
-                publication.publish();
+                publication.publish(None);
                 assert_eq!(received.recv().await, Some(vec![1; 4]));
                 assert!(received.recv().await.is_none());
                 Ok(())
