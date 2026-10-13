@@ -932,10 +932,11 @@ impl TestWorkerExecutor {
         )
     }
 
-    pub fn gate_next_oplog_function_end_failure(
+    pub fn gate_next_oplog_function_end(
         &self,
         agent_id: &AgentId,
         function: HostFunctionName,
+        fail: bool,
     ) -> (
         tokio::sync::oneshot::Receiver<()>,
         tokio::sync::oneshot::Sender<()>,
@@ -943,7 +944,7 @@ impl TestWorkerExecutor {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         self.additional_test_deps
-            .oplog_end_failures
+            .oplog_end_gates
             .lock()
             .unwrap()
             .insert(
@@ -951,6 +952,7 @@ impl TestWorkerExecutor {
                 (
                     function,
                     None,
+                    fail,
                     OplogReadGate {
                         entered_tx,
                         release_rx,
@@ -958,6 +960,22 @@ impl TestWorkerExecutor {
                 ),
             );
         (entered_rx, release_tx)
+    }
+
+    /// Observes the first mutable host-context access after the selected entity's guest settlement.
+    /// This uses the test context's fuel-accounting boundary, without adding a production hook.
+    pub fn probe_entity_settlement_access(
+        &self,
+        agent_id: &AgentId,
+        entity_start: OplogIndex,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .entity_settlement_access
+            .lock()
+            .unwrap()
+            .insert((agent_id.clone(), entity_start), (false, sender));
+        receiver
     }
 
     /// Stores the automatic snapshot entries at `indexes` as rejected for the incarnation of the
@@ -2752,6 +2770,18 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<TestWorkerCtx> {
+        if let Some(scope) = self.durable_ctx.entity_invocation_scope() {
+            let key = (self.agent_id.clone(), scope.invocation_id().start_index());
+            let mut probes = self
+                .additional_test_deps
+                .entity_settlement_access
+                .lock()
+                .unwrap();
+            if probes.get(&key).is_some_and(|(settled, _)| *settled) {
+                let (_, sender) = probes.remove(&key).unwrap();
+                let _ = sender.send(());
+            }
+        }
         &mut self.durable_ctx
     }
 }
@@ -2787,6 +2817,16 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
     fn fuel_metering_enabled(&self) -> bool {
+        if let Some(scope) = self.durable_ctx.entity_invocation_scope()
+            && let Some((settled, _)) = self
+                .additional_test_deps
+                .entity_settlement_access
+                .lock()
+                .unwrap()
+                .get_mut(&(self.agent_id.clone(), scope.invocation_id().start_index()))
+        {
+            *settled = true;
+        }
         false
     }
 
@@ -5100,23 +5140,26 @@ impl TestOplog {
         gate.abort_append.load(Ordering::SeqCst)
     }
 
-    fn take_targeted_end_failure(&self, entry: &OplogEntry) -> Option<(OplogIndex, OplogReadGate)> {
-        let mut failures = self.additional_test_deps.oplog_end_failures.lock().unwrap();
+    fn take_targeted_end_gate(
+        &self,
+        entry: &OplogEntry,
+    ) -> Option<(OplogIndex, bool, OplogReadGate)> {
+        let mut gates = self.additional_test_deps.oplog_end_gates.lock().unwrap();
         if let OplogEntry::End { start_index, .. } = entry
-            && failures
+            && gates
                 .get(&self.owned_agent_id.agent_id)
-                .is_some_and(|(_, start, _)| *start == Some(*start_index))
+                .is_some_and(|(_, start, _, _)| *start == Some(*start_index))
         {
-            let (_, _, gate) = failures.remove(&self.owned_agent_id.agent_id).unwrap();
-            return Some((*start_index, gate));
+            let (_, _, fail, gate) = gates.remove(&self.owned_agent_id.agent_id).unwrap();
+            return Some((*start_index, fail, gate));
         }
         None
     }
 
     fn observe_end_failure_target(&self, index: OplogIndex, function: &HostFunctionName) {
-        if let Some((target, start, _)) = self
+        if let Some((target, start, _, _)) = self
             .additional_test_deps
-            .oplog_end_failures
+            .oplog_end_gates
             .lock()
             .unwrap()
             .get_mut(&self.owned_agent_id.agent_id)
@@ -5128,10 +5171,12 @@ impl TestOplog {
     }
 
     async fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
-        if let Some((start, gate)) = self.take_targeted_end_failure(entry) {
+        if let Some((start, fail, gate)) = self.take_targeted_end_gate(entry) {
             let _ = gate.entered_tx.send(());
             let _ = gate.release_rx.await;
-            return Err(format!("injected End append failure for Start {start}"));
+            if fail {
+                return Err(format!("injected End append failure for Start {start}"));
+            }
         }
         let entry_name = match entry {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
@@ -5279,13 +5324,17 @@ impl Oplog for TestOplog {
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
-        if let Some((start, gate)) = self.take_targeted_end_failure(&entry) {
+        if let Some((start, fail, gate)) = self.take_targeted_end_gate(&entry) {
+            let pending = (!fail).then(|| self.oplog.enqueue_add(entry));
             return Box::pin(async move {
                 let _ = gate.entered_tx.send(());
                 let _ = gate.release_rx.await;
-                Err(golem_worker_executor::services::oplog::OplogError::Payload(
-                    format!("injected End append failure for Start {start}"),
-                ))
+                match pending {
+                    Some(pending) => pending.await,
+                    None => Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                        format!("injected End append failure for Start {start}"),
+                    )),
+                }
             });
         }
         let gated = self.is_consume_body_chunk_data_end(&entry);
@@ -5921,8 +5970,10 @@ pub struct AdditionalTestDeps {
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
-    oplog_end_failures: Arc<
-        std::sync::Mutex<HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, OplogReadGate)>>,
+    oplog_end_gates: Arc<
+        std::sync::Mutex<
+            HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, bool, OplogReadGate)>,
+        >,
     >,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
@@ -5960,6 +6011,9 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     entity_store_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
+    entity_settlement_access: Arc<
+        std::sync::Mutex<HashMap<(AgentId, OplogIndex), (bool, tokio::sync::oneshot::Sender<()>)>>,
+    >,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates: IndexedExecutionGates,
     invocation_started_gates: IndexedExecutionGates,
@@ -6003,7 +6057,7 @@ impl AdditionalTestDeps {
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,
-            oplog_end_failures: Arc::default(),
+            oplog_end_gates: Arc::default(),
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6030,6 +6084,7 @@ impl AdditionalTestDeps {
             entity_reconstruction_body_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_store_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            entity_settlement_access: Arc::default(),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             invocation_started_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),

@@ -7059,6 +7059,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
             environment_state_service: Some(environment_state.clone()),
             configure: Some(Arc::new(|config| {
                 config.limits.max_tool_attachment_bytes = 64;
+                config.retry.max_attempts = 0;
             })),
             ..Default::default()
         },
@@ -7168,6 +7169,148 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         ],
         "only the first rejection selects the exhaustion terminal"
     );
+
+    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let cancelled_agent = agent_id!("ToolStreamingCaller", "capable-cancelled-overflow");
+    let cancelled_worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            cancelled_agent.clone(),
+            HashMap::from([(
+                "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+                port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let (accepted, release) = executor.gate_next_oplog_function_end(
+        &cancelled_worker,
+        golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite,
+        false,
+    );
+    let mut completion =
+        executor.gate_next_live_entity_body_completion(&cancelled_worker, "capable-streaming");
+    let invoke = executor.invoke_and_await_agent(
+        &caller_component,
+        &cancelled_agent,
+        "collect_capable",
+        data_value!("cancel-stdout-over", vec![b'c']),
+    );
+    let synchronize = async {
+        let checkpoint =
+            next_promise_checkpoint(&mut checkpoints, "exhaustion-before-write-drop").await?;
+        wait_for_promise_checkpoint_to_await(&executor, &cancelled_worker, &checkpoint).await?;
+        accepted.await?;
+        let entries = executor
+            .get_oplog(&cancelled_worker, OplogIndex::INITIAL)
+            .await?;
+        let entity_start = entries
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::entity::invoke" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .expect("capable tool entity Start");
+        let cleanup = executor.probe_entity_settlement_access(&cancelled_worker, entity_start);
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: cancelled_worker.clone(),
+                    oplog_idx: checkpoint.oplog_idx,
+                },
+                Vec::new(),
+            )
+            .await?;
+        tokio::select! {
+            result = cleanup => {
+                result?;
+                release.send(()).expect("dropped write retains its End receipt");
+            }
+            _ = completion.entered() => {
+                anyhow::bail!("tool response classified before dropped-write cleanup");
+            }
+        }
+        completion.entered().await;
+        completion.release();
+        Ok::<_, anyhow::Error>(entity_start)
+    };
+    let (cancelled, entity_start) = tokio::try_join!(invoke, synchronize)?;
+    server.abort();
+    let cancelled: StreamEvidence = cancelled.into_typed()?;
+    assert!(
+        cancelled.completion.contains("ResourceExhausted"),
+        "{cancelled:#?}"
+    );
+    assert!(cancelled.output.is_empty());
+    let entries = executor
+        .get_oplog(&cancelled_worker, OplogIndex::INITIAL)
+        .await?;
+    let write_start = entries
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::streams::tool-output-writer::write" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("exhaustion write Start");
+    let write_ends: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == write_start => {
+                let response =
+                    golem_common::model::oplog::HostResponseToolAttachmentWrite::from_value(
+                        end.response.as_ref().expect("write response").value(),
+                    )
+                    .expect("decode exhaustion write outcome");
+                assert_eq!(
+                    response.outcome,
+                    ToolAttachmentWriteOutcome::HostResourceExhausted
+                );
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(write_ends.len(), 1);
+    let discards: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CompletionDiscarded(marker) if marker.start_index == write_start => {
+                Some(entry.oplog_index)
+            }
+            PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write_start => {
+                panic!("cancelled write acknowledgment was delivered")
+            }
+            PublicOplogEntry::Cancelled(cancel) if cancel.start_index == write_start => {
+                panic!("accepted exhaustion was cancelled")
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(discards.len(), 1);
+    let (entity_end, terminal_response) = entries
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == entity_start => Some((
+                entry.oplog_index,
+                end.response.as_ref().expect("tool response"),
+            )),
+            _ => None,
+        })
+        .expect("tool entity End");
+    assert!(write_ends[0] < discards[0] && discards[0] < entity_end);
+    let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
+    assert!(matches!(
+        terminal.result,
+        Err(SerializableToolRpcError::ResourceExhausted(_))
+    ));
 
     let stdin_over: StreamEvidence = executor
         .invoke_and_await_agent(
@@ -7319,11 +7462,16 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     );
     checkpoint_server.abort();
 
-    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await {
-        assert!(active.tool_operations.operations.is_empty());
-        assert!(active.lane.holder.is_none());
-        assert_eq!(active.lane.active_invocation_count, 0);
-        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    for owner in [
+        owned_agent_id,
+        OwnedAgentId::new(context.default_environment_id, &cancelled_worker),
+    ] {
+        if let Some(active) = executor.active_entity_metadata(&owner).await {
+            assert!(active.tool_operations.operations.is_empty());
+            assert!(active.lane.holder.is_none());
+            assert_eq!(active.lane.active_invocation_count, 0);
+            assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+        }
     }
 
     Ok(())
@@ -17370,9 +17518,10 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             )
         });
         let failure_gate = storage_failure.then(|| {
-            executor.gate_next_oplog_function_end_failure(
+            executor.gate_next_oplog_function_end(
                 &worker,
                 golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite,
+                true,
             )
         });
         let invocation = executor.invoke_and_await_agent(

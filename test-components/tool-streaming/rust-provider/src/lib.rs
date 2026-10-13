@@ -1938,6 +1938,26 @@ impl CapableStreaming for CapableStreamingImpl {
             bytes.extend(chunk);
         }
 
+        if path == "cancel-stdout-over" {
+            use std::future::{Future, poll_fn};
+            use std::task::Poll;
+
+            let mut write = Box::pin(stdout.write(vec![b'x'; 65]));
+            poll_fn(|cx| {
+                assert!(write.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            wait_at_promise_checkpoint("exhaustion-before-write-drop").await;
+            drop(write);
+            println!("exhaustion-write-dropped");
+            return Ok(StreamSummary {
+                chunks_read,
+                bytes_read: bytes.len() as u64,
+                output_closed: false,
+            });
+        }
+
         let output = if let Some(rest) = path.strip_prefix("order:") {
             let (tag, path) = rest
                 .split_once(':')

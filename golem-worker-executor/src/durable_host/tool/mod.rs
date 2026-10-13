@@ -5060,6 +5060,12 @@ pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
     store
         .as_context_mut()
         .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+            // Dropped acknowledgments leave accepted effects owned by the cleanup queue.
+            // Join their publication before classifying output failures or closing the parent.
+            crate::durable_host::concurrent::drain_dropped_call_events_access(accessor, |ctx| {
+                ctx.durable_ctx_mut()
+            })
+            .await?;
             let execution =
                 accessor.with(|mut access| access.data_mut().durable_ctx().owner_execution.clone());
             prepare_tool_parent_end_owned(&execution, parent)
