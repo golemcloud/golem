@@ -2396,6 +2396,22 @@ pub enum SerializableWebsocketMessage {
 #[derive(
     Debug,
     Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableWebsocketReconstructionPolicy {
+    ReconnectAutomatically,
+    ReportConnectionLoss,
+}
+
+#[derive(
+    Debug,
+    Clone,
     PartialEq,
     Eq,
     BinaryCodec,
@@ -2410,6 +2426,7 @@ pub enum SerializableWebsocketError {
     ProtocolError(String),
     Closed(Option<SerializableWebsocketCloseInfo>),
     Other(String),
+    SessionLost,
 }
 
 #[derive(

@@ -14,13 +14,13 @@
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.13",
-      "sha256": "4859d21e463bfbde91db409f546f65ecb1945616c0495353a30b05d0e3b0d1e5"
+      "version": "0.0.14",
+      "sha256": "0258a7ae0019e258c5beec86dbd0451756e74363be5e118567575bba0797612e"
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.12",
-      "sha256": "e9c9735429c572e6b2e08561d95df25e94bf82ecb8b1cd255199d077e30db811"
+      "version": "0.0.13",
+      "sha256": "a5974719843a75b6561aa37392b1f4f7c721eeda08c80a835d3e2b981b948d9f"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
@@ -29,8 +29,8 @@
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.11",
-      "sha256": "d2be87dc545a9d0f80c029860cfb1aa920549ae6efdbc180d6afa2beb9dfdbde"
+      "version": "0.0.12",
+      "sha256": "6f24f0da4ae69986102cb1cc1408f42ce502de8fc8505f9a41d5a71908778254"
     },
     "web_fetch": {
       "component": "web-fetch",
