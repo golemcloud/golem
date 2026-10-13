@@ -459,11 +459,28 @@ The grant for a default tool is a part of the environment tool grant plan, as fo
 
 An agent that exists already gets a default tool on its next call after the deployment, as long as the deployment contains the agent's component revision. An agent on an older component revision gets it when the agent is updated, for example with `golem deploy --update-agents auto`.
 
-A build does not use the default tools: `bridge.<language>.<mode>.tools: "*"` generates clients only for the tools that the manifest declares. To generate a client for `bash`, declare `tools.bash`.
+A build does not select deployment default tools. `bridge.<language>.internal.tools: "*"` includes application tools and the selected environment's visible ambient native and MCP imported tools, not registry releases added only by deployment defaults. To generate a client for the default registry release of `bash`, declare `tools.bash` and select it for generation. An explicit declaration replaces the default, so also supply the consumer's binding. See [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients) for a complete example.
 
 ### Bridge generation
 
-Bridge generation accepts canonical ambient native-tool names without a top-level `tools` declaration, release grant, or local implementation component. It resolves ambient metadata from the selected environment, so the CLI must be authenticated to read that environment's deployment plan:
+Prefer component tool dependencies for clients used by a consumer. `golem build` automatically generates each client's guest SDK in the consumer's language, as it does for agent dependencies. Keep the component's language template. For a custom template, set `componentTemplates.<template-name>.guestLanguage` and apply that template to the consumer. No additional `bridge.<language>.internal.tools` selection is needed.
+
+Declared local and registry-backed tools resolve from the application; otherwise the name is resolved from the selected environment's ambient catalog and then from its MCP imports. Ambient and MCP imported names need no top-level `tools` declaration, release grant, or local implementation component. The CLI must be authenticated to read the selected environment's metadata:
+
+```yaml
+components:
+  my-app:consumer:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
+      tools: [native-search, catalog-search]
+    tools:
+      native-search: {}
+      catalog-search: {}
+```
+
+Dependencies select client generation; component or agent tool bindings expose the tool for invocation. A dependency does not create a binding, and a binding alone does not generate a client. The calling agent still needs the required runtime permissions. For a local tool, the provider builds before the consumer. A component cannot depend on its own guest bridge SDK; use the language SDK's definition-owned client for a tool in the same component.
+
+Use an explicit bridge selection when you need a separate generation target, such as another language or output directory:
 
 ```yaml
 bridge:
@@ -472,18 +489,11 @@ bridge:
       tools: [native-search]
 ```
 
-Name-only component dependencies use the same lookup. Declared local and registry-backed tools resolve from the application; otherwise the name is resolved from the selected environment's ambient catalog and then from its MCP imports:
-
-```yaml
-components:
-  my-app:consumer:
-    dependencies:
-      tools: [native-search, catalog-search]
-```
-
 `"*"` under `bridge.<language>.internal.tools` includes all visible ambient and MCP-imported tools in addition to application tools. Explicit names avoid MCP discovery when ambient metadata already satisfies every request. Ambient and application tool names may not collide; ambient names take precedence over MCP projections, and earlier MCP imports take precedence over later imports.
 
 Generated clients always invoke the canonical Golem tool name through `tool-rpc`. They contain no native host implementation ID, MCP endpoint, transport, or credentials. Native provision, binding, and middleware configuration is deployment-only and does not change the generated API or generation cache identity.
+
+Run `golem build` to generate selected tool clients. `golem generate-bridge` does not expose a tool selector. Generation does not add a deployment binding or grant the calling agent runtime permissions. The [generation guide](/next/how-to-guides/common/golem-generating-tool-clients) shows generated output paths, consumer imports, typed calls, and regeneration for built-in tools and MCP imports in the supported languages.
 
 For registry-backed tools, the generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. A missing grant is planned and created before metadata access; planning fails clearly when the deploy actor lacks permission to reconcile the grant.
 
@@ -1064,7 +1074,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "components.<component-name>.tools",
   }}>
-    ***Optional map of tool bindings*** inherited by agents exported by the component and used as the authorization baseline for fresh component owners, including tools-only MCP calls.
+    ***Optional map of tool bindings*** inherited by agents exported by the component and used as the authorization baseline for fresh component owners, including tools-only MCP calls. Bindings do not generate clients; use <FieldLink path="components.<component-name>.dependencies.tools"/> for automatic client generation.
   </Field>
 
   <Field meta={{
@@ -1081,7 +1091,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "components.<component-name>.dependencies.tools",
   }}>
-    ***Optional canonical tool names*** whose guest clients the component consumes. A declared local tool creates a component build dependency; a declared registry-backed tool uses its selected release. A name with no declaration is resolved from the selected environment's ambient native tools first and MCP imports second, without requiring a local implementation component or release grant.
+    ***Optional canonical tool names or component/name references*** whose guest clients the component consumes. `golem build` automatically generates these clients in the consumer's language. No explicit bridge selection is required. A declared local tool creates a component build dependency; a declared registry-backed tool uses its selected release. A name with no declaration is resolved from the selected environment's ambient native tools first and MCP imports second, without requiring a local implementation component or release grant. Dependencies do not add runtime bindings; configure <FieldLink path="components.<component-name>.tools"/> or the calling agent's tools separately. A local dependency cannot refer to the consumer itself.
   </Field>
 
   <Field meta={{
