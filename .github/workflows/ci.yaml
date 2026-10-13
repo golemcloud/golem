@@ -386,13 +386,14 @@ jobs:
           cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor \
             --features test-utils --lib --no-run --message-format=json \
             > tmp/apfs-cargo-messages.jsonl
+          integration-tests/scripts/managed-filesystem/test-select-cargo-test-executables.py
           python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py \
             tmp/apfs-cargo-messages.jsonl "$PWD" lib > tmp/apfs-test-executable.tsv
           IFS=$'\t' read -r target executable < tmp/apfs-test-executable.tsv
           test "$target" = lib
           cp "$executable" tmp/apfs-test-bin/golem-worker-executor-apfs-tests
           tar -czf tmp/apfs-test-bin.tar.gz -C tmp/apfs-test-bin golem-worker-executor-apfs-tests
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: apfs-test-bin-${{ github.run_id }}-${{ github.run_attempt }}
           path: tmp/apfs-test-bin.tar.gz
@@ -410,7 +411,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: apfs-test-bin-${{ github.run_id }}-${{ github.run_attempt }}
           path: tmp/apfs-test-bin

@@ -461,14 +461,15 @@ mod tests {
             }
         };
         use Scenario::*;
-        let scenarios = &[
+        [
             Defaults,
             ManifestRoot,
             ArgumentRoot,
             TomlRoot,
             EnvironmentRoot,
-        ];
-        for &scenario in scenarios {
+        ]
+        .into_iter()
+        .for_each(|scenario| {
             let data = tempfile::tempdir().unwrap();
             let case = match scenario {
                 Defaults => Case {
@@ -576,19 +577,18 @@ mod tests {
             if let Some(toml) = case.toml {
                 std::fs::write(&config_file, toml).unwrap();
             }
-            let configure = |config: &mut GolemConfig| {
+            let configure = || {
                 crate::launch::configure_filesystem(
-                    config,
+                    GolemConfig::default(),
                     &launch,
                     &config_file,
                     figment::providers::Serialized::defaults(case.environment.clone()),
                 )
+                .unwrap()
             };
-            let mut first = GolemConfig::default();
-            configure(&mut first).unwrap();
+            let first = configure();
             assert_eq!(first.filesystem_storage.mode, case.expected_storage);
-            let mut second = GolemConfig::default();
-            configure(&mut second).unwrap();
+            let second = configure();
             assert_eq!(second.filesystem_storage.mode, case.expected_storage);
             let key_path = data
                 .path()
@@ -632,7 +632,7 @@ mod tests {
             }
             assert!(!data.path().join("blobs").exists());
             assert!(!data.path().join("agents").exists());
-        }
+        });
     }
 
     #[test]

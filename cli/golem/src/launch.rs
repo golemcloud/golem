@@ -207,17 +207,16 @@ async fn start_components(
     )
     .await?;
 
-    let worker_executor = {
-        let mut config =
-            worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
+    let worker_executor = run_worker_executor(
         configure_filesystem(
-            &mut config,
+            worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?,
             args,
             &golem_worker_executor::services::golem_config::make_config_loader().config_file_name,
             golem_common::config::env_config_provider(),
-        )?;
-        run_worker_executor(config, join_set).await?
-    };
+        )?,
+        join_set,
+    )
+    .await?;
 
     Ok(StartedComponents {
         registry_service,
@@ -229,20 +228,22 @@ async fn start_components(
 }
 
 pub(crate) fn configure_filesystem(
-    config: &mut WorkerExecutorConfig,
+    config: WorkerExecutorConfig,
     args: &LaunchArgs,
     config_file: &Path,
     environment: impl figment::Provider,
-) -> anyhow::Result<()> {
-    let (storage, snapshots) = crate::filesystem_config::prepare(
+) -> anyhow::Result<WorkerExecutorConfig> {
+    let (filesystem_storage, filesystem_snapshots) = crate::filesystem_config::prepare(
         &args.data_dir,
         config_file,
         args.agent_filesystem_root.as_deref(),
         environment,
     )?;
-    config.filesystem_storage = storage;
-    config.filesystem_snapshots = snapshots;
-    Ok(())
+    Ok(WorkerExecutorConfig {
+        filesystem_storage,
+        filesystem_snapshots,
+        ..config
+    })
 }
 
 fn blob_storage_config(args: &LaunchArgs) -> BlobStorageConfig {

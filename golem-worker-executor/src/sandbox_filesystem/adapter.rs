@@ -1930,10 +1930,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let materialization_root: Arc<Path> = Arc::from(self.root());
         let root_directory = self.root_directory_state();
-        let mode = file_copy_mode(&self.volume);
-        let transfer = file_transfer(mode, self.quota_authority);
-        let policy =
-            tree_copy::SeedSyncPolicy::new(tree_copy::native_seed_sync_platform(), transfer);
+        let platform = tree_copy::native_seed_sync_platform();
+        let policy = tree_copy::SeedSyncPolicy::new(
+            platform,
+            file_transfer(platform, file_copy_mode(&self.volume), self.quota_authority),
+        );
         let storage_profile = storage_profile(&self.volume);
         async move {
             let error_path = Arc::clone(&materialization_root);
@@ -1958,7 +1959,9 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                                 placement: entry.placement,
                             };
                             match &admitted {
-                                Some(root) => directory_for_admitted(root, &entry.target),
+                                Some(root) => {
+                                    base_directory(&entry.target, || Ok(root.directory()))
+                                }
                                 None => directory_for(&root_directory, &entry.target),
                             }
                             .and_then(|base| {
@@ -2018,9 +2021,10 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         excluded: Arc<TreeExclusions>,
         target: &HostPath,
     ) -> impl Future<Output = Result<Box<[LinkGroup]>, FilesystemStorageError>> + Send {
-        let transfer = tree_copy::file_transfer_action(
+        let transfer = file_transfer(
             tree_copy::native_seed_sync_platform(),
-            file_transfer(file_copy_mode(&self.volume), QuotaAuthority::Unsupported),
+            file_copy_mode(&self.volume),
+            QuotaAuthority::Unsupported,
         );
         let operation_path = source.operation_path(self.root());
         let root_directory = self.root_directory_state();
@@ -2084,15 +2088,17 @@ fn admit_root(root: &Arc<Mutex<Option<NativeRootHandles>>>) -> std::io::Result<N
         })
 }
 
-fn directory_for_admitted(
-    root: &NativeRootHandles,
+/// Gives the directory that `target` is relative to. `root` gives the root directory of the
+/// sandbox, and is called only for a target at the root.
+fn base_directory(
     target: &SandboxPath,
+    root: impl FnOnce() -> std::io::Result<Arc<cap_std::fs::Dir>>,
 ) -> std::io::Result<Arc<cap_std::fs::Dir>> {
     match &target.base {
         SandboxPathBase::Directory(directory) => {
             directory.host().cloned().map_err(std::io::Error::other)
         }
-        SandboxPathBase::Root => Ok(root.directory()),
+        SandboxPathBase::Root => root(),
     }
 }
 
@@ -2100,19 +2106,14 @@ fn directory_for(
     root: &Arc<Mutex<Option<NativeRootHandles>>>,
     target: &SandboxPath,
 ) -> std::io::Result<Arc<cap_std::fs::Dir>> {
-    match &target.base {
-        SandboxPathBase::Directory(directory) => {
-            directory.host().cloned().map_err(std::io::Error::other)
+    base_directory(target, || {
+        let directory = admit_root(root)?.directory();
+        #[cfg(test)]
+        if benchmark_disable_root_capability_reuse() {
+            return directory.try_clone().map(Arc::new);
         }
-        SandboxPathBase::Root => {
-            let directory = admit_root(root)?.directory();
-            #[cfg(test)]
-            if benchmark_disable_root_capability_reuse() {
-                return directory.try_clone().map(Arc::new);
-            }
-            Ok(directory)
-        }
-    }
+        Ok(directory)
+    })
 }
 
 #[cfg(test)]
@@ -4109,7 +4110,12 @@ mod tests {
             .unwrap();
         let state = filesystem.root_directory_state();
         let admitted = admit_root(&state).unwrap();
-        let metadata = admitted.seed_flusher.metadata().unwrap();
+        let metadata = admitted
+            .seed_flusher
+            .as_deref()
+            .unwrap()
+            .metadata()
+            .unwrap();
         assert!(metadata.is_file());
         assert_eq!(cap_fs_ext::MetadataExt::nlink(&metadata), 0);
         assert!(
@@ -4129,7 +4135,15 @@ mod tests {
             filesystem.root(),
         )
         .unwrap();
-        assert!(admitted.seed_flusher.metadata().unwrap().is_file());
+        assert!(
+            admitted
+                .seed_flusher
+                .as_deref()
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .is_file()
+        );
         drop(admitted);
         SandboxFilesystem::delete_and_verify(filesystem)
             .await
@@ -4163,7 +4177,12 @@ mod tests {
         let lifecycle = Arc::new(AsyncMutex::new(()))
             .try_lock_owned()
             .expect("new name-mode test filesystem lease must be available");
-        let native_root = NativeRoot::new(root.clone(), directory).unwrap();
+        let native_root = NativeRoot::new(
+            root.clone(),
+            directory,
+            tree_copy::native_seed_sync_platform(),
+        )
+        .unwrap();
         SandboxFilesystem::new(
             native_root,
             LeaseState {
@@ -7120,10 +7139,6 @@ mod tests {
             &SandboxPath::at_root("renamed-directory"),
         )
         .unwrap();
-        let source_parent_key = native_directory_coordination_key(source_parent).unwrap();
-        let destination_parent_key =
-            native_directory_coordination_key(&destination_parent).unwrap();
-        let same_parent_handle = Arc::ptr_eq(source_parent, &destination_parent);
 
         let native_source = filesystem.root().join("native-locked-directory");
         let native_destination = filesystem.root().join("native-renamed-directory");
@@ -7140,7 +7155,8 @@ mod tests {
             "native-locked-directory",
             destination_parent.as_ref(),
             "native-renamed-directory",
-        );
+        )
+        .map_err(std::io::Error::from);
         let remaining_native = if native_result.is_ok() {
             &native_destination
         } else {
@@ -7152,23 +7168,40 @@ mod tests {
         let renamed_result = filesystem
             .rename(resolved.target(), SandboxPath::at_root("renamed-directory"))
             .await;
-        assert!(
+        assert_eq!(
             renamed_result.is_ok(),
-            "mode-000 directory rename failed: adapter={renamed_result:?}, native={native_result:?}, \
-             source_parent={source_parent_key:?}, destination_parent={destination_parent_key:?}, \
-             same_parent_handle={same_parent_handle}",
-            source_parent_key = &source_parent_key.0,
-            destination_parent_key = &destination_parent_key.0,
+            native_result.is_ok(),
+            "the adapter rename must succeed exactly when the kernel rename succeeds: \
+             adapter={renamed_result:?}, native={native_result:?}"
+        );
+        assert_eq!(
+            renamed_result
+                .as_ref()
+                .err()
+                .and_then(FilesystemStorageError::io_error)
+                .map(std::io::Error::kind),
+            native_result.as_ref().err().map(std::io::Error::kind),
         );
 
-        let renamed = filesystem
-            .resolve_namespace_target(SandboxPath::at_root("renamed-directory"))
-            .await
-            .unwrap();
-        filesystem.remove_directory(renamed.target()).await.unwrap();
+        match renamed_result {
+            Ok(()) => {
+                let renamed = filesystem
+                    .resolve_namespace_target(SandboxPath::at_root("renamed-directory"))
+                    .await
+                    .unwrap();
+                filesystem.remove_directory(renamed.target()).await.unwrap();
+                drop(renamed);
+            }
+            Err(_) => {
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+                filesystem
+                    .remove_directory(resolved.target())
+                    .await
+                    .unwrap();
+            }
+        }
 
         drop(resolved);
-        drop(renamed);
         <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
             .await
             .unwrap();

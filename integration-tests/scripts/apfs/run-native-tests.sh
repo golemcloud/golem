@@ -20,7 +20,7 @@ cleanup() {
   if [[ ${attach_attempted} == true ]]; then
     if ! hdiutil detach "${mount_point}" > "${fixture}/detach.log" 2>&1; then
       echo "Could not detach the fixture; retained ${fixture}" >&2
-      while IFS= read -r line; do printf '%s\n' "${line}" >&2; done < "${fixture}/detach.log"
+      cat "${fixture}/detach.log" >&2
       if [[ ${result} -eq 0 ]]; then result=1; fi
       exit "${result}"
     fi
@@ -32,14 +32,14 @@ trap cleanup EXIT
 
 if ! hdiutil create -size 32m -fs HFS+ -type SPARSE -volname golem-apfs-refusal \
   "${fixture}/non-cloning-volume.sparseimage" > "${fixture}/create.log" 2>&1; then
-  while IFS= read -r line; do printf '%s\n' "${line}" >&2; done < "${fixture}/create.log"
+  cat "${fixture}/create.log" >&2
   exit 1
 fi
 mkdir "${mount_point}"
 attach_attempted=true
 if ! hdiutil attach "${fixture}/non-cloning-volume.sparseimage" -nobrowse -owners on \
   -mountpoint "${mount_point}" > "${fixture}/attach.log" 2>&1; then
-  while IFS= read -r line; do printf '%s\n' "${line}" >&2; done < "${fixture}/attach.log"
+  cat "${fixture}/attach.log" >&2
   exit 1
 fi
 

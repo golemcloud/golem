@@ -228,13 +228,14 @@ For the macOS seed synchronization policy, see
 [macOS seed synchronization](../../../../golem-worker-executor/worker-executor-walkthrough.html#macos-seed-synchronization).
 Changes to macOS seed synchronization must cover `Apfs`, `Directory` and `Temporary`: plain
 native `fsync` for each seeded regular file and the required scoped namespace `fsync` calls.
-Each fresh macOS filesystem has one precreated, unlinked regular-file descriptor owned by
-`NativeRoot`. Check that admission pins the root descriptor and the flusher descriptor atomically,
-and every admitted batch attempts one final `F_FULLFSYNC` through the pinned flusher. Include
-empty, symlink-only and directory-only batches, and batches that fail early. Verify that flush
+Each fresh macOS filesystem has one `seed_flusher`, an unlinked regular file that `NativeRoot`
+creates and owns. A root on another platform has no `seed_flusher`. Check that admission pins the
+root directory and its `seed_flusher` together, and every admitted batch attempts one final
+`F_FULLFSYNC` through the pinned `seed_flusher`. Include empty, symlink-only and directory-only
+batches, and batches that fail early. Verify that flush
 finalization creates no per-batch directory entry, does not change the root's modification time,
 works without a writable root, and cannot be redirected by pathname replacement. Distinguish
-a setup or admission failure before obtaining the pair, which has no pinned flusher to flush.
+a setup or admission failure before admission, which has no pinned `seed_flusher` to flush.
 Check that the namespace and batch finalizers attempt every required synchronization after an
 admitted batch error while preserving the first error. Keep Linux seed
 synchronization and explicit guest flush behavior unchanged. These are correctness checks,
@@ -248,8 +249,11 @@ The other native cases use the runner's existing volume. The script detaches and
 fixture after the run. A failed detach retains the fixture and fails the job. Worker tests spawn
 no fixture processes. Native CI needs no Lima VM, WASM, built-in artifact or Redis dependency.
 
-For broader local verification, use these commands. They also select portable helpers and the
-shared executor integration cases that ordinary or Linux CI covers:
+For broader local verification on macOS, use these commands. The first and the third also select
+portable helpers that the ordinary unit suite covers. The second runs the only `local_filesystem`
+case, `apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay`. That case is macOS-only and
+no CI job runs it, so run it locally after a change to APFS capture or restore. It needs the
+fixture that the end of this section names:
 
 ```shell
 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- sandbox_filesystem:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
@@ -257,7 +261,7 @@ RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worke
 cargo test --locked -j 4 --profile dev-ci -p golem --lib -- filesystem_config:: command_handler:: launch:: --test-threads 1 --report-time
 ```
 
-The library module filters automatically select all new portable and macOS seed helper tests
+The library module filters automatically select every portable and macOS seed helper test
 in those modules, without a naming prefix or a per-test filter edit. They cover the clone test
 in `sandbox_filesystem::apfs::tests`, the startup probe, conservative filename coordination,
 the configuration round trip and the capture pressure check.
@@ -275,6 +279,11 @@ The `apfs_alias_renamed_initial_file` cases rename a read-only initial file or a
 an intermediate path to a Unicode alias. They check that capture keeps the stored spelling and bytes,
 leaves the declaration out of `left_out`, and restores the same tree. The case-only test runs that
 history when the existing volume has case-insensitive lookup; it reports the observed case mode.
+`apfs_capture_of_a_tree_with_hard_links_restores_the_link_groups` builds a tree through lifecycle
+calls: a new file and a hard link to it, a hard link to a read-only initial file, a renamed file, a
+deleted file, and a moved directory that holds the read-only initial file. It checks the two link
+groups of the source, then captures the tree, restores it into a new agent on APFS and compares
+both trees, link groups included.
 The portable `capture_spelling_` cases check raw name comparisons, per-parent reuse, root-to-leaf
 targets, error propagation and closing after a failed listing. The scripted opaque-facts test separates
 a positive lookup proof from a canonical coordination label, even when the label matches the raw name.
@@ -282,7 +291,8 @@ a positive lookup proof from a canonical coordination label, even when the label
 copies, unflushed writes, exclusions and hard-link groups through the sandbox operations.
 `apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload` checks capture admission.
 The native CI selection covers APFS cloning and lookup, the shared macOS seed effects, the
-permission regression, capture pressure, and capture and restore with native spelling.
+permission regression, capture pressure, and capture and restore with native spelling and with
+hard links.
 Compilation runs in a separate job, so a failed test does not prevent the successful build from
 saving its dependency cache. The ordinary unit suite keeps portable decisions and configuration
 coverage; the Linux runner keeps the shared managed and reflink XFS recovery cases.

@@ -2896,33 +2896,56 @@ async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_resul
             )),
         ),
     ]);
-    futures::stream::iter(proofs).for_each(|(hint, proof)| async move {
-        let (filesystem, control, window) = metered_resident().await;
-        let generation_handle = resident_generation_handle(&filesystem);
-        control.push_namespace_resolution(1, "source", hint);
-        control.push_namespace_resolution(1, "existing", None);
-        control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-        control.push_hard_link(Err(sandbox_error("hard link", std::io::ErrorKind::AlreadyExists)));
-        control.push_get_attributes(proof);
-        let linked = edit_namespace(&generation_handle, NamespaceEdit::Link {
-            source: PathTarget::at_root(&generation_handle, "source").unwrap(),
-            destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
-        }).unwrap().await;
-        assert!(matches!(linked, Err(Error::Sandbox(ref error)) if error.io_kind() == Some(std::io::ErrorKind::AlreadyExists)), "{linked:?}");
-        assert!(!filesystem_activity(&filesystem).has_terminal_failure());
-        assert_eq!(call_count(&control, "hard_link("), 1);
-        assert_eq!(call_count(&control, "get_path_attributes("), 2);
-        assert_hard_link_source_probe(&control.calls().into_boxed_slice());
-        control.push_get_attributes(Err(missing("directory before the insert")));
-        control.push_create_directory(Ok(()));
-        edit_namespace(&generation_handle, NamespaceEdit::Insert {
-            destination: PathTarget::at_root(&generation_handle, "after-refused-link").unwrap(),
-            object: NewObject::Directory,
-        }).unwrap().await.unwrap();
-        close_window(window, Instant::now() + Duration::from_secs(1)).await.unwrap();
-        control.push_delete_and_verify(Ok(()));
-        delete(seal(filesystem)).await.unwrap();
-    }).await;
+    futures::stream::iter(proofs)
+        .for_each(|(hint, proof)| async move {
+            let (filesystem, control, window) = metered_resident().await;
+            let generation_handle = resident_generation_handle(&filesystem);
+            control.push_namespace_resolution(1, "source", hint);
+            control.push_namespace_resolution(1, "existing", None);
+            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+            control.push_hard_link(Err(sandbox_error(
+                "hard link",
+                std::io::ErrorKind::AlreadyExists,
+            )));
+            control.push_get_attributes(proof);
+            let linked = edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                    destination: PathTarget::at_root(&generation_handle, "existing").unwrap(),
+                },
+            )
+            .unwrap()
+            .await;
+            let expected = Some(std::io::ErrorKind::AlreadyExists);
+            assert!(
+                matches!(linked, Err(Error::Sandbox(ref error)) if error.io_kind() == expected),
+                "{linked:?}"
+            );
+            assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+            assert_eq!(call_count(&control, "hard_link("), 1);
+            assert_eq!(call_count(&control, "get_path_attributes("), 2);
+            assert_hard_link_source_probe(&control.calls().into_boxed_slice());
+            control.push_get_attributes(Err(missing("directory before the insert")));
+            control.push_create_directory(Ok(()));
+            edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Insert {
+                    destination: PathTarget::at_root(&generation_handle, "after-refused-link")
+                        .unwrap(),
+                    object: NewObject::Directory,
+                },
+            )
+            .unwrap()
+            .await
+            .unwrap();
+            close_window(window, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            delete(seal(filesystem)).await.unwrap();
+        })
+        .await;
 }
 
 #[test]

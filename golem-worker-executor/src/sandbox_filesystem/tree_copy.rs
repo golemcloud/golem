@@ -470,9 +470,23 @@ fn seed_file(
     directory: &cap_std::fs::Dir,
     destination: &Path,
 ) -> std::io::Result<()> {
+    seed_in_parent(context, directory, destination, |parent, name| {
+        seed_file_resolved(context, source_directory, source, parent, name)
+    })
+}
+
+/// Makes the missing parent directories of `destination` under `directory`, and runs `seed` with
+/// the parent and the name of `destination`. Then, also when `seed` fails, it syncs the parent as
+/// the policy of `context` sets for a seed entry.
+fn seed_in_parent(
+    context: SeedContext,
+    directory: &cap_std::fs::Dir,
+    destination: &Path,
+    seed: impl FnOnce(&cap_std::fs::Dir, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let (parent, name) = create_capability_copy_parent(directory, destination, context.policy)?;
     finalize_operation(
-        || seed_file_resolved(context, source_directory, source, parent.as_dir(), &name),
+        || seed(parent.as_dir(), &name),
         || {
             sync_seed_directories(
                 context.policy.directory_action(SeedDirectoryStage::Entry),
@@ -494,35 +508,24 @@ fn seed_file_resolved(
     let temporary = create_seed_file(context.policy.transfer, parent, &source_file)?;
     temporary.finish(|temporary| {
         let action = context.policy.file;
-        let temporary_file = match temporary.as_file().try_clone() {
-            Ok(file) => file.into_std(),
-            Err(error) => {
-                if action == SeedFileSyncAction::Ordinary {
-                    return finish_operation(Err(error), || temporary.sync_ordinary());
-                }
-                return Err(error);
-            }
-        };
+        let file = temporary.as_file();
         let transfer = || {
-            transfer_seed_file(
-                context.policy.transfer,
-                &source_file,
-                &temporary_file,
-                temporary.as_file_mut(),
-            )
+            let target = file.try_clone()?.into_std();
+            transfer_file(context.policy.transfer, &source_file, &target)?;
+            Ok(target)
         };
-        let attributes = || {
-            temporary_file.set_permissions(seeded_permissions(
-                host_permissions(&source.permissions, &temporary_file)?,
+        let attributes = |target: &File| {
+            target.set_permissions(seeded_permissions(
+                host_permissions(&source.permissions, target)?,
                 context.access,
             ))?;
             if let Some(modified) = source.modified {
-                temporary_file.set_modified(modified)?;
+                target.set_modified(modified)?;
             }
             Ok(())
         };
         prepare_seed_file(action, transfer, attributes, || {
-            sync_seed_file(action, &temporary_file)
+            sync_seed_file(action, file)
         })?;
         // `CreateNew` makes the name with one no-clobber call. Its `AlreadyExists` error applies the
         // `Refuse` row of `placement_action` for every object that is already there, atomically.
@@ -546,17 +549,9 @@ fn seed_symlink(
     link_target: &Path,
     modified: Option<SystemTime>,
 ) -> std::io::Result<()> {
-    let (parent, name) = create_capability_copy_parent(directory, destination, context.policy)?;
-    finalize_operation(
-        || seed_symlink_resolved(context, parent.as_dir(), &name, link_target, modified),
-        || {
-            sync_seed_directories(
-                context.policy.directory_action(SeedDirectoryStage::Entry),
-                || Ok(()),
-                || sync_ordinary_descriptor(parent.as_dir()),
-            )
-        },
-    )
+    seed_in_parent(context, directory, destination, |parent, name| {
+        seed_symlink_resolved(context, parent, name, link_target, modified)
+    })
 }
 
 fn seed_symlink_resolved(
@@ -949,6 +944,12 @@ pub(super) fn native_seed_sync_platform() -> SeedSyncPlatform {
     }
 }
 
+/// Whether a sandbox root on `platform` keeps a seed_flusher, the unlinked regular file that the
+/// full flush of a seed batch goes through.
+pub(super) fn root_keeps_seed_flusher(platform: SeedSyncPlatform) -> bool {
+    platform == SeedSyncPlatform::MacOs
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SeedFileSyncAction {
     Standard,
@@ -964,7 +965,7 @@ fn seed_file_sync_action(platform: SeedSyncPlatform, transfer: FileTransfer) -> 
     }
 }
 
-pub(super) fn file_transfer_action(
+pub(super) fn platform_file_transfer(
     platform: SeedSyncPlatform,
     transfer: FileTransfer,
 ) -> FileTransfer {
@@ -1009,18 +1010,6 @@ fn macos_clone_unavailable() -> std::io::Error {
     )
 }
 
-fn transfer_seed_file(
-    transfer: FileTransfer,
-    source: &File,
-    target: &File,
-    temporary: &mut cap_std::fs::File,
-) -> std::io::Result<()> {
-    match transfer {
-        FileTransfer::Bytes => std::io::copy(&mut &*source, temporary).map(|_| ()),
-        _ => transfer_file(transfer, source, target),
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct SeedSyncPolicy {
     transfer: FileTransfer,
@@ -1029,8 +1018,9 @@ pub(super) struct SeedSyncPolicy {
 }
 
 impl SeedSyncPolicy {
+    /// The policy of a seed on `platform`. `transfer` is what [`platform_file_transfer`] gives for
+    /// that platform.
     pub(super) fn new(platform: SeedSyncPlatform, transfer: FileTransfer) -> Self {
-        let transfer = file_transfer_action(platform, transfer);
         let file = seed_file_sync_action(platform, transfer);
         Self {
             transfer,
@@ -1048,7 +1038,7 @@ impl SeedSyncPolicy {
     }
 }
 
-fn sync_seed_file(action: SeedFileSyncAction, file: &File) -> std::io::Result<()> {
+fn sync_seed_file(action: SeedFileSyncAction, file: &cap_std::fs::File) -> std::io::Result<()> {
     match action {
         SeedFileSyncAction::Standard => file.sync_all(),
         SeedFileSyncAction::Ordinary => sync_ordinary_descriptor(file),
@@ -1070,24 +1060,24 @@ pub(super) fn sync_ordinary_descriptor<F: ?Sized>(_file: &F) -> std::io::Result<
     ))
 }
 
-fn prepare_seed_file(
+/// Runs the steps of one seeded file in the order that `action` sets. `transfer` gives the handle
+/// that `attributes` changes, so a failure to make that handle is a transfer failure.
+///
+/// `Standard` runs transfer, sync, attributes, and a failed step stops the steps after it.
+/// `Ordinary` runs the sync after the transfer and the attributes, also when one of them fails, and
+/// keeps the first error.
+fn prepare_seed_file<T>(
     action: SeedFileSyncAction,
-    transfer: impl FnOnce() -> std::io::Result<()>,
-    attributes: impl FnOnce() -> std::io::Result<()>,
+    transfer: impl FnOnce() -> std::io::Result<T>,
+    attributes: impl FnOnce(&T) -> std::io::Result<()>,
     sync: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     match action {
-        SeedFileSyncAction::Ordinary => finalize_operation(
-            || {
-                transfer()?;
-                attributes()
-            },
-            sync,
-        ),
+        SeedFileSyncAction::Ordinary => finalize_operation(|| attributes(&transfer()?), sync),
         SeedFileSyncAction::Standard => {
-            transfer()?;
+            let target = transfer()?;
             sync()?;
-            attributes()
+            attributes(&target)
         }
     }
 }
@@ -1164,14 +1154,6 @@ fn seed_directory_action(
             SeedDirectoryAction::None
         }
     }
-}
-
-/// Attempts the finalizer even after a failed operation and keeps the earliest error.
-pub(super) fn finish_operation<T, E>(
-    result: Result<T, E>,
-    finalize: impl FnOnce() -> Result<(), E>,
-) -> Result<T, E> {
-    finish_unwinding(Ok(result), finalize)
 }
 
 /// Runs cleanup before resuming the original panic, even if cleanup also panics.
@@ -1264,13 +1246,15 @@ pub(super) fn sync_seed_batch(
         SeedBatchAction::None => Ok(()),
         SeedBatchAction::LinuxVolume => sync_seed_linux_volume(root_path),
         SeedBatchAction::MacFullFlush => {
-            let root = admitted.ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotConnected,
-                    "macOS seed batch root was not admitted",
-                )
-            })?;
-            sync_seed_mac_full_flush(root)
+            let (root, seed_flusher) = admitted
+                .and_then(|root| Some((root, root.seed_flusher.as_deref()?)))
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotConnected,
+                        "macOS seed batch root was not admitted with a seed_flusher",
+                    )
+                })?;
+            sync_seed_mac_full_flush(&root.directory, seed_flusher)
         }
         SeedBatchAction::Unavailable => Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
@@ -1293,16 +1277,22 @@ fn sync_seed_linux_volume(_path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn sync_seed_mac_full_flush(root: &NativeRootHandles) -> std::io::Result<()> {
+fn sync_seed_mac_full_flush(
+    directory: &cap_std::fs::Dir,
+    seed_flusher: &cap_std::fs::File,
+) -> std::io::Result<()> {
     sync_seed_batch_submissions(
-        || sync_ordinary_descriptor(root.seed_flusher.as_ref()),
-        || sync_ordinary_descriptor(root.directory.as_ref()),
-        || rustix::fs::fcntl_fullfsync(root.seed_flusher.as_ref()).map_err(std::io::Error::from),
+        || sync_ordinary_descriptor(seed_flusher),
+        || sync_ordinary_descriptor(directory),
+        || rustix::fs::fcntl_fullfsync(seed_flusher).map_err(std::io::Error::from),
     )
 }
 
 #[cfg(not(target_os = "macos"))]
-fn sync_seed_mac_full_flush(_root: &NativeRootHandles) -> std::io::Result<()> {
+fn sync_seed_mac_full_flush(
+    _directory: &cap_std::fs::Dir,
+    _seed_flusher: &cap_std::fs::File,
+) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "macOS fullflush is unavailable on this platform",
@@ -1481,7 +1471,7 @@ mod tests {
                         Ok(())
                     }
                 },
-                || {
+                |_| {
                     calls.borrow_mut().push("attributes");
                     if attributes_fail {
                         Err(std::io::Error::other("attributes failed"))
@@ -1531,7 +1521,7 @@ mod tests {
                         calls.borrow_mut().push("transfer");
                         Ok(())
                     },
-                    || {
+                    |_| {
                         calls.borrow_mut().push("attributes");
                         if attributes_fail {
                             Err(std::io::Error::other("attributes failed"))
@@ -1556,14 +1546,13 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[test_r::tag(native_apfs)]
     fn ordinary_seed_file_sync_executes_the_selected_native_action() {
         use std::io::Write as _;
         let mut file = tempfile::tempfile().unwrap();
         file.write_all(b"ordinary seed synchronization").unwrap();
-        sync_seed_file(SeedFileSyncAction::Ordinary, &file).unwrap();
         let capability_file = cap_std::fs::File::from_std(file.try_clone().unwrap());
-        sync_ordinary_descriptor(&capability_file).unwrap();
+        sync_seed_file(SeedFileSyncAction::Ordinary, &capability_file).unwrap();
+        sync_ordinary_descriptor(&file).unwrap();
         assert_eq!(file.metadata().unwrap().len(), 29);
         assert_eq!(capability_file.metadata().unwrap().len(), 29);
     }
@@ -1589,9 +1578,11 @@ mod tests {
     #[test]
     fn unsupported_seed_batch_actions_return_errors_without_panicking() {
         let directory = tempfile::tempdir().unwrap();
+        // A root with a seed_flusher lets the macOS full flush reach its platform check.
         let root = NativeRoot::new(
             directory.path().to_path_buf(),
             File::open(directory.path()).unwrap(),
+            SeedSyncPlatform::MacOs,
         )
         .unwrap();
         let admitted = root.directory.lock().unwrap().as_ref().unwrap().clone();
@@ -1630,7 +1621,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_transfer_actions_convert_only_captured_macos_reflinks_to_clones() {
+    fn platform_file_transfer_converts_only_macos_reflinks_to_clones() {
         use FileTransfer::{Bytes, Clone, Reflink, ReflinkIntoProject};
         use SeedSyncPlatform::{Linux, MacOs, Other};
         let project = ReflinkIntoProject(NonZeroU32::new(7).unwrap());
@@ -1651,16 +1642,17 @@ mod tests {
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
             assert_eq!(
-                SeedSyncPolicy::new(platform, transfer).transfer,
-                expected,
-                "{platform:?} {transfer:?}"
-            );
-            assert_eq!(
-                file_transfer_action(platform, transfer),
+                platform_file_transfer(platform, transfer),
                 expected,
                 "{platform:?} {transfer:?}"
             );
         });
+    }
+
+    /// The seed policy on `platform` of a sandbox whose files get `transfer` before
+    /// [`platform_file_transfer`] applies the rule of the platform.
+    fn seed_policy(platform: SeedSyncPlatform, transfer: FileTransfer) -> SeedSyncPolicy {
+        SeedSyncPolicy::new(platform, platform_file_transfer(platform, transfer))
     }
 
     #[test]
@@ -1685,7 +1677,7 @@ mod tests {
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
             assert_eq!(
-                SeedSyncPolicy::new(platform, transfer).file,
+                seed_policy(platform, transfer).file,
                 expected,
                 "{platform:?} {transfer:?}"
             );
@@ -1713,7 +1705,7 @@ mod tests {
         ]
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
-            let policy = SeedSyncPolicy::new(platform, transfer);
+            let policy = seed_policy(platform, transfer);
             assert_eq!(policy.batch, expected, "{platform:?} {transfer:?}");
             assert_eq!(
                 policy.requires_batch_root(),
@@ -1795,7 +1787,7 @@ mod tests {
         ]
         .into_iter()
         .for_each(|(platform, transfer, expected)| {
-            let policy = SeedSyncPolicy::new(platform, transfer);
+            let policy = seed_policy(platform, transfer);
             assert_eq!(
                 stages.map(|stage| policy.directory_action(stage)),
                 expected,
@@ -1867,25 +1859,31 @@ mod tests {
                     std::io::ErrorKind::PermissionDenied,
                     stage,
                 ));
-                let cleaned = finish_operation(seeded, || {
-                    attempts.borrow_mut().push("cleanup");
-                    Err(std::io::Error::other("cleanup"))
-                });
-                let result = finish_operation(cleaned, || {
-                    attempts.borrow_mut().push("parent sync");
-                    Err(std::io::Error::other("parent sync"))
-                });
+                let cleaned = finalize_operation(
+                    || seeded,
+                    || {
+                        attempts.borrow_mut().push("cleanup");
+                        Err(std::io::Error::other("cleanup"))
+                    },
+                );
+                let result = finalize_operation(
+                    || cleaned,
+                    || {
+                        attempts.borrow_mut().push("parent sync");
+                        Err(std::io::Error::other("parent sync"))
+                    },
+                );
                 assert_eq!(*attempts.borrow(), ["cleanup", "parent sync"]);
                 let error = result.unwrap_err();
                 assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
                 assert_eq!(error.to_string(), stage);
             });
-        let result = finish_operation(Ok(17), || Err(std::io::Error::other("cleanup")));
+        let result = finalize_operation(|| Ok(17), || Err(std::io::Error::other("cleanup")));
         assert_eq!(result.unwrap_err().to_string(), "cleanup");
-        let result = finish_operation(Ok(17), || Err(std::io::Error::other("sync")));
+        let result = finalize_operation(|| Ok(17), || Err(std::io::Error::other("sync")));
         assert_eq!(result.unwrap_err().to_string(), "sync");
         assert_eq!(
-            finish_operation::<_, std::io::Error>(Ok(17), || Ok(())).unwrap(),
+            finalize_operation::<_, std::io::Error>(|| Ok(17), || Ok(())).unwrap(),
             17
         );
     }
@@ -1893,11 +1891,13 @@ mod tests {
     #[test]
     fn seed_batch_finalization_runs_after_failure_and_keeps_the_seed_error() {
         let synced = std::cell::Cell::new(false);
-        let result = finish_operation(
-            Err::<(), _>(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "seed",
-            )),
+        let result = finalize_operation(
+            || {
+                Err::<(), _>(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "seed",
+                ))
+            },
             || {
                 synced.set(true);
                 Err(std::io::Error::other("volume sync"))
@@ -1968,8 +1968,8 @@ mod tests {
                 || {
                     finalize_operation(
                         || {
-                            finish_operation(
-                                Err::<(), _>(std::io::Error::other("earlier operation error")),
+                            finalize_operation(
+                                || Err::<(), _>(std::io::Error::other("earlier operation error")),
                                 || {
                                     attempts.borrow_mut().push("cleanup");
                                     panic!("later cleanup panic")
@@ -2212,7 +2212,7 @@ mod tests {
         std::io::Write::write_all(&mut &source, b"selected capture transfer").unwrap();
         let destination = tempfile::tempdir().unwrap();
         let target = destination.path().join("file").into_boxed_path();
-        let transfer = file_transfer_action(SeedSyncPlatform::Linux, FileTransfer::Reflink);
+        let transfer = platform_file_transfer(SeedSyncPlatform::Linux, FileTransfer::Reflink);
         assert_eq!(transfer, FileTransfer::Reflink);
         let error = copy_new_file(transfer, &source, &target).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
@@ -2712,7 +2712,7 @@ mod tests {
             let destination = tempfile::tempdir().unwrap();
             let base = open(destination.path());
             let context = SeedContext {
-                policy: SeedSyncPolicy::new(native_seed_sync_platform(), transfer),
+                policy: seed_policy(native_seed_sync_platform(), transfer),
                 access: SeedAccess::ReadOnly,
                 placement: SeedPlacement::CreateNew,
             };
@@ -2761,7 +2761,7 @@ mod tests {
             let destination = tempfile::tempdir().unwrap();
             let base = open(destination.path());
             let context = SeedContext {
-                policy: SeedSyncPolicy::new(native_seed_sync_platform(), transfer),
+                policy: seed_policy(native_seed_sync_platform(), transfer),
                 access: SeedAccess::FromSource,
                 placement: SeedPlacement::CreateNew,
             };
@@ -2819,7 +2819,7 @@ mod tests {
             let mut entry = listed("merged", None);
             entry.kind = TreeEntryKind::Directory;
             let context = SeedContext {
-                policy: SeedSyncPolicy::new(native_seed_sync_platform(), transfer),
+                policy: seed_policy(native_seed_sync_platform(), transfer),
                 access: SeedAccess::FromSource,
                 placement: SeedPlacement::CreateNew,
             };
@@ -2853,7 +2853,7 @@ mod tests {
                 let modified = UNIX_EPOCH + Duration::from_secs(1_234_567);
                 entry.modified = Some(modified);
                 let result = set_seeded_directory_attributes(
-                    SeedSyncPolicy::new(SeedSyncPlatform::MacOs, transfer),
+                    seed_policy(SeedSyncPlatform::MacOs, transfer),
                     &base,
                     Path::new("made"),
                     &entry,

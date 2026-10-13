@@ -30,7 +30,7 @@ const VALIDATION_ONLY_REPOSITORY_KEY: &str = concat!(
 );
 
 #[derive(Clone, Copy)]
-pub(crate) enum LocalPlatform {
+enum LocalPlatform {
     MacOs,
     Other,
 }
@@ -276,34 +276,36 @@ mod tests {
     #[test]
     fn root_default_follows_the_selected_mode_without_configuration_io() {
         let root: Box<std::path::Path> = std::path::Path::new("requested-agents").into();
-        let rooted_modes = &[
+        [
             FilesystemStorageModeKind::Directory,
             FilesystemStorageModeKind::ManagedXfs,
             FilesystemStorageModeKind::ReflinkXfs,
             FilesystemStorageModeKind::Apfs,
-        ];
-        for &mode in rooted_modes {
+        ]
+        .into_iter()
+        .for_each(|mode| {
             assert_eq!(
                 super::root_default(mode, Some(root.clone())),
                 Some(root.clone()),
             );
             assert!(super::root_default(mode, None).is_none());
-        }
+        });
         assert!(super::root_default(FilesystemStorageModeKind::Temporary, Some(root)).is_none());
         assert!(super::root_default(FilesystemStorageModeKind::Temporary, None).is_none());
     }
 
     #[test]
     fn repository_key_need_depends_only_on_mode_and_key_presence() {
-        let cases = &[
+        [
             (FilesystemSnapshotsKind::Enabled, false, true),
             (FilesystemSnapshotsKind::Enabled, true, false),
             (FilesystemSnapshotsKind::Disabled, false, false),
             (FilesystemSnapshotsKind::Disabled, true, false),
-        ];
-        for &(mode, configured, expected) in cases {
+        ]
+        .into_iter()
+        .for_each(|(mode, configured, expected)| {
             assert_eq!(super::repository_key_needed(mode, configured), expected);
-        }
+        });
     }
 
     #[test]
@@ -316,13 +318,14 @@ mod tests {
             super::exact_path_action(Err(std::io::ErrorKind::NotFound.into())).unwrap(),
             super::ExactPathAction::AllowMissing,
         );
-        let errors = &[
+        [
             std::io::ErrorKind::PermissionDenied,
             std::io::ErrorKind::NotADirectory,
             std::io::ErrorKind::InvalidData,
             std::io::ErrorKind::Other,
-        ];
-        for &kind in errors {
+        ]
+        .into_iter()
+        .for_each(|kind| {
             let error = super::exact_path_action(Err(std::io::Error::new(
                 kind,
                 "exact-path inspection failed",
@@ -330,7 +333,7 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.kind(), kind);
             assert_eq!(error.to_string(), "exact-path inspection failed");
-        }
+        });
     }
 
     #[cfg(unix)]
@@ -345,17 +348,18 @@ mod tests {
 
     #[test]
     fn repository_key_creation_requires_an_underlying_io_not_found() {
-        let cases = &[
+        [
             (std::io::ErrorKind::NotFound, true),
             (std::io::ErrorKind::PermissionDenied, false),
             (std::io::ErrorKind::InvalidData, false),
             (std::io::ErrorKind::Other, false),
-        ];
-        for &(kind, expected) in cases {
+        ]
+        .into_iter()
+        .for_each(|(kind, expected)| {
             let error = anyhow::Error::new(std::io::Error::from(kind))
                 .context("Failed to read the retained repository key");
             assert_eq!(super::repository_key_creation_allowed(&error), expected);
-        }
+        });
         assert!(!super::repository_key_creation_allowed(&anyhow::anyhow!(
             "No such file or directory"
         )));
@@ -368,17 +372,16 @@ mod tests {
             super::validate_retained_repository_key(key.clone()).unwrap(),
             key,
         );
-        let invalid_keys = &["corrupt", "2a", ""];
-        for &key in invalid_keys {
+        ["corrupt", "2a", ""].into_iter().for_each(|key| {
             assert!(super::validate_retained_repository_key(key.into()).is_err());
-        }
+        });
     }
 
     #[test]
     fn local_server_default_policy_matches_the_platform_and_requested_root() {
         let data_dir = std::path::Path::new("local-data");
         let requested_root = std::path::Path::new("cli-agents");
-        let cases: &[_] = &[
+        [
             (
                 LocalPlatform::MacOs,
                 None,
@@ -409,18 +412,21 @@ mod tests {
                 FilesystemSnapshotsKind::Disabled,
                 Some(Box::<std::path::Path>::from(requested_root)),
             ),
-        ];
-        for &(platform, requested, storage_mode, snapshots_mode, ref root) in cases {
-            let defaults = super::local_defaults(platform, requested, data_dir);
-            assert_eq!(
-                (
-                    defaults.storage_mode,
-                    defaults.snapshots_mode,
-                    defaults.root.as_deref(),
-                ),
-                (storage_mode, snapshots_mode, root.as_deref()),
-            );
-        }
+        ]
+        .into_iter()
+        .for_each(
+            |(platform, requested, storage_mode, snapshots_mode, root)| {
+                let defaults = super::local_defaults(platform, requested, data_dir);
+                assert_eq!(
+                    (
+                        defaults.storage_mode,
+                        defaults.snapshots_mode,
+                        defaults.root.as_deref(),
+                    ),
+                    (storage_mode, snapshots_mode, root.as_deref()),
+                );
+            },
+        );
     }
 
     #[test]

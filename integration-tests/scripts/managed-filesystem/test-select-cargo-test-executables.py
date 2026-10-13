@@ -28,6 +28,10 @@ class SelectExecutables(unittest.TestCase):
             "executable": executable,
         }
 
+    def assert_rejects_lib(self, messages):
+        with self.assertRaisesRegex(ValueError, "exactly one lib"):
+            selector.select_executables(messages, self.root, ("lib",))
+
     def test_selects_only_the_requested_library(self):
         messages = (self.artifact("integration", "integration"), self.artifact("lib", "lib"))
         self.assertEqual(selector.select_executables(messages, self.root, ("lib",)), {"lib": "lib"})
@@ -40,10 +44,8 @@ class SelectExecutables(unittest.TestCase):
         )
 
     def test_rejects_missing_and_multiple_artifacts(self):
-        cases = ((), (self.artifact("lib", "first"), self.artifact("lib", "second")))
-        for messages in cases:
-            with self.subTest(messages=messages), self.assertRaisesRegex(ValueError, "exactly one lib"):
-                selector.select_executables(messages, self.root, ("lib",))
+        self.assert_rejects_lib(())
+        self.assert_rejects_lib((self.artifact("lib", "first"), self.artifact("lib", "second")))
 
     def test_ignores_duplicate_messages_for_the_same_artifact(self):
         artifact = self.artifact("lib", "lib")
@@ -52,19 +54,17 @@ class SelectExecutables(unittest.TestCase):
     def test_rejects_a_target_from_another_package(self):
         artifact = self.artifact("lib", "lib")
         artifact["target"]["src_path"] = os.path.join(self.root, "other-package", "src", "lib.rs")
-        with self.assertRaisesRegex(ValueError, "exactly one lib"):
-            selector.select_executables((artifact,), self.root, ("lib",))
+        self.assert_rejects_lib((artifact,))
 
     def test_requires_a_test_executable(self):
         artifact = self.artifact("lib", "lib")
-        for field, value in (("profile", {"test": False}), ("executable", None)):
-            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "exactly one lib"):
-                selector.select_executables((dict(artifact, **{field: value}),), self.root, ("lib",))
+        self.assert_rejects_lib((dict(artifact, profile={"test": False}),))
+        self.assert_rejects_lib((dict(artifact, executable=None),))
 
     def test_rejects_invalid_requests(self):
-        for requested in ((), ("lib", "lib"), ("unknown",)):
-            with self.subTest(requested=requested), self.assertRaises(ValueError):
-                selector.select_executables((), self.root, requested)
+        self.assertRaises(ValueError, selector.select_executables, (), self.root, ())
+        self.assertRaises(ValueError, selector.select_executables, (), self.root, ("lib", "lib"))
+        self.assertRaises(ValueError, selector.select_executables, (), self.root, ("unknown",))
 
 
 if __name__ == "__main__":

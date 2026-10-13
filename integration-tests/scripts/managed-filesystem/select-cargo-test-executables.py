@@ -16,46 +16,58 @@ def select_executables(messages, repo_root, requested):
         raise ValueError("request each test target exactly once")
     if any(label not in TARGETS for label in requested):
         raise ValueError(f"unknown test target; expected one of {sorted(TARGETS)}")
-    matches = {label: set() for label in requested}
     expected_sources = {
         label: os.path.join(repo_root, TARGETS[label][2]) for label in requested
     }
-    for message in messages:
-        if message.get("reason") != "compiler-artifact":
-            continue
-        if not message.get("profile", {}).get("test"):
-            continue
-        target = message.get("target", {})
-        for label in requested:
-            name, kind, _ = TARGETS[label]
-            if target.get("name") != name or target.get("kind") != kind:
-                continue
-            if os.path.realpath(target.get("src_path", "")) != expected_sources[label]:
-                continue
-            executable = message.get("executable")
-            if executable is not None:
-                matches[label].add(executable)
-    selected = {}
-    for label, executables in matches.items():
-        if len(executables) != 1:
-            raise ValueError(
-                f"expected exactly one {label} test executable from Cargo, got {sorted(executables)}"
-            )
-        selected[label] = executables.pop()
-    return selected
+    artifacts = [
+        (message.get("target", {}), message.get("executable"))
+        for message in messages
+        if message.get("reason") == "compiler-artifact"
+        and message.get("profile", {}).get("test")
+    ]
+    matches = {
+        label: {
+            executable
+            for target, executable in artifacts
+            if executable is not None
+            and target.get("name") == TARGETS[label][0]
+            and target.get("kind") == TARGETS[label][1]
+            and os.path.realpath(target.get("src_path", "")) == expected_sources[label]
+        }
+        for label in requested
+    }
+    unmatched = next(
+        (
+            (label, executables)
+            for label, executables in matches.items()
+            if len(executables) != 1
+        ),
+        None,
+    )
+    if unmatched is not None:
+        label, executables = unmatched
+        raise ValueError(
+            f"expected exactly one {label} test executable from Cargo, got {sorted(executables)}"
+        )
+    return {label: next(iter(executables)) for label, executables in matches.items()}
+
+
+def parse_message(line_number, line):
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"invalid Cargo JSON message on line {line_number}: {error}"
+        ) from error
 
 
 def read_messages(path):
     with open(path, encoding="utf-8") as messages:
-        for line_number, line in enumerate(messages, 1):
-            if not line.strip():
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError as error:
-                raise ValueError(
-                    f"invalid Cargo JSON message on line {line_number}: {error}"
-                ) from error
+        yield from (
+            parse_message(line_number, line)
+            for line_number, line in enumerate(messages, 1)
+            if line.strip()
+        )
 
 
 def main():
@@ -66,12 +78,20 @@ def main():
     selected = select_executables(
         read_messages(sys.argv[1]), os.path.realpath(sys.argv[2]), sys.argv[3:]
     )
-    for label, executable in selected.items():
-        if not os.path.isfile(executable) or not os.access(executable, os.X_OK):
-            raise ValueError(
-                f"Cargo emitted a missing or non-executable {label} test artifact: {executable}"
-            )
-        print(f"{label}\t{executable}")
+    unusable = next(
+        (
+            (label, executable)
+            for label, executable in selected.items()
+            if not os.path.isfile(executable) or not os.access(executable, os.X_OK)
+        ),
+        None,
+    )
+    if unusable is not None:
+        label, executable = unusable
+        raise ValueError(
+            f"Cargo emitted a missing or non-executable {label} test artifact: {executable}"
+        )
+    print("\n".join(f"{label}\t{executable}" for label, executable in selected.items()))
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ pub(crate) struct StoreKey(());
 /// The store that the calls go to.
 pub(super) enum StoreOf<'a> {
     /// The store on the blob storage, with the key and the settings of the configuration.
-    Enabled(
+    Blob(
         Arc<dyn golem_service_base::storage::blob::BlobStorage>,
         &'a FilesystemSnapshotStoreConfig,
     ),
@@ -400,7 +400,7 @@ impl StoreCalls {
         jobs: TaskTracker,
     ) -> Self {
         let store = match store {
-            StoreOf::Enabled(storage, config) => {
+            StoreOf::Blob(storage, config) => {
                 crate::filesystem_snapshot::store(storage, config, StoreKey(()))
             }
             #[cfg(any(test, feature = "test-utils"))]

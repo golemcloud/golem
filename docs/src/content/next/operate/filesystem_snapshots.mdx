@@ -28,7 +28,7 @@ Choose the backend with `[filesystem_storage.mode]`:
 
 ## Local development on macOS
 
-The local `golem server run` command on macOS uses `Apfs` at `<data_dir>/agents` and enables `Enabled` filesystem snapshots by default. It uses local file system blob storage at `<data_dir>/blobs` and supplies the repository key. No TOML file or environment settings are needed:
+The local `golem server run` command on macOS uses `Apfs` at `<data_dir>/agents` and sets `filesystem_snapshots` to `Enabled` by default. It uses local file system blob storage at `<data_dir>/blobs` and supplies the repository key. No TOML file or environment settings are needed:
 
 ```shell
 golem server run --data-dir .golem/data
@@ -62,7 +62,7 @@ export GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
 golem server run --data-dir .golem/data
 ```
 
-There is no second switch for local filesystem snapshots. The macOS local server enables `Enabled` by default. A standalone executor must configure it. Setting `Enabled` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
+There is no second switch for local filesystem snapshots. The macOS local server sets `filesystem_snapshots` to `Enabled` by default. A standalone executor must configure it. Setting `Enabled` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
 
 When no `repository_key` is configured, the local server generates a 64-byte repository key and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`. On Unix, it creates the file with permissions `0600`. It uses the retained repository key on later starts. A configured `repository_key` takes precedence over this file. Without a configured key, a corrupt file makes startup fail; the server does not replace it. Keep the retained repository key with the local data. Replacing or deleting it prevents the server from reading snapshots made with it.
 

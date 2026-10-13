@@ -2194,8 +2194,7 @@ pub struct FilesystemStorageConfig {
 /// characters, then `-` and the BLAKE3 hash of the agent id. An empty agent name gives `agent`.
 /// The executor also makes the host directories `.scratch` and `.initial-files` directly under the
 /// root.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, strum_macros::EnumDiscriminants)]
-#[strum_discriminants(name(FilesystemStorageModeKind), derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config", deny_unknown_fields)]
 pub enum FilesystemStorageMode {
     /// Development storage in a new temporary directory for each agent filesystem.
@@ -2212,6 +2211,28 @@ pub enum FilesystemStorageMode {
     /// APFS storage for local development and tests on macOS. Copies are clones. The executor
     /// enforces no per-agent disk limit and measures no per-agent usage.
     Apfs { root: Box<Path> },
+}
+
+/// The `type` tag of a [`FilesystemStorageMode`], without its settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FilesystemStorageModeKind {
+    Temporary,
+    Directory,
+    ManagedXfs,
+    ReflinkXfs,
+    Apfs,
+}
+
+impl FilesystemStorageMode {
+    pub fn kind(&self) -> FilesystemStorageModeKind {
+        match self {
+            Self::Temporary => FilesystemStorageModeKind::Temporary,
+            Self::Directory { .. } => FilesystemStorageModeKind::Directory,
+            Self::ManagedXfs { .. } => FilesystemStorageModeKind::ManagedXfs,
+            Self::ReflinkXfs { .. } => FilesystemStorageModeKind::ReflinkXfs,
+            Self::Apfs { .. } => FilesystemStorageModeKind::Apfs,
+        }
+    }
 }
 
 impl SafeDisplay for FilesystemStorageMode {
@@ -2391,12 +2412,27 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_RESTORE_READER_THREADS: usize = 6;
 const DEFAULT_FILESYSTEM_SNAPSHOT_SAVE_THREADS: usize = 2;
 
 /// Tells whether the executor keeps filesystem snapshots, and gives the settings of the store.
-#[derive(Clone, Debug, Serialize, Deserialize, strum_macros::EnumDiscriminants)]
-#[strum_discriminants(name(FilesystemSnapshotsKind), derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum FilesystemSnapshotsConfig {
     Disabled(FilesystemSnapshotsDisabledConfig),
     Enabled(Box<FilesystemSnapshotStoreConfig>),
+}
+
+/// The `type` tag of a [`FilesystemSnapshotsConfig`], without its settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FilesystemSnapshotsKind {
+    Disabled,
+    Enabled,
+}
+
+impl FilesystemSnapshotsConfig {
+    pub fn kind(&self) -> FilesystemSnapshotsKind {
+        match self {
+            Self::Disabled(_) => FilesystemSnapshotsKind::Disabled,
+            Self::Enabled(_) => FilesystemSnapshotsKind::Enabled,
+        }
+    }
 }
 
 impl Default for FilesystemSnapshotsConfig {
@@ -3274,11 +3310,12 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 mod tests {
     use super::{
         DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
-        FilesystemSnapshotsKind, GolemConfig, InvocationResultsConfig, Limits, RetryConfig,
-        default_filesystem_snapshot_storage_retry,
+        FilesystemSnapshotsKind, FilesystemStorageMode, GolemConfig, InvocationResultsConfig,
+        Limits, RetryConfig, default_filesystem_snapshot_storage_retry,
     };
     use golem_common::SafeDisplay;
     use serde_json::{Value, json};
+    use std::path::Path;
     use std::time::Duration;
     use test_r::test;
 
@@ -3503,18 +3540,19 @@ mod tests {
 
     #[test]
     fn filesystem_snapshots_serialization_uses_enabled_and_disabled() {
-        let cases = &[
+        [
             (FilesystemSnapshotsKind::Enabled, "Enabled"),
             (FilesystemSnapshotsKind::Disabled, "Disabled"),
-        ];
-        for &(kind, name) in cases {
+        ]
+        .into_iter()
+        .for_each(|(kind, name)| {
             let encoded = serde_json::to_value(kind).unwrap();
             assert_eq!(encoded, json!(name));
             assert_eq!(
                 serde_json::from_value::<FilesystemSnapshotsKind>(encoded).unwrap(),
                 kind,
             );
-        }
+        });
         let config: FilesystemSnapshotsConfig = serde_json::from_value(json!({
             "type": "Enabled",
             "config": { "repository_key": KEY },
@@ -3529,14 +3567,38 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_rejects_the_removed_tag() {
-        assert!(serde_json::from_value::<FilesystemSnapshotsKind>(json!("Managed")).is_err());
-        let error = serde_json::from_value::<FilesystemSnapshotsConfig>(json!({
-            "type": "Managed",
-            "config": { "repository_key": KEY },
-        }))
-        .unwrap_err();
-        assert!(error.to_string().contains("unknown variant"));
+    fn filesystem_kinds_serialize_as_the_type_tags_of_their_owners() {
+        let root: Box<Path> = Path::new("agents").into();
+        [
+            FilesystemStorageMode::Temporary,
+            FilesystemStorageMode::Directory { root: root.clone() },
+            FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            FilesystemStorageMode::ReflinkXfs { root: root.clone() },
+            FilesystemStorageMode::Apfs { root },
+        ]
+        .into_iter()
+        .for_each(|mode| {
+            assert_eq!(
+                serde_json::to_value(&mode).unwrap()["type"],
+                serde_json::to_value(mode.kind()).unwrap(),
+                "{mode:?}"
+            );
+        });
+        [
+            FilesystemSnapshotsConfig::default(),
+            FilesystemSnapshotsConfig::Enabled(Box::new(
+                enabled(json!({ "repository_key": KEY })).unwrap(),
+            )),
+        ]
+        .into_iter()
+        .for_each(|config| {
+            assert_eq!(
+                serde_json::to_value(&config).unwrap()["type"],
+                serde_json::to_value(config.kind()).unwrap(),
+                "{:?}",
+                config.kind()
+            );
+        });
     }
 
     #[test]

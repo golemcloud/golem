@@ -2068,12 +2068,99 @@ async fn apfs_case_alias_renamed_initial_file_restores_on_a_case_insensitive_vol
 }
 
 #[cfg(target_os = "macos")]
-async fn assert_apfs_alias_capture_restores(
-    declared: &str,
-    move_from: &str,
-    move_to: &str,
-    stored_file: &str,
-) {
+#[test]
+#[timeout("60s")]
+#[test_r::tag(native_apfs)]
+async fn apfs_capture_of_a_tree_with_hard_links_restores_the_link_groups() {
+    let agents = apfs_agents().await;
+    let files = [
+        agents
+            .store
+            .declare("/dir/ro.txt", AgentFilePermissions::ReadOnly, b"read-only")
+            .await,
+        agents
+            .store
+            .declare("/rw.txt", AgentFilePermissions::ReadWrite, b"read-write")
+            .await,
+        agents
+            .store
+            .declare("/old-name.txt", AgentFilePermissions::ReadWrite, b"renamed")
+            .await,
+        agents
+            .store
+            .declare("/gone.txt", AgentFilePermissions::ReadWrite, b"deleted")
+            .await,
+    ];
+    let source_agent = agents.agent("hard-link-source");
+    let source = agents
+        .start(&source_agent, &files, NO_RESTORE)
+        .await
+        .unwrap();
+    let generation = resident_generation_handle(&source);
+    let at = |path: &str| PathTarget::at_root(&generation, path).unwrap();
+    assert_eq!(
+        write_file(&generation, Ok(at("agent.txt")), b"agent data").await,
+        StepOutcome::Done
+    );
+    futures::stream::iter([
+        NamespaceEdit::Link {
+            source: at("agent.txt"),
+            destination: at("agent-alias.txt"),
+        },
+        NamespaceEdit::Link {
+            source: at("dir/ro.txt"),
+            destination: at("ro-alias.txt"),
+        },
+        NamespaceEdit::Move {
+            source: at("old-name.txt"),
+            destination: at("new-name.txt"),
+        },
+        NamespaceEdit::Remove {
+            target: at("gone.txt"),
+            expected: ObjectKind::File,
+        },
+        NamespaceEdit::Move {
+            source: at("dir"),
+            destination: at("moved-dir"),
+        },
+    ])
+    .for_each(|edit| {
+        let generation = &generation;
+        async move {
+            edit_namespace(generation, edit).unwrap().await.unwrap();
+        }
+    })
+    .await;
+    let expected = read_tree(&agents.root(&source_agent));
+    let group = |names: [&str; 2]| names.into_iter().map(String::from).collect::<BTreeSet<_>>();
+    assert_eq!(
+        expected.links,
+        BTreeSet::from([
+            group(["agent-alias.txt", "agent.txt"]),
+            group(["moved-dir/ro.txt", "ro-alias.txt"]),
+        ])
+    );
+    assert!(expected.nodes.contains_key("rw.txt"));
+    assert!(expected.nodes.contains_key("new-name.txt"));
+    assert!(!expected.nodes.contains_key("old-name.txt"));
+    assert!(!expected.nodes.contains_key("gone.txt"));
+    let captured = copied(capture(&source, Duration::from_secs(5), None))
+        .await
+        .unwrap();
+    let restored_agent = agents.agent("hard-link-restored");
+    let restored = agents
+        .start(&restored_agent, &files, Some(copying_restore(&captured)))
+        .await
+        .unwrap_or_else(|error| panic!("a capture with hard links must restore: {error}"));
+    assert_eq!(read_tree(&agents.root(&restored_agent)), expected);
+    captured.discard().await.unwrap();
+    delete(seal(source)).await.unwrap();
+    delete(seal(restored)).await.unwrap();
+}
+
+/// Filesystems on APFS storage in a temporary directory, with one initial-file store.
+#[cfg(target_os = "macos")]
+async fn apfs_agents() -> UnmanagedAgents {
     let parent = tempfile::tempdir().unwrap();
     let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
         &FilesystemStorageMode::Apfs {
@@ -2083,13 +2170,23 @@ async fn assert_apfs_alias_capture_restores(
     )
     .await
     .unwrap();
-    let agents = UnmanagedAgents {
+    UnmanagedAgents {
         parent,
         provisioning,
         scratch: Arc::new(directories.scratch),
         store: InitialFileStore::new().await,
         component_id: ComponentId::new(),
-    };
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn assert_apfs_alias_capture_restores(
+    declared: &str,
+    move_from: &str,
+    move_to: &str,
+    stored_file: &str,
+) {
+    let agents = apfs_agents().await;
     let files = [agents
         .store
         .declare(

@@ -144,7 +144,7 @@ localServer:
 
 #### Warning: `--agent-filesystem-root`
 
-**Do not use `--agent-filesystem-root` unless you have a specific reason.** This option replaces the default random temporary directories with deterministic paths. Manually modifying files under this root while agents are running can break durable execution guarantees — Golem relies on controlling the agent filesystem to ensure consistency across restarts and replays. This flag is intended for advanced debugging and inspection scenarios only.
+**Do not use `--agent-filesystem-root` unless you have a specific reason.** On macOS, the local server already keeps agent files on `Apfs` storage at `<data_dir>/agents`, and this option moves that root. The new root must be on a volume that can clone files, or the server fails to start. On other platforms, this option replaces the default random temporary directories with deterministic paths. Manually modifying files under this root while agents are running can break durable execution guarantees — Golem relies on controlling the agent filesystem to ensure consistency across restarts and replays. This flag is intended for advanced debugging and inspection scenarios only.
 
 ### `golem server clean`
 
