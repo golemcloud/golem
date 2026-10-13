@@ -3579,6 +3579,49 @@ async fn a_head_that_s3_refuses_gives_a_refused_error_and_sends_one_request() {
     );
 }
 
+#[test]
+async fn a_head_keeps_the_retry_of_a_server_error() {
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(500, ""));
+
+    let result = storage
+        .get_metadata("test", "get-metadata", namespace(), Path::new("blob"))
+        .await;
+
+    assert_eq!(
+        (
+            result.err().map(|error| BlobFailure::of(&error)),
+            sent(&requests).len()
+        ),
+        (Some(BlobFailure::Transient), 3)
+    );
+}
+
+#[test]
+async fn a_416_to_a_range_read_is_not_a_refusal() {
+    // A 416 says that the range is not in the object. It is an answer about the read, not a
+    // refusal of the executor, so `read_refusal` leaves it out.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(416, INVALID_RANGE));
+
+    let result = storage
+        .get_range_stream(
+            "test",
+            "get-range-stream",
+            namespace(),
+            Path::new("blob"),
+            0,
+            2,
+        )
+        .await;
+
+    assert_eq!(
+        (
+            result.err().map(|error| BlobFailure::of(&error)),
+            sent(&requests).len()
+        ),
+        (Some(BlobFailure::Transient), 1)
+    );
+}
+
 /// Gives the failure of a listing, an existence check and a listing below a path of a storage
 /// that answers each `ListObjectsV2` with `answer` and each `HEAD` with a 404, and the number of
 /// `ListObjectsV2` requests that each call sends.

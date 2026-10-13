@@ -2022,6 +2022,24 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_error_names_its_refusal() {
+        // The details of a failed update put this text in the parentheses of its message.
+        let message = |refusal| BlobRefusedError { refusal }.to_string();
+        assert_eq!(
+            [
+                message(BlobRefusal::AccessDenied),
+                message(BlobRefusal::NoSuchBucket),
+                message(BlobRefusal::ClientError { status: 400 }),
+            ],
+            [
+                "the blob storage refused the request (access denied)",
+                "the blob storage refused the request (the bucket does not exist)",
+                "the blob storage refused the request (HTTP status 400)",
+            ]
+        );
+    }
+
+    #[test]
     fn blob_range_gives_the_inclusive_range_or_a_range_error() {
         let blob = b"abcdef";
         let ranges = [
