@@ -46,7 +46,7 @@ The `snapshotting` attribute accepts these values:
 | (omitted) | `#derive.agent` | Snapshotting disabled |
 | Every N | `#derive.agent(snapshotting="every_n(1)")` | Snapshot every N successful invocations |
 
-An ephemeral agent takes no snapshots, whatever its `snapshotting` value. Snapshots are for durable agents only.
+Snapshots are for durable agents only. An ephemeral agent takes no snapshots, and the SDK refuses an ephemeral agent definition whose `snapshotting` value is not disabled, with an error that names the agent.
 
 ## Custom Snapshotting
 

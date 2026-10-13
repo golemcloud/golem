@@ -299,6 +299,35 @@ describe("snapshotting", () => {
     }),
   )
 
+  it("rejects an ephemeral agent that declares snapshotting", async () => {
+    defineAgent({
+      name: "EphemeralSnapshotAgent",
+      id: {},
+      mode: "ephemeral",
+      snapshotting: Snapshot.define({
+        schema: Schema.Struct({ count: Schema.Number }),
+        policy: Snapshot.policy.everyN(1),
+      }),
+      methods: { ping: method({ input: {}, success: Schema.Void }) },
+    }).implement({
+      init: () => Ref.make({ count: 0 }),
+      methods: () => ({ ping: () => Effect.void }),
+      snapshot: Snapshot.ref(),
+    })
+
+    let caught: unknown
+    try {
+      await guest.discoverAgentTypes()
+    } catch (e) {
+      caught = e
+    }
+    expect((caught as { tag?: string } | undefined)?.tag).toBe("invalid-type")
+    expect((caught as { val?: string } | undefined)?.val).toContain(
+      "agent 'EphemeralSnapshotAgent' is ephemeral and declares snapshotting, but ephemeral " +
+        "agents take no snapshots. Remove the snapshotting option or make the agent durable.",
+    )
+  })
+
   // -------------------------------------------------------------------------
   // Auto round-trip
   // -------------------------------------------------------------------------

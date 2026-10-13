@@ -28,6 +28,7 @@ export interface WebsocketClientShape {
   readonly connect: (
     url: string,
     headers: [string, string][] | undefined,
+    reconstructionPolicy: WsClient.ReconstructionPolicy | undefined,
   ) => WsClient.WebsocketConnection
 }
 
@@ -38,6 +39,6 @@ export class WebsocketClient extends Context.Service<WebsocketClient, WebsocketC
 export const WebsocketLive: Layer.Layer<WebsocketClient> = Layer.succeed(
   WebsocketClient,
   WebsocketClient.of({
-    connect: (url, headers) => WsClient.WebsocketConnection.connect(url, headers),
+    connect: (url, headers, policy) => WsClient.WebsocketConnection.connect(url, headers, policy),
   }),
 )
