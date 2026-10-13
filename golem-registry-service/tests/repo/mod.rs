@@ -67,6 +67,7 @@ use uuid::Uuid;
 
 pub mod common;
 pub mod postgres;
+pub mod resource_usage_reload;
 pub mod sqlite;
 
 inherit_test_dep!(Tracing);

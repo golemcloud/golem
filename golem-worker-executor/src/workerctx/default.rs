@@ -467,15 +467,28 @@ fn ensure_monthly_resource_capacity(
     agent_mode: AgentMode,
     current_level: u64,
 ) -> Result<(), AgentError> {
+    resource_limit_entry
+        .ensure_monthly_policy_available()
+        .map_err(|_| {
+            AgentError::Unknown(
+                crate::services::resource_limits::MonthlyResourceCapacityError::UNAVAILABLE_REASON
+                    .to_string(),
+            )
+        })?;
     if let Some(fuel_tracker) = fuel_tracker {
         fuel_tracker.ensure_fuel(resource_limit_entry, agent_mode, current_level)?;
     }
     resource_limit_entry
         .monthly_memory_and_storage_capacity(agent_mode)
-        .map_err(|exhaustion| {
-            AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
-                reason: exhaustion.reason().to_string(),
-            })
+        .map_err(|failure| {
+            match failure {
+                crate::services::resource_limits::MonthlyResourceCapacityError::Unavailable =>
+                    AgentError::Unknown(crate::services::resource_limits::MonthlyResourceCapacityError::UNAVAILABLE_REASON.to_string()),
+                crate::services::resource_limits::MonthlyResourceCapacityError::Exhausted(exhaustion) =>
+                    AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                        reason: exhaustion.reason().to_string(),
+                    }),
+            }
         })
 }
 

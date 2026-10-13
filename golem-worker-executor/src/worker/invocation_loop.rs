@@ -27,7 +27,9 @@ use crate::services::agent_filesystem_snapshots::Confirm;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogError, OplogOps, downcast_oplog};
-use crate::services::resource_limits::{AtomicResourceEntry, MonthlyResourceExhaustion};
+use crate::services::resource_limits::{
+    AtomicResourceEntry, MonthlyResourceCapacityError, MonthlyResourceExhaustion,
+};
 use crate::services::{
     HasActiveAgents, HasAgentFilesystemSnapshots, HasConfig, HasExtraDeps, HasOplog,
     HasOplogService, HasShardService, HasWorker,
@@ -172,18 +174,24 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MonthlyResourceAdmission {
     Admit,
+    Unavailable,
     Suspend,
     FailInvocation(MonthlyResourceExhaustion),
 }
 
 fn monthly_resource_admission_for_capacity(
-    capacity: Result<(), MonthlyResourceExhaustion>,
+    capacity: Result<(), MonthlyResourceCapacityError>,
     agent_mode: AgentMode,
 ) -> MonthlyResourceAdmission {
     match (capacity, agent_mode) {
         (Ok(()), _) => MonthlyResourceAdmission::Admit,
-        (Err(_), AgentMode::Durable) => MonthlyResourceAdmission::Suspend,
-        (Err(exhaustion), AgentMode::Ephemeral) => {
+        (Err(MonthlyResourceCapacityError::Unavailable), _) => {
+            MonthlyResourceAdmission::Unavailable
+        }
+        (Err(MonthlyResourceCapacityError::Exhausted(_)), AgentMode::Durable) => {
+            MonthlyResourceAdmission::Suspend
+        }
+        (Err(MonthlyResourceCapacityError::Exhausted(exhaustion)), AgentMode::Ephemeral) => {
             MonthlyResourceAdmission::FailInvocation(exhaustion)
         }
     }
@@ -1702,6 +1710,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             match monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode())
             {
                 MonthlyResourceAdmission::Admit => {}
+                MonthlyResourceAdmission::Unavailable => {
+                    self.stop_unloaded(
+                        Some(MonthlyResourceCapacityError::unavailable_error()),
+                        PendingLiveInvocationDisposition::Fail,
+                    )
+                    .await;
+                    return CreateInstanceResult::Failed;
+                }
                 MonthlyResourceAdmission::Suspend => {
                     return CreateInstanceResult::Interrupted(InterruptKind::Suspend(
                         Timestamp::now_utc(),
@@ -2749,6 +2765,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             match monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode())
             {
                 MonthlyResourceAdmission::Admit => {}
+                MonthlyResourceAdmission::Unavailable => {
+                    self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
+                    let _ = sender.send(Err(MonthlyResourceCapacityError::unavailable_error()));
+                    return CommandOutcome::Continue;
+                }
                 MonthlyResourceAdmission::Suspend => {
                     self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
                     let _ = sender.send(Err(WorkerExecutorError::Interrupted {
@@ -3374,6 +3395,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
         match admission {
             MonthlyResourceAdmission::Admit => {}
+            MonthlyResourceAdmission::Unavailable => {
+                return self
+                    .agent_invocation_failed(
+                        &display_name,
+                        &invocation_idempotency_key,
+                        Err(MonthlyResourceCapacityError::unavailable_error()),
+                    )
+                    .await;
+            }
             MonthlyResourceAdmission::Suspend => {
                 return self
                     .agent_invocation_failed(
@@ -4650,7 +4680,24 @@ mod tests {
         filesystem_activity, flush, metered_resident_with_open_node_for_unload_test,
         resident_for_unload_test, seal,
     };
-    use crate::services::resource_limits::{AtomicResourceEntry, MonthlyResourceExhaustion};
+    use crate::services::resource_limits::{
+        AtomicResourceEntry, MonthlyResourceCapacityError, MonthlyResourceExhaustion,
+    };
+
+    #[test]
+    fn unavailable_monthly_policy_is_not_quota_suspension_or_ephemeral_resource_exhaustion() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            assert_eq!(
+                monthly_resource_admission_for_capacity(
+                    Err(MonthlyResourceCapacityError::Unavailable),
+                    mode,
+                ),
+                MonthlyResourceAdmission::Unavailable
+            );
+        }
+        let error = MonthlyResourceCapacityError::unavailable_error();
+        assert!(matches!(error, WorkerExecutorError::Runtime { .. }));
+    }
     use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
     use crate::worker::{
@@ -4876,42 +4923,42 @@ mod tests {
         );
         assert_eq!(
             monthly_resource_admission_for_capacity(
-                Err(MonthlyResourceExhaustion::Compute),
+                Err(MonthlyResourceExhaustion::Compute.into()),
                 AgentMode::Durable,
             ),
             MonthlyResourceAdmission::Suspend
         );
         assert_eq!(
             monthly_resource_admission_for_capacity(
-                Err(MonthlyResourceExhaustion::Compute),
+                Err(MonthlyResourceExhaustion::Compute.into()),
                 AgentMode::Ephemeral
             ),
             MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Compute)
         );
         assert_eq!(
             monthly_resource_admission_for_capacity(
-                Err(MonthlyResourceExhaustion::Memory),
+                Err(MonthlyResourceExhaustion::Memory.into()),
                 AgentMode::Durable,
             ),
             MonthlyResourceAdmission::Suspend
         );
         assert_eq!(
             monthly_resource_admission_for_capacity(
-                Err(MonthlyResourceExhaustion::Memory),
+                Err(MonthlyResourceExhaustion::Memory.into()),
                 AgentMode::Ephemeral
             ),
             MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Memory)
         );
         assert_eq!(
             monthly_resource_admission_for_capacity(
-                Err(MonthlyResourceExhaustion::DurableStorage),
+                Err(MonthlyResourceExhaustion::DurableStorage.into()),
                 AgentMode::Durable
             ),
             MonthlyResourceAdmission::Suspend
         );
         assert_eq!(
             monthly_resource_admission_for_capacity(
-                Err(MonthlyResourceExhaustion::EphemeralStorage),
+                Err(MonthlyResourceExhaustion::EphemeralStorage.into()),
                 AgentMode::Ephemeral
             ),
             MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::EphemeralStorage)

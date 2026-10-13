@@ -715,23 +715,7 @@ impl AccountUsageService {
     }
 
     fn usage(account_id: AccountId, report: AccountUsageRecord) -> AccountUsage {
-        let metering = report.metering.map_or_else(
-            || AccountUsageMetering {
-                compute: MeteringStatus::Unknown,
-                memory: MeteringStatus::Unknown,
-                durable_storage: MeteringStatus::Unknown,
-                ephemeral_storage: MeteringStatus::Unknown,
-            },
-            |metering| {
-                let filesystem = metering_status(metering.filesystem);
-                AccountUsageMetering {
-                    compute: metering_status(metering.compute),
-                    memory: metering_status(metering.memory),
-                    durable_storage: filesystem,
-                    ephemeral_storage: filesystem,
-                }
-            },
-        );
+        let metering = account_usage_metering(report.metering);
         AccountUsage {
             account_id,
             usage: AccountUsageMetrics {
@@ -761,23 +745,7 @@ impl AccountUsageService {
         let resolved = resolved_amounts
             .resolve()
             .map_err(|error| AccountUsageError::InternalError(error.into()))?;
-        let metering = report.metering.map_or_else(
-            || AccountUsageMetering {
-                compute: MeteringStatus::Unknown,
-                memory: MeteringStatus::Unknown,
-                durable_storage: MeteringStatus::Unknown,
-                ephemeral_storage: MeteringStatus::Unknown,
-            },
-            |metering| {
-                let filesystem = metering_status(metering.filesystem);
-                AccountUsageMetering {
-                    compute: metering_status(metering.compute),
-                    memory: metering_status(metering.memory),
-                    durable_storage: filesystem,
-                    ephemeral_storage: filesystem,
-                }
-            },
-        );
+        let metering = account_usage_metering(report.metering);
         let mut max_memory_per_agent = account_usage.max_memory_per_worker.clone();
         max_memory_per_agent.active_admin_grant = active_grant(
             &account_usage.admin_grants,
@@ -868,6 +836,8 @@ impl AccountUsageService {
     ) -> ResourceLimits {
         ResourceLimits {
             available_blob_storage_bytes: 0,
+            monthly_policy_status:
+                golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable,
             monthly_usage_mode_revision,
             monthly_policy_revision,
             monthly_policy: MonthlyResourcePolicy {
@@ -902,17 +872,8 @@ impl AccountUsageService {
     ) -> ResourceLimits {
         limits.monthly_usage_mode_revision = monthly_usage_mode_revision;
         limits.monthly_policy_revision = monthly_policy_revision;
-        limits.monthly_policy = MonthlyResourcePolicy {
-            period: AccountUsagePeriod::current(),
-            mode: MonthlyUsageMode::HardLimit,
-            available_fuel: 0,
-            available_memory_gb_seconds: 0,
-            available_memory_byte_nanoseconds_remainder: 0,
-            available_durable_storage_byte_seconds: 0,
-            available_durable_storage_byte_nanoseconds_remainder: 0,
-            available_ephemeral_storage_byte_seconds: 0,
-            available_ephemeral_storage_byte_nanoseconds_remainder: 0,
-        };
+        limits.monthly_policy_status =
+            golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable;
         limits.available_http_calls = 0;
         limits.available_rpc_calls = 0;
         limits.usage_update_applied = usage_update_applied;
@@ -1177,6 +1138,26 @@ async fn reconcile_blob_storage_usage(
     Ok(())
 }
 
+fn account_usage_metering(metering: Option<ResourceUsageMetering>) -> AccountUsageMetering {
+    metering.map_or_else(
+        || AccountUsageMetering {
+            compute: MeteringStatus::Unknown,
+            memory: MeteringStatus::Unknown,
+            durable_storage: MeteringStatus::Unknown,
+            ephemeral_storage: MeteringStatus::Unknown,
+        },
+        |metering| {
+            let filesystem = metering_status(metering.filesystem);
+            AccountUsageMetering {
+                compute: metering_status(metering.compute),
+                memory: metering_status(metering.memory),
+                durable_storage: filesystem,
+                ephemeral_storage: filesystem,
+            }
+        },
+    )
+}
+
 fn metering_status(enabled: bool) -> MeteringStatus {
     if enabled {
         MeteringStatus::Enabled
@@ -1220,6 +1201,50 @@ fn account_usage_permission_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_and_policy_share_metering_status_for_unknown_and_all_switch_combinations() {
+        let cases = std::iter::once(None).chain([false, true].into_iter().flat_map(|compute| {
+            [false, true].into_iter().flat_map(move |memory| {
+                [false, true].into_iter().map(move |filesystem| {
+                    Some(ResourceUsageMetering {
+                        compute,
+                        memory,
+                        filesystem,
+                    })
+                })
+            })
+        }));
+        for metering in cases {
+            let usage = make_policy_usage();
+            let account_id = AccountId(usage.account_id);
+            let report = make_policy_report(metering);
+            let output = AccountUsageService::usage(account_id, report);
+            let policy =
+                AccountUsageService::resource_policy(account_id, usage, report, hard_limit_mode())
+                    .unwrap();
+            assert_eq!(
+                output.usage.metering.compute,
+                policy.monthly.compute_gcu.metering
+            );
+            assert_eq!(
+                output.usage.metering.memory,
+                policy.monthly.memory_gb_seconds.metering
+            );
+            assert_eq!(
+                output.usage.metering.durable_storage,
+                policy.monthly.durable_storage_gb_month.metering
+            );
+            assert_eq!(
+                output.usage.metering.ephemeral_storage,
+                policy.monthly.ephemeral_storage_gb_month.metering
+            );
+            let expected = metering.map_or(MeteringStatus::Unknown, |flags| {
+                metering_status(flags.filesystem)
+            });
+            assert_eq!(output.usage.metering.durable_storage, expected);
+        }
+    }
 
     #[test]
     fn disabled_monthly_dimensions_do_not_create_hidden_usage() {
@@ -1693,6 +1718,43 @@ mod tests {
     }
 
     #[test]
+    fn post_write_reload_failure_does_not_fabricate_exhausted_policy() {
+        let mut usage = make_policy_usage();
+        let period = AccountUsagePeriod::current();
+        usage.year = period.year;
+        usage.month = period.month;
+        usage.monthly_usage_mode = MonthlyUsageMode::AllowOverage;
+        let original = usage
+            .resource_limits(ResourceUsageMetering {
+                compute: false,
+                memory: true,
+                filesystem: false,
+            })
+            .unwrap();
+        assert!(original.monthly_policy.available_memory_gb_seconds > 0);
+        let fallback = AccountUsageService::fence_monthly_policy(original.clone(), 7, 9, true);
+
+        assert!(
+            fallback.usage_update_applied,
+            "the committed update must remain acknowledged"
+        );
+        assert_eq!(fallback.monthly_usage_mode_revision, 7);
+        assert_eq!(fallback.monthly_policy_revision, 9);
+        assert_eq!(
+            fallback.monthly_policy_status,
+            golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+        );
+        assert_eq!(
+            fallback.max_memory_per_worker,
+            original.max_memory_per_worker
+        );
+        assert_eq!(
+            fallback.monthly_policy, original.monthly_policy,
+            "a failed reload must report unavailability, not fabricate exhausted policy"
+        );
+    }
+
+    #[test]
     fn post_write_failure_fence_acknowledges_the_committed_update() {
         let limits = AccountUsageService::fenced_resource_limits(7, 9, true);
 
@@ -1705,6 +1767,10 @@ mod tests {
         assert_eq!(limits.monthly_usage_mode_revision, 7);
         assert_eq!(limits.monthly_policy_revision, 9);
         assert!(limits.usage_update_applied);
+        assert_eq!(
+            limits.monthly_policy_status,
+            golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+        );
     }
 
     #[test]
@@ -1721,11 +1787,15 @@ mod tests {
         let expected_rpc_limit = limits.per_invocation_rpc_call_limit;
         let expected_concurrency = limits.max_concurrent_agents_per_executor;
         let expected_oplog_rate = limits.oplog_writes_per_second;
+        let expected_policy = limits.monthly_policy.clone();
 
         limits = AccountUsageService::fence_monthly_policy(limits, 7, 9, true);
 
-        assert_eq!(limits.monthly_policy.available_fuel, 0);
-        assert_eq!(limits.monthly_policy.available_memory_gb_seconds, 0);
+        assert_eq!(limits.monthly_policy, expected_policy);
+        assert_eq!(
+            limits.monthly_policy_status,
+            golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+        );
         assert_eq!(limits.monthly_usage_mode_revision, 7);
         assert_eq!(limits.monthly_policy_revision, 9);
         assert!(limits.usage_update_applied);

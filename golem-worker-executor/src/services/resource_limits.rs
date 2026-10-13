@@ -171,6 +171,8 @@ struct UsageRevisionState {
 
 #[derive(Debug)]
 struct MonthlyPolicyGate {
+    policy_status: golem_service_base::model::MonthlyResourcePolicyStatus,
+    minimum_policy_revision: u64,
     period: AccountUsagePeriod,
     mode: MonthlyUsageMode,
     available_fuel: Option<u64>,
@@ -319,6 +321,7 @@ fn retain_unaccepted_delivery(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MonthlyCapacity {
+    pub(crate) policy_status: golem_service_base::model::MonthlyResourcePolicyStatus,
     pub(crate) exhaustion: Option<MonthlyResourceExhaustion>,
     pub(crate) policy_revision: u64,
     pub(crate) period: AccountUsagePeriod,
@@ -331,6 +334,27 @@ pub(crate) enum MonthlyResourceExhaustion {
     Memory,
     DurableStorage,
     EphemeralStorage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonthlyResourceCapacityError {
+    Exhausted(MonthlyResourceExhaustion),
+    Unavailable,
+}
+
+impl From<MonthlyResourceExhaustion> for MonthlyResourceCapacityError {
+    fn from(value: MonthlyResourceExhaustion) -> Self {
+        Self::Exhausted(value)
+    }
+}
+
+impl MonthlyResourceCapacityError {
+    pub(crate) const UNAVAILABLE_REASON: &'static str =
+        "Monthly enforcement unavailable: Registry resource policy could not be refreshed";
+
+    pub(crate) fn unavailable_error() -> WorkerExecutorError {
+        WorkerExecutorError::runtime(Self::UNAVAILABLE_REASON)
+    }
 }
 
 impl MonthlyResourceExhaustion {
@@ -859,6 +883,9 @@ impl AtomicResourceEntry {
                 pending: VecDeque::new(),
                 monthly_policy: (metering.compute || metering.memory || metering.filesystem)
                     .then_some(MonthlyPolicyGate {
+                        policy_status:
+                            golem_service_base::model::MonthlyResourcePolicyStatus::Available,
+                        minimum_policy_revision: monthly_policy_revision,
                         period: monthly_policy.period,
                         mode: monthly_policy.mode,
                         available_fuel: metering.compute.then_some(monthly_policy.available_fuel),
@@ -1317,8 +1344,16 @@ impl AtomicResourceEntry {
     ) -> R {
         let mut state = self.usage_revision_state.lock().unwrap();
         self.update_usage_period_locked(&mut state, AccountUsagePeriod::current());
+        let policy_status = state.monthly_policy.as_ref().map_or(
+            golem_service_base::model::MonthlyResourcePolicyStatus::Available,
+            |gate| gate.policy_status,
+        );
         let exhaustion = state.monthly_policy.as_ref().and_then(|gate| {
-            if gate.mode != MonthlyUsageMode::HardLimit || gate.period != state.current_period {
+            if gate.policy_status
+                != golem_service_base::model::MonthlyResourcePolicyStatus::Available
+                || gate.mode != MonthlyUsageMode::HardLimit
+                || gate.period != state.current_period
+            {
                 return None;
             }
             if gate.available_fuel.is_some()
@@ -1332,6 +1367,7 @@ impl AtomicResourceEntry {
             }
         });
         read(MonthlyCapacity {
+            policy_status,
             exhaustion,
             policy_revision: state.current_policy_revision,
             period: state.current_period,
@@ -1339,39 +1375,63 @@ impl AtomicResourceEntry {
         })
     }
 
+    pub(crate) fn ensure_monthly_policy_available(
+        &self,
+    ) -> Result<(), MonthlyResourceCapacityError> {
+        let state = self.usage_revision_state.lock().unwrap();
+        if state.monthly_policy.as_ref().is_some_and(|gate| {
+            gate.policy_status
+                == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+        }) {
+            Err(MonthlyResourceCapacityError::Unavailable)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn monthly_resource_capacity(
         &self,
         agent_mode: AgentMode,
-    ) -> Result<(), MonthlyResourceExhaustion> {
+    ) -> Result<(), MonthlyResourceCapacityError> {
         self.flush_active_resource_usage();
         let revision_state = self.usage_revision_state.lock().unwrap();
         let Some(gate) = revision_state.monthly_policy.as_ref() else {
             return Ok(());
         };
+        if gate.policy_status == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+        {
+            return Err(MonthlyResourceCapacityError::Unavailable);
+        }
         if gate.mode == MonthlyUsageMode::AllowOverage {
             return Ok(());
         }
         if gate.available_fuel.is_some()
             && self.effective_fuel_with_revision_state(&revision_state) == 0
         {
-            return Err(MonthlyResourceExhaustion::Compute);
+            return Err(MonthlyResourceExhaustion::Compute.into());
         }
         self.monthly_memory_and_storage_capacity_with_revision_state(&revision_state, agent_mode)
+            .map_err(Into::into)
     }
 
     pub(crate) fn monthly_memory_and_storage_capacity(
         &self,
         agent_mode: AgentMode,
-    ) -> Result<(), MonthlyResourceExhaustion> {
+    ) -> Result<(), MonthlyResourceCapacityError> {
         self.flush_active_resource_usage();
         let revision_state = self.usage_revision_state.lock().unwrap();
         let Some(gate) = revision_state.monthly_policy.as_ref() else {
             return Ok(());
         };
+        if gate.policy_status == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+        {
+            return Err(MonthlyResourceCapacityError::Unavailable);
+        }
         if gate.mode == MonthlyUsageMode::AllowOverage {
             return Ok(());
         }
         self.monthly_memory_and_storage_capacity_with_revision_state(&revision_state, agent_mode)
+            .map_err(Into::into)
     }
 
     fn monthly_memory_and_storage_capacity_with_revision_state(
@@ -1874,7 +1934,11 @@ impl AtomicResourceEntry {
             || self.blob_storage_quota.lock().unwrap().unsynced_delta != 0;
         let stale = self.secs_since_last_refresh() >= refresh_threshold_secs;
 
-        if !active && !stale {
+        let unavailable = revision_state.monthly_policy.as_ref().is_some_and(|gate| {
+            gate.policy_status
+                == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+        });
+        if !active && !stale && !unavailable {
             return None;
         }
 
@@ -2169,6 +2233,7 @@ impl AtomicResourceEntry {
             monthly_policy,
             monthly_usage_mode_revision,
             monthly_usage_mode_revision,
+            golem_service_base::model::MonthlyResourcePolicyStatus::Available,
             usage_update_applied,
         )
     }
@@ -2179,6 +2244,7 @@ impl AtomicResourceEntry {
         monthly_policy: MonthlyResourcePolicy,
         monthly_usage_mode_revision: u64,
         monthly_policy_revision: u64,
+        policy_status: golem_service_base::model::MonthlyResourcePolicyStatus,
         usage_update_applied: bool,
     ) -> bool {
         self.flush_active_resource_usage();
@@ -2204,7 +2270,9 @@ impl AtomicResourceEntry {
             }
             return false;
         }
-        if monthly_policy_revision < current_policy_revision {
+        if monthly_policy_revision < current_policy_revision
+            || monthly_policy_revision < gate.minimum_policy_revision
+        {
             let retry =
                 retain_unaccepted_delivery(gate, delivered, current_period, usage_update_applied);
             gate.settled_generation = generation;
@@ -2212,6 +2280,21 @@ impl AtomicResourceEntry {
                 revision_state.pending.push_front(captured);
             }
             return false;
+        }
+
+        if policy_status == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable {
+            let retry =
+                retain_unaccepted_delivery(gate, delivered, current_period, usage_update_applied);
+            gate.policy_status = policy_status;
+            gate.minimum_policy_revision = monthly_policy_revision;
+            gate.settled_generation = generation;
+            if let Some(captured) = retry {
+                revision_state.pending.push_front(captured);
+            }
+            drop(revision_state);
+            self.capacity_updates
+                .send_modify(|version| *version = version.wrapping_add(1));
+            return true;
         }
 
         self.update_usage_revision_locked(&mut revision_state, monthly_policy_revision);
@@ -2253,6 +2336,8 @@ impl AtomicResourceEntry {
             retain_unaccepted_delivery(gate, delivered, current_period, false)
         };
         gate.period = monthly_policy.period;
+        gate.policy_status = policy_status;
+        gate.minimum_policy_revision = monthly_policy_revision;
         gate.mode = monthly_policy.mode;
         gate.available_fuel = self
             .metering
@@ -3077,6 +3162,7 @@ impl ResourceLimitsGrpc {
                 updated_limits.monthly_policy.clone(),
                 updated_limits.monthly_usage_mode_revision,
                 updated_limits.monthly_policy_revision,
+                updated_limits.monthly_policy_status,
                 updated_limits.usage_update_applied,
             ) {
                 self.settle_blob_storage_delta(account_id, settled_blob_storage_delta)
@@ -3196,6 +3282,12 @@ impl ResourceLimits for ResourceLimitsGrpc {
             .get_or_try_init(|| async {
                 let refresh_generation = self.next_refresh_generation();
                 let fetched = self.fetch_resource_limits(account_id).await?;
+                if (self.metering.compute || self.metering.any_byte_time_enabled())
+                    && fetched.monthly_policy_status
+                        == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable
+                {
+                    return Err(MonthlyResourceCapacityError::unavailable_error());
+                }
                 let entry = Arc::new(
                     AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
                         fetched.monthly_policy,
@@ -3276,6 +3368,208 @@ impl ResourceLimits for ResourceLimitsDisabled {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_policy_acknowledges_usage_without_installing_fake_capacity() {
+        use golem_service_base::model::MonthlyResourcePolicyStatus;
+        let period = AccountUsagePeriod::current();
+        for mode in [MonthlyUsageMode::HardLimit, MonthlyUsageMode::AllowOverage] {
+            for metering in [
+                ResourceUsageMeteringConfig {
+                    compute: true,
+                    memory: false,
+                    filesystem: false,
+                },
+                ResourceUsageMeteringConfig {
+                    compute: false,
+                    memory: true,
+                    filesystem: false,
+                },
+                ResourceUsageMeteringConfig {
+                    compute: false,
+                    memory: false,
+                    filesystem: true,
+                },
+            ] {
+                let mut policy = memory_policy(period, mode, 50);
+                policy.available_fuel = 50;
+                policy.available_durable_storage_byte_seconds = 50;
+                policy.available_ephemeral_storage_byte_seconds = 50;
+                let entry = AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
+                    policy.clone(),
+                    4096,
+                    8192,
+                    16384,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    32,
+                    u64::MAX,
+                    metering,
+                    7,
+                    7,
+                    0,
+                );
+                if metering.compute {
+                    assert!(entry.borrow_fuel(1));
+                }
+                if metering.memory {
+                    entry.record_memory_gb_seconds(AgentMode::Durable, 1);
+                }
+                if metering.filesystem {
+                    entry.record_storage_byte_seconds(AgentMode::Durable, 1);
+                    entry.record_storage_byte_seconds(AgentMode::Ephemeral, 1);
+                }
+                let captured = entry.capture_usage_update(0).unwrap();
+                entry.begin_monthly_refresh(
+                    1,
+                    &captured.update,
+                    captured.durable_memory_gb_seconds_delta,
+                    captured.ephemeral_memory_gb_seconds_delta,
+                );
+                let mut fake_policy = policy.clone();
+                fake_policy.mode = MonthlyUsageMode::HardLimit;
+                fake_policy.available_fuel = 0;
+                fake_policy.available_memory_gb_seconds = 0;
+                assert!(entry.apply_monthly_snapshot_with_policy_revision(
+                    1,
+                    fake_policy,
+                    9,
+                    9,
+                    MonthlyResourcePolicyStatus::Unavailable,
+                    true,
+                ));
+                for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+                    assert_eq!(
+                        entry.monthly_resource_capacity(agent_mode),
+                        Err(MonthlyResourceCapacityError::Unavailable)
+                    );
+                    entry.with_monthly_capacity(agent_mode, None, |capacity| {
+                        assert_eq!(
+                            capacity.policy_status,
+                            MonthlyResourcePolicyStatus::Unavailable
+                        );
+                        assert_eq!(capacity.exhaustion, None);
+                        assert_eq!(capacity.policy_revision, 7);
+                    });
+                }
+                let retry = entry
+                    .capture_usage_update(i64::MAX)
+                    .expect("unavailable policy uses the next existing batch tick");
+                assert_eq!(retry.update.fuel_delta, 0);
+                assert_eq!(retry.update.memory_gb_seconds_delta, 0);
+                assert_eq!(retry.update.durable_storage_byte_seconds_delta, 0);
+                assert_eq!(retry.update.ephemeral_storage_byte_seconds_delta, 0);
+                assert_eq!(entry.max_memory_limit(), 4096);
+                assert_eq!(entry.max_disk_space_limit(), 16384);
+                entry.begin_monthly_refresh(2, &retry.update, 0, 0);
+                policy.available_fuel = 49;
+                policy.available_memory_gb_seconds = 49;
+                policy.available_durable_storage_byte_seconds = 49;
+                policy.available_ephemeral_storage_byte_seconds = 49;
+                assert!(entry.apply_monthly_snapshot_with_policy_revision(
+                    2,
+                    policy,
+                    9,
+                    9,
+                    MonthlyResourcePolicyStatus::Available,
+                    true,
+                ));
+                for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+                    assert!(entry.monthly_resource_capacity(agent_mode).is_ok());
+                }
+                assert_eq!(
+                    entry.effective_memory_gb_seconds(),
+                    if metering.memory { 49 } else { u64::MAX }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn policy_availability_rejects_stale_generations_and_is_inactive_when_all_meters_are_off() {
+        use golem_service_base::model::MonthlyResourcePolicyStatus;
+        let period = AccountUsagePeriod::current();
+        let entry = memory_entry(period, MonthlyUsageMode::AllowOverage, 50);
+        let policy = memory_policy(period, MonthlyUsageMode::AllowOverage, 50);
+        entry.begin_monthly_refresh_with_memory_for_test(1, 0, 0);
+        entry.begin_monthly_refresh_with_memory_for_test(2, 0, 0);
+        assert!(!entry.apply_monthly_snapshot_with_policy_revision(
+            1,
+            policy.clone(),
+            7,
+            7,
+            MonthlyResourcePolicyStatus::Unavailable,
+            true
+        ));
+        assert!(entry.monthly_resource_capacity(AgentMode::Durable).is_ok());
+        assert!(entry.apply_monthly_snapshot_with_policy_revision(
+            2,
+            policy.clone(),
+            7,
+            7,
+            MonthlyResourcePolicyStatus::Unavailable,
+            true
+        ));
+        assert!(!entry.apply_monthly_snapshot_with_policy_revision(
+            1,
+            policy.clone(),
+            7,
+            7,
+            MonthlyResourcePolicyStatus::Available,
+            true
+        ));
+        assert_eq!(
+            entry.monthly_resource_capacity(AgentMode::Durable),
+            Err(MonthlyResourceCapacityError::Unavailable)
+        );
+        entry.begin_monthly_refresh_with_memory_for_test(3, 0, 0);
+        assert!(entry.apply_monthly_snapshot_with_policy_revision(
+            3,
+            policy.clone(),
+            9,
+            9,
+            MonthlyResourcePolicyStatus::Unavailable,
+            true
+        ));
+        entry.begin_monthly_refresh_with_memory_for_test(4, 0, 0);
+        assert!(!entry.apply_monthly_snapshot_with_policy_revision(
+            4,
+            policy.clone(),
+            8,
+            8,
+            MonthlyResourcePolicyStatus::Available,
+            true
+        ));
+        assert_eq!(
+            entry.monthly_resource_capacity(AgentMode::Durable),
+            Err(MonthlyResourceCapacityError::Unavailable)
+        );
+        let off = AtomicResourceEntry::new_with_all_limits_and_metering(
+            0,
+            4096,
+            8192,
+            16384,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            32,
+            u64::MAX,
+            ResourceUsageMeteringConfig::default(),
+        );
+        assert!(off.apply_monthly_snapshot_with_policy_revision(
+            1,
+            policy,
+            7,
+            7,
+            MonthlyResourcePolicyStatus::Unavailable,
+            true
+        ));
+        assert_eq!(off.monthly_resource_capacity(AgentMode::Durable), Ok(()));
+        assert!(off.capture_usage_update(i64::MAX).is_none());
+    }
     use crate::services::golem_config::GolemConfig;
     use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use crate::worker::{MonthlyResourceAdmission, monthly_resource_admission};
@@ -3347,7 +3641,14 @@ mod tests {
         );
 
         entry.begin_monthly_refresh_for_test(2, 0);
-        assert!(entry.apply_monthly_snapshot_with_policy_revision(2, policy.clone(), 7, 8, true));
+        assert!(entry.apply_monthly_snapshot_with_policy_revision(
+            2,
+            policy.clone(),
+            7,
+            8,
+            golem_service_base::model::MonthlyResourcePolicyStatus::Available,
+            true
+        ));
         let revised = read();
         assert_eq!(revised.policy_revision, 8);
         assert_eq!(
@@ -3363,7 +3664,14 @@ mod tests {
         );
 
         entry.begin_monthly_refresh_for_test(3, 0);
-        assert!(!entry.apply_monthly_snapshot_with_policy_revision(3, policy, 7, 7, true));
+        assert!(!entry.apply_monthly_snapshot_with_policy_revision(
+            3,
+            policy,
+            7,
+            7,
+            golem_service_base::model::MonthlyResourcePolicyStatus::Available,
+            true
+        ));
         assert_eq!(
             read(),
             revised,
@@ -4985,7 +5293,7 @@ mod tests {
                         let expected_capacity = enabled.then_some(exhausted);
                         assert_eq!(
                             entry.monthly_resource_capacity(agent_mode),
-                            expected_capacity.map_or(Ok(()), Err),
+                            expected_capacity.map_or(Ok(()), |exhaustion| Err(exhaustion.into())),
                             "metering={metering:?}, exhausted={exhausted:?}, mode={agent_mode:?}"
                         );
                         let expected_admission = match (expected_capacity, agent_mode) {
@@ -5316,7 +5624,7 @@ mod tests {
         assert_eq!(hard.effective_memory_gb_seconds(), 0);
         assert_eq!(
             hard.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         assert_eq!(
             hard.capture_usage_update_for_test().memory_gb_seconds_delta,
@@ -5352,7 +5660,7 @@ mod tests {
         ));
         assert_eq!(
             hard.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         hard.begin_monthly_refresh_with_memory_for_test(2, 0, 0);
         assert!(hard.apply_monthly_snapshot(
@@ -5398,7 +5706,7 @@ mod tests {
         entry.record_storage_byte_seconds(AgentMode::Durable, 10);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::DurableStorage)
+            Err(MonthlyResourceExhaustion::DurableStorage.into())
         );
         assert!(
             entry
@@ -5409,7 +5717,7 @@ mod tests {
         entry.record_storage_byte_seconds(AgentMode::Ephemeral, 20);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Ephemeral),
-            Err(MonthlyResourceExhaustion::EphemeralStorage)
+            Err(MonthlyResourceExhaustion::EphemeralStorage.into())
         );
         let captured = entry.capture_usage_update_for_test();
         assert_eq!(captured.durable_storage_byte_seconds_delta, 10);
@@ -5437,7 +5745,7 @@ mod tests {
         );
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         assert!(entry.apply_monthly_snapshot_for_test(
             2,
@@ -5537,7 +5845,7 @@ mod tests {
 
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::DurableStorage)
+            Err(MonthlyResourceExhaustion::DurableStorage.into())
         );
         let captured = entry.capture_usage_update_for_test();
         assert_eq!(captured.durable_storage_byte_seconds_delta, 2);
@@ -5580,11 +5888,11 @@ mod tests {
         ));
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::DurableStorage)
+            Err(MonthlyResourceExhaustion::DurableStorage.into())
         );
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Ephemeral),
-            Err(MonthlyResourceExhaustion::EphemeralStorage)
+            Err(MonthlyResourceExhaustion::EphemeralStorage.into())
         );
     }
 
@@ -5648,7 +5956,7 @@ mod tests {
         assert_eq!(captured.durable_storage_byte_seconds_delta, 10);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::DurableStorage)
+            Err(MonthlyResourceExhaustion::DurableStorage.into())
         );
     }
 
@@ -5675,7 +5983,7 @@ mod tests {
         assert_eq!(entry.durable_byte_seconds_delta(), 160);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::DurableStorage)
+            Err(MonthlyResourceExhaustion::DurableStorage.into())
         );
         assert_eq!(
             entry
@@ -5888,7 +6196,7 @@ mod tests {
 
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         let captured = entry.capture_usage_update_for_test();
         assert_eq!(captured.memory_gb_seconds_delta, 1);
@@ -5922,7 +6230,7 @@ mod tests {
 
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         entry.update_policy_revision(9);
         let revision_7 = entry.capture_usage_update_for_test();
@@ -5984,7 +6292,7 @@ mod tests {
         );
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
     }
 
@@ -6008,7 +6316,7 @@ mod tests {
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 160);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         assert_eq!(
             entry
@@ -6162,7 +6470,7 @@ mod tests {
 
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 10);
     }
@@ -6174,7 +6482,7 @@ mod tests {
         entry.record_memory_gb_seconds(AgentMode::Durable, 10);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
 
         entry.begin_monthly_refresh_with_memory_for_test(1, 0, 0);
@@ -6222,7 +6530,7 @@ mod tests {
         assert!(failed.finish_ambiguous_transport_failure(1));
         assert_eq!(
             failed.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::Memory)
+            Err(MonthlyResourceExhaustion::Memory.into())
         );
         let next_period = if period.month == 12 {
             AccountUsagePeriod {
@@ -6518,11 +6826,11 @@ mod tests {
         entry.record_storage_byte_seconds(AgentMode::Ephemeral, 18);
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Durable),
-            Err(MonthlyResourceExhaustion::DurableStorage)
+            Err(MonthlyResourceExhaustion::DurableStorage.into())
         );
         assert_eq!(
             entry.monthly_resource_capacity(AgentMode::Ephemeral),
-            Err(MonthlyResourceExhaustion::EphemeralStorage)
+            Err(MonthlyResourceExhaustion::EphemeralStorage.into())
         );
     }
 
@@ -7424,6 +7732,8 @@ mod tests {
             available_blob_storage_bytes: u64::MAX,
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            monthly_policy_status:
+                golem_service_base::model::MonthlyResourcePolicyStatus::Available,
             usage_update_applied: true,
             monthly_usage_mode_revision: 0,
             monthly_policy_revision: 0,
@@ -7453,6 +7763,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -7490,6 +7802,8 @@ mod tests {
             available_blob_storage_bytes: u64::MAX,
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            monthly_policy_status:
+                golem_service_base::model::MonthlyResourcePolicyStatus::Available,
             usage_update_applied: true,
             monthly_usage_mode_revision: 0,
             monthly_policy_revision: 0,
@@ -7509,6 +7823,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -7619,6 +7935,8 @@ mod tests {
                     available_blob_storage_bytes: u64::MAX,
                     max_concurrent_agents_per_executor: u64::MAX,
                     oplog_writes_per_second: u64::MAX,
+                    monthly_policy_status:
+                        golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                     usage_update_applied: true,
                     monthly_usage_mode_revision: 0,
                     monthly_policy_revision: 0,
@@ -7939,6 +8257,8 @@ mod tests {
             available_rpc_calls: u64::MAX,
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: u64::MAX,
+            monthly_policy_status:
+                golem_service_base::model::MonthlyResourcePolicyStatus::Available,
             usage_update_applied: true,
             monthly_usage_mode_revision,
             monthly_policy_revision: monthly_usage_mode_revision,
@@ -8344,6 +8664,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -8390,6 +8712,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -8479,6 +8803,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -8517,6 +8843,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -8699,6 +9027,8 @@ mod tests {
                 available_blob_storage_bytes: 0,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: u64::MAX,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
             },
         )])));
@@ -8776,6 +9106,8 @@ mod tests {
                 available_blob_storage_bytes: 10,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: u64::MAX,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: false,
             },
         )])));
@@ -8846,6 +9178,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -8882,6 +9216,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -8945,6 +9281,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -8988,6 +9326,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -9065,6 +9405,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -9101,6 +9443,8 @@ mod tests {
             available_blob_storage_bytes: u64::MAX,
             max_concurrent_agents_per_executor: limit,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            monthly_policy_status:
+                golem_service_base::model::MonthlyResourcePolicyStatus::Available,
             usage_update_applied: true,
             monthly_usage_mode_revision: 0,
             monthly_policy_revision: 0,
@@ -9155,6 +9499,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: 10,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -9193,6 +9539,8 @@ mod tests {
                 available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: 3,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                monthly_policy_status:
+                    golem_service_base::model::MonthlyResourcePolicyStatus::Available,
                 usage_update_applied: true,
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,

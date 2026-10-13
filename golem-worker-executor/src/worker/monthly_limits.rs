@@ -240,6 +240,10 @@ impl ExecutionWindow {
                         let capacity = worker
                             .owner_runtime_resources
                             .with_monthly_capacity(worker.agent_mode(), |capacity| capacity);
+                        if capacity.policy_status == golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable {
+                            monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
+                            return Err(crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error());
+                        }
                         if capacity.exhaustion.is_some() {
                             worker.state_actor.monthly_capacity_exhausted(
                                 worker.clone(),

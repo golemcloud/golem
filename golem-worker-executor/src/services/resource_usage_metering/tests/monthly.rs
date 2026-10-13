@@ -389,7 +389,7 @@ async fn monthly_scripted_storage_rollover_preserves_mode_and_recovers_capacity(
         };
         assert_eq!(
             entry.monthly_memory_and_storage_capacity(mode),
-            Err(exhausted)
+            Err(exhausted.into())
         );
         let old_policy = policy.clone();
         policy.period = february;

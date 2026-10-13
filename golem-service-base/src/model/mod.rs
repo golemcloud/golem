@@ -165,6 +165,7 @@ pub struct ResourceLimits {
     pub monthly_usage_mode_revision: u64,
     pub monthly_policy_revision: u64,
     pub monthly_policy: MonthlyResourcePolicy,
+    pub monthly_policy_status: MonthlyResourcePolicyStatus,
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
     pub max_disk_space_per_worker: u64,
@@ -176,6 +177,13 @@ pub struct ResourceLimits {
     pub max_concurrent_agents_per_executor: u64,
     pub oplog_writes_per_second: u64,
     pub usage_update_applied: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Unavailable policy payloads do not refresh enforcement; delivery acknowledgement is independent.
+pub enum MonthlyResourcePolicyStatus {
+    Available,
+    Unavailable,
 }
 
 const UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR: u64 = 1_000_000_000_000_000_000;
@@ -208,6 +216,16 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
         Self {
             monthly_usage_mode_revision: value.monthly_usage_mode_revision,
             monthly_policy_revision: value.monthly_policy_revision,
+            monthly_policy_status: match value.monthly_policy_status {
+                MonthlyResourcePolicyStatus::Available => {
+                    golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available
+                        .into()
+                }
+                MonthlyResourcePolicyStatus::Unavailable => {
+                    golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Unavailable
+                        .into()
+                }
+            },
             monthly_policy: Some(
                 golem_api_grpc::proto::golem::common::MonthlyResourcePolicy {
                     period: Some(golem_api_grpc::proto::golem::common::AccountUsagePeriod {
@@ -259,6 +277,23 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
         value: golem_api_grpc::proto::golem::common::ResourceLimits,
     ) -> Result<Self, Self::Error> {
         let monthly_policy = value.monthly_policy.ok_or("missing monthly_policy field")?;
+        let monthly_policy_status =
+            match golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::try_from(
+                value.monthly_policy_status,
+            )
+            .map_err(|_| {
+                format!(
+                    "invalid monthly policy status: {}",
+                    value.monthly_policy_status
+                )
+            })? {
+                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available => {
+                    MonthlyResourcePolicyStatus::Available
+                }
+                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Unavailable => {
+                    MonthlyResourcePolicyStatus::Unavailable
+                }
+            };
         let period = monthly_policy.period.ok_or("missing period field")?;
         if !(1..=12).contains(&period.month) {
             return Err(format!(
@@ -306,6 +341,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
         Ok(Self {
             monthly_usage_mode_revision: value.monthly_usage_mode_revision,
             monthly_policy_revision: value.monthly_policy_revision,
+            monthly_policy_status,
             monthly_policy: MonthlyResourcePolicy {
                 period: golem_common::model::account_usage::AccountUsagePeriod {
                     year: period.year,
@@ -648,6 +684,51 @@ mod tests {
     use std::collections::HashMap;
     use test_r::test;
 
+    #[test]
+    fn monthly_policy_availability_and_committed_acknowledgement_survive_wire_roundtrip() {
+        use golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus as ProtoStatus;
+        use prost::Message;
+        for status in [ProtoStatus::Available, ProtoStatus::Unavailable] {
+            let wire = ResourceLimits {
+                monthly_policy: Some(monthly_resource_policy()),
+                monthly_policy_status: status.into(),
+                usage_update_applied: true,
+                monthly_usage_mode_revision: 7,
+                monthly_policy_revision: 9,
+                ..Default::default()
+            };
+            let bytes = wire.encode_to_vec();
+            let decoded = ResourceLimits::decode(bytes.as_slice()).unwrap();
+            let model = super::ResourceLimits::try_from(decoded).unwrap();
+            assert!(model.usage_update_applied);
+            assert_eq!(model.monthly_policy_revision, 9);
+            assert_eq!(
+                model.monthly_policy.mode,
+                golem_common::model::account_usage::MonthlyUsageMode::AllowOverage
+            );
+            assert_eq!(model.monthly_policy.available_memory_gb_seconds, 2);
+            assert_eq!(
+                model.monthly_policy_status,
+                match status {
+                    ProtoStatus::Available => super::MonthlyResourcePolicyStatus::Available,
+                    ProtoStatus::Unavailable => super::MonthlyResourcePolicyStatus::Unavailable,
+                }
+            );
+            let emitted: ResourceLimits = model.clone().into();
+            assert_eq!(super::ResourceLimits::try_from(emitted).unwrap(), model);
+        }
+        let unknown = ResourceLimits {
+            monthly_policy: Some(monthly_resource_policy()),
+            monthly_policy_status: 99,
+            ..Default::default()
+        };
+        assert!(
+            super::ResourceLimits::try_from(unknown)
+                .unwrap_err()
+                .contains("invalid monthly policy status")
+        );
+    }
+
     fn monthly_resource_policy() -> MonthlyResourcePolicy {
         MonthlyResourcePolicy {
             period: Some(AccountUsagePeriod {
@@ -679,6 +760,8 @@ mod tests {
             available_blob_storage_bytes: 0,
             max_concurrent_agents_per_executor: 0,
             oplog_writes_per_second: 0,
+            monthly_policy_status:
+                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available.into(),
             usage_update_applied: false,
             monthly_usage_mode_revision: 0,
             monthly_policy_revision: 0,
@@ -707,6 +790,8 @@ mod tests {
             available_blob_storage_bytes: 9,
             max_concurrent_agents_per_executor: 7,
             oplog_writes_per_second: 500,
+            monthly_policy_status:
+                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available.into(),
             usage_update_applied: true,
             monthly_usage_mode_revision: 6,
             monthly_policy_revision: 7,
@@ -776,6 +861,7 @@ mod tests {
             available_rpc_calls: 0,
             max_concurrent_agents_per_executor: 7,
             oplog_writes_per_second: 8,
+            monthly_policy_status: crate::model::MonthlyResourcePolicyStatus::Available,
             usage_update_applied: true,
         };
 

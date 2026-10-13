@@ -615,6 +615,13 @@ async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(
 }
 
 #[test]
+async fn committed_usage_with_failed_reload_reports_unavailable_and_recovers(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::resource_usage_reload::committed_usage_with_failed_reload_reports_unavailable_and_recovers(deps).await;
+}
+
+#[test]
 async fn test_resource_reads_exclude_disabled_monthly_usage_and_baselines(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

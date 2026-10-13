@@ -1166,7 +1166,7 @@ async fn ephemeral_meter_rollover_keeps_storage_separate_and_recovers_hard_limit
 
     assert_eq!(
         entry.monthly_memory_and_storage_capacity(AgentMode::Ephemeral),
-        Err(crate::services::resource_limits::MonthlyResourceExhaustion::Memory)
+        Err(crate::services::resource_limits::MonthlyResourceExhaustion::Memory.into())
     );
     assert!(entry.apply_monthly_snapshot_for_test(
         1,

@@ -151,6 +151,11 @@ impl MutableResourceLimitsRegistry {
         self.limits.lock().unwrap().max_memory_per_worker = max_memory_per_worker;
     }
 
+    fn mark_monthly_policy_unavailable(&self) {
+        self.limits.lock().unwrap().monthly_policy_status =
+            golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable;
+    }
+
     fn applied_updates(&self) -> Vec<ResourceUsageUpdate> {
         self.applied_updates.lock().unwrap().clone()
     }
@@ -234,6 +239,7 @@ fn resource_limits_response(
         available_rpc_calls: u64::MAX,
         max_concurrent_agents_per_executor: u64::MAX,
         oplog_writes_per_second: u64::MAX,
+        monthly_policy_status: golem_service_base::model::MonthlyResourcePolicyStatus::Available,
         usage_update_applied: true,
         monthly_usage_mode_revision,
         monthly_policy_revision: monthly_usage_mode_revision,

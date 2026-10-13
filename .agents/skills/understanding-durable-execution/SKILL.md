@@ -264,6 +264,14 @@ Registry limit requests carry the deployment's existing meter flags; disabled ru
 skip usage reads and allowance calculations. All-off reads resolve per-agent policy without creating
 monthly billing revisions or baselines, and aggregate display does not create runtime billing state.
 
+Registry replies carry delivery acknowledgement separately from monthly-policy availability. A
+committed usage update can be acknowledged even when the next policy read fails. The account entry
+marks enforcement unavailable without installing the fallback's mode, period or capacity. Admission,
+guest checks and the existing monitor report infrastructure failure rather than quota exhaustion.
+The entry retains the latest observed policy revision as a floor, so an older reply cannot restore
+capacity. Unavailable entries refresh on the next existing batch tick; a valid policy restores
+admission without resending acknowledged usage. All-off entries have no monthly availability gate.
+
 Fuel keeps the existing prepaid/refund meter. A remaining prepaid reservation can retain its borrow
 revision and month across a transition, with a default remaining batch of 10,000 fuel. Failed Registry
 delivery can also lose captured usage; ambiguous additive updates are not blindly resent. Delivery

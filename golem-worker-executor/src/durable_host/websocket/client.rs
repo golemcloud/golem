@@ -1281,12 +1281,7 @@ async fn acquire_websocket_connection_or_interrupt(
         golem_service_base::error::worker_executor::InterruptKind,
     >,
 > {
-    let acquire = pool.acquire();
-    pin_mut!(acquire, interrupt_signal);
-    match futures::future::select(acquire, interrupt_signal).await {
-        Either::Left((result, _)) => result.map(Ok),
-        Either::Right((interrupt, _)) => Ok(Err(interrupt)),
-    }
+    acquire_websocket_connection_or_interrupt_future(pool.acquire(), interrupt_signal).await
 }
 
 async fn acquire_websocket_connection_or_interrupt_future(

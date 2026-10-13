@@ -26,6 +26,11 @@ message MonthlyResourcePolicy {
   uint64 available_ephemeral_storage_byte_nanoseconds_remainder = 9;
 }
 
+enum MonthlyResourcePolicyStatus {
+  MONTHLY_RESOURCE_POLICY_STATUS_AVAILABLE = 0;
+  MONTHLY_RESOURCE_POLICY_STATUS_UNAVAILABLE = 1;
+}
+
 message ResourceLimits {
   MonthlyResourcePolicy monthly_policy = 1;
   uint64 max_memory_per_worker = 2;
@@ -42,6 +47,7 @@ message ResourceLimits {
   uint64 monthly_usage_mode_revision = 12;
   uint64 monthly_policy_revision = 13;
   uint64 available_blob_storage_bytes = 14;
+  MonthlyResourcePolicyStatus monthly_policy_status = 15;
 }
 
 message AccountResourceLimitsEntry {
