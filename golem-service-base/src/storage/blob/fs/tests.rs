@@ -18,6 +18,8 @@ use super::{
     directory_attempts, encoded_name, first_error, listed_entry, persist_with,
     remove_unless_dropped, staging_file_is_old, write_if_absent, write_staged,
 };
+#[cfg(unix)]
+use crate::storage::blob::{BlobFailure, BlobRefusal};
 use crate::storage::blob::{
     BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
     normalized_blob_path,
@@ -1269,5 +1271,127 @@ fn a_write_dropped_while_it_makes_its_directory_never_lands() {
     assert_eq!(
         (written, target.exists()),
         (Err(ErrorKind::Interrupted), false)
+    );
+}
+
+#[cfg(unix)]
+/// Gives the kind of the error of each read of the blob `ranges/blob` of `storage`: `get_raw`,
+/// `get_stream`, `get_range_stream` and `get_raw_slice`, and `None` for a read that passed.
+async fn read_failures(storage: &FileSystemBlobStorage) -> [Option<BlobFailure>; 4] {
+    let path = Path::new("ranges/blob");
+    let failure = |error: anyhow::Error| BlobFailure::of(&error);
+    [
+        storage
+            .get_raw("test", "get-raw", namespace(), path)
+            .await
+            .err()
+            .map(failure),
+        storage
+            .get_stream("test", "get-stream", namespace(), path)
+            .await
+            .err()
+            .map(failure),
+        storage
+            .get_range_stream("test", "get-range-stream", namespace(), path, 0, 2)
+            .await
+            .err()
+            .map(failure),
+        storage
+            .get_raw_slice("test", "get-raw-slice", namespace(), path, 0, 1)
+            .await
+            .err()
+            .map(failure),
+    ]
+}
+
+#[cfg(unix)]
+/// Sets the Unix permission bits of `path` to `mode`.
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+async fn a_read_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error() {
+    // A directory on the path of the blob that the executor cannot search, or a blob that it
+    // cannot read, is of the setup of the storage, and only an operator can fix it. Each read
+    // gives a `BlobRefusedError` for it, and not `Ok(None)`: the blob can be there.
+    let (_root, storage) = storage_with_blobs().await;
+    let blob = storage
+        .blob_of(
+            &namespace(),
+            &normalized_blob_path(Path::new("ranges/blob")).unwrap(),
+        )
+        .unwrap();
+    let directory = blob.parent().unwrap().to_path_buf();
+    let refused = Some(BlobFailure::Refused(BlobRefusal::AccessDenied));
+
+    set_mode(&blob, 0o000);
+    let unreadable_blob = read_failures(&storage).await;
+    set_mode(&blob, 0o644);
+    set_mode(&directory, 0o000);
+    let unsearchable_directory = read_failures(&storage).await;
+    set_mode(&directory, 0o755);
+
+    assert_eq!(
+        (
+            unreadable_blob,
+            unsearchable_directory,
+            read_failures(&storage).await
+        ),
+        ([refused; 4], [refused; 4], [None; 4])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+async fn an_existence_check_or_a_listing_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error()
+ {
+    // An existence check or a listing that cannot search a directory cannot tell what is in it, so
+    // it gives a `BlobRefusedError` and not `DoesNotExist` or an untyped error.
+    let (_root, storage) = storage_with_blobs().await;
+    let directory = storage
+        .directory_of(
+            &namespace(),
+            &normalized_blob_path(Path::new("ranges")).unwrap(),
+        )
+        .unwrap();
+    let failure = |error: anyhow::Error| BlobFailure::of(&error);
+    let failures = async || {
+        [
+            storage
+                .exists("test", "exists", namespace(), Path::new("ranges/blob"))
+                .await
+                .err()
+                .map(failure),
+            storage
+                .exists("test", "exists", namespace(), Path::new("ranges"))
+                .await
+                .err()
+                .map(failure),
+            storage
+                .list_dir("test", "list-dir", namespace(), Path::new("ranges"))
+                .await
+                .err()
+                .map(failure),
+            storage
+                .list_blobs_below("test", "list-blobs-below", namespace(), Path::new("ranges"))
+                .await
+                .err()
+                .map(failure),
+        ]
+    };
+
+    set_mode(&directory, 0o000);
+    let unsearchable_directory = failures().await;
+    set_mode(&directory, 0o755);
+
+    assert_eq!(
+        (unsearchable_directory, failures().await),
+        (
+            [Some(BlobFailure::Refused(BlobRefusal::AccessDenied)); 4],
+            [None; 4]
+        )
     );
 }

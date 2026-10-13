@@ -248,6 +248,8 @@ A method marked **read-only**, such as `getCount` above, can be answered from a 
 
 The mode is set on the agent type. A durable counter called three times returns 1, 2, 3; the same counter as an ephemeral agent returns 1, 1, 1.
 
+Only durable agents can take [snapshots](/next/develop/snapshotting). An ephemeral agent has no state to save, so the SDKs refuse an ephemeral agent definition that enables snapshotting.
+
 A caller can also create a **phantom** agent: a separate agent with the same constructor arguments, distinguished by a generated ID. Phantoms are useful for running several independent copies of the same job.
 
 ## How agents are isolated

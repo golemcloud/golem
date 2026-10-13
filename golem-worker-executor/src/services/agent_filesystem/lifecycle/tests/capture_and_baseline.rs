@@ -1215,8 +1215,9 @@ async fn an_update_with_two_sizes_for_one_content_fails_before_any_change() {
 }
 
 /// A source that the blob storage cannot give now stops an update before its first change as an
-/// unavailable source, and the generation stays valid: the same update passes when the storage
-/// gives the source. A source that the storage does not hold is a sandbox error.
+/// unavailable source, and a source that the storage refuses stops it as a refused source. The
+/// generation stays valid: the same update passes when the storage gives the source. A source
+/// that the storage does not hold is a sandbox error.
 #[test]
 #[timeout("60s")]
 async fn an_unavailable_initial_file_source_stops_an_update_before_any_change_and_a_later_update_passes()
@@ -1224,6 +1225,7 @@ async fn an_unavailable_initial_file_source_stops_an_update_before_any_change_an
     let agents = UnmanagedAgents::new().await;
     let store = InitialFileStore::over(Arc::new(ScriptedSourceStorage::new([
         SourceRead::Unavailable,
+        SourceRead::Refused,
     ])))
     .await;
     let content = b"added";
@@ -1243,6 +1245,15 @@ async fn an_unavailable_initial_file_source_stops_an_update_before_any_change_an
     let root = agents.root(&agent);
 
     let unavailable = update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![added.clone()],
+    )
+    .unwrap()
+    .await
+    .unwrap_err();
+    let refused = update_initial_files(
         &resident_generation_handle(&resident),
         Arc::clone(&store.loader),
         store.environment_id,
@@ -1274,6 +1285,16 @@ async fn an_unavailable_initial_file_source_stops_an_update_before_any_change_an
     assert!(
         matches!(unavailable, Error::InitialFileUnavailable(_)),
         "{unavailable}"
+    );
+    assert!(
+        matches!(
+            refused,
+            Error::InitialFileRefused {
+                refusal: BlobRefusal::AccessDenied,
+                ..
+            }
+        ),
+        "{refused}"
     );
     assert!(unchanged);
     assert!(matches!(failed, Error::Sandbox(_)), "{failed}");
@@ -2396,6 +2417,7 @@ enum StepOutcome {
     Access(AccessError),
     Sandbox(Option<std::io::ErrorKind>),
     InitialFileUnavailable,
+    InitialFileRefused,
     AgentQuota,
     PhysicalCapacity,
     Baseline,
@@ -2764,6 +2786,7 @@ fn error_outcome(error: Error) -> StepOutcome {
         Error::Access(error) => StepOutcome::Access(error),
         Error::Sandbox(error) => StepOutcome::Sandbox(error.io_kind()),
         Error::InitialFileUnavailable(_) => StepOutcome::InitialFileUnavailable,
+        Error::InitialFileRefused { .. } => StepOutcome::InitialFileRefused,
         Error::InitialFileConflict(conflict) => {
             StepOutcome::Conflict(conflict.path().display().to_string())
         }

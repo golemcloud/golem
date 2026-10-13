@@ -16,7 +16,10 @@ function normalizedNotice(file) {
     .readFileSync(file, "utf8")
     .replaceAll("\r\n", "\n")
     .split("\n");
-  return `${lines.map((line) => line.trimEnd()).join("\n").trimEnd()}\n`;
+  return `${lines
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd()}\n`;
 }
 
 function packageName(packagePath, manifest) {
@@ -85,10 +88,7 @@ function fallbackLicenseAssets(item) {
     return [
       {
         name: "diff3.js.LICENSE",
-        content: stripLineCommentNotice(
-          path.join(item.root, "diff3.js"),
-          22,
-        ),
+        content: stripLineCommentNotice(path.join(item.root, "diff3.js"), 22),
       },
       {
         name: "onp.js.LICENSE",
@@ -144,7 +144,9 @@ const packages = Object.entries(lock.packages)
     };
   })
   .sort((left, right) =>
-    `${left.name}@${left.version}`.localeCompare(`${right.name}@${right.version}`),
+    `${left.name}@${left.version}`.localeCompare(
+      `${right.name}@${right.version}`,
+    ),
   );
 
 const spdx = `${JSON.stringify(
@@ -173,7 +175,7 @@ const spdx = `${JSON.stringify(
   2,
 )}\n`;
 
-const sourceLines = ["isomorphicGit", "diff", "zod"].map((key) => {
+const sourceLines = ["isomorphicGit", "diff", "diff3", "zod"].map((key) => {
   const item = provenance[key];
   return `- ${item.name} ${item.version}: ${item.sourceTag}\n  - Registry archive: ${item.registryTarball}\n  - Integrity: \`${item.registryIntegrity}\`\n  - Repacked artifact SHA-256: \`${item.artifactSha256}\``;
 });
@@ -192,7 +194,9 @@ const generated = new Map([
   ],
   [
     "git/GOLEM-TS-SDK-LICENSE",
-    normalizedNotice(path.join(root, "../../sdks/ts/packages/golem-ts-sdk/LICENSE")),
+    normalizedNotice(
+      path.join(root, "../../sdks/ts/packages/golem-ts-sdk/LICENSE"),
+    ),
   ],
   [
     "git/DEPENDENCY-NOTICES.md",
@@ -206,7 +210,7 @@ const generated = new Map([
   ["git/sbom.spdx.json", spdx],
   [
     "SOURCE.md",
-    `# Git tool source and notices\n\nThe Git object and worktree implementation is provided by pinned upstream packages. Golem-owned wrappers expose the supported local command surface and integrate it with the component filesystem.\n\n${sourceLines.join("\n")}\n\nThe Git and upstream package names are used descriptively. No upstream logos are used, no endorsement is implied, and the respective trademarks belong to their owners. Production publication requires legal and release-owner approval.\n`,
+    `# Git tool source and notices\n\nThe Git object, transfer and worktree implementation uses released, pinned JavaScript packages without upstream source patches. Golem-owned wrappers expose local and HTTP(S) commands, reference publication and merge/rebase lifecycle through the component filesystem and WASI HTTP. Text integration uses the released diff3 package, not native Git's merge algorithm.\n\n${sourceLines.join("\n")}\n\nThe Git and upstream package names are used descriptively. No upstream logos are used, no endorsement is implied, and the respective trademarks belong to their owners. Production publication requires legal and release-owner approval.\n`,
   ],
 ]);
 
@@ -235,7 +239,9 @@ for (const [relative, content] of generated) {
   const target = path.join(outputRoot, relative);
   if (check) {
     if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== content) {
-      console.error(`stale compliance artifact: ${path.relative(root, target)}`);
+      console.error(
+        `stale compliance artifact: ${path.relative(root, target)}`,
+      );
       stale = true;
     }
   } else {
@@ -250,5 +256,7 @@ else {
     .createHash("sha256")
     .update([...generated.values()].join("\0"))
     .digest("hex");
-  console.log(`${check ? "verified" : "generated"} compliance bundle ${digest}`);
+  console.log(
+    `${check ? "verified" : "generated"} compliance bundle ${digest}`,
+  );
 }

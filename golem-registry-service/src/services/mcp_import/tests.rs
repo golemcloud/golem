@@ -476,13 +476,15 @@ async fn deployment_warnings_preserve_collision_indices_and_do_not_cache() {
     upstream.reply(200, json!({"tools":[tool("shared"),tool("last")]}));
     let resolver = fixture.resolver(Default::default());
     let warnings = resolver
-        .deployment_warnings(
+        .deployment_discovery(
             fixture.source.environment_id,
             vec![declaration(&upstream.url); 2],
             vec!["native".into()],
+            &BTreeSet::new(),
             AuthCtx::System,
         )
-        .await;
+        .await
+        .warnings;
     let details = warnings
         .iter()
         .map(|warning| match warning {
@@ -507,6 +509,139 @@ async fn deployment_warnings_preserve_collision_indices_and_do_not_cache() {
 
 #[test]
 #[timeout("30s")]
+async fn deployment_discovery_reports_an_import_that_supplies_a_reserved_name() {
+    let upstream = Upstream::new().await;
+    let fixture = Fixture::new(&upstream).await;
+    upstream.reply(
+        200,
+        json!({"tools":[tool("bash"),tool("native"),tool("first")]}),
+    );
+    upstream.reply(200, json!({"tools":[tool("last")]}));
+    let resolver = fixture.resolver(Default::default());
+    let discovery = resolver
+        .deployment_discovery(
+            fixture.source.environment_id,
+            vec![declaration(&upstream.url); 2],
+            vec!["bash".into(), "native".into()],
+            &BTreeSet::from(["bash".to_string()]),
+            AuthCtx::System,
+        )
+        .await;
+
+    assert_eq!(discovery.reserved_name_conflicts, [(0, "bash".to_string())]);
+    // A clash with another tool of the deployment stays a warning.
+    let details = discovery
+        .warnings
+        .iter()
+        .map(|warning| match warning {
+            DeployValidationWarning::McpImportDiscovery(warning) => {
+                (warning.import_index, warning.upstream_tool_name.as_deref())
+            }
+            _ => panic!("unexpected warning"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(details, [(Some(0), Some("native"))]);
+    assert_eq!(upstream.count(), 2);
+    assert!(resolver.inner.cache.lock().unwrap().entries.is_empty());
+}
+
+#[test]
+#[timeout("30s")]
+async fn deployment_discovery_has_no_conflict_for_an_import_with_a_prefix() {
+    let upstream = Upstream::new().await;
+    let fixture = Fixture::new(&upstream).await;
+    let resolver = fixture.resolver(Default::default());
+
+    // A prefix gives the imported tool another name.
+    upstream.reply(200, json!({"tools":[tool("bash")]}));
+    let prefixed = resolver
+        .deployment_discovery(
+            fixture.source.environment_id,
+            vec![McpImportDeployment {
+                prefix: Some("remote".into()),
+                ..declaration(&upstream.url)
+            }],
+            vec!["bash".into()],
+            &BTreeSet::from(["bash".to_string()]),
+            AuthCtx::System,
+        )
+        .await;
+    assert!(prefixed.reserved_name_conflicts.is_empty());
+    assert!(prefixed.unread_reserved_names.is_empty());
+    assert!(prefixed.warnings.is_empty(), "{:?}", prefixed.warnings);
+}
+
+#[test]
+#[timeout("30s")]
+async fn deployment_discovery_of_imports_that_cannot_be_read_names_those_that_can_supply_a_reserved_name()
+ {
+    let upstream = Upstream::new().await;
+    let fixture = Fixture::new(&upstream).await;
+    let resolver = fixture.resolver(Default::default());
+    let reserved = BTreeSet::from(["bash".to_string()]);
+    let unread = |imports: Vec<McpImportDeployment>, reserved: BTreeSet<String>| {
+        let resolver = &resolver;
+        let upstream = &upstream;
+        let environment_id = fixture.source.environment_id;
+        async move {
+            for _ in &imports {
+                upstream.reply(503, json!({}));
+            }
+            let discovery = resolver
+                .deployment_discovery(
+                    environment_id,
+                    imports,
+                    vec!["bash".into()],
+                    &reserved,
+                    AuthCtx::System,
+                )
+                .await;
+            // The tools were not read, so no tool is known to have the name. The warning stays.
+            assert!(discovery.reserved_name_conflicts.is_empty());
+            assert!(
+                matches!(&discovery.warnings[..], [DeployValidationWarning::McpImportDiscovery(w)]
+                if w.upstream_tool_name.is_none())
+            );
+            discovery
+                .unread_reserved_names
+                .into_iter()
+                .map(|unread| {
+                    assert!(!unread.reason.is_empty());
+                    (unread.import_index, unread.tool_name)
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+    let plain = || declaration(&upstream.url);
+
+    // An import with no prefix and no filter can supply each name.
+    assert_eq!(
+        unread(vec![plain()], reserved.clone()).await,
+        [(0, "bash".to_string())]
+    );
+    // An import cannot supply the name with a prefix, with a filter that leaves the name out,
+    // or when the deployment has no tool with a reserved name.
+    for import in [
+        McpImportDeployment {
+            prefix: Some("remote".into()),
+            ..plain()
+        },
+        McpImportDeployment {
+            exclude: Some(vec!["bash".into()]),
+            ..plain()
+        },
+        McpImportDeployment {
+            include: Some(vec!["search*".into()]),
+            ..plain()
+        },
+    ] {
+        assert!(unread(vec![import], reserved.clone()).await.is_empty());
+    }
+    assert!(unread(vec![plain()], BTreeSet::new()).await.is_empty());
+}
+
+#[test]
+#[timeout("30s")]
 async fn deployment_warnings_do_not_elevate_permissions_or_expose_inline_credentials() {
     let upstream = Upstream::new().await;
     let fixture = Fixture::new(&upstream).await;
@@ -519,13 +654,15 @@ async fn deployment_warnings_do_not_elevate_permissions_or_expose_inline_credent
         ..declaration(&upstream.url)
     };
     let warnings = resolver
-        .deployment_warnings(
+        .deployment_discovery(
             fixture.source.environment_id,
             vec![import.clone()],
             vec![],
+            &BTreeSet::new(),
             fixture.auth.clone(),
         )
-        .await;
+        .await
+        .warnings;
     assert_eq!(warnings.len(), 1);
     assert_eq!(
         upstream.count(),
@@ -539,24 +676,28 @@ async fn deployment_warnings_do_not_elevate_permissions_or_expose_inline_credent
     );
     assert!(
         resolver
-            .deployment_warnings(
+            .deployment_discovery(
                 fixture.source.environment_id,
                 vec![],
                 vec![],
+                &BTreeSet::new(),
                 fixture.auth.clone(),
             )
             .await
+            .warnings
             .is_empty()
     );
     upstream.reply(503, json!({"private":"private-inline-token"}));
     let warnings = resolver
-        .deployment_warnings(
+        .deployment_discovery(
             fixture.source.environment_id,
             vec![import],
             vec![],
+            &BTreeSet::new(),
             AuthCtx::System,
         )
-        .await;
+        .await
+        .warnings;
     assert!(
         matches!(&warnings[..], [DeployValidationWarning::McpImportDiscovery(w)]
         if w.import_index == Some(0) && w.upstream_tool_name.is_none())

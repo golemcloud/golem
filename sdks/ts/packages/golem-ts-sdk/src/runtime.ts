@@ -610,6 +610,14 @@ function assembleAgentType(
       if (method !== undefined && !methodCodecs.has(method))
         throw new Error('HTTP router method is missing');
     }
+  } else if (
+    metadata.mode === 'ephemeral' &&
+    toWitSnapshotting(metadata.snapshotting).tag === 'enabled'
+  ) {
+    throw new Error(
+      `Agent "${name}" is ephemeral and declares snapshotting, but ephemeral agents take no ` +
+        'snapshots. Remove the snapshotting option or make the agent durable.',
+    );
   }
   if (httpMount?.filesystemBindings.length) {
     const captures = httpMount.pathPrefix.flatMap((segment) =>
