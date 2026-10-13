@@ -1,6 +1,6 @@
 # Git tool source and notices
 
-The Git object and worktree implementation is provided by pinned upstream packages. Golem-owned wrappers expose the supported local command surface and integrate it with the component filesystem.
+The Git object, transfer and worktree implementation uses released, pinned JavaScript packages without upstream source patches. Golem-owned wrappers expose local and HTTP(S) commands, reference publication and merge/rebase lifecycle through the component filesystem and WASI HTTP. Text integration uses the released diff3 package, not native Git's merge algorithm.
 
 - isomorphic-git 1.42.2: https://github.com/isomorphic-git/isomorphic-git/tree/v1.42.2
   - Registry archive: https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.42.2.tgz
@@ -10,6 +10,10 @@ The Git object and worktree implementation is provided by pinned upstream packag
   - Registry archive: https://registry.npmjs.org/diff/-/diff-8.0.2.tgz
   - Integrity: `sha512-sSuxWU5j5SR9QQji/o2qMvqRNYRDOcBTgsJ/DeCf4iSN4gW+gNMXM7wFIP+fdXZxoNiAnHUTGjCr+TSWXdRDKg==`
   - Repacked artifact SHA-256: `7bdbefb2df0f28dc9280e39e2399f2e6e84d13e9ccb098469b32ad0372c0f5e3`
+- diff3 0.0.3: https://github.com/axosoft/diff3
+  - Registry archive: https://registry.npmjs.org/diff3/-/diff3-0.0.3.tgz
+  - Integrity: `sha512-iSq8ngPOt0K53A6eVr4d5Kn6GNrM2nQZtC740pzIriHtn4pOQ2lyzEXQMBeVcWERN0ye7fhBsk9PbLLQOnUx/g==`
+  - Repacked artifact SHA-256: `7095b10b8dd5e160dbf9593f202c97b515886dc775ae7cc67b38a8624251c282`
 - zod 4.4.3: https://github.com/colinhacks/zod/tree/v4.4.3
   - Registry archive: https://registry.npmjs.org/zod/-/zod-4.4.3.tgz
   - Integrity: `sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==`

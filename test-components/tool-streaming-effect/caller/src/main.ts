@@ -1,10 +1,11 @@
-import { Effect, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Schema, Stream } from "effect"
 import "./concurrent-stream.js"
 import {
   defineAgent,
   defineConfig,
   method,
   Quota,
+  Websocket,
   WitTypes,
 } from "@golemcloud/effect-golem"
 import { ChunkMEffectStreamingClient } from "chunk-m-effect-streaming-tool-guest-client"
@@ -15,6 +16,47 @@ import { client as matrixResource } from "matrix-resource-tool-guest-client"
 declare module "@golemcloud/effect-golem/BridgeTool" {
   export type AgentStream<T> = Stream.Stream<T, unknown>
 }
+
+defineAgent({
+  name: "WebsocketRecoveryProbe",
+  id: { name: Schema.String },
+  methods: {
+    recover: method({
+      input: { oldUrl: Schema.String, replacementUrl: Schema.String },
+      success: Schema.Tuple([Schema.Boolean, Schema.Boolean, Schema.String]),
+    }),
+  },
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
+    recover: ({ oldUrl, replacementUrl }) => Effect.gen(function* () {
+      let initializationJoined = false
+      const error = yield* Effect.flip(Effect.scoped(Effect.gen(function* () {
+        const socket = yield* Websocket.connect(oldUrl, { reconstructionPolicy: "report-connection-loss" })
+        const reader = yield* Effect.forkChild(socket.runString<void, never, never>(() => {}))
+        const initialize = Effect.gen(function* () {
+          const writer = yield* socket.writer
+          yield* writer.write("initialize-old")
+          yield* Effect.never
+          yield* writer.write("must-not-forward")
+        }).pipe(Effect.ensuring(Effect.sync(() => { initializationJoined = true })))
+        yield* Effect.raceFirst(Fiber.join(reader), initialize)
+      })))
+      if (!Websocket.isSessionLost(error)) return yield* Effect.fail(error)
+      if (!initializationJoined) return yield* Effect.fail(new Error("old initialization is still running"))
+      const greeting = yield* Effect.scoped(Effect.gen(function* () {
+        const socket = yield* Websocket.connect(replacementUrl, { reconstructionPolicy: "report-connection-loss" })
+        const received = yield* Deferred.make<string>()
+        yield* Effect.forkChild(socket.runString<void, never, never>((text) =>
+          Deferred.succeed(received, text).pipe(Effect.asVoid)))
+        const writer = yield* socket.writer
+        yield* writer.write("initialize-new")
+        return yield* Deferred.await(received)
+      }))
+      return [true, initializationJoined, greeting] as const
+    }),
+  }),
+})
 
 class MatrixResourceConfig extends defineConfig("EffectToolStreamingCaller.Config", {
   secret: Schema.Redacted(Schema.String),

@@ -875,7 +875,7 @@ cargo-test-r run --package integration-tests --test memory-billing -- --nocaptur
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs all CLI integration tests"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -964,8 +964,8 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-core]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'core' shard (untagged tests, i.e. app::app)"
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
+description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -1875,6 +1875,16 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.prepare-git-differential-tests]
+description = "Builds the pinned native Git reference and installs released JavaScript dependencies for differential tests"
+script_runner = "@duckscript"
+script = '''
+cd builtin-tools/git
+exec --fail-on-error node scripts/prepare-native-tests.mjs
+exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
+cd ../..
+'''
+
 [tasks.build-git-tool]
 dependencies = ["wit"]
 description = "Builds the built-in Git tool component"
@@ -2105,7 +2115,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.4\",\"npm@10.9.9+golem.4\",\"npx@10.9.9+golem.4\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.5\",\"npm@10.9.9+golem.5\",\"npx@10.9.9+golem.5\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2113,7 +2123,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.4\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.5\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2129,7 +2139,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.10\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.12\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2379,7 +2389,7 @@ exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin b
 [tasks.run-benchmark-suite-orb]
 description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
 script_runner = "@duckscript"
-env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.6" }
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.11" }
 script = '''
 exec --fail-on-error docker info
 exec --fail-on-error cargo make --profile ci build-release

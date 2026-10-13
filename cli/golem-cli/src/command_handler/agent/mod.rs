@@ -13,18 +13,24 @@
 // limitations under the License.
 
 pub(crate) mod invocation_session;
+pub mod oplog_serve;
 mod stream;
 mod stream_output;
 
+use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
+use crate::command_handler::agent::oplog_serve::{
+    OplogViewerServer, open_in_browser, serve_oplog_viewer,
+};
 use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
+use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
@@ -37,6 +43,9 @@ use crate::model::agent::action_result::{
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::oplog_html::{
+    OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
+};
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
@@ -130,6 +139,10 @@ fn pending_update_progress(
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
 }
+
+/// Above this many embedded entries the static viewer page becomes slow to open, so the command
+/// points at the served viewer.
+const STATIC_VIEWER_ENTRY_WARNING_THRESHOLD: usize = 20_000;
 
 impl AgentCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
@@ -250,7 +263,8 @@ impl AgentCommandHandler {
                     agent_id,
                     from,
                     query,
-                } => self.cmd_oplog(agent_id, from, query).await,
+                    viewer,
+                } => self.cmd_oplog(agent_id, from, query, viewer).await,
                 AgentSubcommand::Revert {
                     agent_id,
                     last_oplog_index,
@@ -812,14 +826,48 @@ impl AgentCommandHandler {
         agent_id: AgentIdArgs,
         from: Option<u64>,
         query: Option<String>,
+        viewer: OplogViewerArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
         let batch_size = self.ctx.http_batch_size();
+        let viewer_document =
+            |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
+                mode,
+                agent_id: format_agent_id_match(&agent_id_match),
+                component_name: component.component_name.0.clone(),
+                component_id: component.id.0.to_string(),
+                generated_at: Utc::now().to_rfc3339(),
+                cli_version: crate::version().to_string(),
+                from,
+                query: query.clone(),
+                page_size: batch_size,
+                entries,
+            };
+
+        if viewer.serve {
+            let page = render_oplog_viewer_html(&viewer_document(OplogViewerMode::Live, vec![]))?;
+            return serve_oplog_viewer(
+                OplogViewerServer {
+                    ctx: self.ctx.clone(),
+                    component_id: component.id.0,
+                    agent_id: agent_id.0.clone(),
+                    page,
+                    page_size: batch_size,
+                },
+                viewer.port,
+                !viewer.no_open,
+            )
+            .await;
+        }
+
+        let html = viewer.html;
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
+        let print_entries = html.is_none() || self.ctx.format().is_structured();
+        let mut collected_entries = Vec::<AgentOplogEntryView>::new();
         loop {
             let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
             cursor = {
@@ -845,11 +893,17 @@ impl AgentCommandHandler {
             if !entries.is_empty() {
                 had_entries = true;
                 for entry in entries {
-                    self.ctx.log_handler().log_output(AgentOplogEntryView {
+                    let view = AgentOplogEntryView {
                         index: entry.oplog_index.as_u64(),
                         attribution: entry.attribution,
                         entry: entry.entry,
-                    })?;
+                    };
+                    if html.is_some() {
+                        collected_entries.push(view.clone());
+                    }
+                    if print_entries {
+                        self.ctx.log_handler().log_output(view)?;
+                    }
                 }
             }
 
@@ -858,7 +912,43 @@ impl AgentCommandHandler {
             }
         }
 
-        if !self.ctx.format().is_structured() && !had_entries {
+        if let Some(html_path) = html {
+            let entry_count = collected_entries.len();
+            let rendered = render_oplog_viewer_html(&viewer_document(
+                OplogViewerMode::Static,
+                collected_entries,
+            ))?;
+            if let Some(parent) = html_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write_str(&html_path, rendered)?;
+            log_action(
+                "Generated",
+                format!(
+                    "HTML oplog viewer with {} entries: {}",
+                    entry_count,
+                    html_path.display().to_string().log_color_highlight()
+                ),
+            );
+            if entry_count > STATIC_VIEWER_ENTRY_WARNING_THRESHOLD {
+                log_warn(format!(
+                    "The page embeds {entry_count} entries; large pages are slow to open. Use {} to load the oplog page by page instead.",
+                    "--serve".log_color_highlight()
+                ));
+            }
+            if viewer.open {
+                let absolute = fs::absolute_lexical_path(&html_path)?;
+                match url::Url::from_file_path(&absolute) {
+                    Ok(file_url) => open_in_browser(file_url.as_str()),
+                    Err(()) => log_warn(format!(
+                        "Could not build a file URL for {}",
+                        absolute.display()
+                    )),
+                }
+            }
+        } else if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 

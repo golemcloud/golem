@@ -10,6 +10,10 @@ Snapshotting also enables **manual agent updates** between incompatible versions
     Automatic snapshotting is optional. Without it, recovery starts from the authoritative recovery baseline, if one exists: the snapshot of the last successful manual update or snapshot-assisted automatic update. Otherwise it replays the full oplog.
 </Callout>
 
+<Callout type="warning">
+    Snapshotting is for durable agents only. An ephemeral agent takes no snapshots: a restart of an ephemeral agent replays only its initialization and never loads a snapshot. Each SDK refuses an ephemeral agent definition that enables snapshotting, and `golem build` refuses a component with such an agent type. The error names the agent. Remove the snapshotting option or make the agent durable.
+</Callout>
+
 ## Default snapshotting implementation
 
 Each language SDK can generate JSON saving and loading when the complete agent state has an explicit JSON-deserialization contract. Automatic loading is not generated for arbitrary state: use custom snapshotting when your SDK cannot deserialize the complete state.
@@ -622,7 +626,7 @@ Golem captures the files at the same boundary where it takes the application sna
 
 The capture keeps the agent's files, directories, symbolic links, hard links and modification times, except the times of the untouched read-only initial files that Golem leaves out. Golem leaves out an untouched read-only initial file, because the component revision already has its content. Golem uploads nothing when each initial file of the component revision is read-only and untouched, the agent has no other files or directories and no files that Golem provisions for it in addition to the initial files, the agent did not rename or hard link any file, and did not set a given modification time on a file or directory, or when nothing changed the files since the last confirmed filesystem snapshot. In the second case the new record uses the name of that snapshot and is confirmed at once.
 
-Ephemeral agents take no snapshots, whatever their snapshotting policy is. A retry of an ephemeral agent replays only its initialization.
+Ephemeral agents take no snapshots, and an ephemeral agent cannot enable snapshotting. A retry of an ephemeral agent replays only its initialization.
 
 `golem agent oplog <agent_id>` shows the name as `filesystem:` on each `SNAPSHOT` entry that has a name, and a `SNAPSHOT CONFIRMED` entry with the same name when the snapshot is usable.
 

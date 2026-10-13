@@ -74,6 +74,15 @@ pub(crate) fn expand_agent_definition(
     let type_name = name
         .map(|name| name.value())
         .unwrap_or_else(|| agent_definition_trait.ident.to_string());
+    if !agent_is_durable && snapshotting_enabled {
+        return syn::Error::new_spanned(
+            &agent_definition_trait.ident,
+            format!(
+                "agent `{type_name}` is ephemeral and enables snapshotting, but ephemeral agents take no snapshots. Remove the snapshotting option or make the agent durable."
+            ),
+        )
+        .to_compile_error();
+    }
     let type_parameters = agent_definition_trait
         .generics
         .type_params()
@@ -812,4 +821,53 @@ fn extract_meta(attrs: &[syn::Attribute], key: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+    use test_r::test;
+
+    fn expand(attrs: proc_macro2::TokenStream) -> String {
+        expand_agent_definition(
+            attrs,
+            quote! {
+                trait CounterAgent {
+                    fn new(id: String) -> Self;
+                    fn increment(&mut self) -> u32;
+                }
+            },
+            AgentDefinitionKind::Regular,
+        )
+        .to_string()
+    }
+
+    #[test]
+    fn ephemeral_agent_with_enabled_snapshotting_is_rejected() {
+        for attrs in [
+            quote! { ephemeral, snapshotting = "enabled" },
+            quote! { mode = "ephemeral", snapshotting = "periodic(5s)" },
+            quote! { snapshotting = "every(3)", ephemeral },
+        ] {
+            let expanded = expand(attrs.clone());
+            assert!(
+                expanded.contains("compile_error")
+                    && expanded.contains("agent `CounterAgent` is ephemeral"),
+                "{attrs}: {expanded}"
+            );
+        }
+    }
+
+    #[test]
+    fn ephemeral_agent_without_snapshotting_is_accepted() {
+        for attrs in [
+            quote! { ephemeral },
+            quote! { ephemeral, snapshotting = "disabled" },
+            quote! { snapshotting = "enabled" },
+        ] {
+            let expanded = expand(attrs.clone());
+            assert!(!expanded.contains("compile_error"), "{attrs}: {expanded}");
+        }
+    }
 }

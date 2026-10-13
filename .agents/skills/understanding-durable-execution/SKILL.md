@@ -86,8 +86,9 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
 something from the right column to survive a restart is wrong. Sockets and other OS resources are
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
-coordination gate so concurrent calls cannot reconnect one handle twice (see
+must tolerate reconnect or explicitly handle loss. Replayed websocket handles use their connect-time
+reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
+one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
 wake is persisted as a scheduler action before automatic suspension (`worker/suspension.rs::RuntimeStore::drive`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
@@ -878,6 +879,17 @@ request. A shared slot receives the scope index when admission returns the handl
 no scope is installed in the durable context. Both replay consumption and live execution disarm
 the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
 
+P3 HTTP response frames remain batched parent/child durable calls, not consumer-journal records.
+Data and ordinary EOF settle their child delivery tokens at Wasmtime's per-read consumption
+observer. Producer readiness is too early: it can reverse a timer/EOF ordering during replay.
+The producer exposes at most the guest read's capacity and retains the frame's suffix; the first
+positive consumption records the frame's marker, and later suffix reads add no durable child.
+A fresh frame demand always parks, while an already buffered suffix is available inline on both
+paths. Explicit cancellation acknowledgements keep their producer handoff boundary before
+waiting for parent finalization, avoiding an observer/acknowledgement cycle. Trailers still settle
+the parent's token at the future's terminal observer. Tests: `tests/http.rs` cancellation and
+offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download recovery.
+
 ## Durable RPC exactly-once
 
 `RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
@@ -1039,6 +1051,15 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
 - `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
+- `UPDATE_BLOB_STORAGE_REFUSED`: at the update point, the blob storage refused the executor a read
+  of an initial-file source of the target (`FilesystemError::InitialFileRefused`, from
+  `BlobFailure::Refused` of a `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other
+  than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
+  loads every source before its first change, so the agent runs on its source revision. The text
+  names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
+  update and retries as a recovery; outside the update point a refused source is a
+  reconstruction error. The guest blob store maps the same refusal to a permanent
+  `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with
 `services/component.rs::component_support_error`. Admission uses the same support policy.
@@ -1355,7 +1376,8 @@ handle goes through `ensure_websocket_connection_live_access` in
 `durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
-still sees its own gate in the entry proceeds to take one pool permit, run the handshake, and
+still sees its own gate in the entry applies the policy. With the default
+`reconnect-automatically`, it proceeds to take one pool permit, run the handshake, and
 publish `Live` in a single store window re-verified against the current entry. A queued peer
 therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
 the leader means it uses that entry and takes no permit, and a `Terminal` entry fails with the
@@ -1380,6 +1402,30 @@ interruption. Tests:
 `websocket_reconnect_{direct_send_is_interruptible_and_continues,direct_close_reconnects_and_terminalizes}`,
 `websocket_reconnect_failure_publishes_terminal_outcome`,
 `websocket_closed_connection_stays_terminal_after_replay`.
+
+The third optional WIT `connect` parameter is `option<reconstruction-policy>`. Absence selects
+`reconnect-automatically`; `report-connection-loss` publishes terminal `SessionLost` at the first
+live access to a reconstructed successful handle, without a pool permit or handshake. Recorded
+send, receive, timeout, error, and close outcomes replay unchanged under either policy. Suspension,
+restart, and crash all use this reconstruction path; the option does not change ordinary live
+disconnect retry behavior. Live `close` on the lost handle reports loss without reconnecting;
+resource drop releases it locally. Loss does not prove an earlier send never reached the peer.
+
+Central recovery guards for incomplete non-idempotent scopes trap before policy handling. An
+`End` result alone does not override an unfinished durable scope. Atomic rollback may remove the
+recorded connect from the replay path, in which case a newly executed connect legitimately opens
+a new session under either policy.
+
+Guests that need protocol initialization should supervise session generations: one scope per
+generation, reader started before initialization writer acquisition, reader failure observed or
+raced during all writes, old generation cancelled and joined before explicit connect and
+initialization of the next. Never forward the old writer's pending traffic automatically.
+Rust takes `Option<golem_rust::websocket::WebSocketReconstructionPolicy>` and reports
+`WebSocketError::SessionLost`. TypeScript uses `ConnectOptions.reconstructionPolicy` and
+`WebsocketError.tag === "session-lost"`. Effect's `Websocket.isSessionLost` checks structural
+`SocketError` / `SocketReadError` or `SocketWriteError` tags and the plain payloadless
+`{ _tag: "SessionLost" }` in `reason.cause`. Explicit Effect writer close propagates loss and
+fails the reader deferred with the same error; the scope finalizer remains best-effort.
 
 ## Streaming invocations
 

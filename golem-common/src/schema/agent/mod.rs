@@ -649,6 +649,13 @@ impl AgentTypeSchema {
     pub fn validate(&self) -> Result<(), String> {
         http::validate(self).map_err(|error| error.to_string())?;
         if self.mode == AgentMode::Ephemeral {
+            if matches!(self.snapshotting, Snapshotting::Enabled(_)) {
+                return Err(format!(
+                    "Agent type '{}' is ephemeral and declares snapshotting, but ephemeral agents \
+                     take no snapshots. Remove the snapshotting option or make the agent durable.",
+                    self.type_name
+                ));
+            }
             for method in &self.methods {
                 if method.read_only.is_some() {
                     return Err(format!(

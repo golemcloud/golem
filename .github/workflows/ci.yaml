@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.10"
+  WASM_RQUICKJS_VERSION: "0.4.11"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -520,6 +520,11 @@ jobs:
       - name: Install browser WASM target
         if: matrix.group.shard == 'bridge_gen_rust'
         run: rustup target add wasm32-unknown-unknown
+      - name: Install native Git build dependencies
+        if: matrix.group.shard == 'core'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qqy --no-install-recommends build-essential libcurl4-openssl-dev libssl-dev libexpat1-dev zlib1g-dev
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.49.0
         with:

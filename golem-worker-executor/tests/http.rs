@@ -3540,6 +3540,10 @@ async fn outgoing_http_full_response_is_replayed_without_network(
     use golem_common::model::oplog::OplogIndex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // The guest reads at most 1024 bytes. Exercise a frame with a retained suffix rather than
+    // allowing a whole-frame destination buffer to mask incorrect read observation.
+    let body = format!("{}end", "0123456789abcdef".repeat(257));
+    let expected = format!("status=200;x-resp-test=distinctive-header-value;body={body}");
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -3554,12 +3558,10 @@ async fn outgoing_http_full_response_is_replayed_without_network(
                 "/full-response",
                 axum::routing::get(move || {
                     let requests = requests_in_server.clone();
+                    let body = body.clone();
                     async move {
                         requests.fetch_add(1, Ordering::SeqCst);
-                        (
-                            [("x-resp-test", "distinctive-header-value")],
-                            "full-response-body",
-                        )
+                        ([("x-resp-test", "distinctive-header-value")], body)
                     }
                 }),
             );
@@ -3589,10 +3591,7 @@ async fn outgoing_http_full_response_is_replayed_without_network(
         )
         .await?
         .into_typed::<String>()?;
-    assert_eq!(
-        result,
-        "status=200;x-resp-test=distinctive-header-value;body=full-response-body"
-    );
+    assert_eq!(result, expected);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
     // The send and its body consumption must be durable and complete.

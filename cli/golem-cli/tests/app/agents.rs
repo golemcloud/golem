@@ -6720,3 +6720,191 @@ fn check_agent_types_golden_file(
 
     Ok(())
 }
+
+/// Builds and deploys the Rust template app, invokes `CounterAgent` twice, and returns the agent id.
+async fn deploy_counter_agent_with_invocations(ctx: &mut TestContext, app_name: &str) -> String {
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let agent = format!("CounterAgent(\"{}\")", Uuid::new_v4());
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &agent, "increment"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+    agent
+}
+
+/// The JSON document embedded in a generated oplog viewer page.
+fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
+    let open_tag = "<script id=\"oplog-data\" type=\"application/json\">";
+    let start = html
+        .find(open_tag)
+        .expect("the viewer page must embed its data document")
+        + open_tag.len();
+    let end = start + html[start..].find("</script>").unwrap();
+    serde_json::from_str(&html[start..end]).expect("the embedded document must be valid JSON")
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_oplog_html_viewer() {
+    let mut ctx = TestContext::new();
+    let agent = deploy_counter_agent_with_invocations(&mut ctx, "oplog-html-viewer").await;
+
+    let html_path = ctx.cwd_path_join("viewer/oplog.html");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            &agent,
+            "--html",
+            html_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Generated HTML oplog viewer with"));
+    assert!(
+        !outputs.stdout_contains("CREATE"),
+        "the text dump must not be printed when the page is written"
+    );
+
+    let html = fs::read_to_string(&html_path).unwrap();
+    let document = embedded_oplog_viewer_document(&html);
+    assert_eq!(document["mode"], "static");
+    assert!(
+        document["agentId"]
+            .as_str()
+            .unwrap()
+            .contains("CounterAgent"),
+        "{document}"
+    );
+    let entries = document["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["index"], 1);
+    assert_eq!(entries[0]["entry"]["type"], "Create");
+    assert!(entries.iter().any(|entry| {
+        entry["entry"]["type"] == "AgentInvocationStarted"
+            && entry["entry"]["invocation"]["methodName"] == "increment"
+    }));
+
+    // With a structured format the entries are still streamed on stdout.
+    let json_html_path = ctx.cwd_path_join("viewer/oplog-json.html");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            &agent,
+            flag::FORMAT,
+            "json",
+            "--html",
+            json_html_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let streamed = outputs.stdout_json::<serde_json::Value>();
+    assert_eq!(streamed.len(), entries.len());
+    assert!(json_html_path.is_file());
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_oplog_served_viewer() {
+    let mut ctx = TestContext::new();
+    let agent = deploy_counter_agent_with_invocations(&mut ctx, "oplog-served-viewer").await;
+
+    let (mut server, serving_line) = ctx
+        .cli_process_after_line(
+            [
+                cmd::AGENT,
+                "oplog",
+                &agent,
+                "--serve",
+                "--port",
+                "0",
+                "--no-open",
+            ],
+            "Serving oplog viewer at",
+        )
+        .await;
+    let url = serving_line[serving_line.find("http://").unwrap()..]
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(url.starts_with("http://127.0.0.1:"), "{serving_line}");
+
+    let client = reqwest::Client::new();
+    let get = |path: &str| client.get(format!("{url}{path}")).send();
+
+    let page = get("").await.unwrap();
+    assert!(page.status().is_success());
+    let document = embedded_oplog_viewer_document(&page.text().await.unwrap());
+    assert_eq!(document["mode"], "live");
+    assert!(document["entries"].as_array().unwrap().is_empty());
+    assert!(document["pageSize"].as_u64().unwrap() > 0);
+
+    let first_page: serde_json::Value = get("api/oplog?count=2")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_entries = first_page["entries"].as_array().unwrap();
+    assert_eq!(first_entries.len(), 2);
+    assert_eq!(first_entries[0]["index"], 1);
+    assert_eq!(first_entries[0]["entry"]["type"], "Create");
+    let cursor = &first_page["next"];
+    assert!(
+        cursor.is_object(),
+        "the first page must hand out a cursor: {first_page}"
+    );
+
+    let second_page: serde_json::Value = get(&format!(
+        "api/oplog?from=1&count=2&cursorIndex={}&cursorRevision={}",
+        cursor["nextOplogIndex"], cursor["currentComponentRevision"]
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let second_entries = second_page["entries"].as_array().unwrap();
+    assert_eq!(second_entries[0]["index"], 3);
+
+    let query_page: serde_json::Value = get("api/oplog?query=invoke")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let query_entries = query_page["entries"].as_array().unwrap();
+    assert!(!query_entries.is_empty());
+    assert!(
+        query_entries.iter().all(|entry| {
+            entry["entry"]["type"]
+                .as_str()
+                .unwrap()
+                .contains("Invocation")
+        }),
+        "{query_page}"
+    );
+
+    let metadata: serde_json::Value = get("api/agent").await.unwrap().json().await.unwrap();
+    assert!(metadata["status"].is_string(), "{metadata}");
+    assert!(
+        metadata["lastOplogIndex"].as_u64().unwrap() >= 3,
+        "{metadata}"
+    );
+
+    server.start_kill().unwrap();
+    server.wait().await.unwrap();
+}

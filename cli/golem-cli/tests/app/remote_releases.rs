@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{TestContext, cmd, flag};
+use crate::app::{Output, TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
 use chrono::{DateTime, Utc};
 use golem_cli::fs;
@@ -480,7 +480,10 @@ environments:
         .client
         .list_environment_tool_grants(&consumer_environment.id.0)
         .await?
-        .values;
+        .values
+        .into_iter()
+        .filter(|grant| grant.release.id == release.id)
+        .collect::<Vec<_>>();
     assert_eq!(
         stale_grants.len(),
         1,
@@ -575,6 +578,110 @@ environments:
             &EnvironmentToolGrantDeletion { automatic: true },
         )
         .await?;
+
+    Ok(())
+}
+
+#[test]
+#[timeout("5m")]
+async fn default_tool_uses_its_grant_pinned_by_release_id_in_read_only_runs(
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let base_url = Url::parse(&format!("http://localhost:{}", ctx.router_port()))?;
+    let admin = registry_client(&base_url, golem_client::LOCAL_WELL_KNOWN_TOKEN);
+    let user = create_registry_user(&admin, &base_url, "default-tool-pinned").await?;
+    let (application, environment) =
+        create_app_and_environment(&user, "default-tool-pinned").await?;
+    let yaml_string = |value: &str| serde_json::to_string(value).unwrap();
+    // `tools` is the top-level tools section of the manifest, or nothing.
+    let manifest = |tools: &str| {
+        format!(
+            r#"manifestVersion: 1.6.0
+app: {application}
+{tools}
+environments:
+  {environment}:
+    server:
+      url: {server_url}
+      workerUrl: {server_url}
+      allowInsecure: true
+      auth:
+        staticToken: {token}
+"#,
+            application = yaml_string(&application.name.0),
+            environment = yaml_string(&environment.name.0),
+            server_url = yaml_string(base_url.as_str()),
+            token = yaml_string(user.token.secret()),
+        )
+    };
+    let only_grant = || async {
+        let mut grants = user
+            .client
+            .list_environment_tool_grants(&environment.id.0)
+            .await?
+            .values;
+        assert_eq!(grants.len(), 1);
+        anyhow::Ok(grants.remove(0))
+    };
+
+    let says =
+        |output: &Output, text: &str| output.stdout_contains(text) || output.stderr_contains(text);
+
+    // The default tool gets an automatic grant that follows the coordinates of its release.
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), manifest(""))?;
+    let deployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deployed.success_or_dump());
+    assert!(says(&deployed, "environment tool grant setup"));
+    let granted = only_grant().await?;
+    assert!(granted.grant.automatic);
+    assert!(granted.grant.follow_coordinates);
+
+    // A declaration that pins the same release by ID changes the grant to that mode.
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        manifest(&format!(
+            "tools:\n  bash:\n    release:\n      releaseId: {}\n",
+            granted.release.id
+        )),
+    )?;
+    let pinned = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(pinned.success_or_dump());
+    let pinned_grant = only_grant().await?;
+    assert_eq!(pinned_grant.grant.id, granted.grant.id);
+    assert!(pinned_grant.grant.automatic);
+    assert!(!pinned_grant.grant.follow_coordinates);
+
+    // Without the declaration the default tool is back. Its release is granted, so a run that
+    // changes no grant keeps the tool, and it leaves the grant as it is.
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), manifest(""))?;
+    for run in ["--plan", "--stage"] {
+        let read_only = ctx.cli([flag::YES, cmd::DEPLOY, run]).await;
+        assert!(read_only.success_or_dump(), "{run}");
+        for unexpected in [
+            "delete remote tool bash",
+            "Planning stopped",
+            "requires environment tool or tool middleware grant changes",
+        ] {
+            assert!(!says(&read_only, unexpected), "{run}: {unexpected}");
+        }
+        let unchanged = only_grant().await?;
+        assert_eq!(unchanged.grant.id, granted.grant.id);
+        assert!(!unchanged.grant.follow_coordinates, "{run}");
+    }
+
+    // A deployment changes the mode of the grant as a step of its grant plan. The release was
+    // granted before, so the plan has no new grant for the default tool.
+    let redeployed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(redeployed.success_or_dump());
+    assert!(says(&redeployed, "environment tool grant reconciliation"));
+    assert!(!says(&redeployed, "default tool bash"));
+    let following = only_grant().await?;
+    assert_eq!(following.grant.id, granted.grant.id);
+    assert!(following.grant.automatic);
+    assert!(following.grant.follow_coordinates);
 
     Ok(())
 }

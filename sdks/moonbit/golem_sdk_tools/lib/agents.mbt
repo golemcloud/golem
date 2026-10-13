@@ -1752,6 +1752,15 @@ pub fn parse_agents(
       )
     }
     let snapshotting = agent_snapshotting.get(name).unwrap_or(Disabled)
+    let router = agent_mounts.get(name).unwrap_or(None)
+      is Some({ router: true, .. })
+    if agent_modes.get(name) is Some(Ephemeral) &&
+      !(snapshotting is Disabled) &&
+      !router {
+      raise AgentParseError(
+        "Agent '\{name}' is ephemeral and declares snapshotting, but ephemeral agents take no snapshots. Remove the snapshotting option or make the agent durable.",
+      )
+    }
     let has_json_derives = agent_json_derives.get(name).unwrap_or(false)
     if !(snapshotting is Disabled) &&
       !has_json_derives &&

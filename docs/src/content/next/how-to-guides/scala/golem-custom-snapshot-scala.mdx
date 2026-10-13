@@ -34,7 +34,7 @@ The `snapshotting` parameter accepts these values:
 | `"every(N)"` | Snapshot every N successful function calls (use `"every(1)"` for every invocation) |
 | `"periodic(duration)"` | Snapshot at most once per time interval (e.g., `"periodic(30s)"`) |
 
-An ephemeral agent takes no snapshots, whatever its `snapshotting` value. Snapshots are for durable agents only.
+Snapshots are for durable agents only. An ephemeral agent takes no snapshots, and the SDK refuses an ephemeral agent definition whose `snapshotting` value is not disabled, with an error that names the agent.
 
 ```scala
 @agentDefinition(snapshotting = "periodic(30s)")
