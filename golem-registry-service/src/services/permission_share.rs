@@ -628,3 +628,29 @@ fn invalid_grant(grant: &str, err: CardParseError) -> PermissionShareError {
         message: err.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn tool_share_grants_use_primary_names_before_attenuation() {
+        let parse = |resource: &str| {
+            parse_and_validate_grants(
+                &[format!("tool(*/*/*/*/*) @ * : invoke : {resource}")],
+                "recipient@example.com",
+            )
+        };
+        assert!(parse("status -sz").is_err());
+        let parent = parse("status --cwd=/workspace/**").unwrap();
+        let child = parse("status --short --cwd=/workspace/project/*").unwrap();
+        assert!(parent[0].subsumes(&child[0]));
+        assert!(!child[0].subsumes(&parent[0]));
+        let encoded = serde_json::to_string(&child).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<PermissionPattern>>(&encoded).unwrap(),
+            child
+        );
+    }
+}

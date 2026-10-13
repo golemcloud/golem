@@ -748,6 +748,33 @@ impl<T: FromSchema> FromSchema for Vec<T> {
     }
 }
 
+impl<T: IntoSchema> IntoSchema for HashSet<T> {
+    fn type_id() -> TypeId {
+        type_id_with_args("std.collections.HashSet", &[T::type_id()])
+    }
+    fn register_in(b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::list(T::register_in(b))
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::List {
+            elements: self.iter().map(|x| x.to_value()).collect(),
+        }
+    }
+}
+
+impl<T: FromSchema + Eq + std::hash::Hash> FromSchema for HashSet<T> {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::List { elements } => elements.iter().map(T::from_value).collect(),
+            other => Err(FromSchemaError::shape_mismatch(
+                "list",
+                value_kind(other),
+                "HashSet",
+            )),
+        }
+    }
+}
+
 impl<K: IntoSchema, V: IntoSchema> IntoSchema for HashMap<K, V> {
     fn type_id() -> TypeId {
         type_id_with_args("std.collections.HashMap", &[K::type_id(), V::type_id()])

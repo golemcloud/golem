@@ -39,8 +39,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, DurableStreamEventSummary, FilesystemSnapshotName, HostRequest,
-    HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
+    DurableFunctionType, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
+    HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
     UpdateDescription,
 };
 use golem_common::model::{
@@ -1528,6 +1528,7 @@ pub trait OplogOps: Oplog {
         response: &HostResponse,
         function_type: DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
@@ -1536,7 +1537,7 @@ pub trait OplogOps: Oplog {
             timestamp: now,
             parent_start_index,
             function_name,
-            invocation_id: None,
+            invocation_id,
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: function_type,

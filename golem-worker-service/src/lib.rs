@@ -38,7 +38,6 @@ use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::BoxEndpoint;
 use poem::endpoint::TowerCompatExt;
 use poem::listener::Acceptor;
-use poem::listener::Listener;
 use poem::middleware::{CookieJarManager, Cors};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
@@ -91,6 +90,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> anyhow::Result<RunDetails> {
         let registry_service = self.services.registry_service.clone();
+        let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
@@ -98,6 +98,7 @@ impl WorkerService {
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
+                component_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
@@ -135,6 +136,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let registry_service = self.services.registry_service.clone();
+        let component_service = self.services.component_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
@@ -142,6 +144,7 @@ impl WorkerService {
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
+                component_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
@@ -171,9 +174,14 @@ impl WorkerService {
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<u16, anyhow::Error> {
-        grpcapi::start_grpc_server(&self.config.grpc, self.services.clone(), join_set)
-            .await
-            .context("gRPC server failed")
+        grpcapi::start_grpc_server(
+            self.config.socket_addr(self.config.grpc.port),
+            &self.config.grpc,
+            self.services.clone(),
+            join_set,
+        )
+        .await
+        .context("gRPC server failed")
     }
 
     async fn start_http_server(
@@ -203,10 +211,8 @@ impl WorkerService {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });
 
-        let poem_listener =
-            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.port));
-
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor =
+            golem_service_base::net::bind_poem_acceptor(self.config.socket_addr(self.config.port))?;
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
             .expect("socket address")
@@ -237,11 +243,9 @@ impl WorkerService {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });
 
-        let poem_listener = poem::listener::TcpListener::bind(format!(
-            "0.0.0.0:{}",
-            self.config.custom_request_port
-        ));
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor = golem_service_base::net::bind_poem_acceptor(
+            self.config.socket_addr(self.config.custom_request_port),
+        )?;
         let port = acceptor.local_addr()[0]
             .as_socket_addr()
             .expect("socket address")
@@ -264,10 +268,9 @@ impl WorkerService {
         join_set: &mut JoinSet<anyhow::Result<()>>,
         tracer: Option<SdkTracer>,
     ) -> anyhow::Result<u16> {
-        let poem_listener =
-            poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.mcp_port));
-
-        let acceptor = poem_listener.into_acceptor().await?;
+        let acceptor = golem_service_base::net::bind_poem_acceptor(
+            self.config.socket_addr(self.config.mcp_port),
+        )?;
 
         let port = acceptor.local_addr()[0]
             .as_socket_addr()

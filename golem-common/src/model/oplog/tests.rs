@@ -41,12 +41,12 @@ use crate::model::oplog::public_oplog_entry::{
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, FilesystemSnapshotName,
-    JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
-    OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
-    PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
-    PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
-    PublicEntityInvocationContext, PublicEntityInvocationOperation,
+    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, DurableInvocationId,
+    FilesystemSnapshotName, JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData,
+    MultipartSnapshotPart, OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription,
+    PublicAgentEntity, PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode,
+    PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
     PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData, PublicOplogEntry,
     PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
@@ -77,6 +77,23 @@ fn raw_oplog_entry_fits_in_176_bytes() {
 }
 
 #[test]
+fn durable_invocation_id_uses_variable_length_integers() {
+    for (anchor, ordinal, size) in [
+        (0, 0, 2),
+        (127, 127, 2),
+        (128, 0, 3),
+        (300_000, 129, 5),
+        (u64::MAX, u64::MAX, 20),
+    ] {
+        let id = DurableInvocationId::new(OplogIndex::from_u64(anchor), ordinal);
+        let bytes = crate::serialization::serialize(&id).unwrap();
+        assert_eq!(bytes.len() - 1, size, "{id}");
+        let decoded: DurableInvocationId = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, id);
+    }
+}
+
+#[test]
 fn start_desert_roundtrip() {
     use crate::model::invocation_context::AttributeValue;
     use crate::model::oplog::raw_types::{AttributeMap, SpanKind, SpanStarted};
@@ -85,7 +102,7 @@ fn start_desert_roundtrip() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: Some(OplogIndex::from_u64(7)),
         function_name: HostFunctionName::Custom("operation".to_string()),
-        invocation_id: Some(Uuid::new_v4()),
+        invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(300_000), 129)),
         observational_owner: Some(OplogIndex::from_u64(6)),
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,

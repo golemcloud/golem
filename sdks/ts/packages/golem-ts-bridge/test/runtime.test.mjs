@@ -1768,6 +1768,126 @@ test('uncertain resume close exact-retries the frozen resume descriptor', async 
   }
 });
 
+for (const secondRejection of [undefined, false, true]) {
+  test(`resume attachment rejection takes over once (second rejection: ${secondRejection})`, async () => {
+    const operations = [];
+    let firstSocket;
+    let idempotencyKey;
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        const text = data.toString();
+        const operation = JSON.parse(text);
+        operations.push(text);
+        if (operations.length === 1) {
+          firstSocket = socket;
+          idempotencyKey = operation.idempotencyKey;
+          socket.send(JSON.stringify(accepted(operation, [outputMapping])));
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationResult',
+              mappings: [],
+              result: {
+                kind: 'value',
+                graph: outputStreamGraph,
+                value: { kind: 'stream', value: { streamToken: 'output' } },
+              },
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'outputStreamItem',
+              channel: 2,
+              sequence: '0',
+              cursorToken: 'delivered-first',
+              mappings: [],
+              value: 'first',
+            }),
+          );
+        } else if (
+          operations.length === 2 ||
+          (operations.length === 4 && secondRejection !== undefined)
+        ) {
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationRejected',
+              attemptId: operation.attemptId,
+              code: 'invalid-attachment-state',
+              message: 'old attachment remains',
+              retryable: operations.length === 2 ? false : secondRejection,
+            }),
+          );
+        } else if (operations.length === 3) {
+          socket.terminate();
+        } else {
+          socket.send(
+            JSON.stringify(accepted(operation, [{ ...outputMapping, channel: 9 }], idempotencyKey)),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'outputStreamItem',
+              channel: 9,
+              sequence: '1',
+              cursorToken: 'delivered-second',
+              mappings: [],
+              value: 'second',
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'outputStreamEnd',
+              channel: 9,
+              sequence: '2',
+              cursorToken: 'delivered-end',
+              outcome: { kind: 'ok' },
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationFinished',
+              outcome: { kind: 'success' },
+            }),
+          );
+        }
+      });
+    });
+    try {
+      const method = createStreamingRemoteMethod(
+        () => local.endpoint,
+        () => descriptor,
+        () => ({}),
+        (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
+      );
+      const iterator = (await method())[Symbol.asyncIterator]();
+      assert.equal((await iterator.next()).value, 'first');
+      firstSocket.terminate();
+      if (secondRejection === undefined) {
+        assert.equal((await iterator.next()).value, 'second');
+        assert.equal((await iterator.next()).done, true);
+      } else {
+        await assert.rejects(iterator.next(), /old attachment remains/);
+      }
+      assert.equal(operations.length, 4);
+      const resume = JSON.parse(operations[1]);
+      const takeover = JSON.parse(operations[2]);
+      assert.equal(resume.operation, 'resume');
+      assert.deepEqual(resume.outputCursors, ['delivered-first']);
+      assert.equal(takeover.operation, 'takeover');
+      assert.notEqual(takeover.attemptId, resume.attemptId);
+      assert.equal(takeover.sessionToken, resume.sessionToken);
+      assert.deepEqual(takeover.outputCursors, resume.outputCursors);
+      assert.equal(operations[3], operations[2]);
+    } finally {
+      await local.close();
+    }
+  });
+}
+
 test('retryable rejection after acceptance creates a fresh resume attempt', async () => {
   const operations = [];
   let idempotencyKey;

@@ -7,8 +7,15 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { Result } from '../src/host/result';
-import { s } from '../src/schema/markers';
-import { SchemaValueWriter, invocationSchemaValueReader } from '../src/schema/codec';
+import { Uuid } from '../src/uuid';
+import { s, Path, Quantity } from '../src/schema/markers';
+import { encodeToolValue } from '../src/internal/tool/invocationResult';
+import {
+  SchemaValueWriter,
+  invocationSchemaValueReader,
+  schemaValueIsCanonical,
+  withDirectCodec,
+} from '../src/schema/codec';
 import { schemaValueFromWit, schemaValueToWit } from '../src/internal/schema-model';
 import {
   compileSchema,
@@ -17,6 +24,319 @@ import {
 } from '../src/schema/public';
 
 describe('direct flat-wire schema codecs', () => {
+  it('rejects nonliteral primitive payloads during strict direct decoding', () => {
+    const cases = [
+      [z.literal('fixed'), { tag: 'string', value: 'wrong' }],
+      [z.literal(17), { tag: 'f64', value: 31 }],
+      [z.literal(true), { tag: 'bool', value: false }],
+      [z.literal(17n), { tag: 'u64', value: 31n }],
+    ] as const;
+    for (const [schema, value] of cases) {
+      const codec = compileSchema(z.tuple([schema]));
+      const wire = schemaValueToWit({ tag: 'tuple', elements: [value] });
+      expect(() => directSchemaValueFromWit(codec, wire)).toThrow(/canonical/);
+      expect(codec.invocationDirect!.read(invocationSchemaValueReader(wire), wire.root)).toEqual(
+        codec.fromValue(schemaValueFromWit(wire)),
+      );
+    }
+  });
+
+  it('matches ordinary tool-result canonicality for primitive literals in tuples and maps', () => {
+    const cases = [
+      [z.tuple([z.literal('fixed')]), ['fixed'], ['wrong']],
+      [z.tuple([z.literal(17)]), [17], [31]],
+      [z.tuple([z.literal(true)]), [true], [false]],
+      [z.tuple([z.literal(17n)]), [17n], [31n]],
+      [
+        z.map(z.literal('key'), z.literal('fixed')),
+        new Map([['key', 'fixed']]),
+        new Map([['wrong', 'fixed']]),
+      ],
+      [
+        z.map(z.literal('key'), z.literal('fixed')),
+        new Map([['key', 'fixed']]),
+        new Map([['key', 'wrong']]),
+      ],
+      [z.record(z.literal('key'), z.literal(17)), { key: 17 }, { key: 31 }],
+      [
+        z.tuple([z.object({ items: z.array(z.tuple([z.literal('fixed')])) })]),
+        [{ items: [['fixed']] }],
+        [{ items: [['wrong']] }],
+      ],
+    ] as const;
+    for (const [schema, valid, invalid] of cases) {
+      const codec = compileSchema(schema);
+      const normal = { ...codec, direct: undefined };
+      expect(codec.direct).toBeDefined();
+      expect(encodeToolValue(codec, valid, 'return')).toEqual(
+        encodeToolValue(normal, valid, 'return'),
+      );
+      expect(directSchemaValueFromWit(codec, directSchemaValueToWit(codec, valid))).toEqual(valid);
+      for (const candidate of [codec, normal]) {
+        expect(() => encodeToolValue(candidate, invalid, 'return')).toThrow(
+          expect.objectContaining({ tag: 'invalid-result' }),
+        );
+      }
+      const writer = new SchemaValueWriter();
+      const root = codec.invocationDirect!.write(invalid, writer)!;
+      const ordinary = schemaValueToWit(codec.toValue(invalid));
+      expect({ valueNodes: writer.valueNodes, root }).toEqual(ordinary);
+      expect(codec.invocationDirect!.read(invocationSchemaValueReader(ordinary), root)).toEqual(
+        codec.fromValue(schemaValueFromWit(ordinary)),
+      );
+    }
+  });
+
+  it('enforces rich restrictions in tool results and direct decoding, including children', () => {
+    const cases = [
+      [s.text({ minLength: 2 }), 'a'],
+      [s.text({ maxLength: 1 }), 'ab'],
+      [s.text({ regex: '^a$' }), 'b'],
+      [s.binary({ minBytes: 1 }), new Uint8Array()],
+      [s.binary({ maxBytes: 1 }), new Uint8Array(2)],
+      [Path({ allowedExtensions: ['txt'] }), 'file.png'],
+      [s.url(), 'not a URL'],
+      [Quantity({ baseUnit: 'm', allowedSuffixes: [] }), { mantissa: 1n, scale: 0, unit: 's' }],
+      [
+        Quantity({ baseUnit: 'm', min: { mantissa: 2n, scale: 0, unit: 'm' } }),
+        { mantissa: 1n, scale: 0, unit: 'm' },
+      ],
+      [
+        Quantity({ baseUnit: 'm', max: { mantissa: 2n, scale: 0, unit: 'm' } }),
+        { mantissa: 3n, scale: 0, unit: 'm' },
+      ],
+      [z.tuple([s.text({ minLength: 2 })]), ['a']],
+      [z.map(z.string(), s.binary({ minBytes: 1 })), new Map([['a', new Uint8Array()]])],
+    ] as const;
+    for (const [schema, input] of cases) {
+      const codec = compileSchema(schema);
+      const normal = { ...codec, direct: undefined };
+      expect(() => encodeToolValue(normal, input, 'return')).toThrow();
+      expect(() => encodeToolValue(codec, input, 'return')).toThrow(
+        expect.objectContaining({ tag: 'invalid-result' }),
+      );
+      const wire = schemaValueToWit(codec.toValue(input));
+      expect(() => directSchemaValueFromWit(codec, wire)).toThrow();
+      const writer = new SchemaValueWriter();
+      expect(() => codec.invocationDirect!.write(input, writer)).not.toThrow();
+      expect(codec.invocationDirect!.read(invocationSchemaValueReader(wire), wire.root)).toEqual(
+        codec.fromValue(schemaValueFromWit(wire)),
+      );
+    }
+  });
+
+  it('encodes tuples, enums, records and Maps with ordinary invocation semantics', () => {
+    const cases = [
+      [z.tuple([z.literal('fixed'), s.f32()]), ['ignored', 1.1]],
+      [z.tuple([z.string(), z.number()]), ['short']],
+      [z.enum(['first', 'second']), 'second'],
+      [z.literal(['left', 'right']), 'right'],
+      [z.record(z.string(), z.literal('fixed')), { z: 'ignored', a: 'fixed' }],
+      [z.map(z.tuple([s.u8(), z.string()]), s.duration()), new Map([[[7, 'key'], 31]])],
+    ] as const;
+    cases.forEach(([schema, input]) => {
+      const codec = compileSchema(schema);
+      expect(codec.invocationDirect).toBeDefined();
+      const ordinary = schemaValueToWit(codec.toValue(input));
+      const writer = new SchemaValueWriter();
+      const root = codec.invocationDirect!.write(input, writer)!;
+      expect({ valueNodes: writer.valueNodes, root }).toEqual(ordinary);
+      expect(codec.invocationDirect!.read(invocationSchemaValueReader(ordinary), root)).toEqual(
+        codec.fromValue(schemaValueFromWit(ordinary)),
+      );
+    });
+  });
+
+  it('round-trips structural codecs without converting the root model', () => {
+    const cases = [
+      [z.tuple([s.u8(), z.enum(['a', 'b'])]), [31, 'b']],
+      [z.record(z.string(), z.array(s.u8())), { z: [31], a: [255] }],
+      [
+        z.map(s.u8(), z.string()),
+        new Map([
+          [31, 'first'],
+          [7, 'second'],
+        ]),
+      ],
+    ] as const;
+    cases.forEach(([schema, input]) => {
+      const base = compileSchema(schema);
+      const ordinary = schemaValueToWit(base.toValue(input));
+      const codec = withDirectCodec({
+        ...base,
+        toValue: () => {
+          throw new Error('model encode');
+        },
+        fromValue: () => {
+          throw new Error('model decode');
+        },
+      });
+      expect(directSchemaValueToWit(codec, input)).toEqual(ordinary);
+      expect(directSchemaValueFromWit(codec, ordinary)).toEqual(input);
+      const writer = new SchemaValueWriter();
+      expect(codec.invocationDirect!.write(input, writer)).toBe(ordinary.root);
+      expect(
+        codec.invocationDirect!.read(invocationSchemaValueReader(ordinary), ordinary.root),
+      ).toEqual(input);
+    });
+  });
+
+  it('rejects lossy strict reads but preserves invocation wire interpretation', () => {
+    const cases = [
+      [
+        z.map(z.string(), z.string()),
+        {
+          tag: 'map',
+          entries: [
+            { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'first' } },
+            { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'last' } },
+          ],
+        },
+      ],
+      [
+        z.record(z.string(), z.string()),
+        {
+          tag: 'map',
+          entries: [
+            { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'first' } },
+            { key: { tag: 'string', value: 'key' }, value: { tag: 'string', value: 'last' } },
+          ],
+        },
+      ],
+      [
+        z.record(z.string(), z.string()),
+        {
+          tag: 'map',
+          entries: [
+            {
+              key: { tag: 'string', value: '__proto__' },
+              value: { tag: 'string', value: 'ignored' },
+            },
+          ],
+        },
+      ],
+      [
+        z.record(z.string(), z.string()),
+        {
+          tag: 'map',
+          entries: [
+            { key: { tag: 'string', value: '2' }, value: { tag: 'string', value: 'two' } },
+            { key: { tag: 'string', value: '1' }, value: { tag: 'string', value: 'one' } },
+          ],
+        },
+      ],
+      [s.text(), { tag: 'text', text: 'bonjour', language: 'fr' }],
+      [s.binary(), { tag: 'binary', bytes: new Uint8Array([17]), mimeType: 'image/png' }],
+      [s.uuid(), { tag: 'uuid', value: new Uuid(17n, 31n) }],
+      [z.enum(['a']), { tag: 'enum', caseIndex: 1 }],
+    ] as const;
+    cases.forEach(([schema, value]) => {
+      const codec = compileSchema(schema);
+      const wire = schemaValueToWit(value);
+      const canonical = schemaValueIsCanonical(codec, schemaValueFromWit(wire));
+      if (canonical) {
+        expect(directSchemaValueFromWit(codec, wire)).toEqual(codec.fromValue(value));
+      } else {
+        expect(() => directSchemaValueFromWit(codec, wire)).toThrow();
+      }
+      expect(codec.invocationDirect!.read(invocationSchemaValueReader(wire), wire.root)).toEqual(
+        codec.fromValue(schemaValueFromWit(wire)),
+      );
+    });
+  });
+
+  it('encodes rich markers directly without calling model codecs', () => {
+    const cases = [
+      [s.uuid(), new Uuid(17n, 31n)],
+      [s.datetime(), { seconds: -17n, nanoseconds: 999999999 }],
+      [s.duration(), -31n],
+      [s.url(), 'https://example.com/a?q=b'],
+      [Path(), '/tmp/δ'],
+      [Quantity({ baseUnit: 'm' }), { mantissa: 123n, scale: -2, unit: 'm' }],
+      [s.text(), 'héllo'],
+      [s.binary(), new Uint8Array([0, 255, 31])],
+    ] as const;
+    cases.forEach(([schema, input]) => {
+      const base = compileSchema(schema);
+      const ordinary = schemaValueToWit(base.toValue(input));
+      const codec = withDirectCodec({
+        ...base,
+        toValue: () => {
+          throw new Error('model encode');
+        },
+        fromValue: () => {
+          throw new Error('model decode');
+        },
+      });
+      const wire = directSchemaValueToWit(codec, input);
+      expect(wire).toEqual(ordinary);
+      expect(directSchemaValueFromWit(codec, wire)).toEqual(
+        base.fromValue(schemaValueFromWit(ordinary)),
+      );
+      const writer = new SchemaValueWriter();
+      const root = codec.invocationDirect!.write(input, writer)!;
+      expect({ valueNodes: writer.valueNodes, root }).toEqual(ordinary);
+      expect(codec.invocationDirect!.read(invocationSchemaValueReader(ordinary), root)).toEqual(
+        input,
+      );
+    });
+    const duration = compileSchema(s.duration());
+    const writer = new SchemaValueWriter();
+    duration.invocationDirect!.write(31, writer);
+    expect(writer.valueNodes).toEqual(schemaValueToWit(duration.toValue(31)).valueNodes);
+  });
+
+  it('rejects invalid tuple, enum, map and rich-marker values at the wire boundary', () => {
+    const cases = [
+      [z.tuple([s.u8()]), [256]],
+      [z.enum(['a', 'b']), 'missing'],
+      [z.map(s.u8(), z.string()), new Map([[256, 'x']])],
+      [z.record(z.string(), s.u8()), { x: 256 }],
+      [s.uuid(), { highBits: 1n, lowBits: 2n }],
+      [s.uuid(), new Uuid(-1n, 0n)],
+      [s.datetime(), { seconds: 0n, nanoseconds: 1000000000 }],
+      [s.duration(), 1n << 63n],
+      [s.url(), 17],
+      [Path(), 17],
+      [Quantity({ unit: 'm' }), { mantissa: 1n << 63n, scale: 0, unit: 'm' }],
+      [s.text(), 17],
+      [s.binary(), [0, 255]],
+    ] as const;
+    cases.forEach(([schema, input]) => {
+      const codec = compileSchema(schema);
+      expect(() => schemaValueToWit(codec.toValue(input))).toThrow();
+      expect(() => codec.invocationDirect!.write(input, new SchemaValueWriter())).toThrow();
+      expect(() => directSchemaValueToWit(codec, input)).toThrow();
+    });
+    expect(() => directSchemaValueToWit(compileSchema(z.tuple([z.string()])), [])).toThrow();
+    expect(() =>
+      directSchemaValueFromWit(compileSchema(z.enum(['a'])), {
+        valueNodes: [{ tag: 'enum-value', val: 1 }],
+        root: 0,
+      }),
+    ).toThrow();
+    const tuple = compileSchema(z.tuple([s.u8(), s.u8()]));
+    const sparse = [7, 31];
+    delete sparse[1];
+    expect(() => schemaValueToWit(tuple.toValue(sparse))).toThrow();
+    expect(() => tuple.invocationDirect!.write(sparse, new SchemaValueWriter())).toThrow();
+    expect(() =>
+      directSchemaValueFromWit(compileSchema(s.datetime()), {
+        valueNodes: [{ tag: 'datetime-value', val: { seconds: 0n, nanoseconds: -1 } }],
+        root: 0,
+      }),
+    ).toThrow();
+    expect(() =>
+      directSchemaValueFromWit(compileSchema(z.map(z.string(), z.string())), {
+        valueNodes: [
+          { tag: 'string-value', val: 'shared' },
+          { tag: 'map-value', val: [{ key: 0, value: 0 }] },
+        ],
+        root: 1,
+      }),
+    ).toThrow(/aliased/);
+  });
+
   it('matches invocation conversion rather than canonical application identity', () => {
     let transforms = 0;
     const schemas = [

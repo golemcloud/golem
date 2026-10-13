@@ -56,19 +56,20 @@ tokio::task_local! {
     static ENTITY_CANCELLATION_MASKED: ();
 }
 
-/// The recorded function name of a batched-write durable scope `Start`. A discriminator makes the
-/// name unique among concurrent sibling scopes of the same durable function type; a discriminated
-/// claim never matches a plain-named scope and vice versa.
-pub(crate) fn batched_write_scope_name(discriminator: Option<&str>) -> HostFunctionName {
-    match discriminator {
-        Some(discriminator) => {
-            HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
-        }
-        None => HostFunctionName::Custom(PLAIN_BATCHED_WRITE_SCOPE_NAME.to_string()),
-    }
+/// The recorded function name of a batched-write durable scope `Start`. Replay tells concurrent
+/// scopes apart by the invocation id of the call that opened them.
+pub(crate) fn batched_write_scope_name() -> HostFunctionName {
+    HostFunctionName::Custom(BATCHED_WRITE_SCOPE_NAME.to_string())
 }
 
-const PLAIN_BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
+const BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
+
+/// The recorded function name of the batched-write scope `Start` that a P3 HTTP `consume-body`
+/// opens. The name tells the scope of a response body apart from the scope of a send in the
+/// oplog; it does not identify the call.
+pub(crate) fn consume_body_scope_name() -> HostFunctionName {
+    HostFunctionName::Custom("<scope:batched-write:consume-body>".to_string())
+}
 
 /// The per-call quota an outbound durable call is charged against: the per-invocation call
 /// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
@@ -85,9 +86,8 @@ impl QuotaClass {
     /// which classes still have an unclaimed retained `Start` waiting for its owner (see
     /// `WorkerState::durable_call_is_fresh`), so the two must agree on the recorded kinds.
     ///
-    /// P2 HTTP (`wasi:http/outgoing-handler.handle`) is recorded as a plain batched-write scope,
-    /// a name it shares with rdbms transactions; a retained scope of that name therefore counts as
-    /// a possibly-HTTP one.
+    /// HTTP requests are recorded under a batched-write scope, a name they share with other
+    /// batched writes; a retained scope of that name therefore counts as a possibly-HTTP one.
     pub(crate) fn of_recorded_call(function_name: &HostFunctionName) -> Option<Self> {
         match function_name {
             HostFunctionName::P3HttpClientSend
@@ -96,9 +96,7 @@ impl QuotaClass {
             | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
             HostFunctionName::GolemRpcWasmRpcInvoke
             | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
-            HostFunctionName::Custom(name) if name == PLAIN_BATCHED_WRITE_SCOPE_NAME => {
-                Some(Self::Http)
-            }
+            HostFunctionName::Custom(name) if name == BATCHED_WRITE_SCOPE_NAME => Some(Self::Http),
             _ => None,
         }
     }
@@ -248,10 +246,11 @@ use golem_common::model::invocation_context::{
     InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
+use golem_common::model::oplog::payload::types::SerializableWebsocketReconstructionPolicy;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, SnapshotAssistedUpdateDetails,
-    UpdateDescription,
+    AgentError, AgentResourceId, DurableFunctionType, DurableInvocationId, HostRequestHttpRequest,
+    LogLevel, OplogEntry, OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState,
+    SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -1511,6 +1510,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.state.assume_idempotence = true;
                     self.state.entity_logical_key_position = None;
                 }
+                self.state.inherited_invocation_scope = scope
+                    .as_ref()
+                    .and_then(EntityInvocationScope::invocation_scope_card)
+                    .cloned()
+                    .map(InheritedInvocationScope::unchecked);
+                // A changed scope is not represented by a worker-status generation. Force the next
+                // live authorization through the synchronized path, which checks inherited roots.
+                self.state.authority_initialized = false;
+                self.rederive_agent_effective_surface_from_wallet();
                 self.entity_invocation_scope = scope;
                 Ok(())
             }
@@ -1595,6 +1603,47 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|scope| scope.invocation_id().start_index())
             })
+    }
+
+    /// The index of the record that numbers the guest calls of the current invocation: the entity
+    /// invocation `Start` of an entity Store, or the `AgentInvocationStarted` of the primary Store.
+    pub(crate) fn invocation_anchor(&self) -> Option<OplogIndex> {
+        self.entity_parent_start_index().or(self
+            .primary_invocation_start_index
+            .filter(|index| *index != OplogIndex::NONE))
+    }
+
+    /// The invocation id of a direct (Store-holding) durable call of `function_type`. A call
+    /// inside an open durable scope records the id of the call that opened the scope; any other
+    /// direct call reserves the next ordinal of its invocation. A direct call holds the Store, so
+    /// it reserves in guest call order.
+    pub(crate) fn direct_call_invocation_id(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<Option<DurableInvocationId>, WorkerExecutorError> {
+        if let DurableFunctionType::WriteRemoteBatched(Some(scope))
+        | DurableFunctionType::WriteRemoteTransaction(Some(scope)) = function_type
+            && let Some(invocation_id) = self.state.durable_scope_invocation_id(*scope)
+        {
+            return Ok(invocation_id);
+        }
+        if self.state.snapshotting_mode {
+            return Ok(None);
+        }
+        let observed_by_custom_invocation = wasmtime::component::current_guest_task_context::<
+            durability::CustomInvocationContext,
+        >()
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .as_deref()
+        .and_then(durability::CustomInvocationContext::current)
+        .is_some();
+        if observed_by_custom_invocation {
+            return Ok(None);
+        }
+        let Some(anchor) = self.invocation_anchor() else {
+            return Ok(None);
+        };
+        durability::reserve_invocation_id(self, None, anchor).map(Some)
     }
 
     fn entity_parent_start_index(&self) -> Option<OplogIndex> {
@@ -1684,7 +1733,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let delegation_surface = golem_common::model::card::agent_delegation_surface_from_wallet(
             &context,
-            self.state.agent_wallet_cards.values(),
+            self.authority_wallet_cards(),
         );
 
         AuthCtx::agent_with_permission_surfaces(
@@ -1693,6 +1742,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.agent_effective_surface(),
             delegation_surface,
         )
+    }
+
+    /// Wallet cards that grant authority: the Store's wallet without cards the owner worker has
+    /// revoked. Revocation events are drained by whichever of the owner's Stores reaches a
+    /// boundary first, so a Store's own wallet copy can still hold a card another Store revoked.
+    fn authority_wallet_cards(&self) -> impl Iterator<Item = &StoredCard> {
+        self.state
+            .agent_wallet_cards
+            .iter()
+            .filter(|(card_id, _)| !self.state.owner_revoked_card_ids.contains(card_id))
+            .map(|(_, card)| card)
     }
 
     pub(crate) fn agent_wallet_cards_snapshot(&self) -> Vec<StoredCard> {
@@ -1845,6 +1905,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .agent_wallet_cards
             .values()
             .chain(self.state.invocation_scope_root_cards.values())
+            .chain(
+                self.state
+                    .inherited_invocation_scope
+                    .as_ref()
+                    .and_then(InheritedInvocationScope::live_roots)
+                    .into_iter()
+                    .flat_map(BTreeMap::values),
+            )
             .filter_map(StoredCard::expires_at)
             .min();
     }
@@ -2054,9 +2122,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     fn rederive_agent_effective_surface_from_wallet(&mut self) {
-        if matches!(self.runtime, OwnerRuntime::Entity(_)) {
-            return;
-        }
         let context = match &self.state.owner_context {
             ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
                 self.owner_component_metadata(),
@@ -2070,12 +2135,94 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
             }
         };
-        self.state.agent_effective_surface =
-            golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
-                &context,
-                self.state.agent_wallet_cards.values(),
-                self.state.invocation_scope_card.as_ref(),
-            );
+        let surface = {
+            let wallet = self.authority_wallet_cards();
+            match &self.runtime {
+                OwnerRuntime::Agent => {
+                    golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                        &context,
+                        wallet,
+                        self.state.invocation_scope_card.as_ref(),
+                    )
+                }
+                OwnerRuntime::Entity(_) => match &self.state.inherited_invocation_scope {
+                    None => golem_common::model::card::agent_effective_surface_from_wallet(
+                        &context, wallet,
+                    ),
+                    Some(scope) => {
+                        golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                            &context,
+                            wallet,
+                            Some(&scope.card),
+                        )
+                    }
+                },
+            }
+        };
+        self.state.agent_effective_surface = surface;
+    }
+
+    /// The invocation scope that bounds this Store's current invocation: the primary Store's
+    /// admitted scope, or the scope an entity Store inherited from its caller.
+    pub(crate) fn current_invocation_scope_card(&self) -> Option<ScopeCard> {
+        match &self.runtime {
+            OwnerRuntime::Agent => self.state.invocation_scope_card.clone(),
+            OwnerRuntime::Entity(_) => self
+                .state
+                .inherited_invocation_scope
+                .as_ref()
+                .map(|scope| scope.card.clone()),
+        }
+    }
+
+    /// Brings a Store's authority up to date with its owner worker at a live boundary: excludes
+    /// cards revoked by any of the owner's Stores, removes a scope whose roots they revoked, and
+    /// checks an entity Store's inherited scope roots.
+    async fn synchronize_owner_authority(&mut self) -> Result<(), WorkerExecutorError> {
+        if !self.state.is_live() {
+            return Ok(());
+        }
+        let revoked =
+            owner_revoked_card_ids(&*self.public_state.worker().get_last_known_status().await);
+        let unchecked_root_ids = self
+            .state
+            .inherited_invocation_scope
+            .as_ref()
+            .and_then(InheritedInvocationScope::unchecked_root_ids);
+        let root_states = match unchecked_root_ids {
+            Some(root_ids) => Some(self.state.card_service.check_cards(root_ids).await?),
+            None => None,
+        };
+        self.apply_owner_authority_synchronization(revoked, root_states)
+    }
+
+    fn apply_owner_authority_synchronization(
+        &mut self,
+        revoked: HashSet<CardId>,
+        root_states: Option<HashMap<CardId, CardState>>,
+    ) -> Result<(), WorkerExecutorError> {
+        let remove_inherited_scope = match &mut self.state.inherited_invocation_scope {
+            Some(scope) => {
+                let all_live = match &root_states {
+                    Some(root_states) => scope.check_roots(root_states)?,
+                    None => true,
+                };
+                !all_live || scope.roots_expired(Utc::now())
+            }
+            None => false,
+        };
+        if remove_inherited_scope {
+            self.state.inherited_invocation_scope = None;
+        }
+        let revoked_roots = self
+            .interested_card_ids()
+            .into_iter()
+            .filter(|card_id| revoked.contains(card_id))
+            .collect::<Vec<_>>();
+        self.clear_invocation_scope_if_roots_include(&revoked_roots);
+        self.state.owner_revoked_card_ids = revoked;
+        self.rederive_agent_effective_surface_from_wallet();
+        Ok(())
     }
 
     fn interested_card_ids(&self) -> Vec<CardId> {
@@ -2087,6 +2234,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .collect::<BTreeSet<_>>();
         if let Some(scope_card) = &self.state.invocation_scope_card {
             card_ids.extend(scope_card.root_card_ids.iter().copied());
+        }
+        if let Some(scope) = &self.state.inherited_invocation_scope {
+            card_ids.extend(scope.card.root_card_ids.iter().copied());
         }
         card_ids.into_iter().collect()
     }
@@ -2144,6 +2294,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     fn clear_invocation_scope_if_roots_include(&mut self, card_ids: &[CardId]) -> bool {
+        let inherited_scope_removed = self
+            .state
+            .inherited_invocation_scope
+            .as_ref()
+            .is_some_and(|scope| scope.roots_include(&card_ids.iter().copied().collect()));
+        if inherited_scope_removed {
+            self.state.inherited_invocation_scope = None;
+        }
         let (scope_changed, handles) = remove_invocation_scope_for_revoked_roots(
             &mut self.state.invocation_scope_card,
             &mut self.state.invocation_scope_handles,
@@ -2157,7 +2315,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if scope_changed {
             self.state.invocation_scope_root_cards.clear();
         }
-        scope_changed
+        scope_changed || inherited_scope_removed
     }
 
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
@@ -2227,7 +2385,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         self.remove_expired_cards().await?;
         self.remove_expired_invocation_scope_roots().await?;
-        Ok(())
+        self.synchronize_owner_authority().await
     }
 
     async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
@@ -3208,8 +3366,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn begin_function(
         &mut self,
         function_type: &DurableFunctionType,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        self.begin_function_impl(function_type, None)
+        self.begin_function_impl(function_type, None, invocation_id)
             .await
             .map(|(index, _)| index)
     }
@@ -3218,9 +3377,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
         span_started: golem_common::model::oplog::SpanStarted,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
         let (index, recorded) = self
-            .begin_function_impl(function_type, Some(span_started))
+            .begin_function_impl(function_type, Some(span_started), invocation_id)
             .await?;
         let recorded = recorded.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
@@ -3231,10 +3391,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok((index, recorded))
     }
 
+    /// Opens the durable scope of a call of `function_type`, when it has one. `invocation_id` is
+    /// the invocation id of the call: the scope `Start` carries it and replay claims the scope by
+    /// it.
     async fn begin_function_impl(
         &mut self,
         function_type: &DurableFunctionType,
         span_started: Option<golem_common::model::oplog::SpanStarted>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<(OplogIndex, Option<golem_common::model::oplog::SpanStarted>), WorkerExecutorError>
     {
         if self.state.durability_is_suppressed() {
@@ -3250,14 +3414,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // and only stored when the scope continues replaying (not when recovery switches to live
             // and re-runs the body, which appends a fresh `End` live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = batched_write_scope_name(None);
+            let scope_name = batched_write_scope_name();
             // A scope opened after the live transition may still own a recorded scope `Start`
             // the cursor retained for it (see `WorkerState::durable_call_is_live`), so it claims
             // first and appends a new `Start` only once replay reports none remains.
             let claimed_scope = if self.state.durable_call_is_live() {
                 None
             } else {
-                self.claim_durable_scope_start(&scope_name, function_type)
+                self.claim_durable_scope_start(&scope_name, function_type, invocation_id)
                     .await?
             };
             let mut recorded_span_started = span_started.clone();
@@ -3401,7 +3565,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     timestamp: Timestamp::now_utc(),
                     parent_start_index: self.entity_parent_start_index(),
                     function_name: scope_name,
-                    invocation_id: None,
+                    invocation_id,
                     observational_owner: None,
                     request: None,
                     durable_function_type: function_type.clone(),
@@ -3431,7 +3595,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 DurableScopeKind::NonIdempotentWrite
             };
             self.state
-                .push_durable_scope(result, kind, scope_replay_handle);
+                .push_durable_scope(result, kind, invocation_id, scope_replay_handle);
 
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
@@ -3541,10 +3705,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         scope_name: &HostFunctionName,
         function_type: &DurableFunctionType,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<Option<(OplogIndex, concurrent::ReplayCallHandle)>, WorkerExecutorError> {
         loop {
             let claim =
-                StartClaim::scope(scope_name, function_type, self.entity_parent_start_index());
+                StartClaim::scope(scope_name, function_type, self.entity_parent_start_index())
+                    .with_invocation_id(invocation_id);
             let expected = claim.expected_description();
             let store_continued_live = self.state.store_continued_live();
             match self
@@ -3685,6 +3851,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+        let invocation_id =
+            self.direct_call_invocation_id(&DurableFunctionType::WriteRemoteTransaction(None))?;
         // A transaction begun after the live transition claims first while unclaimed retained
         // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
         // transaction only once replay reports that no scope `Start` remains.
@@ -3694,6 +3862,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.claim_durable_scope_start(
                 &scope_name,
                 &DurableFunctionType::WriteRemoteTransaction(None),
+                invocation_id,
             )
             .await?
         };
@@ -3709,7 +3878,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: self.entity_parent_start_index(),
                 function_name: scope_name,
-                invocation_id: None,
+                invocation_id,
                 observational_owner: None,
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
@@ -3736,8 +3905,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             // The transaction scope is now open until commit/rollback; block checkpoints. Opened
             // live, so there is no recorded scope `End` to await on close.
-            self.state
-                .push_durable_scope(begin_index, DurableScopeKind::Transaction, None);
+            self.state.push_durable_scope(
+                begin_index,
+                DurableScopeKind::Transaction,
+                invocation_id,
+                None,
+            );
             self.state.current_retry_point = begin_index;
 
             return Ok(ControlFlow::Continue((begin_index, tx)));
@@ -3771,8 +3944,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ))
                 .await
                 .map_err(WorkerExecutorError::from)?;
-            self.state
-                .push_durable_scope(scope_start_index, DurableScopeKind::Transaction, None);
+            self.state.push_durable_scope(
+                scope_start_index,
+                DurableScopeKind::Transaction,
+                invocation_id,
+                None,
+            );
             self.state.current_retry_point = scope_start_index;
             return Ok(ControlFlow::Continue((scope_start_index, tx)));
         }
@@ -3897,8 +4074,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }?;
 
         // The (possibly re-begun) transaction scope is open until commit/rollback.
-        self.state
-            .push_durable_scope(result, DurableScopeKind::Transaction, scope_replay_handle);
+        self.state.push_durable_scope(
+            result,
+            DurableScopeKind::Transaction,
+            invocation_id,
+            scope_replay_handle,
+        );
         self.state.current_retry_point = original_begin_index;
 
         Ok(ControlFlow::Continue((result, tx)))
@@ -4819,10 +5000,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rep: u32,
         url: String,
         headers: Option<Vec<(String, String)>>,
+        reconstruction_policy: SerializableWebsocketReconstructionPolicy,
     ) {
-        self.state
-            .open_websocket_connections
-            .insert(rep, WebSocketConnectionState { url, headers });
+        self.state.open_websocket_connections.insert(
+            rep,
+            WebSocketConnectionState {
+                url,
+                headers,
+                reconstruction_policy,
+            },
+        );
     }
 
     /// Returns `Ok(())` if the host is in normal strictness mode, or if the host is in read-only
@@ -4877,6 +5064,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|state| WebSocketConnectionInfo {
                 url: state.url.clone(),
                 headers: state.headers.clone(),
+                reconstruction_policy: state.reconstruction_policy,
             })
     }
 
@@ -6829,6 +7017,80 @@ fn remove_invocation_scope_for_revoked_roots(
     (affected, handles)
 }
 
+fn owner_revoked_card_ids(status: &golem_common::model::AgentStatusRecord) -> HashSet<CardId> {
+    status
+        .revoked_cards
+        .iter()
+        .copied()
+        .chain(
+            status
+                .pending_card_events
+                .iter()
+                .filter_map(|pending_event| match &pending_event.event {
+                    QueuedCardEvent::Revoke(event) => Some(event.card_id),
+                    QueuedCardEvent::Install(_)
+                    | QueuedCardEvent::TransferStarted(_)
+                    | QueuedCardEvent::TransferReceived(_) => None,
+                }),
+        )
+        .collect()
+}
+
+/// Invocation scope an entity Store inherits from the Store that started its invocation. Tool and
+/// middleware code acts as if it were inlined in the owner agent, so the inherited scope follows
+/// the primary Store's rules: it applies as soon as it is installed, its roots are checked at the
+/// entity Store's first live authority boundary, and a revoked or expired root removes the scope.
+#[derive(Clone, Debug)]
+struct InheritedInvocationScope {
+    card: ScopeCard,
+    /// The live root cards, once checked at a live authority boundary.
+    roots: Option<BTreeMap<CardId, StoredCard>>,
+}
+
+impl InheritedInvocationScope {
+    fn unchecked(card: ScopeCard) -> Self {
+        Self { card, roots: None }
+    }
+
+    fn unchecked_root_ids(&self) -> Option<Vec<CardId>> {
+        self.roots
+            .is_none()
+            .then(|| self.card.root_card_ids.clone())
+    }
+
+    fn live_roots(&self) -> Option<&BTreeMap<CardId, StoredCard>> {
+        self.roots.as_ref()
+    }
+
+    /// Records the checked root cards and returns whether every root is live. As in the primary
+    /// Store after replay, a root that the card service does not know is an error.
+    fn check_roots(
+        &mut self,
+        card_states: &HashMap<CardId, CardState>,
+    ) -> Result<bool, WorkerExecutorError> {
+        if self.roots.is_some() {
+            return Ok(true);
+        }
+        let roots = live_scope_root_cards_from_states(Some(&self.card), card_states)?;
+        let all_live = roots.len() == self.card.root_card_ids.len();
+        self.roots = Some(roots);
+        Ok(all_live)
+    }
+
+    fn roots_include(&self, card_ids: &HashSet<CardId>) -> bool {
+        self.card
+            .root_card_ids
+            .iter()
+            .any(|root_id| card_ids.contains(root_id))
+    }
+
+    fn roots_expired(&self, now: DateTime<Utc>) -> bool {
+        self.roots
+            .as_ref()
+            .is_some_and(|roots| !expired_wallet_card_ids_at(roots, now).is_empty())
+    }
+}
+
 fn live_scope_root_cards_from_states(
     scope_card: Option<&ScopeCard>,
     card_states: &HashMap<CardId, CardState>,
@@ -8425,6 +8687,83 @@ mod tests {
         );
         assert!(scope_card.is_none());
         assert_eq!(handles, HashMap::from([(11, vec![unrelated_root])]));
+    }
+
+    #[test]
+    fn inherited_scope_roots_are_checked_once_and_unknown_roots_are_errors() {
+        let first = CardId(Uuid::from_u128(1));
+        let second = CardId(Uuid::from_u128(2));
+        let live = |card_id| CardState::Live(Box::new(concrete_card(card_id)));
+        let unchecked =
+            || InheritedInvocationScope::unchecked(invocation_scope_card(vec![first, second]));
+
+        let mut scope = unchecked();
+        assert_eq!(scope.unchecked_root_ids(), Some(vec![first, second]));
+        assert!(
+            scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, live(second))
+                ]))
+                .unwrap()
+        );
+        assert_eq!(
+            scope
+                .live_roots()
+                .map(|roots| roots.keys().copied().collect::<Vec<_>>()),
+            Some(vec![first, second])
+        );
+        assert_eq!(scope.unchecked_root_ids(), None);
+        assert!(scope.check_roots(&HashMap::new()).unwrap());
+
+        let mut scope = unchecked();
+        assert!(
+            !scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, CardState::Revoked)
+                ]))
+                .unwrap()
+        );
+
+        let mut scope = unchecked();
+        assert!(
+            scope
+                .check_roots(&HashMap::from([
+                    (first, live(first)),
+                    (second, CardState::Unknown)
+                ]))
+                .is_err()
+        );
+        let mut scope = unchecked();
+        assert!(
+            scope
+                .check_roots(&HashMap::from([(first, live(first))]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn inherited_scope_detects_revoked_and_expired_roots() {
+        let root = CardId(Uuid::from_u128(1));
+        let unrelated = CardId(Uuid::from_u128(2));
+        let now = Utc::now();
+        let scope = InheritedInvocationScope {
+            card: invocation_scope_card(vec![root]),
+            roots: Some(BTreeMap::from([(
+                root,
+                concrete_card_expiring_at(root, Some(now + chrono::Duration::seconds(60))),
+            )])),
+        };
+
+        assert!(!scope.roots_include(&HashSet::from([unrelated])));
+        assert!(scope.roots_include(&HashSet::from([root])));
+        assert!(!scope.roots_expired(now));
+        assert!(scope.roots_expired(now + chrono::Duration::seconds(60)));
+        assert!(
+            !InheritedInvocationScope::unchecked(invocation_scope_card(vec![root]))
+                .roots_expired(now + chrono::Duration::seconds(60))
+        );
     }
 
     #[test]
@@ -10585,6 +10924,9 @@ struct ActiveDurableScope {
     start_index: OplogIndex,
     #[allow(dead_code)]
     kind: DurableScopeKind,
+    /// The invocation id of the call that opened the scope. Calls made inside the scope record
+    /// the same id.
+    invocation_id: Option<DurableInvocationId>,
     /// During replay, the resolver handle for this scope's `End`: registered when the scope
     /// `Start` is claimed, awaited (and taken) when the scope closes. `None` on the live path (the
     /// scope `End` is written, not replayed) and once the handle has been taken by the closing
@@ -10615,12 +10957,14 @@ pub(crate) struct TcpTakenStreams {
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
+    pub reconstruction_policy: SerializableWebsocketReconstructionPolicy,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionInfo {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
+    pub reconstruction_policy: SerializableWebsocketReconstructionPolicy,
 }
 
 struct PrivateDurableWorkerState {
@@ -10667,7 +11011,7 @@ struct PrivateDurableWorkerState {
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
-    custom_invocation_ordinals: HashMap<Option<uuid::Uuid>, u64>,
+    invocation_ordinals: HashMap<OplogIndex, u64>,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
@@ -10765,6 +11109,13 @@ struct PrivateDurableWorkerState {
     invocation_scope_card: Option<ScopeCard>,
     invocation_scope_root_cards: BTreeMap<CardId, StoredCard>,
     invocation_scope_handles: HashMap<u32, Vec<CardId>>,
+    /// Invocation scope an entity Store inherits from the Store that started its current entity
+    /// invocation. It bounds the entity's effective surface but is not exposed as a wallet handle.
+    inherited_invocation_scope: Option<InheritedInvocationScope>,
+    /// Cards the owner worker has revoked. Revocation events are drained by whichever of the
+    /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
+    /// surfaces instead of relying on draining every event itself.
+    owner_revoked_card_ids: HashSet<CardId>,
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
     card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
@@ -11150,7 +11501,7 @@ impl PrivateDurableWorkerState {
             local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             assume_idempotence: true,
             active_custom_invocations: HashMap::new(),
-            custom_invocation_ordinals: HashMap::new(),
+            invocation_ordinals: HashMap::new(),
             tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
@@ -11177,6 +11528,8 @@ impl PrivateDurableWorkerState {
             invocation_scope_card: None,
             invocation_scope_root_cards: BTreeMap::new(),
             invocation_scope_handles: HashMap::new(),
+            inherited_invocation_scope: None,
+            owner_revoked_card_ids: HashSet::new(),
             wallet_id_hash,
             wallet_generation,
             card_event_boundary_lock,
@@ -11338,13 +11691,27 @@ impl PrivateDurableWorkerState {
         &mut self,
         start_index: OplogIndex,
         kind: DurableScopeKind,
+        invocation_id: Option<DurableInvocationId>,
         replay_end: Option<concurrent::ReplayCallHandle>,
     ) {
         self.active_durable_scopes.push(ActiveDurableScope {
             start_index,
             kind,
+            invocation_id,
             replay_end,
         });
+    }
+
+    /// The invocation id of the open durable scope at `start_index`, or `None` when no such scope
+    /// is open.
+    fn durable_scope_invocation_id(
+        &self,
+        start_index: OplogIndex,
+    ) -> Option<Option<DurableInvocationId>> {
+        self.active_durable_scopes
+            .iter()
+            .find(|scope| scope.start_index == start_index)
+            .map(|scope| scope.invocation_id)
     }
 
     /// Takes the resolver handle for the scope `End` of the open scope at `start_index`, if one was
@@ -11794,7 +12161,7 @@ impl PrivateDurableWorkerState {
 
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
-        self.custom_invocation_ordinals.clear();
+        self.invocation_ordinals.clear();
     }
 
     pub async fn get_workers(

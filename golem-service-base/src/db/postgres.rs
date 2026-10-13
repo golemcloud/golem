@@ -336,7 +336,19 @@ pub async fn migrate(
     let options = config.connect_options();
     let mut conn = PgConnection::connect_with(&options).await?;
     let sql = format!("CREATE SCHEMA IF NOT EXISTS {schema};");
-    conn.execute(sqlx::query(&sql)).await?;
+    if let Err(err) = conn.execute(sqlx::query(&sql)).await {
+        // `IF NOT EXISTS` does not make concurrent creation safe: when several services or
+        // replicas create the same schema at once, the losers fail with a unique violation on the
+        // schema name, or with duplicate_schema. The schema exists in both cases.
+        let schema_created_concurrently = err
+            .as_database_error()
+            .and_then(|db_err| db_err.code())
+            .is_some_and(|code| code == "23505" || code == "42P06");
+        if !schema_created_concurrently {
+            let _ = conn.close().await;
+            return Err(err.into());
+        }
+    }
     let sql = format!("SET SCHEMA '{schema}';");
     conn.execute(sqlx::query(&sql)).await?;
 

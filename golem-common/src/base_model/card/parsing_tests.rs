@@ -529,15 +529,16 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     tool: "grep".to_string(),
                 },
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
-                resource: ToolResourcePattern::Invocation(ToolInvocationPattern {
-                    command_path: Some(vec![ToolIdentifier("search".to_string())]),
-                    args: Vec::new(),
+                resource: ToolResourcePattern::Invocation(CanonicalToolPattern {
+                    command_path: vec![ToolIdentifier("search".to_string())],
+                    flags: Vec::new(),
+                    positionals: Vec::new(),
                 }),
             }),
         ),
         (
             "tool_with_flags_and_args",
-            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart : invoke : search.files --pattern=* --path=src/** -in README.md",
+            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart : invoke : search.files --pattern=* --path=src/** --ignore-case --line-number README.md",
             PermissionPattern::Tool(ClassPermissionPattern::<ToolClass> {
                 verb: Some(ToolVerb::Invoke),
                 owner: ToolOwnerPattern::Tool {
@@ -548,30 +549,32 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     tool: "grep".to_string(),
                 },
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
-                resource: ToolResourcePattern::Invocation(ToolInvocationPattern {
-                    command_path: Some(vec![
+                resource: ToolResourcePattern::Invocation(CanonicalToolPattern {
+                    command_path: vec![
                         ToolIdentifier("search".to_string()),
                         ToolIdentifier("files".to_string()),
-                    ]),
-                    args: vec![
-                        ToolArgPattern::LongFlag {
+                    ],
+                    flags: vec![
+                        CanonicalToolFlag {
                             name: ToolIdentifier("pattern".to_string()),
                             value: Some(ToolValuePattern::Star),
                         },
-                        ToolArgPattern::LongFlag {
+                        CanonicalToolFlag {
                             name: ToolIdentifier("path".to_string()),
-                            value: Some(ToolValuePattern::Literal(ToolValueLiteral(
-                                "src/**".to_string(),
-                            ))),
+                            value: Some(ToolValuePattern::parse_glob("src/**").unwrap()),
                         },
-                        ToolArgPattern::ShortFlags {
-                            flags: vec!['i', 'n'],
+                        CanonicalToolFlag {
+                            name: ToolIdentifier("ignore-case".into()),
                             value: None,
                         },
-                        ToolArgPattern::Positional(ToolValuePattern::Literal(ToolValueLiteral(
-                            "README.md".to_string(),
-                        ))),
+                        CanonicalToolFlag {
+                            name: ToolIdentifier("line-number".into()),
+                            value: None,
+                        },
                     ],
+                    positionals: vec![ToolValuePattern::Literal(ToolValueLiteral(
+                        "README.md".to_string(),
+                    ))],
                 }),
             }),
         ),

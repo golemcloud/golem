@@ -112,8 +112,7 @@ fn resolver_resolve_before_register_buffers() {
 #[test]
 fn resolver_missing_pending_is_dropped_not_buffered() {
     let mut resolver = ConcurrentReplayResolver::default();
-    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case,
-    // e.g. the guest-facing manual durability pair).
+    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case).
     assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     let mut rx = resolver.register(idx(1), None);
     assert!(rx.try_recv().is_err());
@@ -197,6 +196,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             observational_owner: None,
             entity_parent_start_index: None,
             atomic_lease: unregistered_atomic_lease(atomic_region, true),
+            invocation_id: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -451,6 +451,35 @@ async fn completion_delivery_suppress_records_no_marker() {
         oplog.entries.lock().await.is_empty(),
         "no marker may be recorded"
     );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn replay_discarded_accessor_delivery_waits_for_cancellation_after_restoration() {
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, None::<u32>);
+
+    store
+        .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+            // The caller restores its taken resource before reaching the delivery boundary.
+            let token = CompletionDelivery::replay_discarded();
+            accessor.with(|mut store| *store.data_mut() = Some(42));
+            let mut delivery = Box::pin(token.deliver_at_accessor_terminal(accessor));
+            assert!(
+                futures::poll!(&mut delivery).is_pending(),
+                "a discarded completion must not return its result to the guest"
+            );
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            // Cancelling the host future must leave the restored resource available.
+            drop(delivery);
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            Ok(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[test]
@@ -1955,6 +1984,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1972,6 +2002,7 @@ fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1989,6 +2020,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -2014,6 +2046,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2021,6 +2054,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let error_a = {
@@ -2063,6 +2097,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2070,6 +2105,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
+        invocation_id: None,
     };
 
     let error_a = {
@@ -2130,6 +2166,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
     let terminal_error: anyhow::Error = TerminalCallError::new(
@@ -2186,6 +2223,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2193,6 +2231,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -2303,6 +2342,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2320,6 +2360,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         parent_start_index: None,
         atomic_region: None,
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2336,6 +2377,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: Some(idx(7)),
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2357,6 +2399,7 @@ fn call_execution_scope_owns_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     assert_eq!(scope.retry_from, idx(42));

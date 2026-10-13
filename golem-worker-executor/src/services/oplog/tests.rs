@@ -4861,6 +4861,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             &HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -5069,6 +5070,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
             DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::INITIAL)),
             Some(OplogIndex::INITIAL),
+            None,
         )
         .await;
 
@@ -5086,6 +5088,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
             DurableFunctionType::WriteRemoteBatched(Some(parent)),
             Some(parent),
+            None,
         )
         .await
         .unwrap();
@@ -5467,6 +5470,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
             &HostResponse::Custom(large_payload1.clone().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
+            None,
             None,
         )
         .await

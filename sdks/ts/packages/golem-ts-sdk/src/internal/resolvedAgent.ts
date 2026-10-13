@@ -29,6 +29,7 @@ export type SnapshotTransport =
     }
   | {
       kind: 'multipart';
+      /** JSON-safe state with bigint tags; the guest must not decode it. */
       state: unknown;
       parts: MultipartPart[];
       fileDatabases?: Record<string, string>;

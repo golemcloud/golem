@@ -22,7 +22,6 @@ use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
-use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
 use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,7 +29,9 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 use crate::compat::map_local_server_startup_error;
-use crate::launch::{LaunchArgs, StartupPorts, launch_golem_services};
+use crate::config::{GolemServerConfig, SnapshotRepositoryKeySource, load_server_config};
+use crate::launch::{StartupPorts, launch_golem_services};
+use crate::well_known_secrets::check_exposure;
 
 pub struct ServerCommandHandler;
 
@@ -42,7 +43,6 @@ impl CommandHandlerHooks for ServerCommandHandler {
     ) -> anyhow::Result<()> {
         match subcommand {
             ServerSubcommand::Run { args } => {
-                let args = args.with_env_overrides()?;
                 if !ctx.server_no_limit_change() {
                     let file_limit_increase_result = rlimit::increase_nofile_limit(1000000);
                     debug!(
@@ -51,11 +51,24 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     );
                 }
 
-                let launch_args = launch_args_from_run_args_and_manifest(&args, &ctx)?;
-                let data_dir = launch_args.data_dir.clone();
-                if args.clean && tokio::fs::metadata(&data_dir).await.is_ok() {
-                    clean_data_dir(&ctx, &data_dir).await?;
+                // The first load validates the configuration without touching the data
+                // directory, so `--clean` cannot delete a repository key that the started
+                // server uses. The second load takes the retained key, creating it if needed.
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &args,
+                    SnapshotRepositoryKeySource::ValidationOnly,
+                )?;
+                check_exposure(&config)?;
+                if args.clean && tokio::fs::metadata(&config.data_dir).await.is_ok() {
+                    clean_server_data_dir(&ctx, &config).await?;
                 };
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &args,
+                    SnapshotRepositoryKeySource::DataDir,
+                )?;
+                let data_dir = config.data_dir.clone();
 
                 // A single pinned signal future is shared by both phases below, so the
                 // handlers are installed once and a signal arriving between the two
@@ -64,7 +77,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                 tokio::pin!(shutdown);
 
                 let launch_result = tokio::select! {
-                    res = launch_golem_services(&launch_args) => Some(res),
+                    res = launch_golem_services(&config) => Some(res),
                     _ = &mut shutdown => None,
                 };
 
@@ -103,30 +116,31 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     }
                 }
             }
-            ServerSubcommand::Clean => {
-                let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
-                clean_data_dir(&ctx, &data_dir).await
+            ServerSubcommand::Clean { config } => {
+                let config = load_server_config(
+                    ctx.manifest_local_server(),
+                    &RunArgs {
+                        config,
+                        ..RunArgs::default()
+                    },
+                    SnapshotRepositoryKeySource::ValidationOnly,
+                )?;
+                clean_server_data_dir(&ctx, &config).await
             }
         }
     }
 
     async fn run_server() -> anyhow::Result<()> {
-        let args = RunArgs::default().with_env_overrides()?;
-        let data_dir = default_data_dir()?;
+        let config = load_server_config(
+            None,
+            &RunArgs::default(),
+            SnapshotRepositoryKeySource::DataDir,
+        )?;
+        let data_dir = config.data_dir.clone();
 
-        let (mut join_set, _, _) = launch_golem_services(&LaunchArgs {
-            system_memory_override: args.system_memory_override,
-            router_addr: args.router_addr().to_string(),
-            router_port: args.router_port(),
-            custom_request_port: args.custom_request_port(),
-            mcp_port: args.mcp_port(),
-            ports_file: args.ports_file.clone(),
-            data_dir: data_dir.clone(),
-            agent_filesystem_root: args.agent_filesystem_root.clone(),
-            resource_usage_metering: resource_usage_metering_from_env()?,
-        })
-        .await
-        .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+        let (mut join_set, _, _) = launch_golem_services(&config)
+            .await
+            .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
         tokio::spawn(async move {
             while let Some(res) = join_set.join_next().await {
@@ -162,98 +176,6 @@ async fn shutdown_golem_services(
         );
     }
     join_set.shutdown().await;
-}
-
-fn default_data_dir() -> anyhow::Result<PathBuf> {
-    Ok(dirs::data_local_dir()
-        .ok_or_else(|| anyhow!("Failed to get data local dir"))?
-        .join("golem"))
-}
-
-fn launch_args_from_run_args_and_manifest(
-    args: &RunArgs,
-    ctx: &Context,
-) -> anyhow::Result<LaunchArgs> {
-    launch_args_from_run_args_and_local_server(
-        args,
-        ctx.manifest_local_server(),
-        resource_usage_metering_from_env()?,
-    )
-}
-
-fn resource_usage_metering_from_env() -> anyhow::Result<ResourceUsageMeteringConfig> {
-    Ok(ResourceUsageMeteringConfig {
-        compute: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__COMPUTE")?,
-        memory: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__MEMORY")?,
-        filesystem: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM")?,
-    })
-}
-
-fn metering_dimension_from_env(name: &str) -> anyhow::Result<bool> {
-    match std::env::var(name) {
-        Ok(value) => parse_metering_dimension(name, &value),
-        Err(std::env::VarError::NotPresent) => Ok(false),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("Failed to parse {name}: non-Unicode value")
-        }
-    }
-}
-
-fn parse_metering_dimension(name: &str, value: &str) -> anyhow::Result<bool> {
-    value
-        .parse()
-        .with_context(|| format!("Failed to parse {name}: {value}"))
-}
-
-fn data_dir_from_local_server(
-    local_server: Option<&ResolvedLocalServer>,
-) -> anyhow::Result<PathBuf> {
-    match local_server.and_then(|manifest| manifest.data_dir.clone()) {
-        Some(data_dir) => Ok(data_dir),
-        None => default_data_dir(),
-    }
-}
-
-fn launch_args_from_run_args_and_local_server(
-    args: &RunArgs,
-    local_server: Option<&ResolvedLocalServer>,
-    resource_usage_metering: ResourceUsageMeteringConfig,
-) -> anyhow::Result<LaunchArgs> {
-    Ok(LaunchArgs {
-        system_memory_override: args
-            .system_memory_override
-            .or_else(|| local_server.and_then(|manifest| manifest.system_memory_override)),
-        router_addr: args
-            .router_addr
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.router_addr.clone()))
-            .unwrap_or_else(|| args.router_addr().to_string()),
-        router_port: args
-            .router_port
-            .or_else(|| local_server.and_then(|manifest| manifest.router_port))
-            .unwrap_or_else(|| args.router_port()),
-        custom_request_port: args
-            .custom_request_port
-            .or_else(|| local_server.and_then(|manifest| manifest.custom_request_port))
-            .unwrap_or_else(|| args.custom_request_port()),
-        mcp_port: args
-            .mcp_port
-            .or_else(|| local_server.and_then(|manifest| manifest.mcp_port))
-            .unwrap_or_else(|| args.mcp_port()),
-        ports_file: args
-            .ports_file
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.ports_file.clone())),
-        data_dir: match &args.data_dir {
-            Some(data_dir) => data_dir.clone(),
-            None => data_dir_from_local_server(local_server)?,
-        },
-        agent_filesystem_root: args
-            .agent_filesystem_root
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.agent_filesystem_root.clone())),
-        resource_usage_metering,
-    })
 }
 
 /// A local server port that differs from the one the manifest's deployment `subdomain`
@@ -356,6 +278,24 @@ fn resolve_clean_data_dir(data_dir: &Path) -> anyhow::Result<PathBuf> {
     Ok(resolved_parent.join(file_name))
 }
 
+/// Deletes the data directory of `config`, when it holds all server state.
+async fn clean_server_data_dir(
+    ctx: &Arc<Context>,
+    config: &GolemServerConfig,
+) -> anyhow::Result<()> {
+    let clean_root = resolve_clean_data_dir(&config.data_dir)?;
+    let outside = config.state_outside(&clean_root);
+    if !outside.is_empty() {
+        bail!(
+            "Refusing to clean {}: these stores keep state outside the data directory, so \
+             deleting it does not delete the server state: {}",
+            clean_root.display().to_string().log_color_highlight(),
+            outside.join(", ")
+        );
+    }
+    clean_data_dir(ctx, &config.data_dir).await
+}
+
 async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<()> {
     let data_dir = resolve_clean_data_dir(data_dir)?;
     if !ctx
@@ -433,49 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn metering_dimension_values_are_validated() {
-        assert!(parse_metering_dimension("METERING", "true").unwrap());
-        assert!(!parse_metering_dimension("METERING", "false").unwrap());
-        assert!(parse_metering_dimension("METERING", "invalid").is_err());
-    }
-
-    #[test]
-    fn manifest_local_server_values_are_used_when_cli_args_are_absent() {
-        let manifest = local_server(LocalServer {
-            system_memory_override: std::num::NonZeroU64::new(2147483648),
-            router_addr: Some("127.0.0.1".to_string()),
-            router_port: Some(9882),
-            custom_request_port: Some(9008),
-            mcp_port: Some(9009),
-            ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
-            data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
-            agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
-        });
-
-        let args = launch_args_from_run_args_and_local_server(
-            &RunArgs::default(),
-            Some(&manifest),
-            ResourceUsageMeteringConfig::default(),
-        )
-        .unwrap();
-
-        assert_eq!(args.router_addr, "127.0.0.1");
-        assert_eq!(args.system_memory_override.unwrap().get(), 2147483648);
-        assert_eq!(args.router_port, 9882);
-        assert_eq!(args.custom_request_port, 9008);
-        assert_eq!(args.mcp_port, 9009);
-        assert_eq!(
-            args.ports_file,
-            Some(PathBuf::from("/tmp/test-app/.golem/ports.json"))
-        );
-        assert_eq!(args.data_dir, PathBuf::from("/tmp/test-app/.golem/data"));
-        assert_eq!(
-            args.agent_filesystem_root,
-            Some(PathBuf::from("/tmp/test-app/.golem/agents"))
-        );
-    }
-
-    #[test]
     fn subdomain_ports_match_when_bound_ports_equal_manifest_or_default_ports() {
         let manifest = local_server(LocalServer {
             custom_request_port: Some(9008),
@@ -542,61 +439,6 @@ mod tests {
                     bound_port: 41236,
                 },
             ]
-        );
-    }
-
-    #[test]
-    fn local_server_system_memory_override_uses_detection_when_unset() {
-        let args = launch_args_from_run_args_and_local_server(
-            &RunArgs::default(),
-            None,
-            ResourceUsageMeteringConfig::default(),
-        )
-        .unwrap();
-        assert_eq!(args.system_memory_override, None);
-    }
-
-    #[test]
-    fn cli_args_override_manifest_local_server_values() {
-        let manifest = local_server(LocalServer {
-            system_memory_override: std::num::NonZeroU64::new(2147483648),
-            router_addr: Some("127.0.0.1".to_string()),
-            router_port: Some(9882),
-            custom_request_port: Some(9008),
-            mcp_port: Some(9009),
-            ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
-            data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
-            agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
-        });
-        let run_args = RunArgs {
-            system_memory_override: std::num::NonZeroU64::new(1073741824),
-            router_addr: Some("0.0.0.0".to_string()),
-            router_port: Some(10000),
-            custom_request_port: Some(10001),
-            mcp_port: Some(10002),
-            ports_file: Some(PathBuf::from("cli-ports.json")),
-            data_dir: Some(PathBuf::from("cli-data")),
-            clean: false,
-            agent_filesystem_root: Some(PathBuf::from("cli-agents")),
-        };
-
-        let args = launch_args_from_run_args_and_local_server(
-            &run_args,
-            Some(&manifest),
-            ResourceUsageMeteringConfig::default(),
-        )
-        .unwrap();
-
-        assert_eq!(args.router_addr, "0.0.0.0");
-        assert_eq!(args.system_memory_override.unwrap().get(), 1073741824);
-        assert_eq!(args.router_port, 10000);
-        assert_eq!(args.custom_request_port, 10001);
-        assert_eq!(args.mcp_port, 10002);
-        assert_eq!(args.ports_file, Some(PathBuf::from("cli-ports.json")));
-        assert_eq!(args.data_dir, PathBuf::from("cli-data"));
-        assert_eq!(
-            args.agent_filesystem_root,
-            Some(PathBuf::from("cli-agents"))
         );
     }
 

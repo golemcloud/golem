@@ -75,6 +75,7 @@ jsonschema = { workspace = true }
 lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 phf = { workspace = true }
+poem = { workspace = true }
 portable-pty = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
@@ -123,6 +124,7 @@ uuid = { workspace = true }
 version-compare = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
+webbrowser = { workspace = true }
 which = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }

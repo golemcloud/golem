@@ -425,6 +425,76 @@ fn parse_pattern_grant(
         .map_err(permission_error_from_parse)
 }
 
+async fn normalize_tool_grants<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    sets: [&mut Vec<permissions_types::PatternGrant>; 4],
+) -> anyhow::Result<Result<(), permissions_types::PermissionError>> {
+    use golem_common::model::card::ToolResourcePattern;
+    use golem_common::model::card::owner::ToolOwnerPattern;
+
+    let mut definitions = std::collections::BTreeMap::new();
+    for grant in sets.into_iter().flatten() {
+        if grant.class != "tool" {
+            continue;
+        }
+        let mut pattern = match parse_permission_fields(
+            &grant.class,
+            &grant.owner,
+            &grant.recipient,
+            &grant.verb,
+            "*",
+        ) {
+            Ok(PermissionPattern::Tool(pattern)) => pattern,
+            Ok(_) => unreachable!("tool class was checked"),
+            Err(error) => return Ok(Err(permission_error_from_parse(error))),
+        };
+        let tool_name = match &pattern.owner {
+            ToolOwnerPattern::Tool {
+                account,
+                application,
+                environment,
+                component,
+                tool,
+            } if account == &ctx.owner_component_metadata().account_email
+                && application == &ctx.owner_component_metadata().application_name
+                && environment == &ctx.owner_component_metadata().environment_name
+                && component == &ctx.owner_component_metadata().component_name =>
+            {
+                Some(tool.clone())
+            }
+            _ => None,
+        };
+        // Discovery records the selected deployment and dynamic observations. Replaying a
+        // derivation must not reinterpret aliases using the deployment that is current now.
+        // All four bounds use the same observation for each tool, including an absent tool.
+        let definition = match tool_name {
+            Some(name) if grant.resource_id != "*" => {
+                if !definitions.contains_key(&name) {
+                    definitions.insert(name.clone(), ctx.get_tool_model(name.clone()).await?);
+                }
+                definitions[&name].as_ref()
+            }
+            _ => None,
+        };
+        pattern.resource = match ToolResourcePattern::parse_with_definition(
+            &grant.resource_id,
+            definition.map(|tool| &tool.definition),
+        ) {
+            Ok(resource) => resource,
+            Err(error) => {
+                return Ok(Err(permissions_types::PermissionError::InvalidPattern(
+                    error.to_string(),
+                )));
+            }
+        };
+        *grant = match concrete_pattern_grant(&PermissionPattern::Tool(pattern)) {
+            Ok(grant) => grant,
+            Err(error) => return Ok(Err(error)),
+        };
+    }
+    Ok(Ok(()))
+}
+
 fn permission_error_from_parse(error: CardParseError) -> permissions_types::PermissionError {
     match error {
         CardParseError::UnknownClass(class) => {
@@ -536,6 +606,9 @@ fn permission_error_from_algebra(error: CardAlgebraError) -> permissions_types::
         }
         CardAlgebraError::InvalidRecipientPath(recipient) => {
             permissions_types::PermissionError::InvalidRecipient(recipient)
+        }
+        CardAlgebraError::ToolPattern(message) => {
+            permissions_types::PermissionError::InvalidPattern(message)
         }
         CardAlgebraError::LowerBoundTooBroad { grant } => {
             permissions_types::PermissionError::LowerBoundTooBroad(
@@ -2510,15 +2583,28 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
     async fn derive(
         &mut self,
         parent: Resource<PermissionCardHandleRep>,
-        lower_positive_to_retain: Vec<permissions_types::PatternGrant>,
-        lower_negative_to_add: Vec<permissions_types::PatternGrant>,
-        upper_positive_to_retain: Vec<permissions_types::PatternGrant>,
-        upper_negative_to_add: Vec<permissions_types::PatternGrant>,
+        mut lower_positive_to_retain: Vec<permissions_types::PatternGrant>,
+        mut lower_negative_to_add: Vec<permissions_types::PatternGrant>,
+        mut upper_positive_to_retain: Vec<permissions_types::PatternGrant>,
+        mut upper_negative_to_add: Vec<permissions_types::PatternGrant>,
         lifespan: Option<permissions_types::Duration>,
     ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
+        if let Err(error) = normalize_tool_grants(
+            self,
+            [
+                &mut lower_positive_to_retain,
+                &mut lower_negative_to_add,
+                &mut upper_positive_to_retain,
+                &mut upper_negative_to_add,
+            ],
+        )
+        .await?
+        {
+            return Ok(Err(error));
+        }
         async {
             self.with_agent_authority_at_boundary(|ctx| {
                 ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)
@@ -2559,10 +2645,10 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
 
     async fn derive_from_wallet(
         &mut self,
-        lower_positive: Vec<permissions_types::PatternGrant>,
-        lower_negative: Vec<permissions_types::PatternGrant>,
-        upper_positive: Vec<permissions_types::PatternGrant>,
-        upper_negative: Vec<permissions_types::PatternGrant>,
+        mut lower_positive: Vec<permissions_types::PatternGrant>,
+        mut lower_negative: Vec<permissions_types::PatternGrant>,
+        mut upper_positive: Vec<permissions_types::PatternGrant>,
+        mut upper_negative: Vec<permissions_types::PatternGrant>,
         lifespan: Option<permissions_types::Duration>,
     ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
     {
@@ -2572,6 +2658,19 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
             "derive-from-wallet",
         );
 
+        if let Err(error) = normalize_tool_grants(
+            self,
+            [
+                &mut lower_positive,
+                &mut lower_negative,
+                &mut upper_positive,
+                &mut upper_negative,
+            ],
+        )
+        .await?
+        {
+            return Ok(Err(error));
+        }
         async {
             let grants = parse_derived_grant_sets(
                 &lower_positive,
@@ -2608,14 +2707,27 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
     async fn derive_scope(
         &mut self,
         parents: Vec<Resource<PermissionCardHandleRep>>,
-        lower_positive: Vec<permissions_types::PatternGrant>,
-        lower_negative: Vec<permissions_types::PatternGrant>,
-        upper_positive: Vec<permissions_types::PatternGrant>,
-        upper_negative: Vec<permissions_types::PatternGrant>,
+        mut lower_positive: Vec<permissions_types::PatternGrant>,
+        mut lower_negative: Vec<permissions_types::PatternGrant>,
+        mut upper_positive: Vec<permissions_types::PatternGrant>,
+        mut upper_negative: Vec<permissions_types::PatternGrant>,
     ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive-scope");
 
+        if let Err(error) = normalize_tool_grants(
+            self,
+            [
+                &mut lower_positive,
+                &mut lower_negative,
+                &mut upper_positive,
+                &mut upper_negative,
+            ],
+        )
+        .await?
+        {
+            return Ok(Err(error));
+        }
         let result = async {
             let (wallet, invocation_key) = self
                 .with_agent_authority_at_boundary(|ctx| {
@@ -3994,7 +4106,9 @@ mod tests {
             owner: "alice@example.com/shop/prod/cli-tools/grep".to_string(),
             recipient: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
             verb: "invoke".to_string(),
-            resource_id: "search.files --pattern=* --path=src/** -in README.md".to_string(),
+            resource_id:
+                "search.files --pattern=* --path=src/** --ignore-case --line-number -- README.md"
+                    .to_string(),
         };
 
         let pattern = parse_pattern_grant(&grant).expect("structured grant should be valid");

@@ -95,6 +95,7 @@ use golem_common::model::{
     ShardEpoch, ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
+use golem_service_base::clients::shard_manager::ExecutorEndpoint;
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
     proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
@@ -166,7 +167,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub async fn new(
         services: Svcs,
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
-        port: u16,
+        endpoint: ExecutorEndpoint,
     ) -> Result<Self, Error> {
         let worker_activator: Arc<dyn WorkerActivator<Ctx>> =
             Arc::new(DefaultWorkerActivator::new(services.clone()));
@@ -190,7 +191,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ctx: PhantomData,
         };
 
-        info!(port, "Registering worker executor");
+        info!(
+            port = endpoint.port,
+            advertised_ip = ?endpoint.advertised_ip,
+            "Registering worker executor"
+        );
 
         worker_executor
             .shard_manager_service()
@@ -199,7 +204,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         let shard_assignment = worker_executor
             .shard_manager_service()
-            .register(port, pod_name)
+            .register(endpoint, pod_name)
             .await?;
 
         info!(assignment = %shard_assignment, "Received initial shard assignment");

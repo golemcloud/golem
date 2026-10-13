@@ -317,6 +317,7 @@ pub impl[T : FromWire] FromWire for T?
 pub impl[T : FromWire, E : FromWire] FromWire for Result[T, E]
 pub impl FromWire for Bytes
 pub impl FromWire for @types.Datetime
+pub impl FromWire for @types.Uuid
 pub impl FromWire for @schema_model.GuestPermissionCardHandle
 pub impl FromWire for @schema_model.GuestQuotaTokenHandle
 pub impl FromWire for @schema_model.GuestSchemaValueStreamHandle
@@ -384,6 +385,7 @@ pub impl[T : IntoWire] IntoWire for T?
 pub impl[T : IntoWire, E : IntoWire] IntoWire for Result[T, E]
 pub impl IntoWire for Bytes
 pub impl IntoWire for @types.Datetime
+pub impl IntoWire for @types.Uuid
 pub impl IntoWire for @schema_model.GuestPermissionCardHandle
 pub impl IntoWire for @schema_model.GuestQuotaTokenHandle
 pub impl IntoWire for @schema_model.GuestSchemaValueStreamHandle
@@ -432,6 +434,7 @@ pub impl[T : WireSchema] WireSchema for T?
 pub impl[T : WireSchema, E : WireSchema] WireSchema for Result[T, E]
 pub impl WireSchema for Bytes
 pub impl WireSchema for @types.Datetime
+pub impl WireSchema for @types.Uuid
 pub impl[T : WireSchema] WireSchema for Array[T]
 pub impl[K : WireSchema, V : WireSchema] WireSchema for Map[K, V]
 pub impl[A : WireSchema, B : WireSchema] WireSchema for (A, B)

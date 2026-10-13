@@ -259,6 +259,7 @@ shadow-rs = { version = "1.2.0", default-features = false, features = ["build"] 
 shell-words = "1.1.0"
 shlex = "2.0.1"
 similar = "2.7.0"
+socket2 = "0.6"
 spdx = "0.10.8"
 sqlparser = { version = "=0.62.0", features = ["visitor"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "mysql", "uuid", "migrate", "derive", "chrono", "json", "bigdecimal", "mac_address", "bit-vec", "ipnetwork", ] }
@@ -324,7 +325,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.10", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.12", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"

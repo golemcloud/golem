@@ -501,7 +501,7 @@ impl Pod {
 
 impl Display for Pod {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.ip, self.port)
+        write!(f, "{}", self.address())
     }
 }
 
