@@ -1,0 +1,42 @@
+name: generate-builtin-tool-client-ts
+steps:
+  - id: create-project
+    only_if: { language: ts }
+    create_project:
+      name: test-app
+
+  - id: generate-bash-client
+    only_if: { language: ts }
+    prompt: >
+      In test-app, add CounterAgent.runScript with one string input named script and a
+      string return value. Invoke the built-in bash tool through a generated TypeScript
+      BashClient using run(script, "", 600). Return result.stdout without trimming it;
+      bash returns stdout as a string in its result, not a stream. Reject a nonzero
+      result.exitCode and propagate tool or RPC failures instead of returning a fabricated
+      result.
+      Declare tools.bash.release with account builtin-tool-owner@golem.cloud, name bash,
+      version "0.2.1". Add bash to the CounterAgent component's dependencies.tools and
+      bind bash at the component or agent level with filesystemAccess: allowed.
+      Configure bridge.ts.internal.tools: [bash], generate the client with Golem, and
+      wire its generated source into the TypeScript compiler and runtime imports.
+      Do not hand-write or copy a consumer tool schema, edit generated code, use a raw
+      tool invocation API, or execute the script directly in the agent. Preserve the
+      template CounterAgent identity. Make sure the app builds and deploys locally.
+    expectedSkills:
+      - golem-generating-tool-clients
+    verify:
+      build: true
+      deploy: true
+      expectedFiles:
+        - test-app/golem-temp/bridge-sdk/ts/internal/bash-tool-guest-client/bash-tool-guest-client.ts
+
+  - id: invoke-asymmetric-script
+    only_if: { language: ts }
+    invoke_json:
+      agent: 'CounterAgent("bash-client")'
+      method: runScript
+      args: '"left=7; right=19; printf ''typed-bash:%s:%s'' \"$((left * 3 + right))\" \"$((right - left))\""'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "typed-bash:40:12"

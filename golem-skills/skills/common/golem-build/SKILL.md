@@ -96,4 +96,5 @@ For a deeper breakdown of build pipeline stages, dependency auto-fix behavior, a
 
 ## Related Skills
 
+- Load `golem-generating-tool-clients` to generate and import typed clients for existing built-in tools or MCP imports
 - Load `golem-troubleshoot-build` when a build fails or when diagnosing manifest/configuration issues

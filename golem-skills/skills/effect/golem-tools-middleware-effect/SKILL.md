@@ -1,9 +1,34 @@
 ---
 name: golem-tools-middleware-effect
-description: Defines and calls Golem tools and attaches Effect-native typed or universal middleware. Use for tool providers, clients, and middleware composition.
+description: Defines and calls Golem tools and attaches Effect-native typed or universal middleware. Use for generated built-in or MCP imported clients, tool providers, and middleware composition.
 ---
 
 # Effect tools and middleware
+
+## Call an existing tool through a generated client
+
+Load `golem-generating-tool-clients` to select a built-in release or MCP import.
+Use `bridge.effect.internal.tools` or an Effect component's tool dependencies,
+then wire the generated source into the consumer's TypeScript paths and includes.
+Call the built-in `bash` release `0.2.1` from an Effect agent method:
+
+```typescript
+import { Effect } from 'effect';
+import { client as bash } from 'bash-tool-guest-client';
+
+const program = Effect.gen(function* () {
+  const result = yield* bash.run("printf 'hello\\n'", '', 600);
+  return result.stdout;
+});
+```
+
+Check the result's exit code when a nonzero shell exit should fail the method.
+For streaming commands, start and collect the invocation inside `Effect.scoped`.
+The collector preserves the result and both output outcomes independently.
+Generated calls fail with `ToolRuntimeError<E>` and require the tool runtime;
+they do not call the MCP server directly.
+
+## Define a tool and attach middleware
 
 Build a definition with `Tool.toolDefinition(name).body(...)`. A provider finishes it with `.implement({ camelCaseName: handler })`; a caller uses `Tool.client(definition)`. Handlers and clients return Effects and stream stdin/stdout/stderr with independent Effect `Stream` values. Drain both outputs concurrently when both are declared.
 

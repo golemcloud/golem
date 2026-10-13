@@ -790,6 +790,7 @@ This table shows where each property can be defined:
 
 ## Related Skills
 
+- Load `golem-generating-tool-clients` to select built-in releases or MCP imports, generate typed clients, and configure consumer imports separately from deployment bindings
 - Load `golem-profiles-and-environments` for detailed guidance on CLI profiles, app environments, component presets, and how they interact
 - Load `golem-deployment-version` for the `version:` source (git tag/hash, static, env var) and the `versionCheck` uniqueness policy
 

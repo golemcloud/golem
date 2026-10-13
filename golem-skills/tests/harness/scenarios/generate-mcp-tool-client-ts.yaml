@@ -1,0 +1,98 @@
+name: generate-mcp-tool-client-ts
+steps:
+  - id: create-project
+    only_if: { language: ts }
+    create_project:
+      name: test-app
+
+  - id: deploy-local-provider
+    only_if: { language: ts }
+    prompt: >
+      In test-app, add a separate TypeScript component in provider/ implementing a tool
+      named pigment, version 1.0.0, with command render. Keep the template CounterAgent
+      in the original component. The provider command takes label (string) and revision
+      (number), returns a structured record { label: string, revision: number }, and writes
+      UTF-8 stdout declared as text/plain, exactly `stream:${label}:${revision}` without
+      a newline. Use the current
+      SDK tool definition and implementation APIs, not an agent exposed as a tool.
+      Declare tools.pigment.component as the provider component. Add its qualified tool
+      dependency to the original component and bind pigment there with tools.pigment: {}.
+      Configure mcp.deployments.local with domain localhost:{{mcp_port}},
+      tools.pigment.ownerComponent set to the original component, and include: [render].
+      Use no security scheme. Build and deploy locally. Do not add an MCP import yet.
+    verify:
+      build: true
+      deploy: true
+
+  - id: verify-export-name
+    only_if: { language: ts }
+    mcp_call:
+      url: "http://localhost:{{mcp_port}}/mcp"
+      method: tools/list
+    expect:
+      body_contains: "pigment_render"
+
+  - id: generate-imported-client
+    only_if: { language: ts }
+    continueSession: false
+    prompt: >
+      In test-app, import http://localhost:{{mcp_port}}/mcp through
+      mcp.imports.local with prefix remote. The exported command is pigment_render;
+      the imported tool must be remote-pigment-render, distinct from the local pigment
+      tool. Generate its TypeScript guest client.
+      Add remote-pigment-render to the CounterAgent component's dependencies.tools,
+      bind it for CounterAgent, and select it in bridge.ts.internal.tools. Wire the
+      generated source into TypeScript compilation and imports. Do not hand-write or
+      copy a consumer tool schema, edit generated source, use raw invocation APIs,
+      call the provider directly, or hardcode outputs.
+      Add CounterAgent.renderRemote(label: string, revision: number), returning a
+      record { structuredJson: string, contentJson: string, stdout: string }. Invoke
+      the generated typed client with both inputs and await collect(). Propagate rejected
+      result/stdout/stderr settlements. Serialize collected.result.value.structured as
+      structuredJson and collected.result.value.content as contentJson with JSON.stringify
+      (convert bigint values to strings if needed); decode collected stdout as UTF-8,
+      using an empty string only when absent. Golem MCP exports the structured result and
+      output channel text as content blocks, so preserve those blocks in contentJson.
+      Preserve the template CounterAgent identity. Build and deploy locally while keeping
+      the provider and its MCP deployment available.
+    expectedSkills:
+      - golem-generating-tool-clients
+    verify:
+      build: true
+      deploy: true
+      expectedFiles:
+        - test-app/golem-temp/bridge-sdk/ts/internal/remote-pigment-render-tool-guest-client/remote-pigment-render-tool-guest-client.ts
+
+  - id: invoke-amber
+    only_if: { language: ts }
+    invoke_json:
+      agent: 'CounterAgent("mcp-client")'
+      method: renderRemote
+      args: '"amber" 17'
+    expect:
+      result_json:
+        - path: "$.structuredJson"
+          contains: '"label":"amber"'
+        - path: "$.structuredJson"
+          contains: '"revision":17'
+        - path: "$.contentJson"
+          contains: "stream:amber:17"
+        - path: "$.stdout"
+          equals: ""
+
+  - id: invoke-violet
+    only_if: { language: ts }
+    invoke_json:
+      agent: 'CounterAgent("mcp-client")'
+      method: renderRemote
+      args: '"violet" 42'
+    expect:
+      result_json:
+        - path: "$.structuredJson"
+          contains: '"label":"violet"'
+        - path: "$.structuredJson"
+          contains: '"revision":42'
+        - path: "$.contentJson"
+          contains: "stream:violet:42"
+        - path: "$.stdout"
+          equals: ""

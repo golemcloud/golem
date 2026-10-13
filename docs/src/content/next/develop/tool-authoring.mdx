@@ -152,6 +152,8 @@ Callers that are not a shell supply no variables: `golem tool invoke`, generated
 
 ## Call through a typed client
 
+For an existing built-in tool or MCP import, use [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients). The guide selects metadata from a release or import, generates the client with `golem build`, and shows how to import and call it. Do not manually reconstruct the existing tool's schema. Generation and deployment bindings are separate: generating a client does not authorize its calls.
+
 Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, and MoonBit code generators project equivalent clients. For a tool implemented in another component or language, add it to bridge generation:
 
 ```yaml filename="golem.yaml"
