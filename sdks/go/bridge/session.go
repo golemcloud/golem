@@ -102,6 +102,11 @@ type session struct {
 
 	queued  int
 	unacked int
+
+	// inflight holds the values that bound output streams and are on their
+	// way to a queue, by entry id; detach unbinds them with the queued ones.
+	inflight     map[uint64]schema.SchemaValue
+	nextInflight uint64
 }
 
 type sessionResult struct {
@@ -122,6 +127,7 @@ func openSession(a *Agent, method string, params schema.SchemaValue) (*session, 
 		byProvisional: map[string]*inputStream{},
 		byToken:       map[string]*inputStream{},
 		outputs:       map[string]*outputStream{},
+		inflight:      map[uint64]schema.SchemaValue{},
 		directions:    map[string]string{},
 		channels:      map[uint32]string{},
 		tokenChannels: map[string]uint32{},
@@ -456,6 +462,12 @@ func (s *session) detach() error {
 	}
 	for _, out := range s.outputs {
 		out.resume()
+	}
+	// The server replays the items the old connection was still queueing, so
+	// the streams they bound are free again.
+	for id, value := range s.inflight {
+		unbindStreams(value)
+		delete(s.inflight, id)
 	}
 	if s.accepted {
 		return s.prepareResume()
@@ -996,48 +1008,63 @@ func (s *session) outputOn(channel uint32) (*outputStream, error) {
 }
 
 func (s *session) receiveItem(c *sessionConn, m message) error {
+	out, entry, err := s.bindItem(c, m)
+	if err != nil || out == nil {
+		return err
+	}
+	return out.offer(c, entry)
+}
+
+// bindItem decodes a JSON stream item and binds the streams it carries; the
+// caller offers the entry to the stream. A nil stream means the frame is from
+// a connection the session has left.
+func (s *session) bindItem(c *sessionConn, m message) (*outputStream, outEntry, error) {
 	current, err := s.installFrom(c, m)
 	if err != nil || !current {
-		return err
+		return nil, outEntry{}, err
 	}
 	channel, err := m.channel()
 	if err != nil {
-		return err
+		return nil, outEntry{}, err
 	}
 	sequence, err := m.u64("sequence")
 	if err != nil {
-		return err
+		return nil, outEntry{}, err
 	}
 	cursor, err := m.token("cursorToken")
 	if err != nil {
-		return err
+		return nil, outEntry{}, err
 	}
 	raw, err := schema.UnmarshalWireValue(m["value"])
 	if err != nil {
-		return protocolErrorf("stream item: %v", err)
+		return nil, outEntry{}, protocolErrorf("stream item: %v", err)
 	}
 	s.mu.Lock()
 	out, err := s.outputOn(channel)
 	if err != nil {
 		s.mu.Unlock()
-		return err
+		return nil, outEntry{}, err
 	}
 	if out.lane != laneJSON {
 		s.mu.Unlock()
-		return protocolErrorf("a %s stream's item arrived as JSON", out.lane)
+		return nil, outEntry{}, protocolErrorf("a %s stream's item arrived as JSON", out.lane)
 	}
 	if err := out.item.Validate(raw); err != nil {
 		s.mu.Unlock()
-		return protocolErrorf("stream item: %v", err)
+		return nil, outEntry{}, protocolErrorf("stream item: %v", err)
 	}
 	value, err := s.bindOutputs(out.item, out.item.Type(), raw)
-	s.mu.Unlock()
 	if err != nil {
-		return err
+		s.mu.Unlock()
+		return nil, outEntry{}, err
 	}
-	return out.offer(c, outEntry{
-		first: sequence, count: 1, value: value, cursor: cursor, bytes: len(m["value"]),
-	})
+	s.nextInflight++
+	id := s.nextInflight
+	s.inflight[id] = value
+	s.mu.Unlock()
+	return out, outEntry{
+		first: sequence, count: 1, value: value, cursor: cursor, bytes: len(m["value"]), inflight: id,
+	}, nil
 }
 
 func (s *session) handleBinary(c *sessionConn, data []byte) error {

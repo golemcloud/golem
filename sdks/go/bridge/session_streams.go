@@ -386,6 +386,9 @@ type outEntry struct {
 	bytes    int
 	terminal bool
 	end      error
+	// inflight is the session's id for a value that bound streams until the
+	// entry is queued or dropped, or 0.
+	inflight uint64
 }
 
 func newOutputStream(s *session, token string) *outputStream {
@@ -411,17 +414,19 @@ func (o *outputStream) offer(c *sessionConn, e outEntry) error {
 	s.mu.Lock()
 	for {
 		if s.conn != c || s.over {
-			// The connection the item came on is gone, and the server replays
-			// the item on the next one: the streams it bound are free again.
-			unbindStreams(e.value)
+			// The connection the item came on is gone: detach has freed the
+			// streams it bound, and the server replays it on the next one.
+			delete(s.inflight, e.inflight)
 			s.mu.Unlock()
 			return nil
 		}
 		if o.terminal {
+			delete(s.inflight, e.inflight)
 			s.mu.Unlock()
 			return protocolErrorf("a stream item arrived after the stream ended")
 		}
 		if e.first != o.expected {
+			delete(s.inflight, e.inflight)
 			s.mu.Unlock()
 			return protocolErrorf("stream sequence %d arrived where %d was expected", e.first, o.expected)
 		}
@@ -438,6 +443,7 @@ func (o *outputStream) offer(c *sessionConn, e outEntry) error {
 		s.mu.Lock()
 	}
 	defer s.mu.Unlock()
+	delete(s.inflight, e.inflight)
 	o.expected = e.first + e.count
 	if e.terminal {
 		o.terminal = true

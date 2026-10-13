@@ -491,20 +491,27 @@ impl GoToolBridgeGenerator {
         };
         Ok(match surface {
             CanonicalSurfaceRef::GlobalOption { node, index } => {
-                option(&self.node(node)?.globals.options[index])
+                let o = &self.node(node)?.globals.options[index];
+                check_default(&o.long, o.default.as_ref())?;
+                option(o)
             }
             CanonicalSurfaceRef::GlobalFlag { node, index } => {
                 flag(&self.node(node)?.globals.flags[index])
             }
             CanonicalSurfaceRef::BodyPositional { index } => {
                 let p = &body()?.positionals.fixed[index];
+                check_default(&p.name, p.default.as_ref())?;
                 (
                     "Positional",
                     p.default.as_ref().and_then(|v| self.literal(&p.type_, v)),
                 )
             }
             CanonicalSurfaceRef::BodyTail => ("Tail", None),
-            CanonicalSurfaceRef::BodyOption { index } => option(&body()?.options[index]),
+            CanonicalSurfaceRef::BodyOption { index } => {
+                let o = &body()?.options[index];
+                check_default(&o.long, o.default.as_ref())?;
+                option(o)
+            }
             CanonicalSurfaceRef::BodyFlag { index } => flag(&body()?.flags[index]),
         })
     }
@@ -731,6 +738,39 @@ impl ToolNames {
         out.extend(self.groups.values().cloned());
         out
     }
+}
+
+/// Refuses a default the Go value types cannot carry whole: `values.Text`
+/// has no language and `values.Binary` no MIME type, so such a default would
+/// reach the tool changed.
+fn check_default(name: &str, value: Option<&SchemaValue>) -> anyhow::Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let carried = match value {
+        SchemaValue::Text(text) => text.language.is_none(),
+        SchemaValue::Binary(binary) => binary.mime_type.is_none(),
+        SchemaValue::List { elements } => {
+            for element in elements {
+                check_default(name, Some(element))?;
+            }
+            true
+        }
+        SchemaValue::Map { entries } => {
+            for (key, value) in entries {
+                check_default(name, Some(key))?;
+                check_default(name, Some(value))?;
+            }
+            true
+        }
+        _ => true,
+    };
+    if !carried {
+        anyhow::bail!(
+            "the default of {name} carries a language or MIME type, which a Go tool client cannot represent"
+        );
+    }
+    Ok(())
 }
 
 /// One generated struct field and the spec call that binds it: the spec

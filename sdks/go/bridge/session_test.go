@@ -1037,3 +1037,67 @@ func TestARefusedTakeoverEndsTheSession(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// The schedule a slow reader allows: the old connection's reader binds an
+// item's inner stream and pauses before it queues the item, the session moves
+// to a new connection, and the new reader gets the replayed item first. The
+// replay binds the stream, and the old reader's late offer leaves it bound.
+func TestAReplayedItemBindsWhileTheOldReaderIsPaused(t *testing.T) {
+	old, current := &sessionConn{}, &sessionConn{}
+	s := &session{
+		conn: old, accepted: true, everAccepted: true, sessionToken: "sess",
+		byProvisional: map[string]*inputStream{}, byToken: map[string]*inputStream{},
+		outputs: map[string]*outputStream{}, inflight: map[uint64]schema.SchemaValue{},
+		directions: map[string]string{}, channels: map[uint32]string{},
+		tokenChannels: map[string]uint32{}, cursors: map[string]string{},
+		result: make(chan sessionResult, 1), done: make(chan struct{}),
+	}
+	frame := func(kind string, members map[string]any) []byte {
+		data, err := encodeMessage(kind, members)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	item := func(channel uint32, mappings []any) []byte {
+		return frame("outputStreamItem", map[string]any{
+			"channel": channel, "cursorToken": "c0", "mappings": mappings, "sequence": "0",
+			"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
+		})
+	}
+	if err := s.handleText(old, frame("invocationResult", map[string]any{
+		"mappings": []any{outputMapping(2, "out")},
+		"result": map[string]any{
+			"graph": json.RawMessage(nestedU32StreamGraph), "kind": "value",
+			"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "out"}},
+		},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	_, m, err := parseMessage(item(2, []any{outputMapping(3, "inner")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, paused, err := s.bindItem(old, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.mu.Lock()
+	if err := s.detach(); err != nil {
+		t.Fatal(err)
+	}
+	s.conn, s.accepted = current, true
+	s.mu.Unlock()
+	if err := s.handleText(current, item(5, []any{outputMapping(5, "out"), outputMapping(6, "inner")})); err != nil {
+		t.Fatalf("the replayed item failed: %v", err)
+	}
+
+	if err := out.offer(old, paused); err != nil {
+		t.Fatal(err)
+	}
+	if !s.outputs["inner"].bound {
+		t.Fatal("the old reader's late offer unbound the replayed stream")
+	}
+}

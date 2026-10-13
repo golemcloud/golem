@@ -1710,3 +1710,35 @@ fn go_tool_group_names_do_not_collide(env: &GoEnv) {
     let generated = GeneratedGo::tool(env, tool);
     generated.assert_vets_for_wasip1(env);
 }
+
+/// A text default with a language has no Go spelling that keeps the language,
+/// so generating the tool client fails rather than sending plain text.
+#[test]
+fn go_tool_client_refuses_a_default_it_cannot_carry_whole() {
+    let mut tool = go_grep_tool();
+    let get = tool.commands.nodes[3].body.as_mut().unwrap();
+    get.options.push(OptionSpec {
+        default: Some(SchemaValue::Text(
+            golem_common::schema::schema_value::TextValuePayload {
+                text: "bonjour".to_string(),
+                language: Some("fr".to_string()),
+            },
+        )),
+        ..option(
+            "greeting",
+            OptionShape::Scalar(SchemaType::text(
+                golem_common::schema::schema_type::TextRestrictions::default(),
+            )),
+        )
+    });
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let err = GoToolBridgeGenerator::new(tool, target, true)
+        .expect("a generator")
+        .generate()
+        .expect_err("the default cannot be represented");
+    assert!(
+        format!("{err:#}").contains("greeting"),
+        "unexpected error: {err:#}"
+    );
+}
