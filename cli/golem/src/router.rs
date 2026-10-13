@@ -19,10 +19,10 @@ use golem_common::poem::{CliClientInfoMiddleware, OpenTelemetryMetrics, Promethe
 use golem_registry_service::startup::{StartupPhase, StartupProgress};
 use poem::endpoint::BoxEndpoint;
 use poem::http::{StatusCode, header};
-use poem::listener::{Acceptor, Listener};
+use poem::listener::Acceptor;
 use poem::middleware::{CookieJarManager, Cors, Tracing};
 use poem::{Endpoint, EndpointExt, Request, Response, Route, Server};
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use tokio::task::JoinSet;
 use tracing::Instrument;
@@ -84,14 +84,12 @@ pub async fn bind_router(
     startup_progress: StartupProgress,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<StartingRouter, anyhow::Error> {
-    let ipv4_addr: Ipv4Addr = listener_addr.parse().context(format!(
+    let ip_addr: IpAddr = listener_addr.parse().context(format!(
         "Failed at parsing the listener host address {listener_addr}"
     ))?;
 
-    let listener_socket_addr = SocketAddrV4::new(ipv4_addr, listener_port);
-
-    let listener = poem::listener::TcpListener::bind(listener_socket_addr);
-    let acceptor = listener.into_acceptor().await?;
+    let acceptor =
+        golem_service_base::net::bind_poem_acceptor(SocketAddr::new(ip_addr, listener_port))?;
     let port = acceptor.local_addr()[0]
         .as_socket_addr()
         .expect("socket address")

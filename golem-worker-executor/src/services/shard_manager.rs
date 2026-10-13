@@ -20,7 +20,9 @@ use golem_common::base_model::shard_lease;
 use golem_common::model::{
     ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
 };
-use golem_service_base::clients::shard_manager::{ShardLease, ShardLeaseError, ShardManagerError};
+use golem_service_base::clients::shard_manager::{
+    ExecutorEndpoint, ShardLease, ShardLeaseError, ShardManagerError,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
@@ -74,7 +76,7 @@ pub trait ShardManagerService: Send + Sync {
     /// granted it.
     async fn register(
         &self,
-        port: u16,
+        endpoint: ExecutorEndpoint,
         pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError>;
 
@@ -232,7 +234,7 @@ pub struct GrpcShardManagerService {
     executor_id: RwLock<Uuid>,
     /// The registration arguments, kept so a re-register after `LeaseNotFound`
     /// can repeat it without going back through `WorkerExecutorImpl`.
-    registration: RwLock<Option<(u16, Option<String>)>>,
+    registration: RwLock<Option<(ExecutorEndpoint, Option<String>)>>,
     /// Weak self-reference, so `register` can spawn the renewal loop without
     /// the loop keeping this service alive.
     me: Weak<Self>,
@@ -532,14 +534,14 @@ impl GrpcShardManagerService {
     /// lease, with the revision it was delivered at.
     async fn register_granted(
         &self,
-        port: u16,
+        endpoint: ExecutorEndpoint,
         pod_name: Option<String>,
     ) -> Result<(usize, ShardLease), ShardManagerError> {
-        *self.registration.write().unwrap() = Some((port, pod_name.clone()));
+        *self.registration.write().unwrap() = Some((endpoint, pod_name.clone()));
 
         let registration = self
             .client
-            .register(port, pod_name, self.executor_id())
+            .register(endpoint, pod_name, self.executor_id())
             .await?;
 
         let number_of_shards: usize = registration.number_of_shards.try_into().map_err(|_| {
@@ -625,9 +627,9 @@ impl GrpcShardManagerService {
                     // Bounded like a renewal: the assignment is already cleared, so a manager that
                     // accepts the call and stalls would otherwise hold this executor with no shards
                     // and no registration for as long as it stalls.
-                    Some((port, pod_name)) => match tokio::time::timeout(
+                    Some((endpoint, pod_name)) => match tokio::time::timeout(
                         self.rpc_deadline(),
-                        self.register_granted(port, pod_name),
+                        self.register_granted(endpoint, pod_name),
                     )
                     .await
                     {
@@ -703,10 +705,10 @@ impl ShardManagerService for GrpcShardManagerService {
 
     async fn register(
         &self,
-        port: u16,
+        endpoint: ExecutorEndpoint,
         pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError> {
-        let (number_of_shards, lease) = self.register_granted(port, pod_name).await?;
+        let (number_of_shards, lease) = self.register_granted(endpoint, pod_name).await?;
         Ok(ShardAssignment {
             number_of_shards,
             shard_epochs: lease.shard_epochs.into_iter().collect(),
@@ -783,7 +785,7 @@ pub struct ShardManagerServiceSingleShard;
 impl ShardManagerService for ShardManagerServiceSingleShard {
     async fn register(
         &self,
-        _port: u16,
+        _endpoint: ExecutorEndpoint,
         _pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError> {
         // `expires_at: None` — the single binary has no shard manager to renew
@@ -822,7 +824,10 @@ mod tests {
     test_r::enable!();
 
     const SHARDS: usize = 8;
-    const PORT: u16 = 9000;
+    const ENDPOINT: ExecutorEndpoint = ExecutorEndpoint {
+        port: 9000,
+        advertised_ip: None,
+    };
 
     fn epochs(entries: impl IntoIterator<Item = (i64, u64)>) -> HashMap<ShardId, ShardEpoch> {
         entries
@@ -910,6 +915,8 @@ mod tests {
         deregister_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
         /// Each registration's executor id and the previous epochs it carried.
         register_calls: StdMutex<Vec<Uuid>>,
+        /// The endpoint each registration named, in the order of `register_calls`.
+        register_endpoints: StdMutex<Vec<ExecutorEndpoint>>,
         renew_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
         /// The fenced epochs each renewal reported, in the order of `renew_calls`.
         deregister_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
@@ -927,6 +934,7 @@ mod tests {
                 renew_gate: StdMutex::new(None),
                 deregister_gate: StdMutex::new(None),
                 register_calls: StdMutex::new(Vec::new()),
+                register_endpoints: StdMutex::new(Vec::new()),
                 renew_calls: StdMutex::new(Vec::new()),
                 deregister_calls: StdMutex::new(Vec::new()),
                 hanging_registrations: std::sync::atomic::AtomicUsize::new(0),
@@ -977,6 +985,10 @@ mod tests {
             self.register_calls.lock().unwrap().clone()
         }
 
+        fn register_endpoints(&self) -> Vec<ExecutorEndpoint> {
+            self.register_endpoints.lock().unwrap().clone()
+        }
+
         fn renew_calls(&self) -> Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)> {
             self.renew_calls.lock().unwrap().clone()
         }
@@ -994,11 +1006,12 @@ mod tests {
 
         async fn register(
             &self,
-            _port: u16,
+            endpoint: ExecutorEndpoint,
             _pod_name: Option<String>,
             executor_id: Uuid,
         ) -> Result<ShardRegistration, ShardManagerError> {
             self.register_calls.lock().unwrap().push(executor_id);
+            self.register_endpoints.lock().unwrap().push(endpoint);
             let hangs = self
                 .hanging_registrations
                 .try_update(
@@ -1061,7 +1074,7 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
             _resource_name: ResourceName,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
         ) -> Result<QuotaLease, QuotaError> {
             unimplemented!()
         }
@@ -1069,7 +1082,7 @@ mod tests {
         async fn renew_quota_lease(
             &self,
             _resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _epoch: u64,
             _unused: u64,
             _pending_reservations: Vec<PendingReservation>,
@@ -1079,7 +1092,7 @@ mod tests {
 
         async fn batch_renew_quota_leases(
             &self,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _renewals: Vec<BatchRenewalEntry>,
         ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
             unimplemented!()
@@ -1088,7 +1101,7 @@ mod tests {
         async fn release_quota_lease(
             &self,
             _resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _epoch: u64,
             _unused: u64,
         ) -> Result<(), QuotaError> {
@@ -1181,7 +1194,7 @@ mod tests {
         let shutdown = Shutdown::new();
         let (service, shard_service) = make_service(mock.clone(), shutdown.clone());
 
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -1236,7 +1249,7 @@ mod tests {
         }));
         let (service, shard_service) = make_service(mock, Shutdown::new());
 
-        let result = service.register(PORT, None).await;
+        let result = service.register(ENDPOINT, None).await;
 
         assert!(
             matches!(&result, Err(ShardManagerError::ConversionError(message)) if message.contains("must not be 0")),
@@ -1278,7 +1291,7 @@ mod tests {
             Duration::from_millis(200),
         );
 
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -1343,7 +1356,7 @@ mod tests {
             Shutdown::new(),
             Duration::from_millis(200),
         );
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -1398,7 +1411,7 @@ mod tests {
             Duration::from_millis(200),
         );
 
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -1467,7 +1480,7 @@ mod tests {
         });
         service.set_assignment_changed_hook(&hook);
 
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -1841,7 +1854,7 @@ mod tests {
         });
         service.set_assignment_changed_hook(&hook);
 
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -2042,7 +2055,7 @@ mod tests {
         });
         service.set_assignment_changed_hook(&hook);
 
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -2068,6 +2081,34 @@ mod tests {
         assert_eq!(assignment.expires_at, Some(fresh_expiry));
     }
 
+    /// The re-registration after a lost lease names the executor at the same endpoint as the first
+    /// registration, so an advertised address survives the shard manager forgetting the executor.
+    #[test]
+    async fn a_re_registration_keeps_the_advertised_endpoint() {
+        let expiry = Instant::now() + Duration::from_secs(120);
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_register(move |_| Ok(registration(expiry, [(2, 5)])))
+                .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
+        );
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
+        let advertised = ExecutorEndpoint {
+            port: 9000,
+            advertised_ip: Some("fdaa:0:1:a7b::2".parse().unwrap()),
+        };
+
+        let assignment = service.register(advertised, None).await.unwrap();
+        shard_service.register(
+            assignment.number_of_shards,
+            &assignment.shard_epochs,
+            assignment.expires_at,
+            assignment.revision.expect("a grant names its revision"),
+        );
+        service.renew_shard_lease().await;
+
+        assert_eq!(mock.register_endpoints(), vec![advertised, advertised]);
+    }
+
     /// A shard manager that came back on a wiped store no longer lists this executor, so the
     /// renewal is refused and the re-registration carries the epochs for it to repair. Its answer
     /// is read off a store that counts from the beginning again, far below the last revision this
@@ -2088,7 +2129,7 @@ mod tests {
                 .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
         );
         let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -2129,7 +2170,7 @@ mod tests {
                 }),
         );
         let (service, shard_service) = make_service(mock, Shutdown::new());
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -2179,7 +2220,7 @@ mod tests {
         );
         let shutdown = Shutdown::new();
         let (service, shard_service) = make_service(mock.clone(), shutdown.clone());
-        let assignment = service.register(PORT, None).await.unwrap();
+        let assignment = service.register(ENDPOINT, None).await.unwrap();
         shard_service.register(
             assignment.number_of_shards,
             &assignment.shard_epochs,
@@ -2350,7 +2391,7 @@ mod tests {
         let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         // Registration arguments the re-register repeats; the client fails, so
         // nothing replaces the cleared assignment.
-        assert!(service.register(PORT, None).await.is_err());
+        assert!(service.register(ENDPOINT, None).await.is_err());
         shard_service.register(
             SHARDS,
             &epochs([(0, 1)]),
