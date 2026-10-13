@@ -20,6 +20,7 @@ use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::tool_middleware_release::ToolMiddlewareReleaseService;
 use crate::services::tool_release::ToolReleaseService;
+use crate::startup::{BuiltinArtifactKind, StartupPhase, StartupProgress};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::extraction::extract_component_metadata_from_bytes;
 use golem_common::model::application::{
@@ -130,28 +131,28 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "node",
-        release_version: "0.1.4",
+        release_version: "0.1.5",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "npm",
-        release_version: "10.9.9+golem.4",
+        release_version: "10.9.9+golem.5",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "npx",
-        release_version: "10.9.9+golem.4",
+        release_version: "10.9.9+golem.5",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
         component_name: "typescript-tools",
         artifact_id: "typescript_tools",
         export_name: "tsc",
-        release_version: "5.9.2+golem.4",
+        release_version: "5.9.2+golem.5",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
@@ -165,7 +166,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "git-tool",
         artifact_id: "git_tool",
         export_name: "git",
-        release_version: "0.1.10",
+        release_version: "0.1.11",
         kind: BuiltinExportKind::Tool,
     },
 ];
@@ -173,6 +174,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_builtin_tools(
     artifact_resolver: &BuiltinArtifactResolver,
+    startup_progress: &StartupProgress,
     builtin_tool_owner_account_id: AccountId,
     auth_service: &Arc<AuthService>,
     application_service: &Arc<ApplicationService>,
@@ -186,6 +188,7 @@ pub async fn provision_builtin_tools(
 ) -> anyhow::Result<()> {
     let artifacts = artifact_resolver
         .resolve_many(
+            BuiltinArtifactKind::Tools,
             BUILTIN_EXPORTS
                 .iter()
                 .map(|descriptor| descriptor.artifact_id),
@@ -194,6 +197,7 @@ pub async fn provision_builtin_tools(
     provision_descriptors(
         BUILTIN_EXPORTS,
         &artifacts,
+        startup_progress,
         builtin_tool_owner_account_id,
         auth_service,
         application_service,
@@ -212,6 +216,7 @@ pub async fn provision_builtin_tools(
 pub async fn provision_descriptors(
     descriptors: &[BuiltinExportDescriptor],
     artifacts: &BTreeMap<&str, Arc<Vec<u8>>>,
+    startup_progress: &StartupProgress,
     owner: AccountId,
     auth_service: &Arc<AuthService>,
     applications: &Arc<ApplicationService>,
@@ -229,6 +234,11 @@ pub async fn provision_descriptors(
     let mut extracted = Vec::with_capacity(descriptors.len());
     let mut coordinates = std::collections::BTreeSet::new();
     let mut component_hashes = BTreeMap::new();
+    startup_progress.set_phase(StartupPhase::InspectingBuiltinArtifacts {
+        kind: BuiltinArtifactKind::Tools,
+        completed: 0,
+        total: descriptors.len(),
+    });
     for descriptor in descriptors {
         let wasm_bytes = artifacts.get(descriptor.artifact_id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -334,6 +344,7 @@ pub async fn provision_descriptors(
             }
         };
         extracted.push((export, already_published));
+        startup_progress.step_completed();
     }
     if extracted
         .iter()
@@ -368,6 +379,11 @@ pub async fn provision_descriptors(
         }
     }
     let mut staged = BTreeMap::new();
+    startup_progress.set_phase(StartupPhase::ProvisioningBuiltinArtifacts {
+        kind: BuiltinArtifactKind::Tools,
+        completed: 0,
+        total: component_exports.len(),
+    });
     for (component_name, exports) in component_exports {
         let descriptor = descriptors
             .iter()
@@ -401,6 +417,7 @@ pub async fn provision_descriptors(
             }
         }
         staged.insert(component_name, component);
+        startup_progress.step_completed();
     }
     for (descriptor, (export, already_published)) in descriptors.iter().zip(extracted) {
         if already_published {

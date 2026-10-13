@@ -98,6 +98,32 @@ For a unit-case enum that should appear directly in every generated schema rathe
 schema definition, use `#derive.golem_schema(inline=true)`. Add `#derive.case(name="...")` to a
 case when its authored schema value differs from the MoonBit constructor name.
 
+#### Unstructured text and binary
+
+`@schema.UnstructuredText[L]` and `@schema.UnstructuredBinary[M]` hold inline content or a URL
+reference. The type argument restricts the inline language codes or MIME types; use
+`@schema.AnyLanguage` / `@schema.AnyMimeType` for no restriction. They work as parameters and as
+return types, also inside `T?` and `Result[T, E]`. An HTTP endpoint that returns one of them
+responds with the raw body; `None` responds with 404 and `Err` with 500:
+
+```moonbit nocheck
+///|
+pub(all) struct ReportMimeTypes {}
+
+///|
+impl @schema.AllowedMimeTypes for ReportMimeTypes with fn mime_types() {
+  ["text/csv"]
+}
+
+///|
+#derive.endpoint(get="/report")
+pub fn ReportAgent::report(
+  self : Self,
+) -> Result[@schema.UnstructuredBinary[ReportMimeTypes]?, String] {
+  Ok(Some(@schema.UnstructuredBinary::inline(self.csv, mime_type="text/csv")))
+}
+```
+
 ### 3. Stream typed agent data
 
 Use `@schema.AgentStream[T]` in agent method parameters and results. Create a demand-driven
@@ -471,7 +497,7 @@ one host-managed retry sequence.
 | Package | Description |
 |---|---|
 | `agents` | Agent registry, `RawAgent` trait, `register_agent`, dispatch runtime |
-| `schema` | `IntoSchema` / `FromSchema` traits and impls for primitives, `Option`, `Array`, `Result`, records/enums/variants |
+| `schema` | `IntoSchema` / `FromSchema` traits and impls for primitives, `Option`, `Array`, `Result`, records/enums/variants, rich types, and `UnstructuredText` / `UnstructuredBinary` |
 | `schema_model` | The recursive `SchemaType` / `SchemaValue` model + `SchemaGraph` / `SchemaBuilder` and WIT (`golem:core/types@2.0.0`) conversions |
 | `multimodal` | `Multimodal[T]` + `MultimodalModality` trait (schema-native `list<variant>` with `role = multimodal`) |
 | `config` | Code-first configuration (`Config[T]`, `Secret[T]`, `#derive.config`) |

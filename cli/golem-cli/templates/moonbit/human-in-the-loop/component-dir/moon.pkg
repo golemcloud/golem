@@ -8,6 +8,7 @@ import {
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock,
   "golemcloud/golem_sdk/gen" @gen,
   "golemcloud/golem_sdk/api" @api,
+  "moonbitlang/core/encoding/utf8" @utf8,
 }
 
 options(

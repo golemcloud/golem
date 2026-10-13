@@ -27,11 +27,29 @@ import golem.runtime.annotations.{
 }
 import golem.runtime.http.DurableStreamSlotSource
 import golem.runtime.{AsyncImplementationMethod, MethodInvocation, OutputMetadata}
-import golem.schema.{AgentStream, SchemaGraph, SchemaTypeBody}
+import golem.schema.wire.{
+  ConcreteCodec,
+  SchemaWire,
+  WitBinaryValuePayload,
+  WitResultValuePayload,
+  WitSchemaValueNode,
+  WitSchemaValueTree
+}
+import golem.schema.{
+  AgentStream,
+  SchemaGraph,
+  SchemaType,
+  SchemaTypeBody,
+  SchemaValue,
+  UnstructuredBinary,
+  UnstructuredText,
+  Unstructured
+}
 import zio.blocks.schema.Schema
 import zio.test._
 
-import scala.concurrent.Future
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.*
 
 private[macros] object AgentMetadataMacroTypes {
 
@@ -41,6 +59,27 @@ private[macros] object AgentMetadataMacroTypes {
     final case class Err(message: String) extends EchoResult
 
     implicit val schema: Schema[EchoResult] = Schema.derived
+  }
+
+  final case class Attachment[M](file: UnstructuredBinary[M])
+  final case class Gallery(png: Attachment["image/png"], jpeg: Attachment["image/jpeg"])
+  object Gallery {
+    implicit val schema: Schema[Gallery] = Schema.derived
+  }
+
+  object A { type Language = "en" }
+  object B { type Language = "de" }
+  type AOrFrench = A.Language | "fr"
+  type BOrFrench = B.Language | "fr"
+  final case class Caption[L](text: UnstructuredText[L])
+  final case class Bilingual(
+    first: Caption[A.Language | "fr"],
+    second: Caption[B.Language | "fr"],
+    nestedFirst: Caption[AOrFrench | "it"],
+    nestedSecond: Caption[BOrFrench | "it"]
+  )
+  object Bilingual {
+    implicit val schema: Schema[Bilingual] = Schema.derived
   }
 }
 
@@ -95,6 +134,62 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     class Id(owner: ConcreteOnly, streams: StreamEnvelope)
     def roundTrip(value: ConcreteOnly): Future[ConcreteOnly]
     def consume(value: StreamEnvelope): Unit
+  }
+
+  @agentDefinition()
+  trait RawBodyAgent {
+    class Id()
+    def text(input: UnstructuredText[String]): Future[UnstructuredText["en" | "de"]]
+    def image(input: UnstructuredBinary["image/png" | "image/jpeg"]): Future[UnstructuredBinary[String]]
+    def maybeImage(id: String): Future[Option[UnstructuredBinary[String]]]
+    def imageOrError(id: String): Future[Either[String, UnstructuredBinary[String]]]
+    def maybeImageOrError(id: String): Future[Either[String, Option[UnstructuredBinary[String]]]]
+  }
+
+  final class RawBodyAgentImpl() extends RawBodyAgent {
+    private def lookup(id: String): Either[String, Option[UnstructuredBinary[String]]] = id match {
+      case "png"     => Right(Some(UnstructuredBinary.fromInline(Array[Byte](1, 2, 3), "image/png")))
+      case "missing" => Right(None)
+      case other     => Left(s"invalid id $other")
+    }
+    override def text(input: UnstructuredText[String]): Future[UnstructuredText["en" | "de"]] =
+      Future.successful(UnstructuredText.fromInline("hallo", "de"))
+    override def image(input: UnstructuredBinary["image/png" | "image/jpeg"]): Future[UnstructuredBinary[String]] =
+      Future.successful(UnstructuredBinary.fromUrl("https://example.com/image.png"))
+    override def maybeImage(id: String): Future[Option[UnstructuredBinary[String]]] =
+      Future.successful(lookup(id).toOption.flatten)
+    override def imageOrError(id: String): Future[Either[String, UnstructuredBinary[String]]] =
+      Future.successful(lookup(id).flatMap(_.toRight("not found")))
+    override def maybeImageOrError(id: String): Future[Either[String, Option[UnstructuredBinary[String]]]] =
+      Future.successful(lookup(id))
+  }
+
+  @agentDefinition()
+  trait MimeAllowListAgent {
+    class Id()
+    def pair(png: UnstructuredBinary["image/png"], jpeg: UnstructuredBinary["image/jpeg"]): Future[Unit]
+    def gallery(input: Gallery): Future[Gallery]
+  }
+
+  final class MimeAllowListAgentImpl() extends MimeAllowListAgent {
+    override def pair(png: UnstructuredBinary["image/png"], jpeg: UnstructuredBinary["image/jpeg"]): Future[Unit] =
+      Future.unit
+    override def gallery(input: Gallery): Future[Gallery] = Future.successful(input)
+  }
+
+  @agentDefinition()
+  trait LanguageAllowListAgent {
+    class Id()
+    def pair(first: UnstructuredText[A.Language | "fr"], second: UnstructuredText[B.Language | "fr"]): Future[Unit]
+    def bilingual(input: Bilingual): Future[Bilingual]
+  }
+
+  final class LanguageAllowListAgentImpl() extends LanguageAllowListAgent {
+    override def pair(
+      first: UnstructuredText[A.Language | "fr"],
+      second: UnstructuredText[B.Language | "fr"]
+    ): Future[Unit]                                             = Future.unit
+    override def bilingual(input: Bilingual): Future[Bilingual] = Future.successful(input)
   }
 
   @agentDefinition(mount = "/streams")
@@ -163,6 +258,22 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     override def rpcCallTrigger(payload: String): Unit    = ()
   })
   private val durableStreamMetadata = AgentMacros.agentMetadata[DurableStreamAgent]
+  private val rawBodyMetadata       = AgentMacros.agentMetadata[RawBodyAgent]
+  private val mimeAllowListMetadata = AgentMacros.agentMetadata[MimeAllowListAgent]
+  private val languageMetadata      = AgentMacros.agentMetadata[LanguageAllowListAgent]
+
+  private def rawBodyOutput(name: String): SchemaType =
+    rawBodyMetadata.methods.find(_.name == name).get.output.asInstanceOf[OutputMetadata.Single].graph.root
+
+  private def invokeRawBody(method: String, id: String): WitSchemaValueTree = {
+    val implType = AgentImplementationMacro.wireImplementationTypeFromClass[RawBodyAgent, RawBodyAgentImpl]
+    val input    = ConcreteCodec.record(Vector("id" -> ConcreteCodec.string.asInstanceOf[ConcreteCodec[Any]]))
+    val invoked  = implType.methods
+      .find(_.name == method)
+      .get
+      .invoke(new RawBodyAgentImpl, input.encodeValue(Vector(id)), golem.Principal.Anonymous)
+    Await.result(invoked, 5.seconds).get
+  }
 
   /**
    * The effective root body of a graph, dereferencing a top-level named ref.
@@ -208,6 +319,155 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
         assertTrue(
           rootBody(method.input.userSupplied.head.graph) == expected,
           rootBody(method.output.asInstanceOf[OutputMetadata.Single].graph) == expected
+        )
+      },
+      test("unstructured parameters and outputs use the role-marked variants") {
+        val text  = rawBodyMetadata.methods.find(_.name == "text").get
+        val image = rawBodyMetadata.methods.find(_.name == "image").get
+        assertTrue(
+          text.input.userSupplied.head.graph.root == Unstructured.textType(None),
+          rawBodyOutput("text") == Unstructured.textType(Some(List("en", "de"))),
+          image.input.userSupplied.head.graph.root == Unstructured.binaryType(Some(List("image/png", "image/jpeg"))),
+          rawBodyOutput("image") == Unstructured.binaryType(None)
+        )
+      },
+      test("Option and Either wrap unstructured binary outputs as option/result") {
+        val binary = Unstructured.binaryType(None)
+        assertTrue(
+          rawBodyOutput("maybeImage") == golem.schema.t.option(binary),
+          rawBodyOutput("imageOrError") == golem.schema.t.result(Some(binary), Some(golem.schema.t.string)),
+          rawBodyOutput("maybeImageOrError") ==
+            golem.schema.t.result(Some(golem.schema.t.option(binary)), Some(golem.schema.t.string))
+        )
+      },
+      test("compiler-emitted wire metadata for unstructured types equals dynamic metadata encoding") {
+        assertTrue(
+          AgentDefinitionMacro.generateWire[RawBodyAgent] == golem.runtime.WireAgentMetadata.fromModel(rawBodyMetadata)
+        )
+      },
+      test("wire client and implementation derive unstructured codecs") {
+        val client   = AgentClientMacro.wireType[RawBodyAgent]
+        val implType = AgentImplementationMacro.wireImplementationTypeFromClass[RawBodyAgent, RawBodyAgentImpl]
+        assertTrue(
+          client.methods.map(_.name).sorted ==
+            List("image", "imageOrError", "maybeImage", "maybeImageOrError", "text"),
+          implType.methods.map(_.name).sorted ==
+            List("image", "imageOrError", "maybeImage", "maybeImageOrError", "text")
+        )
+      },
+      test("distinct MIME allow-lists in one agent keep their own restrictions") {
+        val compiled     = AgentDefinitionMacro.generateWire[MimeAllowListAgent]
+        val attachmentId = (mime: String) => s"golem.runtime.macros.AgentMetadataMacroTypes.Attachment<\"$mime\">"
+        val attachment   = (mime: String) =>
+          golem.schema.t.record(List(golem.schema.t.field("file", Unstructured.binaryType(Some(List(mime))))))
+        def pairRoots(metadata: golem.runtime.MethodMetadata)   = metadata.input.userSupplied.map(_.graph.root)
+        def galleryDefs(metadata: golem.runtime.MethodMetadata) =
+          List("image/png", "image/jpeg").map(mime =>
+            metadata.input.userSupplied.head.graph.defs.get(attachmentId(mime)).map(_.body)
+          )
+        val expectedPair                 = List("image/png", "image/jpeg").map(mime => Unstructured.binaryType(Some(List(mime))))
+        val expectedGallery              = List("image/png", "image/jpeg").map(mime => Some(attachment(mime)))
+        def method(name: String)         = mimeAllowListMetadata.methods.find(_.name == name).get
+        def compiledMethod(name: String) = compiled.reflectedMethod(compiled.methods.find(_.name == name).get)
+        assertTrue(
+          pairRoots(method("pair")) == expectedPair,
+          galleryDefs(method("gallery")) == expectedGallery,
+          pairRoots(compiledMethod("pair")) == expectedPair,
+          galleryDefs(compiledMethod("gallery")) == expectedGallery,
+          compiled == golem.runtime.WireAgentMetadata.fromModel(mimeAllowListMetadata)
+        )
+      },
+      test("implementation decodes and encodes distinct MIME allow-lists in one value") {
+        val implType =
+          AgentImplementationMacro.wireImplementationTypeFromClass[MimeAllowListAgent, MimeAllowListAgentImpl]
+        val gallery = Gallery(
+          Attachment(UnstructuredBinary.fromInline(Array[Byte](1), "image/png")),
+          Attachment(UnstructuredBinary.fromInline(Array[Byte](2), "image/jpeg"))
+        )
+        val input =
+          ConcreteCodec.record(Vector("input" -> ConcreteCodec.derived[Gallery].asInstanceOf[ConcreteCodec[Any]]))
+        val invoked = implType.methods
+          .find(_.name == "gallery")
+          .get
+          .invoke(new MimeAllowListAgentImpl, input.encodeValue(Vector(gallery)), golem.Principal.Anonymous)
+        val output = Await.result(invoked, 5.seconds).get
+        assertTrue(ConcreteCodec.derived[Gallery].decode(output) == gallery)
+      },
+      test("same-named literal aliases from different owners keep their own restrictions") {
+        val compiled = AgentDefinitionMacro.generateWire[LanguageAllowListAgent]
+        val prefix   = "golem.runtime.macros.AgentMetadataMacroTypes."
+        val caption  = (langs: List[String]) =>
+          golem.schema.t.record(List(golem.schema.t.field("text", Unstructured.textType(Some(langs)))))
+        val expectedDefs = List(
+          s"${prefix}Caption<${prefix}A.Language | \"fr\">" -> caption(List("en", "fr")),
+          s"${prefix}Caption<${prefix}B.Language | \"fr\">" -> caption(List("de", "fr")),
+          s"${prefix}Caption<${prefix}AOrFrench | \"it\">"  -> caption(List("en", "fr", "it")),
+          s"${prefix}Caption<${prefix}BOrFrench | \"it\">"  -> caption(List("de", "fr", "it"))
+        ).map { case (id, body) => id -> Some(body) }
+        def pairRoots(metadata: golem.runtime.MethodMetadata)     = metadata.input.userSupplied.map(_.graph.root)
+        def bilingualDefs(metadata: golem.runtime.MethodMetadata) =
+          expectedDefs.map { case (id, _) => id -> metadata.input.userSupplied.head.graph.defs.get(id).map(_.body) }
+        val expectedPair                 = List(List("en", "fr"), List("de", "fr")).map(l => Unstructured.textType(Some(l)))
+        def method(name: String)         = languageMetadata.methods.find(_.name == name).get
+        def compiledMethod(name: String) = compiled.reflectedMethod(compiled.methods.find(_.name == name).get)
+        assertTrue(
+          pairRoots(method("pair")) == expectedPair,
+          bilingualDefs(method("bilingual")) == expectedDefs,
+          pairRoots(compiledMethod("pair")) == expectedPair,
+          bilingualDefs(compiledMethod("bilingual")) == expectedDefs,
+          compiled == golem.runtime.WireAgentMetadata.fromModel(languageMetadata)
+        )
+      },
+      test("implementation decodes and encodes same-named literal aliases from different owners") {
+        val implType =
+          AgentImplementationMacro.wireImplementationTypeFromClass[LanguageAllowListAgent, LanguageAllowListAgentImpl]
+        val bilingual = Bilingual(
+          Caption(UnstructuredText.fromInline("hello", "en")),
+          Caption(UnstructuredText.fromInline("hallo", "de")),
+          Caption(UnstructuredText.fromInline("ciao", "it")),
+          Caption(UnstructuredText.fromInline("salut", "fr"))
+        )
+        val codec   = ConcreteCodec.derived[Bilingual]
+        val input   = ConcreteCodec.record(Vector("input" -> codec.asInstanceOf[ConcreteCodec[Any]]))
+        val invoked = scala.util.Try(
+          implType.methods
+            .find(_.name == "bilingual")
+            .get
+            .invoke(new LanguageAllowListAgentImpl, input.encodeValue(Vector(bilingual)), golem.Principal.Anonymous)
+        )
+        val output = invoked.flatMap(f => scala.util.Try(Await.result(f, 5.seconds).get))
+        assertTrue(output.map(codec.decode).toOption.contains(bilingual))
+      },
+      test("implementation encodes Either[E, Option[UnstructuredBinary]] as result<option<variant>, E>") {
+        val found = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "png"))
+        val none  = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "missing"))
+        val err   = SchemaWire.schemaValueFromWit(invokeRawBody("maybeImageOrError", "bad"))
+        val raw   = invokeRawBody("maybeImageOrError", "png")
+        assertTrue(
+          found == SchemaValue.ResultValue(
+            golem.schema.SchemaResult.Ok(
+              Some(
+                SchemaValue.OptionValue(
+                  Some(
+                    SchemaValue.VariantValue(0, Some(SchemaValue.BinaryValue(Vector[Byte](1, 2, 3), Some("image/png"))))
+                  )
+                )
+              )
+            )
+          ),
+          none == SchemaValue.ResultValue(golem.schema.SchemaResult.Ok(Some(SchemaValue.OptionValue(None)))),
+          err == SchemaValue.ResultValue(
+            golem.schema.SchemaResult.Err(Some(SchemaValue.StringValue("invalid id bad")))
+          ),
+          raw.valueNodes.contains(
+            WitSchemaValueNode.BinaryValue(WitBinaryValuePayload(Vector[Byte](1, 2, 3), Some("image/png")))
+          ),
+          raw.valueNodes(raw.root).isInstanceOf[WitSchemaValueNode.ResultValue],
+          !raw
+            .valueNodes(raw.root)
+            .asInstanceOf[WitSchemaValueNode.ResultValue]
+            .payload
+            .isInstanceOf[WitResultValuePayload.ErrValue]
         )
       },
       test("Agent metadata captures trait-level mode annotation") {

@@ -182,10 +182,37 @@ Scala `Either[E, T]` is mapped to the WIT `result<T, E>` type, with `Right` trea
 | `Future[Either[E, T]]` | 200 OK if `Right`, 500 Internal Server Error if `Left` | JSON `T` or JSON `E` |
 | `Future[Either[E, Unit]]` | 204 No Content if `Right`, 500 if `Left` | empty or JSON `E` |
 | `Future[Either[Unit, T]]` | 200 OK if `Right`, 500 if `Left` | JSON `T` or empty |
+| `Future[Either[E, Option[T]]]` | 200 OK if `Right(Some)`, 404 Not Found if `Right(None)`, 500 if `Left` | JSON `T`, empty, or JSON `E` |
+| `Future[golem.schema.UnstructuredBinary[M]]` | 200 OK (`Url` → 307 redirect) | Raw binary with Content-Type |
+| `Future[golem.schema.UnstructuredText[L]]` | 200 OK (`Url` → 307 redirect) | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
 
-The current Scala SDK does not expose `UnstructuredText` or `UnstructuredBinary`. Use ordinary
-schema-backed values, which are JSON encoded, or choose an SDK that supports rich raw-body types
-when an endpoint must return plain text or arbitrary binary bytes.
+### Raw Text and Binary Responses
+
+Return `golem.schema.UnstructuredText[L]` or `golem.schema.UnstructuredBinary[M]` for a raw body
+instead of JSON (`L` / `M` is `String` for no restriction, or a string-literal union allow-list
+such as `"image/png" | "image/jpeg"`). The value inside `Some` / `Right` follows the same rules as a
+top-level value, so an unstructured value nested in `Option`, `Either[E, _]`, or
+`Either[E, Option[_]]` is still sent **raw**. A guarded raw download (raw bytes / 404 / JSON error 500):
+
+```scala
+@endpoint(method = "GET", path = "/files/{name}")
+def download(name: String): Future[Either[String, Option[golem.schema.UnstructuredBinary[String]]]]
+```
+
+```scala
+import golem.schema.UnstructuredBinary
+
+override def download(name: String): Future[Either[String, Option[UnstructuredBinary[String]]]] =
+  Future.successful(name match {
+    case "missing" => Right(None)                       // 404
+    case "pending" => Left("pending")                   // 500, JSON body
+    case _         => Right(Some(UnstructuredBinary.fromInline(Array[Byte](1, 2, 3), "image/png"))) // 200, raw bytes
+  })
+```
+
+Generated RPC clients copy method signatures but not the imports of the agent trait's file, so use
+the fully qualified `golem.schema.UnstructuredBinary` / `golem.schema.UnstructuredText` names in the
+agent trait. Load `golem-http-params-scala` for unstructured request bodies.
 
 ## Complete Example
 

@@ -199,7 +199,7 @@ From your component (or shared workspace) `Cargo.toml`:
 - `serde` / `serde_json` — serialization
 - Optional: `golem-wasi-http` — advanced HTTP client alternative
 
-To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`).
+To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
 
 ## Key Constraints
 

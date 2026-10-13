@@ -15,6 +15,10 @@
 pub mod header {
     pub const GOLEM_CLI_VERSION: &str = "x-golem-cli-version";
     pub const GOLEM_CLI_PLATFORM: &str = "x-golem-cli-platform";
+    /// Set on the `503 Service Unavailable` responses of a server that has bound its API port
+    /// but is still starting; the value is [`GOLEM_SERVER_STATUS_STARTING`].
+    pub const GOLEM_SERVER_STATUS: &str = "x-golem-server-status";
+    pub const GOLEM_SERVER_STATUS_STARTING: &str = "starting";
 }
 
 pub mod error_code {
@@ -32,6 +36,9 @@ pub mod error_code {
 
     // --- CLI ---
     pub const CLI_UPDATE_REQUIRED: &str = "CLI_UPDATE_REQUIRED";
+
+    // --- Server lifecycle ---
+    pub const SERVER_STARTING: &str = "SERVER_STARTING";
 
     // --- Not found ---
     pub const ACCOUNT_NOT_FOUND: &str = "ACCOUNT_NOT_FOUND";

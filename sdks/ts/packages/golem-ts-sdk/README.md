@@ -172,6 +172,57 @@ corpus integrity alone does not prove runtime conformance. The CLI deployed fixt
 `typescript_http_router` exercises static files, live files and ordinary invocation, OpenAPI,
 extension methods, empty queries, HEAD, early responses, cookie order, and delayed duplex input.
 
+## Unstructured outputs and HTTP responses
+
+`s.unstructuredText()` and `s.unstructuredBinary()` declare unstructured values. A method returns
+them as `{ tag: 'inline', val, ... }` with the data or `{ tag: 'url', val }`. Wrap them in
+`s.option(inner)` for an optional value (`undefined` is `none`) and in `s.result(ok, err)` for a
+typed error:
+
+```ts
+import { defineAgent, http, method, Result, s } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+
+const Pending = z.object({ tag: z.literal('pending') });
+
+export const Images = defineAgent({
+  name: 'Images',
+  id: { bucket: z.string() },
+  http: http.mount('/images/{bucket}'),
+  methods: {
+    download: method({
+      input: { id: z.string() },
+      returns: s.result(s.option(s.unstructuredBinary({ mimeTypes: ['image/png'] })), Pending),
+      http: http.get('/{id}'),
+    }),
+  },
+}).implement({
+  init: () => ({}),
+  methods: {
+    download: ({ id }) =>
+      id === 'missing'
+        ? Result.ok(undefined)
+        : id === 'pending'
+          ? Result.err({ tag: 'pending' as const })
+          : Result.ok({ tag: 'inline' as const, val: new Uint8Array(), mimeType: 'image/png' }),
+  },
+});
+```
+
+The output schema keeps the `unstructured-text` or `unstructured-binary` role on the nested
+`variant { inline, url }`. The Golem HTTP host maps the output of an HTTP endpoint method as
+follows:
+
+| Output                       | Response                                                        |
+| ---------------------------- | --------------------------------------------------------------- |
+| element                      | `inline` → 200 with the raw body; `url` → redirect              |
+| `option<element>`            | `none` → 404; `some` → as the element                           |
+| `result<element, E>`         | `ok` → as the element; `err` → 500 with the error as JSON       |
+| `result<option<element>, E>` | `ok(none)` → 404; `ok(some)` → as the element; `err` → 500 JSON |
+
+Other return schemas use the same `option` and `result` rules with a JSON body in place of the raw
+body.
+
 ## Streaming methods
 
 Use `s.stream(itemSchema)` in a method schema and `AgentStream<T>` in its implementation. Streams
