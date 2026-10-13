@@ -28,7 +28,7 @@ pub(crate) enum StartClaim {
         observational_owner: Option<OplogIndex>,
         /// The invocation id of the guest call that recorded the `Start`; `None` for calls that
         /// are identified by their order or by their owner.
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<RequestClaimIdentity>,
@@ -41,7 +41,7 @@ pub(crate) enum StartClaim {
         parent_start_index: OplogIndex,
         observational_owner: Option<OplogIndex>,
         /// See [`Self::Unowned`].
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<RequestClaimIdentity>,
@@ -65,7 +65,7 @@ pub(crate) enum StartClaim {
         parent_start_index: Option<OplogIndex>,
         observational_owner: Option<OplogIndex>,
         /// The invocation id of the guest call that opened the scope; see [`Self::Unowned`].
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
     },
     /// Any top-level durable-call `Start`, whatever its function name and durable function type
     /// (the dynamic guest-facing durability read learns the identity from the claimed entry
@@ -235,7 +235,7 @@ impl StartClaim {
 
     /// Requires the recorded `Start` to carry `invocation_id`, the invocation id of the guest call
     /// that is claiming it.
-    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<uuid::Uuid>) -> Self {
+    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<DurableInvocationId>) -> Self {
         match &mut self {
             Self::Unowned {
                 invocation_id: expected,
@@ -257,7 +257,7 @@ impl StartClaim {
     }
 
     /// The invocation id the recorded `Start` must carry.
-    pub(super) fn expected_invocation_id(&self) -> Option<uuid::Uuid> {
+    pub(super) fn expected_invocation_id(&self) -> Option<DurableInvocationId> {
         match self {
             Self::Unowned { invocation_id, .. }
             | Self::Owned { invocation_id, .. }
@@ -803,7 +803,7 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         self.claim_scope_start_with_missing_recovery(
             expected_function_name,
@@ -821,7 +821,7 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         self.claim_scope_start_with_missing_recovery(
             expected_function_name,
@@ -841,7 +841,7 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
         readiness: impl Future<Output = Result<(), WorkerExecutorError>>,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         match self
@@ -875,7 +875,7 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
         recover_missing: bool,
     ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
         let claim = StartClaim::scope(
@@ -1000,7 +1000,7 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         expected_parent_start_index: Option<OplogIndex>,
-        expected_invocation_id: uuid::Uuid,
+        expected_invocation_id: DurableInvocationId,
         expected_request: &HostRequest,
         store_live: bool,
     ) -> Result<CustomStartClaimOutcome, WorkerExecutorError> {

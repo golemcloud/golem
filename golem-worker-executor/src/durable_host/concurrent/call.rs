@@ -17,6 +17,7 @@ use crate::durable_host::durability::reserve_invocation_id;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
 use crate::workerctx::ReplayAdmissionStage;
+use golem_common::model::oplog::DurableInvocationId;
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
     ToolInvocationClaimIdentity,
@@ -226,7 +227,7 @@ pub(super) struct BegunCallExecutionScope {
     pub(super) observational_owner: Option<OplogIndex>,
     /// Invocation id of the guest call, recorded in every `Start` of the call; see
     /// [`InvocationIdSource`].
-    pub(super) invocation_id: Option<uuid::Uuid>,
+    pub(super) invocation_id: Option<DurableInvocationId>,
 }
 
 impl BegunCallExecutionScope {
@@ -673,7 +674,7 @@ pub(crate) enum InvocationIdSource {
     /// The id reserved earlier by the guest import that issued this call, with
     /// [`reserve_access_invocation_id`] or [`reserve_import_invocation_id`]. `None` means the
     /// import is not identified by an invocation id.
-    Reserved(Option<uuid::Uuid>),
+    Reserved(Option<DurableInvocationId>),
 }
 
 /// Reserves the invocation id of the concurrent guest import that `store` belongs to. Host
@@ -723,10 +724,10 @@ pub(crate) fn reserve_import_invocation_id<Ctx: WorkerCtx>(
     if observational_owner.is_some() || ctx.state.snapshotting_mode {
         return Ok(InvocationIdSource::Reserved(None));
     }
-    let Some(idempotency_key) = ctx.state.get_current_idempotency_key() else {
+    let Some(anchor) = ctx.invocation_anchor() else {
         return Ok(InvocationIdSource::Reserved(None));
     };
-    reserve_invocation_id(ctx, None, &idempotency_key, None)
+    reserve_invocation_id(ctx, None, anchor)
         .map(|invocation_id| InvocationIdSource::Reserved(Some(invocation_id)))
 }
 
@@ -734,7 +735,7 @@ fn reserve_guest_import_invocation_id<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     observed_by_custom_invocation: bool,
-) -> Result<Option<uuid::Uuid>, WorkerExecutorError>
+) -> Result<Option<DurableInvocationId>, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
@@ -749,10 +750,10 @@ where
         if ctx.state.snapshotting_mode {
             return Ok(None);
         }
-        let Some(idempotency_key) = ctx.state.get_current_idempotency_key() else {
+        let Some(anchor) = ctx.invocation_anchor() else {
             return Ok(None);
         };
-        reserve_invocation_id(ctx, activity, &idempotency_key, None).map(Some)
+        reserve_invocation_id(ctx, activity, anchor).map(Some)
     })
 }
 
@@ -763,7 +764,7 @@ fn resolve_access_invocation_id<T, D, Ctx>(
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     claim_options: &AccessClaimOptions,
     observed_by_custom_invocation: bool,
-) -> Result<Option<uuid::Uuid>, WorkerExecutorError>
+) -> Result<Option<DurableInvocationId>, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
@@ -1849,7 +1850,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         custom_invocation_scope: Option<CustomInvocationScope>,
-        invocation_id: Option<uuid::Uuid>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<PreparedAccessStart<Pair, P, Ctx>, WorkerExecutorError> {
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
         let identity_count = usize::from(claim_options.request_identity.is_some())

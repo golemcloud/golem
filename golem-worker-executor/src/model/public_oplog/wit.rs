@@ -42,6 +42,26 @@ use golem_common::model::oplog::public_oplog_entry::{
     SuspendParams, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 
+/// The WIT `start-parameters` carry the invocation id in a `uuid` record: `high-bits` holds the
+/// anchor and `low-bits` the ordinal.
+fn durable_invocation_id_to_wit(
+    id: golem_common::base_model::oplog::DurableInvocationId,
+) -> wire::Uuid {
+    wire::Uuid {
+        high_bits: id.anchor.as_u64(),
+        low_bits: id.ordinal,
+    }
+}
+
+fn durable_invocation_id_from_wit(
+    id: wire::Uuid,
+) -> golem_common::base_model::oplog::DurableInvocationId {
+    golem_common::base_model::oplog::DurableInvocationId::new(
+        golem_common::base_model::OplogIndex::from_u64(id.high_bits),
+        id.low_bits,
+    )
+}
+
 fn public_attribute_to_wit(value: PublicAttribute) -> oplog::Attribute {
     oplog::Attribute {
         key: value.key,
@@ -604,7 +624,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|c| c.into()),
                 function_name,
-                invocation_id: invocation_id.map(Into::into),
+                invocation_id: invocation_id.map(durable_invocation_id_to_wit),
                 observational_owner: observational_owner.map(|i| i.into()),
                 request: request.map(encode_public_typed_schema_value).transpose()?,
                 durable_function_type: wrapped_function_type.into(),
@@ -1601,9 +1621,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     golem_common::model::oplog::payload::host_functions::HostFunctionName::from(
                         params.function_name.as_str(),
                     ),
-                invocation_id: params
-                    .invocation_id
-                    .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
+                invocation_id: params.invocation_id.map(durable_invocation_id_from_wit),
                 observational_owner: params
                     .observational_owner
                     .map(golem_common::base_model::OplogIndex::from_u64),
@@ -2433,7 +2451,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|i| i.into()),
                 function_name: function_name.to_string(),
-                invocation_id: invocation_id.map(Into::into),
+                invocation_id: invocation_id.map(durable_invocation_id_to_wit),
                 observational_owner: observational_owner.map(|i| i.into()),
                 request: request.map(oplog_payload_to_wit).transpose()?,
                 durable_function_type: durable_function_type.into(),

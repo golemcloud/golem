@@ -17,6 +17,7 @@ use futures::future::Either;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use golem_common::model::entity::EntityInvocationId;
+use golem_common::model::oplog::DurableInvocationId;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tokio::sync::Notify;
 use wasmtime::component::{
@@ -780,13 +781,13 @@ pub(crate) struct RuntimeStore {
 #[derive(Default)]
 struct GuestImports {
     latest: Option<RuntimeActivityId>,
-    invocation_ids: HashMap<RuntimeActivityId, uuid::Uuid>,
+    invocation_ids: HashMap<RuntimeActivityId, DurableInvocationId>,
 }
 
 /// The invocation id of a guest import call, as far as the Store's import order allows.
 pub(crate) enum GuestImportInvocationId {
     /// The call already reserved this id for an earlier durable call it made.
-    Reserved(uuid::Uuid),
+    Reserved(DurableInvocationId),
     /// The call is the guest's newest import, so it can reserve the next id now.
     Reservable,
     /// The guest made another import call after this one, so an id reserved now could be out
@@ -835,7 +836,7 @@ impl RuntimeStore {
     pub(crate) fn record_guest_import_invocation_id(
         &self,
         activity: RuntimeActivityId,
-        invocation_id: uuid::Uuid,
+        invocation_id: DurableInvocationId,
     ) {
         self.guest_imports
             .lock()
@@ -1408,7 +1409,7 @@ pub(crate) mod tests {
             GuestImportInvocationId::Reservable
         ));
 
-        let invocation_id = uuid::Uuid::from_u128(7);
+        let invocation_id = DurableInvocationId::new(OplogIndex::from_u64(1), 7);
         store.record_guest_import_invocation_id(ids[0], invocation_id);
         started(ids[2], RuntimeActivityKind::Import);
         assert!(matches!(

@@ -459,7 +459,7 @@ impl RetainedClaims<'_> {
     async fn claim_custom_start(
         &mut self,
         claim: &StartClaim,
-        invocation_id: uuid::Uuid,
+        invocation_id: DurableInvocationId,
         expected_parent: Option<OplogIndex>,
     ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
         self.ensure_custom_invocation_unused(invocation_id)?;
@@ -499,7 +499,7 @@ impl RetainedClaims<'_> {
 
     pub(super) fn ensure_custom_invocation_unused(
         &self,
-        invocation_id: uuid::Uuid,
+        invocation_id: DurableInvocationId,
     ) -> Result<(), WorkerExecutorError> {
         if self
             .st
@@ -520,7 +520,7 @@ impl RetainedClaims<'_> {
     pub(super) async fn validate_custom_candidate(
         &self,
         claim: &StartClaim,
-        invocation_id: uuid::Uuid,
+        invocation_id: DurableInvocationId,
         expected_parent: Option<OplogIndex>,
         index: OplogIndex,
         candidate: &OplogEntry,
@@ -2804,7 +2804,7 @@ impl ReplayState {
     pub(super) async fn with_claim_tx<R>(
         &self,
         claim: &StartClaim,
-        custom_invocation: Option<(uuid::Uuid, Option<OplogIndex>)>,
+        custom_invocation: Option<(DurableInvocationId, Option<OplogIndex>)>,
         on_retained: impl FnOnce(ReplayCallHandle, Box<OplogEntry>) -> R,
         gated: impl AsyncFnOnce(&mut CursorTx<'_>) -> Result<R, WorkerExecutorError>,
     ) -> Result<R, WorkerExecutorError> {

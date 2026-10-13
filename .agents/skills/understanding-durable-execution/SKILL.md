@@ -677,9 +677,11 @@ their host tasks reach the claim in an order that depends on host scheduling (a 
 watchdog `wait-for` could take the record of a completed 300 ms `wait-for` and fire at once). So a
 concurrent guest call
 also carries an invocation id. The guest import that makes the call reserves it
-(`reserve_invocation_id`, `durability.rs`) from the ordinal counter of the current agent or
-entity invocation, which root custom durable invocations also use, before the guest can make
-another import call. `RuntimeStore` (`worker/suspension.rs`) records the Store's newest guest
+(`reserve_invocation_id`, `durability.rs`) before the guest can make another import call. The id
+(`DurableInvocationId`) is an anchor and an ordinal: the anchor is the oplog index of the current
+agent invocation (`AgentInvocationStarted`), entity invocation (`Start`) or parent custom durable
+invocation (`Start`), and the ordinal counts the calls numbered under that anchor. Root custom
+durable invocations share the counter with ordinary calls. `RuntimeStore` (`worker/suspension.rs`) records the Store's newest guest
 import and refuses a later reservation, and all durable calls of one import share its id. Every
 `Start` the call records carries the id in `Start.invocation_id`, and the claim requires it, so
 calls with equal requests cannot swap either. A host function that `await`s before its first

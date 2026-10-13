@@ -1598,6 +1598,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             })
     }
 
+    /// The index of the record that numbers the guest calls of the current invocation: the entity
+    /// invocation `Start` of an entity Store, or the `AgentInvocationStarted` of the primary Store.
+    pub(crate) fn invocation_anchor(&self) -> Option<OplogIndex> {
+        self.entity_parent_start_index().or(self
+            .primary_invocation_start_index
+            .filter(|index| *index != OplogIndex::NONE))
+    }
+
     fn entity_parent_start_index(&self) -> Option<OplogIndex> {
         self.entity_invocation_scope
             .as_ref()
@@ -10677,7 +10685,7 @@ struct PrivateDurableWorkerState {
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
-    custom_invocation_ordinals: HashMap<Option<uuid::Uuid>, u64>,
+    invocation_ordinals: HashMap<OplogIndex, u64>,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
@@ -11160,7 +11168,7 @@ impl PrivateDurableWorkerState {
             local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             assume_idempotence: true,
             active_custom_invocations: HashMap::new(),
-            custom_invocation_ordinals: HashMap::new(),
+            invocation_ordinals: HashMap::new(),
             tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
@@ -11804,7 +11812,7 @@ impl PrivateDurableWorkerState {
 
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
-        self.custom_invocation_ordinals.clear();
+        self.invocation_ordinals.clear();
     }
 
     pub async fn get_workers(

@@ -25,6 +25,7 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
+    DurableInvocationId,
     AtomicOplogIndex, DurableFunctionType, EntityAttribution, HostRequest, HostResponse,
     HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
     ScopeScanState,
@@ -464,7 +465,7 @@ struct CursorState {
     /// Invocation IDs of custom durable roots already claimed during this replay. Custom
     /// invocation IDs are single-use even if a malformed oplog contains more than one matching
     /// `Start`.
-    claimed_custom_invocation_ids: HashSet<uuid::Uuid>,
+    claimed_custom_invocation_ids: HashSet<DurableInvocationId>,
     /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
     /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
     /// operation and are drained with their terminals while resolving the root. The map stores

@@ -14,6 +14,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
+    DurableInvocationId,
     AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest,
     HostRequestGolemToolInvocationRejected, HostRequestMonotonicClockDuration, HostRequestNoInput,
     HostRequestPollCount, HostResponseMonotonicClockTimestamp,
@@ -464,7 +465,7 @@ async fn claim_custom_start(
     expected_function_name: &HostFunctionName,
     expected_function_type: &DurableFunctionType,
     expected_parent_start_index: Option<OplogIndex>,
-    expected_invocation_id: uuid::Uuid,
+    expected_invocation_id: DurableInvocationId,
     expected_request: &HostRequest,
 ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
     match rs
@@ -492,7 +493,11 @@ fn custom_request(value: i32) -> HostRequest {
     HostRequest::Custom(value.into_typed_schema_value().unwrap())
 }
 
-fn custom_start(name: &str, value: i32, parent: Option<u64>, invocation_id: u128) -> OplogEntry {
+fn test_invocation_id(ordinal: u64) -> DurableInvocationId {
+    DurableInvocationId::new(OplogIndex::from_u64(1), ordinal)
+}
+
+fn custom_start(name: &str, value: i32, parent: Option<u64>, invocation_id: u64) -> OplogEntry {
     custom_start_with_request(name, custom_request(value), parent, invocation_id)
 }
 
@@ -500,13 +505,13 @@ fn custom_start_with_request(
     name: &str,
     request: HostRequest,
     parent: Option<u64>,
-    invocation_id: u128,
+    invocation_id: u64,
 ) -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: parent.map(OplogIndex::from_u64),
         function_name: HostFunctionName::Custom(name.to_string()),
-        invocation_id: Some(uuid::Uuid::from_u128(invocation_id)),
+        invocation_id: Some(test_invocation_id(invocation_id)),
         observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
@@ -592,7 +597,7 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -621,7 +626,7 @@ async fn incomplete_custom_invocation_drains_completed_descendants_then_reexecut
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -695,7 +700,7 @@ async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sib
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -740,7 +745,7 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -772,7 +777,7 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -800,7 +805,7 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -830,7 +835,7 @@ async fn delivered_observational_completion_does_not_block_custom_live_fallback(
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -860,7 +865,7 @@ async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -894,7 +899,7 @@ async fn custom_replay_skips_observational_cancellation() {
         &HostFunctionName::Custom("outer".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -925,7 +930,7 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
         &name,
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
+        test_invocation_id(2),
         &no_input,
     )
     .await
@@ -935,7 +940,7 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
         &name,
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &no_input,
     )
     .await
@@ -968,7 +973,7 @@ async fn custom_claim_rejects_changed_request_for_same_invocation_id() {
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(2),
     )
     .await;
@@ -982,7 +987,7 @@ async fn custom_claim_rejects_changed_request_for_same_invocation_id() {
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await
@@ -1006,7 +1011,7 @@ async fn custom_claim_rejects_reused_invocation_id() {
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(1),
     )
     .await;
@@ -1031,7 +1036,7 @@ async fn custom_claim_rejects_start_without_invocation_id() {
         &HostFunctionName::Custom("generator".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(1),
+        test_invocation_id(1),
         &no_input,
     )
     .await;
@@ -1067,7 +1072,7 @@ async fn custom_claim_never_claims_observational_start_with_same_invocation_id()
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
+        test_invocation_id(2),
         &request,
     )
     .await
@@ -1093,7 +1098,7 @@ async fn custom_claim_ignores_start_without_invocation_id_before_exact_match() {
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
+        test_invocation_id(2),
         &request,
     )
     .await
@@ -1115,7 +1120,7 @@ async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
         &HostFunctionName::Custom("operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        uuid::Uuid::from_u128(2),
+        test_invocation_id(2),
         &request,
     )
     .await;
@@ -1134,7 +1139,7 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
     ];
     let rs = replay_state_over(entries.clone()).await;
     let name = HostFunctionName::Custom("operation".to_string());
-    let invocation_id = uuid::Uuid::from_u128(1);
+    let invocation_id = test_invocation_id(1);
 
     let claimed = claim_custom_start(
         &rs,
@@ -1857,7 +1862,7 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         &HostFunctionName::Custom("durable-operation".to_string()),
         &DurableFunctionType::ReadRemote,
         None,
-        Uuid::from_u128(1),
+        test_invocation_id(1),
         &custom_request(41),
     )
     .await
@@ -3587,7 +3592,7 @@ async fn custom_subtree_guest_observation_does_not_block_resolution() {
             &HostFunctionName::Custom("outer".to_string()),
             &DurableFunctionType::ReadRemote,
             None,
-            uuid::Uuid::from_u128(1),
+            test_invocation_id(1),
             &custom_request(1),
         )
         .await
@@ -9577,7 +9582,7 @@ async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_hea
                 &HostFunctionName::Custom("missing-custom".to_string()),
                 &DurableFunctionType::WriteRemote,
                 None,
-                uuid::Uuid::new_v4(),
+                test_invocation_id(99),
                 &custom_request(1),
                 false,
             )
@@ -9785,7 +9790,7 @@ async fn missing_start_claim_keeps_waiting_on_a_custom_root_of_the_active_body()
             &HostFunctionName::Custom("entity-custom-root".to_string()),
             &DurableFunctionType::ReadRemote,
             Some(OplogIndex::from_u64(2)),
-            uuid::Uuid::from_u128(7),
+            test_invocation_id(7),
             &custom_request(1),
             false,
         )
@@ -9822,12 +9827,12 @@ async fn missing_start_claim_is_divergence_at_a_top_level_custom_root() {
     reconstruction.body_settled();
 }
 
-fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u128>) -> OplogEntry {
+fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u64>) -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
         function_name: HostFunctionName::P3MonotonicClockWaitFor,
-        invocation_id: invocation_id.map(uuid::Uuid::from_u128),
+        invocation_id: invocation_id.map(test_invocation_id),
         observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(
             HostRequestMonotonicClockDuration { duration_in_nanos }.into(),
@@ -9844,12 +9849,12 @@ async fn claimed(rs: &ReplayState, claim: StartClaim) -> ReplayCallHandle {
     }
 }
 
-fn wait_for_claim(invocation_id: Option<u128>) -> StartClaim {
+fn wait_for_claim(invocation_id: Option<u64>) -> StartClaim {
     StartClaim::unowned(
         &HostFunctionName::P3MonotonicClockWaitFor,
         &DurableFunctionType::ReadLocal,
     )
-    .with_invocation_id(invocation_id.map(uuid::Uuid::from_u128))
+    .with_invocation_id(invocation_id.map(test_invocation_id))
 }
 
 #[test]
@@ -9905,23 +9910,23 @@ async fn a_call_without_invocation_id_never_claims_a_numbered_start() {
 #[test]
 fn scope_claim_requires_the_recorded_invocation_id() {
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-    let scope_start = |invocation_id: Option<u128>| OplogEntry::Start {
+    let scope_start = |invocation_id: Option<u64>| OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
         function_name: scope_name.clone(),
-        invocation_id: invocation_id.map(uuid::Uuid::from_u128),
+        invocation_id: invocation_id.map(test_invocation_id),
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
         span_started: None,
     };
-    let claim = |invocation_id: Option<u128>| {
+    let claim = |invocation_id: Option<u64>| {
         StartClaim::scope(
             &scope_name,
             &DurableFunctionType::WriteRemoteBatched(None),
             None,
         )
-        .with_invocation_id(invocation_id.map(uuid::Uuid::from_u128))
+        .with_invocation_id(invocation_id.map(test_invocation_id))
     };
 
     assert!(claim(Some(1)).matches_start_identity(&scope_start(Some(1))));
