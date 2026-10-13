@@ -146,6 +146,8 @@ pub enum ReplayAdmissionStage {
     AfterHostInternalTerminal,
     /// After a tool output write accepts its bytes, before returning to the guest.
     AfterToolOutputAccepted,
+    /// After a failed attachment receipt, before its retained continuation elects an owner failure.
+    BeforeToolAttachmentFailureElection,
     /// Before committing the Jump that abandons an incomplete batched attempt.
     BeforeBatchedJump,
     /// After that Jump is committed and registered, before continuing the scope.

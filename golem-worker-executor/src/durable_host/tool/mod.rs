@@ -266,6 +266,7 @@ impl ToolStdinEntry {
 
 pub struct ToolStdinClosedEntry {
     observer: AttachmentObserver,
+    next_operation_ordinal: u64,
 }
 
 struct ToolStdinStreamItem {
@@ -5081,17 +5082,41 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
 ) -> Result<(), WorkerExecutorError> {
+    use futures::FutureExt;
+
     let execution = store.data().durable_ctx().owner_execution.clone();
-    store
-        .as_context_mut()
-        .run_concurrent(async move |_accessor| -> wasmtime::Result<()> {
-            settle_tool_children_owned(&execution, parent)
-                .await
-                .map_err(|error| wasmtime::Error::msg(error.to_string()))
-        })
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+    let operations = execution.tool_operations();
+    let primary = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .is_none();
+    let settlement = async move {
+        let result = settle_tool_children_owned(&execution, parent).await;
+        if primary {
+            execution
+                .tool_operations()
+                .join_owner_failure_cleanup()
+                .await?;
+        }
+        result
+    }
+    .boxed()
+    .shared();
+    loop {
+        let pending = settlement.clone();
+        match store
+            .as_context_mut()
+            .run_concurrent(async move |_accessor| pending.await)
+            .await
+        {
+            Ok(result) => return result,
+            // A secondary task error must not strand a registered failure continuation,
+            // even while election still waits for another terminal selection to settle.
+            Err(_) if operations.has_owner_failure() => {}
+            Err(error) => return Err(WorkerExecutorError::runtime(error.to_string())),
+        }
+    }
 }
 
 fn register_tool_admission<U, Ctx>(
@@ -5882,17 +5907,36 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinWriterWithStore<U>
         self_: Resource<ToolStdinWriterEntry>,
         bytes: Vec<u8>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        let writer = accessor.with(|mut access| {
-            Ok::<_, anyhow::Error>(access.get().table().get(&self_)?.producer.writer())
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let producer = &mut access.get().table().get_mut(&self_)?.producer;
+            Ok::<_, anyhow::Error>((
+                producer.writer(),
+                producer.controller(),
+                producer.next_operation_ordinal(),
+            ))
         })?;
-        Ok(writer.write(bytes).await)
+        durability::write::<golem_common::model::oplog::host_functions::GolemToolStdinWrite, _, _>(
+            accessor, writer, controller, ordinal, bytes,
+        )
+        .await
     }
 
     async fn finish(
         accessor: &Accessor<U, Self>,
         self_: Resource<ToolStdinWriterEntry>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| Ok(access.get().table().get(&self_)?.producer.writer().finish()))
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let producer = &mut access.get().table().get_mut(&self_)?.producer;
+            Ok::<_, anyhow::Error>((
+                producer.writer(),
+                producer.controller(),
+                producer.next_operation_ordinal(),
+            ))
+        })?;
+        durability::finish::<golem_common::model::oplog::host_functions::GolemToolStdinFinish, _, _>(
+            accessor, writer, controller, ordinal,
+        )
+        .await
     }
 
     async fn fail(
@@ -5900,15 +5944,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinWriterWithStore<U>
         self_: Resource<ToolStdinWriterEntry>,
         reason: ByteStreamFailure,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| {
-            Ok(access
-                .get()
-                .table()
-                .get(&self_)?
-                .producer
-                .writer()
-                .fail(reason))
-        })
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let producer = &mut access.get().table().get_mut(&self_)?.producer;
+            Ok::<_, anyhow::Error>((
+                producer.writer(),
+                producer.controller(),
+                producer.next_operation_ordinal(),
+            ))
+        })?;
+        durability::fail::<golem_common::model::oplog::host_functions::GolemToolStdinFail, _, _>(
+            accessor, writer, controller, ordinal, reason,
+        )
+        .await
     }
 }
 
@@ -5933,10 +5980,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinClosedWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<ToolStdinClosedEntry>,
     ) -> anyhow::Result<ByteStreamCloseCause> {
-        let observer = accessor.with(|mut access| {
-            Ok::<_, anyhow::Error>(access.get().table().get(&self_)?.observer.clone())
+        let (observer, operation_ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            let operation_ordinal = entry.next_operation_ordinal;
+            entry.next_operation_ordinal += 1;
+            Ok::<_, anyhow::Error>((entry.observer.clone(), operation_ordinal))
         })?;
-        Ok(observer.wait_terminal().await)
+        durability::wait(accessor, observer, operation_ordinal).await
     }
 }
 
@@ -5963,12 +6013,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         self_: Resource<ToolOutputWriterEntry>,
         bytes: Vec<u8>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        let (writer, controller) = accessor.with(|mut access| {
-            let entry = access.get().table().get(&self_)?;
-            Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            Ok::<_, anyhow::Error>((
+                entry.producer.writer(),
+                entry.controller(),
+                entry.producer.next_operation_ordinal(),
+            ))
         })?;
         durability::write::<golem_common::model::oplog::host_functions::GolemToolOutputWrite, _, _>(
-            accessor, writer, controller, bytes,
+            accessor, writer, controller, ordinal, bytes,
         )
         .await
     }
@@ -5977,12 +6031,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<ToolOutputWriterEntry>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        let (writer, controller) = accessor.with(|mut access| {
-            let entry = access.get().table().get(&self_)?;
-            Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            Ok::<_, anyhow::Error>((
+                entry.producer.writer(),
+                entry.controller(),
+                entry.producer.next_operation_ordinal(),
+            ))
         })?;
         durability::finish::<golem_common::model::oplog::host_functions::GolemToolOutputFinish, _, _>(
-            accessor, writer, controller,
+            accessor, writer, controller, ordinal,
         )
         .await
     }
@@ -5992,12 +6050,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         self_: Resource<ToolOutputWriterEntry>,
         reason: ByteStreamFailure,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        let (writer, controller) = accessor.with(|mut access| {
-            let entry = access.get().table().get(&self_)?;
-            Ok::<_, anyhow::Error>((entry.producer.writer(), entry.controller()))
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            Ok::<_, anyhow::Error>((
+                entry.producer.writer(),
+                entry.controller(),
+                entry.producer.next_operation_ordinal(),
+            ))
         })?;
         durability::fail::<golem_common::model::oplog::host_functions::GolemToolOutputFail, _, _>(
-            accessor, writer, controller, reason,
+            accessor, writer, controller, ordinal, reason,
         )
         .await
     }
@@ -6027,12 +6089,54 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Resource<ToolStdinEntry>,
         Resource<ToolStdinClosedEntry>,
     )> {
+        use golem_common::model::oplog::HostResponseToolAttachmentCreated;
+        use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+        use golem_common::model::oplog::host_functions::GolemToolCreateStdin;
+        use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentCreated;
+
+        let mut call = DurableCallSession::<GolemToolCreateStdin, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+        let identity = ToolAttachmentId {
+            creation_start: call.start_index(),
+            slot: ToolAttachmentSlot::Stdin,
+        };
+        let created = 'creation: {
+            if !call.is_live() {
+                match call.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => {
+                        anyhow::ensure!(
+                            response.created.attachment == identity,
+                            "tool stdin identity changed during replay"
+                        );
+                        break 'creation response.created;
+                    }
+                    CallReplayOutcome::Incomplete(live) => call = live,
+                }
+            }
+            let capacity_bytes = self.state.config.limits.max_tool_attachment_bytes as u64;
+            call.complete(
+                self,
+                HostResponseToolAttachmentCreated {
+                    created: ToolAttachmentCreated {
+                        attachment: identity,
+                        capacity_bytes,
+                    },
+                },
+            )
+            .await?
+            .created
+        };
         let memory = AttachmentMemory::for_store(
             self.public_state.worker().active_agents(),
             self.state.is_live(),
         );
         let (producer, consumer, observer) =
-            attachment_pair(self.state.config.limits.max_tool_attachment_bytes, memory);
+            attachment_pair(usize::try_from(created.capacity_bytes)?, memory);
+        producer.writer().set_identity(created.attachment);
         let writer = self.table().push(ToolStdinWriterEntry { producer })?;
         let source = match self.table().push(ToolStdinEntry { consumer }) {
             Ok(source) => source,
@@ -6041,7 +6145,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 return Err(error.into());
             }
         };
-        let closed = match self.table().push(ToolStdinClosedEntry { observer }) {
+        let closed = match self.table().push(ToolStdinClosedEntry {
+            observer,
+            next_operation_ordinal: 0,
+        }) {
             Ok(closed) => closed,
             Err(error) => {
                 self.table().delete(source)?;

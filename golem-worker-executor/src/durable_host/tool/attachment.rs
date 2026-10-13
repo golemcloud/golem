@@ -1233,9 +1233,19 @@ fn close_cause_eq(left: &ByteStreamCloseCause, right: &ByteStreamCloseCause) -> 
 
 pub(crate) struct AttachmentProducer {
     attachment: Arc<ByteAttachment>,
+    next_operation_ordinal: u64,
 }
 
 impl AttachmentProducer {
+    /// Reserve at guest initiation, before durable admission can reorder concurrent calls.
+    pub(crate) fn next_operation_ordinal(&mut self) -> u64 {
+        let ordinal = self.next_operation_ordinal;
+        self.next_operation_ordinal = ordinal
+            .checked_add(1)
+            .expect("attachment operation overflow");
+        ordinal
+    }
+
     pub(crate) fn controller(&self) -> AttachmentController {
         AttachmentController {
             attachment: self.attachment.clone(),
@@ -1525,6 +1535,10 @@ pub(crate) struct AttachmentObserver {
 }
 
 impl AttachmentObserver {
+    pub(crate) fn identity(&self) -> Option<ToolAttachmentId> {
+        self.attachment.state.lock().unwrap().identity
+    }
+
     pub(crate) async fn wait_terminal(&self) -> ByteStreamCloseCause {
         self.attachment.wait_terminal().await
     }
@@ -1946,6 +1960,7 @@ pub(crate) fn attachment_pair(
     (
         AttachmentProducer {
             attachment: attachment.clone(),
+            next_operation_ordinal: 0,
         },
         AttachmentConsumer {
             attachment: attachment.clone(),
@@ -1957,6 +1972,7 @@ pub(crate) fn attachment_pair(
 pub(crate) fn discard_producer(memory: AttachmentMemory) -> AttachmentProducer {
     AttachmentProducer {
         attachment: ByteAttachment::discard(memory),
+        next_operation_ordinal: 0,
     }
 }
 

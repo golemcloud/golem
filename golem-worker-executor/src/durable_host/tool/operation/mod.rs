@@ -285,13 +285,19 @@ struct OwnerToolOperationsState {
     operations: HashMap<u64, RegisteredOperation>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OwnerFailureCleanupOwner {
+    Primary,
+    Tool(u64),
+}
+
 struct OwnerFailureCleanupState {
-    operation_id: u64,
+    owner: OwnerFailureCleanupOwner,
     claimed: bool,
 }
 
 pub(crate) struct OwnerFailureCleanupToken {
-    operation_id: u64,
+    owner: OwnerFailureCleanupOwner,
 }
 
 /// One arbitration domain for all accepted tool operations in an owner generation. Durable
@@ -301,6 +307,7 @@ pub(crate) struct OwnerToolOperations {
     next_id: AtomicU64,
     state: Mutex<OwnerToolOperationsState>,
     changed: Notify,
+    failure_continuations: tokio_util::task::TaskTracker,
     #[cfg(test)]
     operation_removals: AtomicU64,
 }
@@ -345,6 +352,8 @@ impl OwnerToolOperations {
     }
 
     pub(crate) fn new() -> Arc<Self> {
+        let failure_continuations = tokio_util::task::TaskTracker::new();
+        failure_continuations.close();
         Arc::new(Self {
             next_id: AtomicU64::new(1),
             state: Mutex::new(OwnerToolOperationsState {
@@ -356,6 +365,7 @@ impl OwnerToolOperations {
                 operations: HashMap::new(),
             }),
             changed: Notify::new(),
+            failure_continuations,
             #[cfg(test)]
             operation_removals: AtomicU64::new(0),
         })
@@ -426,6 +436,11 @@ impl OwnerToolOperations {
     }
 
     pub(crate) fn begin_generation(&self) -> Result<(), WorkerExecutorError> {
+        if !self.failure_continuations.is_empty() {
+            return Err(WorkerExecutorError::runtime(
+                "tool failure continuation is still running",
+            ));
+        }
         let mut state = self.state.lock().unwrap();
         if let Some(task) = &state.cleanup_task {
             task.clone().now_or_never().ok_or_else(|| {
@@ -449,10 +464,40 @@ impl OwnerToolOperations {
         self.select_owner_failure_with_cleanup(winner, None).await
     }
 
+    pub(crate) async fn select_primary_infrastructure(
+        &self,
+        error: WorkerExecutorError,
+    ) -> Option<OwnerFailureCleanupToken> {
+        if self
+            .select_owner_failure_with_cleanup(
+                OwnerFailureWinner::Infrastructure(error),
+                Some(OwnerFailureCleanupOwner::Primary),
+            )
+            .await
+        {
+            self.claim_owner_failure_cleanup(OwnerFailureCleanupOwner::Primary)
+        } else {
+            None
+        }
+    }
+
+    fn claim_owner_failure_cleanup(
+        &self,
+        owner: OwnerFailureCleanupOwner,
+    ) -> Option<OwnerFailureCleanupToken> {
+        let mut state = self.state.lock().unwrap();
+        let cleanup = state.owner_failure_cleanup.as_mut()?;
+        if cleanup.owner != owner || cleanup.claimed {
+            return None;
+        }
+        cleanup.claimed = true;
+        Some(OwnerFailureCleanupToken { owner })
+    }
+
     async fn select_owner_failure_with_cleanup(
         &self,
         winner: OwnerFailureWinner,
-        cleanup_operation_id: Option<u64>,
+        cleanup_owner: Option<OwnerFailureCleanupOwner>,
     ) -> bool {
         loop {
             let wait = self.changed.notified();
@@ -470,8 +515,8 @@ impl OwnerToolOperations {
                 } else {
                     state.owner_winner = Some(winner.clone());
                     state.owner_failure_cleanup =
-                        cleanup_operation_id.map(|operation_id| OwnerFailureCleanupState {
-                            operation_id,
+                        cleanup_owner.map(|owner| OwnerFailureCleanupState {
+                            owner,
                             claimed: false,
                         });
                     let mut attachments = Vec::new();
@@ -602,7 +647,19 @@ impl OwnerToolOperations {
         task
     }
 
+    /// Register before a failed publication receipt is released, even before failure election.
+    pub(crate) fn track_failure_continuation(
+        &self,
+    ) -> tokio_util::task::task_tracker::TaskTrackerToken {
+        self.failure_continuations.token()
+    }
+
+    pub(crate) fn has_owner_failure(&self) -> bool {
+        !self.failure_continuations.is_empty() || self.selected_owner_failure().is_some()
+    }
+
     pub(crate) async fn join_owner_failure_cleanup(&self) -> Result<(), WorkerExecutorError> {
+        self.failure_continuations.wait().await;
         let task = self.state.lock().unwrap().cleanup_task.clone();
         if let Some(task) = task {
             task.await?;
@@ -620,11 +677,11 @@ impl OwnerToolOperations {
             matches!(
                 state.owner_failure_cleanup,
                 Some(OwnerFailureCleanupState {
-                    operation_id,
+                    owner,
                     claimed: true,
-                }) if operation_id == token.operation_id
+                }) if owner == token.owner
             ),
-            "owner failure cleanup requires its claimed operation token"
+            "owner failure cleanup requires its claimed owner token"
         );
         assert!(
             state.operations.is_empty(),
@@ -674,10 +731,19 @@ impl OwnerToolOperations {
 
     pub(crate) fn interruptible_owner_failure(&self) -> Option<OwnerFailureWinner> {
         let state = self.state.lock().unwrap();
-        state
-            .owner_failure_cleanup_settled
-            .then(|| state.owner_winner.clone())
-            .flatten()
+        // Primary-origin cleanup can need tasks in the primary Store. Stop guest execution
+        // first; parent settlement and the retained cleanup join still fence completion/reuse.
+        (state.owner_failure_cleanup_settled
+            || (state.cleanup_task.is_some()
+                && matches!(
+                    state.owner_failure_cleanup,
+                    Some(OwnerFailureCleanupState {
+                        owner: OwnerFailureCleanupOwner::Primary,
+                        ..
+                    })
+                )))
+        .then(|| state.owner_winner.clone())
+        .flatten()
     }
 
     pub(crate) fn commit_if_owner_open(&self, commit: impl FnOnce()) -> bool {
@@ -1483,7 +1549,7 @@ impl OwnerToolOperation {
                 } else {
                     state.owner_winner = Some(OwnerFailureWinner::Trap(trap.clone()));
                     state.owner_failure_cleanup = Some(OwnerFailureCleanupState {
-                        operation_id: self.id,
+                        owner: OwnerFailureCleanupOwner::Tool(self.id),
                         claimed: false,
                     });
                     let mut attachments = Vec::new();
@@ -1534,7 +1600,7 @@ impl OwnerToolOperation {
             .owner
             .select_owner_failure_with_cleanup(
                 OwnerFailureWinner::Infrastructure(error),
-                Some(self.id),
+                Some(OwnerFailureCleanupOwner::Tool(self.id)),
             )
             .await;
         tracing::debug!(
@@ -1547,20 +1613,16 @@ impl OwnerToolOperation {
 
     pub(crate) async fn select_failure(&self, winner: OwnerFailureWinner) -> bool {
         self.owner
-            .select_owner_failure_with_cleanup(winner, Some(self.id))
+            .select_owner_failure_with_cleanup(
+                winner,
+                Some(OwnerFailureCleanupOwner::Tool(self.id)),
+            )
             .await
     }
 
     pub(crate) fn claim_owner_failure_cleanup(&self) -> Option<OwnerFailureCleanupToken> {
-        let mut state = self.owner.state.lock().unwrap();
-        let cleanup = state.owner_failure_cleanup.as_mut()?;
-        if cleanup.operation_id != self.id || cleanup.claimed {
-            return None;
-        }
-        cleanup.claimed = true;
-        Some(OwnerFailureCleanupToken {
-            operation_id: self.id,
-        })
+        self.owner
+            .claim_owner_failure_cleanup(OwnerFailureCleanupOwner::Tool(self.id))
     }
 
     fn begin_selection(&self, selecting: ToolOperationWinner) -> bool {

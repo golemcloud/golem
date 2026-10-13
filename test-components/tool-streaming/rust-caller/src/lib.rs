@@ -705,6 +705,13 @@ pub trait ToolStreamingCaller {
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
     async fn recover_piped_unread_output(&self, chunk_size: u32) -> Vec<u8>;
+    async fn recover_direct_stdin(&self) -> Vec<u8>;
+    async fn drop_direct_stdin_write_and_spin(&self);
+    async fn fail_direct_stdin_without_tool(&self);
+    async fn direct_stdin_wait_order(&self) -> Vec<String>;
+    async fn direct_stdin_write_order(&self) -> Vec<String>;
+    async fn identical_stdin_write_order(&self) -> Vec<String>;
+    async fn identical_stdin_wait_order(&self) -> Vec<String>;
     async fn retain_tool_output(&self, cancel_read: bool);
     async fn consume_retained_tool_output(&self) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
@@ -3436,6 +3443,177 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         .await
         .expect("invoke native config probe");
         String::from_utf8(read_all(stdout).await).unwrap()
+    }
+
+    async fn identical_stdin_wait_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (writer, _stdin, closed) = tool_host::create_stdin();
+        let mut first = Box::pin(closed.wait());
+        poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let mut second = Box::pin(closed.wait());
+        poll_fn(|cx| {
+            assert!(second.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        wait_at_promise_checkpoint("same-watcher-started").await;
+        drop(first);
+        writer.finish().await.unwrap();
+        let second = second.await;
+        assert!(matches!(second, tool_host::ByteStreamCloseCause::Finished));
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        vec![format!("{second:?}")]
+    }
+
+    async fn identical_stdin_write_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (writer, _stdin, closed) = tool_host::create_stdin();
+        writer.write(vec![0x13; 64]).await.unwrap();
+        let mut first = Box::pin(writer.write(vec![0xa7; 7]));
+        poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let second = writer.write(vec![0xa7; 7]).await.unwrap_err();
+        assert!(matches!(
+            second,
+            tool_host::StreamWriteError::ConcurrentOperation
+        ));
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        drop(first);
+        writer.finish().await.unwrap();
+        vec![format!("{:?}", closed.wait().await), format!("{second:?}")]
+    }
+
+    async fn direct_stdin_write_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (first_writer, _first_stdin, first_closed) = tool_host::create_stdin();
+        let (second_writer, _second_stdin, second_closed) = tool_host::create_stdin();
+        let mut first_write = Box::pin(first_writer.write(vec![0x13; 11]));
+        poll_fn(|cx| {
+            assert!(first_write.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        second_writer.write(vec![0xa7; 19]).await.unwrap();
+        second_writer
+            .fail(ByteStreamFailure::Failed("second".to_string()))
+            .await
+            .unwrap();
+        wait_at_promise_checkpoint("second-stdin-write-done").await;
+        first_write.await.unwrap();
+        first_writer.finish().await.unwrap();
+        let first = first_closed.wait().await;
+        let second = second_closed.wait().await;
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        vec![format!("{first:?}"), format!("{second:?}")]
+    }
+
+    async fn direct_stdin_wait_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (first_writer, _first_stdin, first_closed) = tool_host::create_stdin();
+        let (second_writer, _second_stdin, second_closed) = tool_host::create_stdin();
+        second_writer
+            .fail(ByteStreamFailure::Failed("second".to_string()))
+            .await
+            .unwrap();
+        let mut first = Box::pin(first_closed.wait());
+        poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let second = second_closed.wait().await;
+        assert!(
+            matches!(&second, tool_host::ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(message)) if message == "stream producer failed")
+        );
+        first_writer.finish().await.unwrap();
+        let first = first.await;
+        assert!(matches!(first, tool_host::ByteStreamCloseCause::Finished));
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        vec![format!("{first:?}"), format!("{second:?}")]
+    }
+
+    async fn fail_direct_stdin_without_tool(&self) {
+        let (writer, _stdin, _closed) = tool_host::create_stdin();
+        writer.write(vec![0x13, 0xa7, 0x42]).await.unwrap();
+    }
+
+    async fn drop_direct_stdin_write_and_spin(&self) {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (writer, stdin, _closed) = tool_host::create_stdin();
+        let (target, _stdout) = tool_host::create_output();
+        let _invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("piped-unread-sink"),
+            Some(stdin),
+            Some(target),
+            None,
+        );
+        let mut write = Box::pin(writer.write(vec![0x13, 0xa7, 0x42]));
+        poll_fn(|cx| {
+            assert!(write.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        wait_at_promise_checkpoint("direct-stdin-before-drop").await;
+        drop(write);
+        golem_rust::bindings::wasi::logging::logging::log(
+            golem_rust::bindings::wasi::logging::logging::Level::Info,
+            "stdin-receipt",
+            "direct-stdin-write-dropped",
+        );
+        loop {
+            std::hint::spin_loop();
+        }
+    }
+
+    async fn recover_direct_stdin(&self) -> Vec<u8> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        let (target, stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("piped-unread-sink"),
+            Some(stdin),
+            Some(target),
+            None,
+        );
+        for (byte, length) in [(0x13, 11), (0xa7, 19), (0x42, 34)] {
+            writer.write(vec![byte; length]).await.expect("write stdin");
+        }
+        writer.finish().await.expect("finish stdin");
+        writer.finish().await.expect("repeated finish stdin");
+        assert!(matches!(
+            writer.fail(ByteStreamFailure::Cancelled).await,
+            Err(tool_host::StreamWriteError::Closed(
+                tool_host::ByteStreamCloseCause::Finished
+            ))
+        ));
+        assert!(matches!(
+            closed.wait().await,
+            tool_host::ByteStreamCloseCause::Finished
+        ));
+        wait_at_promise_checkpoint("direct-stdin-accepted").await;
+        let output = read_all(stdout).await;
+        raw_result(&invocation).await.expect("sink result");
+        output
     }
 
     async fn recover_piped_unread_output(&self, chunk_size: u32) -> Vec<u8> {

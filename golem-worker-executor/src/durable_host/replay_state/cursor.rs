@@ -2855,7 +2855,12 @@ impl ReplayState {
                         request,
                         ..
                     } => {
-                        if function_name == HostFunctionName::GolemToolOutputWrite {
+                        let attachment_write = matches!(
+                            function_name,
+                            HostFunctionName::GolemToolOutputWrite
+                                | HostFunctionName::GolemToolStdinWrite
+                        );
+                        if attachment_write {
                             let request = request.ok_or_else(|| {
                                 WorkerExecutorError::runtime("output write Start has no request")
                             })?;
@@ -2893,18 +2898,14 @@ impl ReplayState {
                                 .map_err(WorkerExecutorError::runtime)?
                                 .attachment
                             } else {
-                                golem_common::model::oplog::HostRequestToolAttachmentEndpoint::try_from(request)
+                                golem_common::model::oplog::HostRequestToolAttachmentFinish::try_from(request)
                                     .map_err(WorkerExecutorError::runtime)?.attachment
                             };
                             attachments.terminal_requests.insert(marker_idx, attachment);
                         }
-                        attachments.starts.insert(
-                            marker_idx,
-                            (
-                                parent_start_index,
-                                function_name == HostFunctionName::GolemToolOutputWrite,
-                            ),
-                        );
+                        attachments
+                            .starts
+                            .insert(marker_idx, (parent_start_index, attachment_write));
                         None
                     }
                     OplogEntry::End {

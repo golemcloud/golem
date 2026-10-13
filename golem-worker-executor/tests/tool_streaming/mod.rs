@@ -6851,6 +6851,390 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    unread_stdin_reconstructs_before_downstream_reads(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinRecoveryCase::Piped,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn direct_unread_stdin_reconstructs_before_downstream_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    unread_stdin_reconstructs_before_downstream_reads(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinRecoveryCase::Direct,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn failed_direct_stdin_receipt_interrupts_primary_after_acknowledgment_drop(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    unread_stdin_reconstructs_before_downstream_reads(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinRecoveryCase::FailedReceipt,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn failed_direct_stdin_receipt_waits_for_owner_failure_election(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    unread_stdin_reconstructs_before_downstream_reads(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinRecoveryCase::FailedReceiptWithoutTool,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn direct_stdin_waits_keep_identity_under_reversed_replay_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    direct_stdin_reversed_replay_admission(last_unique_id, deps, caller, StdinAdmissionCase::Waits)
+        .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn direct_stdin_writes_keep_identity_under_reversed_replay_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    direct_stdin_reversed_replay_admission(last_unique_id, deps, caller, StdinAdmissionCase::Writes)
+        .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn identical_stdin_writes_keep_identity_under_reversed_replay_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    direct_stdin_reversed_replay_admission(
+        last_unique_id,
+        deps,
+        caller,
+        StdinAdmissionCase::IdenticalWrites,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn identical_stdin_waits_keep_identity_under_reversed_replay_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    direct_stdin_reversed_replay_admission(
+        last_unique_id,
+        deps,
+        caller,
+        StdinAdmissionCase::IdenticalWaits,
+    )
+    .await
+}
+
+enum StdinAdmissionCase {
+    Waits,
+    Writes,
+    IdenticalWrites,
+    IdenticalWaits,
+}
+
+async fn direct_stdin_reversed_replay_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    case: StdinAdmissionCase,
+) -> anyhow::Result<()> {
+    let identical = matches!(case, StdinAdmissionCase::IdenticalWrites);
+    let same_watcher = matches!(case, StdinAdmissionCase::IdenticalWaits);
+    let writes = matches!(
+        case,
+        StdinAdmissionCase::Writes | StdinAdmissionCase::IdenticalWrites
+    );
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.retry.max_attempts = 0;
+                config.limits.max_tool_attachment_bytes = 64;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    let agent = agent_id!("ToolStreamingCaller", "stdin-wait-order");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([(
+                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let mut live_write = (writes && !identical).then(|| {
+        executor.gate_next_replay_access_admission(
+            &worker,
+            "tool-stdin-writer::write",
+            ReplayAdmissionStage::AfterToolOutputAccepted,
+        )
+    });
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        if same_watcher {
+            "identical_stdin_wait_order"
+        } else if identical {
+            "identical_stdin_write_order"
+        } else if writes {
+            "direct_stdin_write_order"
+        } else {
+            "direct_stdin_wait_order"
+        },
+        data_value!(),
+    );
+    let synchronize = async {
+        if let Some(gate) = &mut live_write {
+            tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
+            let second =
+                next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: second.oplog_idx,
+                    },
+                    Vec::new(),
+                )
+                .await?;
+            gate.release();
+        }
+        if same_watcher {
+            let started = next_promise_checkpoint(&mut checkpoints, "same-watcher-started").await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &started).await?;
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: started.oplog_idx,
+                    },
+                    Vec::new(),
+                )
+                .await?;
+        }
+        let checkpoint =
+            next_promise_checkpoint(&mut checkpoints, "direct-stdin-waits-done").await?;
+        wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let waits: Vec<_> = entries.iter().filter_map(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Start(start) if start.function_name == "golem::tool::host::tool-stdin-closed::wait"
+        ).then_some(entry.oplog_index)).collect();
+        assert_eq!(waits.len(), if identical { 0 } else { 2 });
+        if same_watcher {
+            assert!(
+                entries.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Cancelled(cancel) if cancel.start_index == waits[0]
+                )),
+                "first wait must be cancelled before closing stdin"
+            );
+            assert!(entries.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::CompletionDelivered(delivery) if delivery.start_index == waits[1]
+            )), "second wait must receive the close cause");
+        } else if !identical {
+            let first_cause = entries
+                .iter()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) if end.start_index == waits[0] => Some(
+                        golem_common::model::oplog::HostResponseToolAttachmentClosed::from_value(
+                            end.response.as_ref().expect("wait response").value(),
+                        )
+                        .expect("decode wait response")
+                        .cause,
+                    ),
+                    _ => None,
+                })
+                .expect("first wait End");
+            assert_eq!(
+                first_cause,
+                golem_common::model::oplog::attachment::ByteStreamCloseCause::Finished
+            );
+        }
+        let loads = executor.instance_load_count(&worker);
+        let mut prefill = identical.then(|| {
+            executor.gate_next_replay_access_admission(
+                &worker,
+                "tool-stdin-writer::write",
+                ReplayAdmissionStage::AfterScope,
+            )
+        });
+        if let Some(prefill) = &mut prefill {
+            executor.simulated_crash(&worker).await?;
+            tokio::time::timeout(Duration::from_secs(30), prefill.entered()).await?;
+        }
+        let mut first_wait = executor.gate_next_replay_access_admission(
+            &worker,
+            if writes {
+                "tool-stdin-writer::write"
+            } else {
+                "tool-stdin-closed::wait"
+            },
+            ReplayAdmissionStage::BeforeScope,
+        );
+        let mut first_finish = executor.gate_next_replay_access_admission(
+            &worker,
+            if identical || same_watcher {
+                "http::client::send"
+            } else if writes {
+                "tool-stdin-writer::fail"
+            } else {
+                "tool-stdin-writer::finish"
+            },
+            ReplayAdmissionStage::BeforeScope,
+        );
+        if let Some(prefill) = prefill {
+            prefill.release();
+        } else {
+            executor.simulated_crash(&worker).await?;
+        }
+        tokio::time::timeout(Duration::from_secs(30), first_wait.entered()).await?;
+        // The second operation must complete while the first cannot claim its Start.
+        tokio::time::timeout(Duration::from_secs(30), first_finish.entered()).await?;
+        if same_watcher {
+            let mut completed = executor.gate_next_replay_access_admission(
+                &worker,
+                "http::client::send",
+                ReplayAdmissionStage::BeforeScope,
+            );
+            first_finish.release();
+            tokio::time::timeout(Duration::from_secs(30), completed.entered()).await?;
+            first_finish = completed;
+        }
+        assert!(executor.instance_load_count(&worker) > loads);
+        first_finish.release();
+        first_wait.release();
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: worker.clone(),
+                    oplog_idx: checkpoint.oplog_idx,
+                },
+                Vec::new(),
+            )
+            .await?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let (result, ()) = tokio::try_join!(invocation, synchronize)?;
+    assert_eq!(
+        result.into_typed::<Vec<String>>()?,
+        if same_watcher {
+            vec!["ByteStreamCloseCause::Finished"]
+        } else if identical {
+            vec![
+                "ByteStreamCloseCause::Finished",
+                "StreamWriteError::ConcurrentOperation",
+            ]
+        } else {
+            vec![
+                "ByteStreamCloseCause::Finished",
+                "ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(\"stream producer failed\"))",
+            ]
+        }
+    );
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(entries.iter().filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::Start(start) if start.function_name == "golem::tool::host::tool-stdin-closed::wait"
+    )).count(), if identical { 1 } else { 2 });
+    if writes {
+        assert_eq!(entries.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Start(start) if start.function_name == "golem::tool::host::tool-stdin-writer::write"
+        )).count(), if identical { 3 } else { 2 });
+    }
+    server.abort();
+    executor.delete_worker(&worker).await?;
+    Ok(())
+}
+
+enum StdinRecoveryCase {
+    Piped,
+    Direct,
+    FailedReceipt,
+    FailedReceiptWithoutTool,
+}
+
+async fn unread_stdin_reconstructs_before_downstream_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    case: StdinRecoveryCase,
+) -> anyhow::Result<()> {
+    let direct = !matches!(case, StdinRecoveryCase::Piped);
+    let no_tool = matches!(case, StdinRecoveryCase::FailedReceiptWithoutTool);
+    let fail_receipt = matches!(
+        case,
+        StdinRecoveryCase::FailedReceipt | StdinRecoveryCase::FailedReceiptWithoutTool
+    );
     const CAPACITY: u32 = 64;
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -6902,19 +7286,157 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
         .start_agent_with(
             &caller_component.id,
             agent.clone(),
-            HashMap::from([(
-                "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-                port.to_string(),
-            )]),
+            HashMap::from([
+                (
+                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    port.to_string(),
+                ),
+                (
+                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    port.to_string(),
+                ),
+            ]),
             Vec::new(),
         )
         .await?;
+    let write_function = if direct {
+        "golem::tool::host::tool-stdin-writer::write"
+    } else {
+        "golem::tool::streams::tool-output-writer::write"
+    };
+    let failure_gate = fail_receipt.then(|| {
+        executor.gate_next_oplog_function_end(
+            &worker,
+            golem_common::model::oplog::host_functions::HostFunctionName::GolemToolStdinWrite,
+            true,
+        )
+    });
+    let mut election_gate = no_tool.then(|| {
+        executor.gate_next_replay_access_admission(
+            &worker,
+            "tool-stdin-writer::write",
+            ReplayAdmissionStage::BeforeToolAttachmentFailureElection,
+        )
+    });
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
         &agent,
-        "recover_piped_unread_output",
-        data_value!(CAPACITY),
+        if no_tool {
+            "fail_direct_stdin_without_tool"
+        } else if fail_receipt {
+            "drop_direct_stdin_write_and_spin"
+        } else if direct {
+            "recover_direct_stdin"
+        } else {
+            "recover_piped_unread_output"
+        },
+        if direct {
+            data_value!()
+        } else {
+            data_value!(CAPACITY)
+        },
     );
+    if let Some((entered, release)) = failure_gate {
+        let synchronize = async {
+            if no_tool {
+                tokio::time::timeout(Duration::from_secs(30), entered).await??;
+                release.send(()).expect("failure receipt is retained");
+                return Ok(());
+            }
+            let mut before = None;
+            for _ in 0..2 {
+                let checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv())
+                    .await?
+                    .expect("promise checkpoint server stopped");
+                wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+                if checkpoint.name == "direct-stdin-before-drop" {
+                    before = Some(checkpoint);
+                } else {
+                    assert_eq!(checkpoint.name, "piped-sink-before-read");
+                }
+            }
+            tokio::time::timeout(Duration::from_secs(30), entered).await??;
+            executor
+                .complete_promise(
+                    &PromiseId {
+                        agent_id: worker.clone(),
+                        oplog_idx: before.expect("caller checkpoint").oplog_idx,
+                    },
+                    Vec::new(),
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    executor.commit_oplog(&worker).await?;
+                    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    if entries.iter().any(|entry| matches!(&entry.entry,
+                        PublicOplogEntry::Log(log) if log.message.contains("direct-stdin-write-dropped")
+                    )) {
+                        break Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }).await??;
+            release
+                .send(())
+                .expect("failed receipt remains owned after acknowledgment drop");
+            Ok::<_, anyhow::Error>(())
+        };
+        tokio::pin!(invocation);
+        tokio::select! {
+            result = invocation.as_mut() => panic!("invocation settled before receipt failure: {result:?}"),
+            result = synchronize => result?,
+        }
+        if let Some(gate) = &mut election_gate {
+            tokio::select! {
+                result = invocation.as_mut() => panic!("invocation settled before failure election: {result:?}"),
+                result = tokio::time::timeout(Duration::from_secs(30), gate.entered()) => result?,
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(250), invocation.as_mut())
+                    .await
+                    .is_err(),
+                "failed receipt must not bypass pending owner failure election"
+            );
+            election_gate.take().unwrap().release();
+        }
+        let error = tokio::time::timeout(Duration::from_secs(30), invocation.as_mut())
+            .await?
+            .expect_err("failed stdin persistence must fail the primary");
+        assert!(
+            format!("{error:?}").contains("injected End append failure"),
+            "{error:?}"
+        );
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let write = entries
+            .iter()
+            .find_map(|entry| {
+                matches!(&entry.entry,
+                    PublicOplogEntry::Start(start) if start.function_name == write_function
+                )
+                .then_some(entry.oplog_index)
+            })
+            .expect("stdin write Start");
+        assert!(
+            !entries.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == write,
+                PublicOplogEntry::Cancelled(cancel) => cancel.start_index == write,
+                PublicOplogEntry::CompletionDelivered(marker) => marker.start_index == write,
+                PublicOplogEntry::CompletionDiscarded(marker) => marker.start_index == write,
+                _ => false,
+            }),
+            "failed acceptance must not publish a terminal or acknowledgment"
+        );
+        if let Some(active) = executor
+            .active_entity_metadata(&OwnedAgentId::new(context.default_environment_id, &worker))
+            .await
+        {
+            assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+        }
+        server.abort();
+        executor.delete_worker(&worker).await?;
+        return Ok(());
+    }
     let synchronize = async {
         let mut held = Vec::new();
         for _ in 0..2 {
@@ -6925,15 +7447,20 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
             held.push(checkpoint);
         }
         held.sort_by(|left, right| left.name.cmp(&right.name));
-        assert_eq!(held[0].name, "piped-sink-before-read");
-        assert_eq!(held[1].name, "piped-source-three-accepted");
+        let expected_checkpoints = if direct {
+            ["direct-stdin-accepted", "piped-sink-before-read"]
+        } else {
+            ["piped-sink-before-read", "piped-source-three-accepted"]
+        };
+        assert_eq!(
+            [held[0].name.as_str(), held[1].name.as_str()],
+            expected_checkpoints
+        );
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let writes: Vec<_> = entries
             .iter()
             .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(start)
-                    if start.function_name == "golem::tool::streams::tool-output-writer::write" =>
-                {
+                PublicOplogEntry::Start(start) if start.function_name == write_function => {
                     Some(entry.oplog_index)
                 }
                 _ => None,
@@ -6942,7 +7469,7 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
         assert_eq!(
             writes.len(),
             3,
-            "three full chunks accepted before the sink reads"
+            "three chunks accepted before the sink reads"
         );
         for start in &writes {
             assert!(entries.iter().any(|entry| matches!(
@@ -6953,7 +7480,11 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
         let loads = executor.instance_load_count(&worker);
         let mut regeneration = executor.gate_next_replay_access_admission(
             &worker,
-            "tool-output-writer::write",
+            if direct {
+                "tool-stdin-writer::write"
+            } else {
+                "tool-output-writer::write"
+            },
             ReplayAdmissionStage::BeforeScope,
         );
         executor.simulated_crash(&worker).await?;
@@ -6987,9 +7518,15 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
     let (result, ()) = tokio::try_join!(invocation, synchronize)?;
     server.abort();
     let output: Vec<u8> = result.into_typed()?;
+    let lengths = if direct {
+        [11, 19, 34]
+    } else {
+        [CAPACITY as usize; 3]
+    };
     let expected: Vec<u8> = [0x13, 0xa7, 0x42]
         .into_iter()
-        .flat_map(|byte| std::iter::repeat_n(byte, CAPACITY as usize))
+        .zip(lengths)
+        .flat_map(|(byte, length)| std::iter::repeat_n(byte, length))
         .collect();
     assert_eq!(output, expected);
     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -7000,6 +7537,7 @@ async fn piped_unread_tool_output_reconstructs_before_downstream_reads(
                 &entry.entry,
                 PublicOplogEntry::Start(start)
                     if start.function_name == "golem::tool::streams::tool-output-writer::write"
+                        || (direct && start.function_name == write_function)
             ))
             .count(),
         6,

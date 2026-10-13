@@ -3617,7 +3617,7 @@ fn attachment_index_fixture(payload: OplogPayload<Vec<u8>>) -> Vec<OplogEntry> {
         ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3)));
     *body = Some(payload);
     let request = HostRequestToolAttachmentWrite {
-        request: ToolAttachmentWriteRequest::new(observation.attachment, b"abc"),
+        request: ToolAttachmentWriteRequest::new(observation.attachment, 0, b"abc"),
     };
     let mut start = start_now_with_request_payload(OplogPayload::Inline(Box::new(request.into())));
     let OplogEntry::Start { function_name, .. } = &mut start else {
@@ -3643,14 +3643,15 @@ fn attachment_terminal_prefix() -> Vec<OplogEntry> {
     };
     use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentTerminalOutcome;
     use golem_common::model::oplog::{
-        HostRequestToolAttachmentEndpoint, HostResponseToolAttachmentTerminalResult,
+        HostRequestToolAttachmentFinish, HostResponseToolAttachmentTerminalResult,
     };
     let mut start = start_now_with_request_payload(OplogPayload::Inline(Box::new(
-        HostRequestToolAttachmentEndpoint {
+        HostRequestToolAttachmentFinish {
             attachment: ToolAttachmentId {
                 creation_start: OplogIndex::INITIAL,
                 slot: ToolAttachmentSlot::Stdout,
             },
+            operation_ordinal: 1,
         }
         .into(),
     )));

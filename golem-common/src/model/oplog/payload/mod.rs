@@ -426,8 +426,9 @@ oplog_payload! {
             agent_id: String
         },
         ToolAttachmentWrite { request: ToolAttachmentWriteRequest },
-        ToolAttachmentEndpoint { attachment: ToolAttachmentId },
-        ToolAttachmentFail { attachment: ToolAttachmentId, reason: ByteStreamFailure },
+        ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
+        ToolAttachmentFail { attachment: ToolAttachmentId, operation_ordinal: u64, reason: ByteStreamFailure },
+        ToolAttachmentFinish { attachment: ToolAttachmentId, operation_ordinal: u64 },
     }
 }
 
@@ -1032,11 +1033,11 @@ pub mod host_functions {
         (GolemToolCreateStdin => "golem::tool::host", "create-stdin", NoInput, ToolAttachmentCreated),
         (GolemToolCreateOutput => "golem::tool::host", "create-output", NoInput, ToolAttachmentCreated),
         (GolemToolStdinWrite => "golem::tool::host::tool-stdin-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
-        (GolemToolStdinFinish => "golem::tool::host::tool-stdin-writer", "finish", ToolAttachmentEndpoint, ToolAttachmentTerminalResult),
+        (GolemToolStdinFinish => "golem::tool::host::tool-stdin-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolStdinFail => "golem::tool::host::tool-stdin-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
         (GolemToolStdinWait => "golem::tool::host::tool-stdin-closed", "wait", ToolAttachmentEndpoint, ToolAttachmentClosed),
         (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
-        (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentEndpoint, ToolAttachmentTerminalResult),
+        (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult)
     }
 }

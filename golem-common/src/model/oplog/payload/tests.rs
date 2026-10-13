@@ -30,7 +30,7 @@ mod tool_attachment {
             creation_start: index(2),
             slot: ToolAttachmentSlot::Stdout,
         };
-        let request = ToolAttachmentWriteRequest::new(attachment, b"abcdefghijklm");
+        let request = ToolAttachmentWriteRequest::new(attachment, 0, b"abcdefghijklm");
         let outcome = ToolAttachmentWriteOutcome::Accepted;
         let mut history = ToolAttachmentHistory::default();
         history.writes.insert(
@@ -180,7 +180,7 @@ mod tool_attachment {
     #[test]
     fn attachment_reference_requires_retained_nonempty_acceptance() {
         let (mut history, read) = fixture();
-        let request = ToolAttachmentWriteRequest::new(read.attachment, b"abcdefghijklm");
+        let request = ToolAttachmentWriteRequest::new(read.attachment, 0, b"abcdefghijklm");
         let rejection = ToolAttachmentWriteOutcome::Rejected(StreamWriteError::Closed(
             ByteStreamCloseCause::ConsumerCancelled,
         ));
@@ -281,7 +281,7 @@ mod tool_attachment {
     fn attachment_rollback_replaces_input_only_when_acceptance_is_removed() {
         let (mut history, read) = fixture();
         history.observations.insert(index(10), read.clone());
-        let request = ToolAttachmentWriteRequest::new(read.attachment, b"second");
+        let request = ToolAttachmentWriteRequest::new(read.attachment, 1, b"second");
         history.writes.insert(
             index(19),
             ToolAttachmentWriteOutcome::Accepted
@@ -563,7 +563,7 @@ mod tool_attachment {
     #[test]
     fn attachment_payloads_validate_input_and_roundtrip() {
         let (_, read) = fixture();
-        let request = ToolAttachmentWriteRequest::new(read.attachment, b"asymmetric-body");
+        let request = ToolAttachmentWriteRequest::new(read.attachment, 7, b"asymmetric-body");
         assert!(request.matches_input(b"asymmetric-body"));
         assert!(!request.matches_input(b"asymmetric-bodx"));
         let outcomes = [
@@ -594,10 +594,13 @@ mod tool_attachment {
         );
         assert!(!ToolAttachmentWriteOutcome::Empty.validate(&request));
         assert!(
-            ToolAttachmentWriteOutcome::Empty
-                .validate(&ToolAttachmentWriteRequest::new(read.attachment, &[]))
+            ToolAttachmentWriteOutcome::Empty.validate(&ToolAttachmentWriteRequest::new(
+                read.attachment,
+                8,
+                &[]
+            ))
         );
-        let empty = ToolAttachmentWriteRequest::new(read.attachment, &[]);
+        let empty = ToolAttachmentWriteRequest::new(read.attachment, 8, &[]);
         assert!(!ToolAttachmentWriteOutcome::Accepted.validate(&empty));
         assert!(!ToolAttachmentWriteOutcome::HostResourceExhausted.validate(&empty));
         assert!(!ToolAttachmentWriteOutcome::Discarded.validate(&empty));
@@ -638,8 +641,9 @@ mod tool_attachment {
             assert_eq!(decoded, outcome);
             assert_eq!(decoded.result(), outcome.result());
             super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinFinish>(
-                HostRequestToolAttachmentEndpoint {
+                HostRequestToolAttachmentFinish {
                     attachment: read.attachment,
+                    operation_ordinal: 9,
                 },
                 HostResponseToolAttachmentTerminalResult { outcome },
             );
@@ -683,7 +687,7 @@ mod tool_attachment {
             response
         );
         let request: HostRequest = HostRequestToolAttachmentWrite {
-            request: ToolAttachmentWriteRequest::new(read.attachment, b"abc"),
+            request: ToolAttachmentWriteRequest::new(read.attachment, 3, b"abc"),
         }
         .into();
         let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -699,7 +703,7 @@ mod tool_attachment {
         );
         super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolOutputWrite>(
             HostRequestToolAttachmentWrite {
-                request: ToolAttachmentWriteRequest::new(read.attachment, b"schema-body"),
+                request: ToolAttachmentWriteRequest::new(read.attachment, 4, b"schema-body"),
             },
             HostResponseToolAttachmentWrite {
                 outcome: ToolAttachmentWriteOutcome::Accepted,
@@ -715,8 +719,9 @@ mod tool_attachment {
             },
         );
         super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinFinish>(
-            HostRequestToolAttachmentEndpoint {
+            HostRequestToolAttachmentFinish {
                 attachment: read.attachment,
+                operation_ordinal: 5,
             },
             HostResponseToolAttachmentTerminalResult {
                 outcome: ToolAttachmentTerminalOutcome::Selected(
@@ -727,6 +732,7 @@ mod tool_attachment {
         super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolOutputFail>(
             HostRequestToolAttachmentFail {
                 attachment: read.attachment,
+                operation_ordinal: 6,
                 reason: ByteStreamFailure::Abandoned,
             },
             HostResponseToolAttachmentTerminalResult {
@@ -738,6 +744,7 @@ mod tool_attachment {
         super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinWait>(
             HostRequestToolAttachmentEndpoint {
                 attachment: read.attachment,
+                operation_ordinal: 1,
             },
             HostResponseToolAttachmentClosed {
                 cause: ByteStreamCloseCause::ConsumerCancelled,

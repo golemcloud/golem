@@ -28,14 +28,16 @@ pub struct ToolAttachmentCreated {
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoSchema, FromSchema)]
 pub struct ToolAttachmentWriteRequest {
     pub attachment: ToolAttachmentId,
+    pub operation_ordinal: u64,
     pub length: u64,
     pub digest: Vec<u8>,
 }
 
 impl ToolAttachmentWriteRequest {
-    pub fn new(attachment: ToolAttachmentId, bytes: &[u8]) -> Self {
+    pub fn new(attachment: ToolAttachmentId, operation_ordinal: u64, bytes: &[u8]) -> Self {
         Self {
             attachment,
+            operation_ordinal,
             length: bytes.len() as u64,
             digest: blake3::hash(bytes).as_bytes().to_vec(),
         }

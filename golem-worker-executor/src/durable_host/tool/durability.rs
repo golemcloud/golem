@@ -5,9 +5,12 @@
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
 use super::attachment::{
-    AttachmentController, AttachmentWriteAcceptance, AttachmentWriter, PreparedAttachmentTerminal,
+    AttachmentController, AttachmentObserver, AttachmentWriteAcceptance, AttachmentWriter,
+    PreparedAttachmentTerminal,
 };
-use crate::durable_host::concurrent::{Cancellable, DeferredCallReplayOutcome, DurableCallSession};
+use crate::durable_host::concurrent::{
+    AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DurableCallSession,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::tool::host::{
     ByteStreamCloseCause, ByteStreamFailure, StreamWriteError,
@@ -33,6 +36,7 @@ pub(super) async fn write<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     writer: AttachmentWriter,
     controller: AttachmentController,
+    operation_ordinal: u64,
     bytes: Vec<u8>,
 ) -> anyhow::Result<Result<(), StreamWriteError>>
 where
@@ -44,14 +48,19 @@ where
     let Some(identity) = writer.identity() else {
         return Ok(writer.write(bytes).await);
     };
-    let request = ToolAttachmentWriteRequest::new(identity, &bytes);
-    let mut call = DurableCallSession::<Pair, Cancellable>::start_access(
+    let request = ToolAttachmentWriteRequest::new(identity, operation_ordinal, &bytes);
+    let host_request = HostRequestToolAttachmentWrite {
+        request: request.clone(),
+    };
+    let mut call = DurableCallSession::<Pair, Cancellable>::start_access_with_options(
         accessor,
         accessor.getter(),
-        HostRequestToolAttachmentWrite {
-            request: request.clone(),
-        },
         DurableFunctionType::WriteLocal,
+        AccessClaimOptions {
+            request_identity: Some(host_request.clone().into()),
+            ..Default::default()
+        },
+        async move |_| Ok(host_request),
     )
     .await?;
     let start = call.start_index();
@@ -168,7 +177,7 @@ where
     loop {
         prepared.wait_ready().await;
         let mut selected = None;
-        let failed = publication_failure(accessor, controller.clone())?;
+        let failed = publication_failure(accessor, controller.clone(), Pair::FQFN)?;
         let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
         let completing = call.complete_access_deferred_with_effect(
             accessor,
@@ -241,7 +250,7 @@ where
             Resp = HostResponseToolAttachmentWrite,
         >,
 {
-    let failed = publication_failure(accessor, controller)?;
+    let failed = publication_failure(accessor, controller, Pair::FQFN)?;
     let mut selection = None;
     let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
     let completing = call.complete_access_deferred_with_effect(
@@ -290,10 +299,11 @@ pub(super) async fn finish<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     writer: AttachmentWriter,
     controller: AttachmentController,
+    operation_ordinal: u64,
 ) -> anyhow::Result<Result<(), StreamWriteError>>
 where
     Pair: golem_common::model::oplog::HostPayloadPair<
-            Req = golem_common::model::oplog::HostRequestToolAttachmentEndpoint,
+            Req = golem_common::model::oplog::HostRequestToolAttachmentFinish,
             Resp = golem_common::model::oplog::HostResponseToolAttachmentTerminalResult,
         >,
 {
@@ -304,7 +314,10 @@ where
         accessor,
         writer,
         controller,
-        golem_common::model::oplog::HostRequestToolAttachmentEndpoint { attachment },
+        golem_common::model::oplog::HostRequestToolAttachmentFinish {
+            attachment,
+            operation_ordinal,
+        },
         None,
     )
     .await
@@ -314,6 +327,7 @@ pub(super) async fn fail<Pair, U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     writer: AttachmentWriter,
     controller: AttachmentController,
+    operation_ordinal: u64,
     reason: ByteStreamFailure,
 ) -> anyhow::Result<Result<(), StreamWriteError>>
 where
@@ -331,11 +345,58 @@ where
         controller,
         golem_common::model::oplog::HostRequestToolAttachmentFail {
             attachment,
+            operation_ordinal,
             reason: failure_to_model(&reason),
         },
         Some(reason),
     )
     .await
+}
+
+pub(super) async fn wait<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    observer: AttachmentObserver,
+    operation_ordinal: u64,
+) -> anyhow::Result<ByteStreamCloseCause> {
+    use crate::durable_host::concurrent::CallReplayOutcome;
+    use golem_common::model::oplog::host_functions::GolemToolStdinWait;
+    use golem_common::model::oplog::{
+        HostRequestToolAttachmentEndpoint, HostResponseToolAttachmentClosed,
+    };
+
+    let attachment = observer
+        .identity()
+        .expect("stdin observer has a constructor identity");
+    let request = HostRequestToolAttachmentEndpoint {
+        attachment,
+        operation_ordinal,
+    };
+    let mut call =
+        DurableCallSession::<GolemToolStdinWait, Cancellable>::start_access_with_options(
+            accessor,
+            accessor.getter(),
+            DurableFunctionType::ReadLocal,
+            AccessClaimOptions {
+                request_identity: Some(request.clone().into()),
+                ..Default::default()
+            },
+            async move |_| Ok(request),
+        )
+        .await?;
+    if !call.is_live() {
+        match call.replay_access(accessor, accessor.getter()).await? {
+            CallReplayOutcome::Replayed(response) => return Ok(cause_from_model(response.cause)),
+            CallReplayOutcome::Incomplete(live) => call = live,
+        }
+    }
+    let response = call
+        .run_live_action_access(accessor, accessor.getter(), async move || {
+            Ok::<_, anyhow::Error>(HostResponseToolAttachmentClosed {
+                cause: cause_to_model(&observer.wait_terminal().await),
+            })
+        })
+        .await?;
+    Ok(cause_from_model(response.cause))
 }
 
 async fn terminal<Pair, U: Send + 'static, Ctx: WorkerCtx>(
@@ -349,17 +410,23 @@ where
     Pair: golem_common::model::oplog::HostPayloadPair<
             Resp = golem_common::model::oplog::HostResponseToolAttachmentTerminalResult,
         >,
+    Pair::Req: Clone,
 {
     use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentTerminalOutcome;
     use golem_common::model::oplog::{HostRequest, HostResponseToolAttachmentTerminalResult};
     let attachment = writer.identity().expect("durable terminal has an identity");
     let cause = AttachmentWriter::effective_terminal(reason.clone());
     let effective = model::ToolAttachmentTerminal::Application(cause_to_model(&cause));
-    let mut call = DurableCallSession::<Pair, Cancellable>::start_access(
+    let expected: HostRequest = request.clone().into();
+    let mut call = DurableCallSession::<Pair, Cancellable>::start_access_with_options(
         accessor,
         accessor.getter(),
-        request,
         DurableFunctionType::WriteLocal,
+        AccessClaimOptions {
+            request_identity: Some(expected.clone()),
+            ..Default::default()
+        },
+        async move |_| Ok(request),
     )
     .await?;
     let start = call.start_index();
@@ -378,16 +445,7 @@ where
             .download_payload(recorded)
             .await
             .map_err(anyhow::Error::msg)?;
-        let matches = match (recorded, &reason) {
-            (HostRequest::ToolAttachmentEndpoint(recorded), None) => {
-                recorded.attachment == attachment
-            }
-            (HostRequest::ToolAttachmentFail(recorded), Some(reason)) => {
-                recorded.attachment == attachment && recorded.reason == failure_to_model(reason)
-            }
-            _ => false,
-        };
-        if !matches {
+        if recorded != expected {
             return Err(call.trap(anyhow::anyhow!(
                 "tool output terminal request differs at {start}"
             )));
@@ -424,7 +482,7 @@ where
     let prepared = writer.prepare_terminal(cause);
     let outcome = match prepared {
         Ok(Ok(prepared)) if call.is_persisted() => {
-            let failed = publication_failure(accessor, controller)?;
+            let failed = publication_failure(accessor, controller, Pair::FQFN)?;
             let mut selection = None;
             let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
             let completing = call.complete_access_deferred_with_effect(
@@ -507,60 +565,78 @@ fn error_to_model(error: &StreamWriteError) -> model::StreamWriteError {
 fn publication_failure<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     controller: AttachmentController,
+    function: &'static str,
 ) -> anyhow::Result<
     impl FnOnce(WorkerExecutorError) -> Pin<Box<dyn Future<Output = ()> + Send>>
     + Send
     + 'static
     + use<U, Ctx>,
 > {
-    let (worker, operation, execution, owner_id) = accessor.with(|mut access| {
+    let (worker, operation, execution, owner_id, hook) = accessor.with(|mut access| {
         let ctx = access.get();
         (
             ctx.public_state.worker(),
             ctx.entity_tool_operation(),
             ctx.owner_execution.clone(),
             ctx.state.owned_agent_id.clone(),
+            ctx.replay_admission_hook(),
         )
     });
-    let operation = operation
-        .ok_or_else(|| anyhow::anyhow!("tool output writer has no owning tool operation"))?;
     Ok(move |error| -> Pin<Box<dyn Future<Output = ()> + Send>> {
         controller.fence_owner();
+        let operations = execution.tool_operations();
+        let continuation = operations.track_failure_continuation();
         Box::pin(async move {
-            let operations = execution.tool_operations();
+            let _continuation = continuation;
+            if let Some(hook) = hook {
+                hook.before_replay_access_start(
+                    function,
+                    ReplayAdmissionStage::BeforeToolAttachmentFailureElection,
+                )
+                .await;
+            }
             let active = worker
                 .active_agents()
                 .try_get_active_agent(&owner_id)
                 .await
                 .filter(|active| std::sync::Arc::ptr_eq(&active.execution(), &execution));
-            operation.select_infrastructure(error).await;
-            if let Some(cleanup) = operation.claim_owner_failure_cleanup() {
+            let cleanup = if let Some(operation) = &operation {
+                operation.select_infrastructure(error).await;
+                operation.claim_owner_failure_cleanup()
+            } else {
+                operations.select_primary_infrastructure(error).await
+            };
+            if let Some(cleanup) = cleanup {
                 let winner = operations
                     .selected_owner_failure()
                     .expect("failure cleanup has an owner winner");
                 let interrupt = worker.current_execution_interrupt_signal();
+                let primary_interrupt = operation.is_none().then(|| interrupt.clone()).flatten();
                 let cleanup_operations = operations.clone();
-                let _ = operations
-                    .start_owner_failure_cleanup(
-                        cleanup,
-                        async move {
-                            if let Some(active) = active {
-                                active.fence_entity_bodies(winner).await;
-                            } else {
-                                cleanup_operations.close_failed_attachments();
-                                cleanup_operations.drain_owner_failure_lanes().await;
-                            }
+                let cleanup = operations.start_owner_failure_cleanup(
+                    cleanup,
+                    async move {
+                        if let Some(active) = active {
+                            active.fence_entity_bodies(winner).await;
+                        } else {
+                            cleanup_operations.close_failed_attachments();
+                            cleanup_operations.drain_owner_failure_lanes().await;
+                        }
+                        if let Some(operation) = operation {
                             operation.settle().await;
-                            Ok(())
-                        },
-                        move || {
-                            if let Some(interrupt) = interrupt {
-                                let _ =
-                                    interrupt.send(InterruptKind::Interrupt(Timestamp::now_utc()));
-                            }
-                        },
-                    )
-                    .await;
+                        }
+                        Ok(())
+                    },
+                    move || {
+                        if let Some(interrupt) = interrupt {
+                            let _ = interrupt.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+                        }
+                    },
+                );
+                if let Some(interrupt) = primary_interrupt {
+                    let _ = interrupt.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+                }
+                let _ = cleanup.await;
             }
         })
     })
@@ -580,21 +656,21 @@ fn outcome_for_result(
 fn write_error_from_model(error: model::StreamWriteError) -> StreamWriteError {
     match error {
         model::StreamWriteError::ConcurrentOperation => StreamWriteError::ConcurrentOperation,
-        model::StreamWriteError::Closed(cause) => StreamWriteError::Closed(match cause {
-            model::ByteStreamCloseCause::Finished => ByteStreamCloseCause::Finished,
-            model::ByteStreamCloseCause::ConsumerCancelled => {
-                ByteStreamCloseCause::ConsumerCancelled
-            }
-            model::ByteStreamCloseCause::Failed(failure) => {
-                ByteStreamCloseCause::Failed(match failure {
-                    model::ByteStreamFailure::Cancelled => ByteStreamFailure::Cancelled,
-                    model::ByteStreamFailure::Abandoned => ByteStreamFailure::Abandoned,
-                    model::ByteStreamFailure::ResourceExhausted => {
-                        ByteStreamFailure::ResourceExhausted
-                    }
-                    model::ByteStreamFailure::Failed(message) => ByteStreamFailure::Failed(message),
-                })
-            }
-        }),
+        model::StreamWriteError::Closed(cause) => StreamWriteError::Closed(cause_from_model(cause)),
+    }
+}
+
+fn cause_from_model(cause: model::ByteStreamCloseCause) -> ByteStreamCloseCause {
+    match cause {
+        model::ByteStreamCloseCause::Finished => ByteStreamCloseCause::Finished,
+        model::ByteStreamCloseCause::ConsumerCancelled => ByteStreamCloseCause::ConsumerCancelled,
+        model::ByteStreamCloseCause::Failed(failure) => {
+            ByteStreamCloseCause::Failed(match failure {
+                model::ByteStreamFailure::Cancelled => ByteStreamFailure::Cancelled,
+                model::ByteStreamFailure::Abandoned => ByteStreamFailure::Abandoned,
+                model::ByteStreamFailure::ResourceExhausted => ByteStreamFailure::ResourceExhausted,
+                model::ByteStreamFailure::Failed(message) => ByteStreamFailure::Failed(message),
+            })
+        }
     }
 }
