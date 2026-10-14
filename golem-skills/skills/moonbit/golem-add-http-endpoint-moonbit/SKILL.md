@@ -169,7 +169,7 @@ Multiple origins can be specified as separate string arguments.
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE` endpoints, method parameters **not** bound to path variables, query parameters, or headers are populated from the JSON request body:
+User-supplied method parameters **not** bound to path variables, query parameters, or headers are body parameters. Ordinary structured parameters are populated from a JSON object with body parameter names as top-level fields:
 
 ```moonbit
 #derive.endpoint(post="/items/{id}")
@@ -177,6 +177,8 @@ pub fn MyAgent::update_item(self : Self, id : String, name : String, count : UIn
   // id from path, name and count from JSON body: { "name": "Widget", "count": 5 }
 }
 ```
+
+A single object parameter named `payload` still needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`. Do not include path/query/header parameters in the body. Unstructured text and binary parameters instead consume the raw body. Load `golem-http-params-moonbit` for those restrictions and the separate CLI positional/native-literal rules.
 
 ## Custom Types
 
