@@ -618,11 +618,22 @@ export const invokeWireValue = <
   Effect.gen(function* () {
     const decoded = yield* inputCodec.decode(input)
     const injected =
-      options.inputSchema?.val.filter((field) => field.source.tag === "auto-injected") ?? []
+      options.inputSchema?.val.flatMap((field) =>
+        field.source.tag === "auto-injected" ? [{ name: field.name, kind: field.source.val }] : [],
+      ) ?? []
     const principal = injected.length > 0 ? yield* Principal : undefined
     const fullInput = {
       ...decoded,
-      ...Object.fromEntries(injected.map((field) => [field.name, principal])),
+      ...Object.fromEntries(
+        injected.map(({ name, kind }) => {
+          switch (kind) {
+            case "principal":
+              return [name, principal]
+            default:
+              throw new Error(`Unsupported auto-injected input kind: ${kind satisfies never}`)
+          }
+        }),
+      ),
     } as unknown as MethodInput<I>
     if (options.errorWrapped) {
       const result = yield* handler(fullInput).pipe(

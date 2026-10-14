@@ -28,7 +28,7 @@ The function to be invoked is selected by the second parameter. Read the [page a
 
 ## Encoding parameters
 
-Pass one shell argument per user-supplied method parameter after the function name, using the source language's native value syntax. Parameters follow signature order in Rust, Scala, and MoonBit, and the method's `input` declaration order in TypeScript and Effect. Skip host-injected `Principal` fields without changing the order of the remaining inputs. Do not supply `self` or configuration parameters.
+Pass one shell argument per user-supplied method parameter after the function name, using the source language's native value syntax. Parameters follow signature order in Rust, Scala, and MoonBit, the method's `input` declaration order in TypeScript and Effect, and the exported input-struct fields' declaration order in Go. Skip host-injected `Principal` fields without changing the order of the remaining inputs. Do not supply `self` or configuration parameters.
 
 Do not supply a `Principal` value or placeholder. Effect SDK clients also omit explicitly declared `PrincipalSchema` input fields; the host injects those fields into handlers. The normal `Principal.Principal` service remains available and does not add a caller-supplied input.
 
@@ -36,7 +36,7 @@ Do not wrap all method inputs in one JSON object. A parameter whose value is an 
 
 The following examples show method declarations and the corresponding CLI method names and arguments. Prefix each command fragment with `golem agent invoke '<agent-id>'`.
 
-<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]}>
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"]}>
 <Tabs.Tab>
 
 | Method | Input schema | CLI method and arguments |
@@ -95,6 +95,18 @@ See the [Scala invocation guide](/next/how-to-guides/scala/golem-invoke-agent-sc
 | `pub fn MyAgent::history(self : Self) -> Unit` | `history` |
 
 See the [MoonBit invocation guide](/next/how-to-guides/moonbit/golem-invoke-agent-moonbit) for other value types.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+| Method | Input struct | CLI method and arguments |
+|--------|--------------|--------------------------|
+| `prompt` | `struct { Text string }` | `prompt '"hello"'` |
+| `submit` | `struct { Request struct { Text string } }` | `submit '{text: "hello"}'` |
+| `processOrder` | `struct { OrderID string; Quantity uint32 }` | `processOrder '"order-456"' 42` |
+| `history` | `golem.Unit` | `history` |
+
+Nested struct literals use the published lower-camel field names: use `{text: "hello"}`, not `{Text: "hello"}`. See the [Go invocation guide](/next/how-to-guides/go/golem-invoke-agent-go) for other value types.
 
 </Tabs.Tab>
 </Tabs>

@@ -3798,6 +3798,7 @@ mod tests {
             SourceLanguage::Rust,
             SourceLanguage::Scala,
             SourceLanguage::MoonBit,
+            SourceLanguage::Go,
         ] {
             let arguments = ["\"alice\"", "7"].map(str::to_string).to_vec();
             assert_eq!(
