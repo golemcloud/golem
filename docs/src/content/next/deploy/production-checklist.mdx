@@ -1,0 +1,67 @@
+import { Callout } from "nextra/components"
+
+# Production checklist
+
+Go through this list before you serve a self-hosted Golem to other machines. Each item links to the page with the details. The defaults of the `golem` binary and of the per-service images are for local development: they use public secrets, local storage and listeners without TLS.
+
+## 1. Choose the mode and the platform
+
+- [ ] Choose one of the [deployment modes](/next/deploy/modes): a single node on SQLite, the all-in-one server on managed Postgres, or a fixed cluster of the per-service images.
+- [ ] Check that the platform supports the mode in [Platform fit](/next/deploy/modes#platform-fit). Modes 1 and 2 need one long-running process. Mode 1 also needs a volume that outlives the process.
+- [ ] Follow the guide for the platform: [VM](/next/deploy/vm) or [AWS ECS](/next/deploy/ecs).
+
+## 2. Choose the storage
+
+- [ ] **State.** Mode 1 keeps it in SQLite files in the data directory, on a volume. Modes 2 and 3 keep it in one Postgres database, in a separate schema for each service. Use the schemas that [All-in-one server](/next/deploy/server#managed-postgres) lists in both modes, so that the database can move from mode 2 to mode 3. The database user must be able to create schemas in the database.
+- [ ] **Blobs.** Use S3 or an S3-compatible service in every mode. All services use the same endpoint and buckets. To use one bucket, set `namespace_prefixes = true` **before the first start**, and do not change it later. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs). Golem does not create buckets.
+- [ ] **Sessions.** The worker service keeps HTTP API login and MCP sessions in `gateway_session_storage`. Use `Postgres` in modes 2 and 3, so the deployment needs no Redis.
+- [ ] **Backups.** In modes 2 and 3, turn on the point-in-time recovery of the database provider. In mode 1, a volume snapshot of live SQLite files is not guaranteed to be consistent, and a platform that snapshots once a day can lose a day of state. A restored database is older than the oplogs in S3 and the shard epochs that the executors saw; see [Shard Manager](/next/deploy#shard-manager) for what to do after a restore.
+- [ ] **Postgres TLS.** The services connect with TLS when the server offers it (`PGSSLMODE=prefer`). To require a verified connection, set `PGSSLMODE=verify-full` and `PGSSLROOTCERT=<CA file>` in the environment of every service.
+- [ ] **Postgres password.** Use a password without `@`, `/`, `?`, `#` and `%`. The registry service puts the password into a connection URL for its change notifications without escaping it.
+
+## 3. Replace the secrets
+
+The default configuration uses secrets that are public: the admin token, the key that signs webhook URLs and the key that signs invocation session tokens.
+
+- [ ] **All-in-one server.** Replace the five settings that [Secrets](/next/deploy/server#secrets) lists. The server refuses to bind a listener to an address that is not loopback while one of them has its default value. Replace them also when the server binds loopback and a reverse proxy on the same host serves it: the server cannot detect the proxy.
+- [ ] **Per-service images.** The images do not check their secrets. Replace the tokens of the `root` and `marketing` accounts in the registry service, the webhook HMAC key in the worker service and the worker executor (the same value in both), and the invocation session token key in the worker service. See [Secrets](/next/deploy/cluster#secrets). The tokens in the `.env` files of the Docker Compose examples are public too.
+- [ ] Generate each token with `openssl rand -hex 32` and each key with `openssl rand -base64 32`. Keep them in the secret store of the platform, and pass them to the services as `GOLEM__...` environment variables.
+- [ ] **Login.** With `login.type = "Disabled"`, only the tokens of the initial accounts can call the API. To let users log in with GitHub, configure `OAuth2` login in the registry service.
+- [ ] **Plans.** The `default` plan of the all-in-one server has no limits. The `default` plan of the per-service images limits applications, components, storage and uploads. Set the limits in `initial_plans.default` of the registry service. Keep `max_disk_space_per_worker` unlimited unless the executors use `ManagedXfs` storage: see [Plans](/next/deploy/cluster#plans).
+
+## 4. Put a reverse proxy in front
+
+- [ ] **TLS.** Terminate TLS in a reverse proxy or a load balancer. The Golem listeners serve plain HTTP.
+- [ ] **Host routing.** Point the management host (for example `golem.example.com`) at the management API. Point the domains of HTTP API and MCP deployments at the worker service's custom request port, which chooses the deployment by the request's host. A domain holds either an HTTP API deployment or an MCP deployment, not both. Reserve the management host with `domain_registration.reserved_domains` in the registry service, so that no environment can register it. See [Serving HTTP APIs and MCP on one port](/next/invoke/http-routers#serving-http-apis-and-mcp-on-one-port).
+- [ ] **Streams.** Do not buffer responses: MCP and HTTP APIs use server-sent events. Allow WebSocket upgrades on the management API, for `/v1/components/<component>/workers/<agent>/connect` and `/v1/agents/invoke-agent-session`. Raise idle and read timeouts to at least an hour, so that long streams stay open.
+- [ ] **Uploads.** Allow request bodies at least as large as your largest component.
+- [ ] **Forwarded headers.** Forward the original `Host`. To give the worker service the public scheme and host, list the proxy's own address in `route_resolver.trusted_ingress_addresses` of the worker service, and make the proxy replace any client `X-Forwarded-Proto` and `X-Forwarded-Host` with exactly one value each. A trusted proxy that does not send `X-Forwarded-Host` makes every request fail, so do not list one that cannot send it, such as an AWS Application Load Balancer. See [Configuring ingress](/next/invoke/http-routers#configuring-ingress).
+- [ ] **Private ports.** Keep every other port private. The gRPC ports and the ports of the internal services do not authenticate their callers.
+- [ ] **CORS.** Set `cors_origin_regex` of the registry service to the origins of the browser applications that call the management API.
+
+## 5. Run one shard manager
+
+- [ ] In SQL mode, run exactly one shard manager: one all-in-one server in modes 1 and 2, and one shard manager service in mode 3. Two instances on the same database can run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
+- [ ] Configure the platform to deploy it stop-then-start: no rolling or zero-downtime deploy, no second revision that takes traffic, no autoscaling.
+- [ ] Run more than one shard manager replica only in etcd mode, and only where the platform sends traffic to the elected leader alone (Kubernetes readiness probes on the gRPC port). etcd must run on volumes, on the private network: the shard manager does not support etcd TLS.
+- [ ] Do not change the shard manager's store after the first start. A new store starts its shard epochs over; see [Shard Manager](/next/deploy#shard-manager).
+
+## 6. Make every executor addressable
+
+This item applies to the fixed cluster.
+
+- [ ] Check that the shard manager sees the real IP address of each executor: it records the source address of the executor's registration, and the worker services dial that address. This holds on Docker networks, on Kubernetes and on ECS with `awsvpc` networking.
+- [ ] Where the network translates source addresses, set `grpc.advertised_ip` on each executor to an address of its own. On an IPv6 network, set `bind_address = "::"` on every service. See [Network Addresses](/next/deploy#network-addresses).
+- [ ] Allow the worker service and the shard manager to reach the gRPC port of every executor.
+
+## 7. Size and operate
+
+- [ ] Set the memory budget of the executor: `memory.system_memory_override` of the worker executor sets the memory that it uses for agent admission and eviction. It is not a hard limit.
+- [ ] Agent files are in temporary directories by default. An agent whose files changed recovers them by replaying its oplog. To keep agent files in snapshots, see [Filesystem snapshots](/next/operate/filesystem_snapshots).
+- [ ] The registry service downloads Golem's built-in plugins and tools at its first start, so allow outgoing HTTPS connections to GitHub.
+- [ ] Pin the version of the binary or the images, and upgrade every service to the same version.
+- [ ] Collect the logs and the [metrics](/next/operate/metrics).
+
+<Callout type="info">
+  The `next` documentation describes the unreleased version of Golem. Some settings on these pages, such as `namespace_prefixes`, `bind_address`, `grpc.advertised_ip` and the Postgres session store, need a release that includes them.
+</Callout>

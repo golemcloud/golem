@@ -1,0 +1,12 @@
+# The management API: the worker service serves the agent and worker endpoints, the registry
+# service everything else.
+{$GOLEM_MANAGEMENT_HOST} {
+	@worker_service path_regexp ^/v1/(agents/|components/[^/]+/workers(/|$))
+	reverse_proxy @worker_service golem-worker-service:9005
+	reverse_proxy golem-registry-service:8083
+}
+
+# The domains of HTTP API and MCP deployments. The worker service chooses the deployment by host.
+{$GOLEM_APP_DOMAINS} {
+	reverse_proxy golem-worker-service:9006
+}

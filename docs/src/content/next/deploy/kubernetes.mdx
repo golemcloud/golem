@@ -1,3 +1,5 @@
 # Deploy to Kubernetes
 
 Golem currently does not provide an official Helm chart or equivalent for Kubernetes deployments. However all the Golem services are containerized and deployed to Docker Hub, and configurable though environment variables, so it is possible to create your own Kubernetes manifests.
+
+The Kubernetes manifests take the same configuration as a [fixed cluster](/next/deploy/cluster). Kubernetes can also run two shard manager replicas in etcd mode, with a readiness probe on the gRPC port; see [Shard Manager](/next/deploy#shard-manager). Go through the [production checklist](/next/deploy/production-checklist) too.

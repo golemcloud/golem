@@ -1,0 +1,226 @@
+import { Callout } from "nextra/components"
+
+# All-in-one server
+
+`golem server run` runs every Golem service in one process: the registry service, the shard manager, the worker service, the component compilation service and the worker executor. Without a configuration file it is the [local development server](/next/how-to-guides/common/golem-local-dev-server). With a configuration file it runs the [single node](/next/deploy/modes#single-node) and [managed Postgres](/next/deploy/modes#managed-postgres) deployment modes.
+
+This page describes the configuration. For the steps on a machine, see [VM](/next/deploy/vm).
+
+## Listeners
+
+| Listener | Default address | Serves |
+| --- | --- | --- |
+| `router.address`, `router.port` | `127.0.0.1:9881` | The management API: the registry and worker service APIs, which the `golem` CLI uses |
+| `worker_service.bind_address`, `worker_service.custom_request_port` | `127.0.0.1:9006` | HTTP API deployments and MCP deployments, chosen by the request's host |
+| `worker_service.bind_address`, `worker_service.mcp_port` | `127.0.0.1:9007` | MCP deployments only |
+
+The services also bind gRPC and metrics listeners on ports that the operating system selects, each on the `bind_address` of its service. They do not authenticate their callers. Keep every `bind_address` at `127.0.0.1` unless a proxy on another machine must reach the listener, and then expose only the three ports above.
+
+## Configuration
+
+`golem server run --config <file>` reads a TOML file. Every field has a default, so the file contains only the fields that it changes. `GOLEM__<SECTION>__<FIELD>` environment variables override the file, for example `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Each section has the shape of the configuration of its service:
+
+| Section | Service |
+| --- | --- |
+| `[router]` | The management API listener |
+| `[registry_service]` | Registry service: database, login, initial accounts and plans, domain registration, blob storage |
+| `[shard_manager]` | Shard manager: persistence |
+| `[worker_service]` | Worker service: listeners, session storage, ingress, blob storage |
+| `[worker_executor]` | Worker executor: key-value, indexed and scheduler storage, blob storage, memory, agent filesystems |
+| `[component_compilation_service]` | Component compilation service: blob storage |
+
+`golem --dump-config-default-toml` prints the complete default configuration, followed by a commented example that keeps all state in Postgres and the blobs in S3. `golem --dump-config-default-env-var` prints the same as environment variables. The server sets the internal ports and hosts itself, and refuses a file that sets them. See [Configuration File](/next/how-to-guides/common/golem-local-dev-server#configuration-file) for all rules.
+
+A field whose value selects a variant with `type` takes its settings from `config`. When the file selects a variant other than the default, give all settings of that variant: the defaults of the default variant do not apply to it. The examples on this page give all settings that have no default.
+
+## Secrets
+
+The default configuration uses public secrets. Replace all of them:
+
+| Setting | Environment variable | Value |
+| --- | --- | --- |
+| `registry_service.initial_accounts.root.token` | `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN` | The admin token: at least 16 characters, each an ASCII letter, a digit, `-` or `_` |
+| `worker_service.webhook_callback_handler.hmac_key` | `GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` | 32 random bytes, base64 |
+| `worker_executor.agent_webhooks_service.hmac_key` | `GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY` | The same value as the webhook HMAC key of the worker service |
+| `worker_service.invocation_session_tokens.active_key.id` | `GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID` | A name for the key, for example `key-1` |
+| `worker_service.invocation_session_tokens.active_key.key` | `GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY` | 32 random bytes, base64 |
+
+Keep the secrets out of the TOML file, in an environment file that only the server can read:
+
+```shell filename="Terminal" copy
+umask 077
+HMAC_KEY=$(openssl rand -base64 32)
+cat > golem.env <<EOF
+GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN=$(openssl rand -hex 32)
+GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY=$HMAC_KEY
+GOLEM__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY=$HMAC_KEY
+GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID=key-1
+GOLEM__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY=$(openssl rand -base64 32)
+EOF
+```
+
+The server refuses to bind any listener to an address that is not loopback while one of these settings has its default value, and lists the settings in the error. A reverse proxy on the same host makes a loopback listener public too, and the server cannot detect it, so replace the secrets in that case as well. When no initial account has the well-known local admin token, the server deletes that token from the registry at startup.
+
+## Single node
+
+In mode 1 the state stays in the default SQLite databases under `data_dir`, so put `data_dir` on a volume that outlives the process. Put the blobs in S3: the same `blob_storage` in all four services that have one. This example uses one bucket, `golem`:
+
+```toml filename="/etc/golem/golem-server.toml" copy
+data_dir = "/var/lib/golem"
+
+[registry_service.blob_storage]
+type = "S3"
+
+[registry_service.blob_storage.config]
+region = "us-east-1"
+object_prefix = ""
+namespace_prefixes = true
+compilation_cache_bucket = "golem"
+custom_data_bucket = "golem"
+oplog_payload_bucket = "golem"
+compressed_oplog_buckets = ["golem"]
+initial_agent_files_bucket = "golem"
+components_bucket = "golem"
+filesystem_snapshots_bucket = "golem"
+
+[registry_service.blob_storage.config.retries]
+max_attempts = 3
+min_delay = "100ms"
+max_delay = "1s"
+multiplier = 3.0
+max_jitter_factor = 0.15
+
+# Repeat the three sections above for worker_service, worker_executor and
+# component_compilation_service: [worker_service.blob_storage],
+# [worker_service.blob_storage.config], [worker_service.blob_storage.config.retries], and so on.
+
+[registry_service.domain_registration]
+reserved_domains = ["golem.example.com"]
+
+[worker_service.route_resolver]
+trusted_ingress_addresses = ["127.0.0.1"]
+```
+
+- `namespace_prefixes = true` lets all blob kinds share one bucket. Choose it before the first start and do not change it later. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
+- For an S3-compatible service, add `aws_endpoint_url = "https://<endpoint>"` and, if the service needs it, `aws_path_style = true` to each `blob_storage.config`.
+- The S3 client reads its credentials from the standard AWS sources: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment file, or the role of the machine.
+- `reserved_domains` keeps any environment from registering the management host as a deployment domain.
+- `trusted_ingress_addresses` makes the worker service take the public scheme and host from the `X-Forwarded-Proto` and `X-Forwarded-Host` headers of a reverse proxy on the same host. A request from a trusted address without both headers fails, so a request sent directly to the custom request port from that host does too.
+
+## Managed Postgres
+
+In mode 2 the state goes to Postgres too. Add the database to the file of the single node. Each store has its own schema, and the server rejects two stores that share one. Use these schema names: the per-service images use the same, so the database can move to a [fixed cluster](/next/deploy/cluster) later.
+
+```toml filename="/etc/golem/golem-server.toml" copy
+[registry_service.db]
+type = "Postgres"
+
+[registry_service.db.config]
+host = "db.example.internal"
+port = 5432
+database = "golem"
+username = "golem"
+password = "<password>"
+max_connections = 10
+schema = "golem_registry_service"
+
+[shard_manager.persistence]
+type = "Postgres"
+
+[shard_manager.persistence.config]
+host = "db.example.internal"
+port = 5432
+database = "golem"
+username = "golem"
+password = "<password>"
+max_connections = 10
+schema = "golem_shard_manager"
+
+[worker_executor.key_value_storage]
+type = "Postgres"
+
+[worker_executor.key_value_storage.config]
+host = "db.example.internal"
+port = 5432
+database = "golem"
+username = "golem"
+password = "<password>"
+max_connections = 10
+schema = "golem_worker_executor"
+
+[worker_executor.indexed_storage]
+type = "Postgres"
+
+[worker_executor.indexed_storage.config]
+host = "db.example.internal"
+port = 5432
+database = "golem"
+username = "golem"
+password = "<password>"
+max_connections = 10
+schema = "golem_worker_executor_indexed"
+drop_prefix_delete_batch_size = 1024
+
+[worker_executor.scheduler_storage]
+type = "Postgres"
+
+[worker_executor.scheduler_storage.config]
+host = "db.example.internal"
+port = 5432
+database = "golem"
+username = "golem"
+password = "<password>"
+max_connections = 10
+schema = "golem_worker_executor_scheduler"
+
+[worker_service.gateway_session_storage]
+type = "Postgres"
+
+[worker_service.gateway_session_storage.config]
+host = "db.example.internal"
+port = 5432
+database = "golem"
+username = "golem"
+password = "<password>"
+max_connections = 10
+schema = "golem_worker_service_session_store"
+pending_login_expiration = "1h"
+cleanup_interval = "5m"
+```
+
+The services create their schemas and tables at startup, so the database user must be able to create schemas in the database. To keep the password out of the file, set it with environment variables such as `GOLEM__REGISTRY_SERVICE__DB__CONFIG__PASSWORD`. The `data_dir` then holds only caches, such as the downloaded built-in plugins and tools, and does not need a volume.
+
+<Callout type="warning">
+  Run exactly one server on one database, and deploy it stop-then-start. Two servers on the same database each run a shard manager in SQL mode, and the same agent can run twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
+</Callout>
+
+## Connect the CLI
+
+Add an environment for the server to the application manifest, with the admin token in an environment variable:
+
+```yaml filename="golem.yaml" copy
+environments:
+  prod:
+    server:
+      url: https://golem.example.com
+      auth:
+        staticToken: "{{ GOLEM_PROD_TOKEN }}"
+
+httpApi:
+  deployments:
+    prod:
+      - domain: api.example.com
+        scheme: https
+        agents:
+          MyAgent: {}
+```
+
+```shell filename="Terminal" copy
+GOLEM_PROD_TOKEN=<admin token> golem -E prod deploy
+```
+
+Deployments on a custom server use `domain`, not `subdomain`. Point each domain at the reverse proxy in DNS, and route it to the custom request port.
+
+## Upgrades
+
+Replace the binary or the image and restart the process. The server migrates its databases at startup. Stop the old process before the new one starts, and upgrade every service of a deployment to the same version.
