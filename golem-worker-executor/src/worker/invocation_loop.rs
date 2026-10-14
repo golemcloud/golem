@@ -4336,6 +4336,14 @@ mod tests {
                 PeriodicFailure::Write(crate::services::oplog::OplogError::Payload(
                     "failed".to_string()
                 )),
+                PeriodicFailure::Write(crate::services::oplog::OplogError::ArchiveWrite {
+                    agent_id: golem_common::model::AgentId {
+                        component_id: golem_common::model::component::ComponentId::new(),
+                        agent_id: "archive-write".to_string(),
+                    },
+                    level: 0,
+                    details: "failed".to_string(),
+                }),
             ]
             .each_ref()
             .map(periodic_failure_outcome),
@@ -4343,6 +4351,7 @@ mod tests {
                 CommandOutcome::Continue,
                 CommandOutcome::BreakInnerLoop(RetryDecision::None),
                 CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+                CommandOutcome::BreakInnerLoop(RetryDecision::None),
             ]
         );
     }

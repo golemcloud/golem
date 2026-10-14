@@ -920,6 +920,26 @@ fn with_access_cleanup(
     }
 }
 
+#[cfg(test)]
+mod access_cleanup_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn an_access_start_failure_carries_the_lease_to_its_cleanup() {
+        let lease = Some(Arc::new(crate::durable_host::AtomicRegionLease::new(
+            OplogIndex::from_u64(3),
+            false,
+        )));
+        let (error, cleanup) = with_access_cleanup(&lease)(WorkerExecutorError::runtime("boom"));
+        assert_eq!(error, WorkerExecutorError::runtime("boom"));
+        assert!(Arc::ptr_eq(
+            cleanup.atomic_lease.as_ref().unwrap(),
+            lease.as_ref().unwrap()
+        ));
+    }
+}
+
 /// Context handed to the request builder of [`DurableCallSession::start_access_with`], available after the
 /// durable scope (if any) has been opened but before the host-call `Start` is written or claimed.
 pub(crate) struct AccessStartContext {

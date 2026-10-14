@@ -821,8 +821,11 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
         shard_epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError> {
-        if let (Some(error), IndexedStorageNamespace::CompressedOpLog { .. }) =
-            (&self.archive_epoch_record_error, &namespace)
+        if let (
+            Some(error),
+            IndexedStorageNamespace::CompressedOpLog { .. }
+            | IndexedStorageNamespace::BlobOplogManifest { .. },
+        ) = (&self.archive_epoch_record_error, &namespace)
         {
             return Err(error.clone());
         }
@@ -8499,6 +8502,195 @@ async fn an_archive_last_index_that_does_not_read_fails_the_open(_tracing: &Trac
                 && details.contains("injected archive index failure")),
         "{error:?}"
     );
+}
+
+#[test]
+fn an_epoch_record_is_labelled_with_the_store_it_records_on() {
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "labelled".to_string(),
+    };
+    assert_eq!(
+        epoch_record_service(&IndexedStorageNamespace::CompressedOpLog {
+            agent_id: agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        }),
+        "compressed_oplog"
+    );
+    assert_eq!(
+        epoch_record_service(&IndexedStorageNamespace::BlobOplogManifest {
+            agent_id: agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        }),
+        "blob_oplog"
+    );
+    assert_eq!(
+        epoch_record_service(&IndexedStorageNamespace::OpLog {
+            agent_id,
+            agent_mode: AgentMode::Durable,
+        }),
+        "oplog"
+    );
+}
+
+#[test]
+fn an_archive_write_failure_names_the_agent_and_the_layer() {
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "archive-write".to_string(),
+    };
+    let error = OplogError::ArchiveWrite {
+        agent_id: agent_id.clone(),
+        level: 2,
+        details: "boom".to_string(),
+    };
+    assert_eq!(
+        error.to_string(),
+        format!("failed to write oplog data of {agent_id} to archive layer 2: boom")
+    );
+}
+
+#[test]
+async fn an_ephemeral_archive_last_index_that_does_not_read_fails_the_open(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage {
+        archive_last_id_error: Some(IndexedStorageError::Other(
+            "injected archive index failure".to_string(),
+        )),
+        ..ReadCountingIndexedStorage::default()
+    });
+    let service = archive_open_service(storage).await;
+    let (_, owned_agent_id, mut metadata) = archive_open_agent("ephemeral-index-at-open");
+    metadata.agent_mode = AgentMode::Ephemeral;
+
+    let open = AssertUnwindSafe(async {
+        let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
+        service
+            .open(
+                &mut lifecycle,
+                &owned_agent_id,
+                AgentMode::Ephemeral,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Ephemeral),
+                None,
+            )
+            .await
+    })
+    .catch_unwind()
+    .await;
+    let Ok(Err(error)) = open else {
+        panic!("the open must fail without a panic");
+    };
+    assert!(
+        matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+            if agent_id == &owned_agent_id.agent_id
+                && details.contains("injected archive index failure")),
+        "{error:?}"
+    );
+}
+
+#[test]
+async fn a_blob_archive_epoch_record_that_fails_fails_the_open(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage {
+        archive_epoch_record_error: Some(IndexedStorageError::Other(
+            "injected blob epoch record failure".to_string(),
+        )),
+        ..ReadCountingIndexedStorage::default()
+    });
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            16,
+            immediate_archive_retry_config(1),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> =
+        Arc::new(crate::services::oplog::blob::BlobOplogArchiveService::new(
+            Arc::new(InMemoryBlobStorage::new()),
+            storage,
+            1,
+            immediate_archive_retry_config(1),
+        ));
+    let service = MultiLayerOplogService::new(primary, nev![archive], 10, 10);
+    let (_, owned_agent_id, metadata) = archive_open_agent("blob-epoch-at-open");
+
+    let open = AssertUnwindSafe(async {
+        let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
+        service
+            .open(
+                &mut lifecycle,
+                &owned_agent_id,
+                AgentMode::Durable,
+                Some(OplogIndex::NONE),
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                Some(ShardEpoch(1)),
+            )
+            .await
+    })
+    .catch_unwind()
+    .await;
+    let Ok(Err(error)) = open else {
+        panic!("the open must fail without a panic");
+    };
+    assert!(
+        matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+            if agent_id == &owned_agent_id.agent_id
+                && details.contains("injected blob epoch record failure")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn an_archive_epoch_record_is_counted_as_an_archive_record() {
+    fn accepted(op: &str) -> f64 {
+        prometheus::gather()
+            .into_iter()
+            .filter(|family| family.name() == "oplog_epoch_fence_total")
+            .flat_map(|family| family.get_metric().to_vec())
+            .filter(|metric| {
+                let labels = metric.get_label();
+                labels
+                    .iter()
+                    .any(|label| label.name() == "op" && label.value() == op)
+                    && labels
+                        .iter()
+                        .any(|label| label.name() == "outcome" && label.value() == "accepted")
+            })
+            .map(|metric| metric.get_counter().value())
+            .sum()
+    }
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "counted".to_string(),
+    };
+    let before = accepted("archive_record");
+    for namespace in [
+        IndexedStorageNamespace::CompressedOpLog {
+            agent_id: agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        },
+        IndexedStorageNamespace::BlobOplogManifest {
+            agent_id: agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        },
+    ] {
+        assert!(matches!(
+            epoch_record_verdict(&namespace, &agent_id, Ok(())),
+            Ok(None)
+        ));
+    }
+    assert!(accepted("archive_record") >= before + 2.0);
 }
 
 #[test]

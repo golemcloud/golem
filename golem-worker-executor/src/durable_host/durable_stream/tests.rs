@@ -9590,6 +9590,28 @@ async fn byte_output_drain_publishes_only_the_live_suffix() {
     );
 }
 
+#[test]
+fn a_session_error_renders_its_cause() {
+    use super::SessionError;
+    use crate::services::oplog::{OplogReadError, UnreadableOplog};
+
+    let unreadable = UnreadableOplog {
+        agent_id: golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "unreadable".to_string(),
+        },
+        error: OplogReadError::Gap {
+            start: OplogIndex::INITIAL,
+            end: OplogIndex::from_u64(2),
+        },
+    };
+    assert_eq!(
+        SessionError::Unreadable(unreadable.clone()).to_string(),
+        unreadable.to_string()
+    );
+    assert_eq!(SessionError::Failed("boom".to_string()).to_string(), "boom");
+}
+
 /// An unreadable oplog keeps its type through the stream and session errors, so the agent fails
 /// with `OplogFailed`, at a boundary and in a trap alike, rather than with a runtime error.
 #[test]

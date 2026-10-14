@@ -45,6 +45,7 @@ pub struct GatedArchive {
     /// refuses them after a newer owner recorded its epoch. The archive does not report it through
     /// `fence`, so only the writer task's latch can tell the oplog.
     refusal: Mutex<Option<OplogFence>>,
+    drop_fails: std::sync::atomic::AtomicBool,
 }
 
 impl Default for GatedArchive {
@@ -56,6 +57,7 @@ impl Default for GatedArchive {
             append_calls: AtomicUsize::new(0),
             read_calls: AtomicUsize::new(0),
             refusal: Mutex::default(),
+            drop_fails: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -129,6 +131,9 @@ impl OplogArchive for GatedArchive {
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
+        if self.drop_fails.load(Ordering::Acquire) {
+            return Err(OplogError::Maintenance("injected drop failure".to_string()));
+        }
         let mut entries = self.entries.lock().unwrap();
         let old = entries.len();
         entries.retain(|idx, _| *idx > last_dropped_id);
@@ -263,6 +268,86 @@ pub async fn fixture(threshold: u64) -> Fixture {
         .await,
     );
     Fixture { oplog, archive }
+}
+
+async fn two_layer_oplog(
+    first: Arc<GatedArchive>,
+    deeper: Arc<GatedArchive>,
+) -> Arc<EphemeralOplog> {
+    let primary: Arc<dyn OplogService> = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            100,
+            100,
+            1024,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let first_service: Arc<dyn OplogArchiveService> =
+        Arc::new(SingletonArchiveService(first.clone()));
+    let deeper_service: Arc<dyn OplogArchiveService> =
+        Arc::new(SingletonArchiveService(deeper.clone()));
+    let service = MultiLayerOplogService::new(
+        primary.clone(),
+        nev![first_service, deeper_service],
+        100,
+        100,
+    );
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "ephemeral-two-layers".into(),
+        },
+    );
+    let first: Arc<dyn OplogArchive + Send + Sync> = first;
+    let deeper: Arc<dyn OplogArchive + Send + Sync> = deeper;
+    let lower = nev![first, deeper];
+    let (transfer_tx, transfer_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let transfer_fiber = new_transfer_fiber();
+    let transfer = EphemeralOplog::spawn_background_transfer(
+        owned_agent_id.clone(),
+        lower.clone(),
+        service.clone(),
+        transfer_rx,
+        start_rx,
+    );
+    MultiLayerOplogService::start_transfer(&transfer_fiber, start_tx, transfer).await;
+    Arc::new(
+        EphemeralOplog::new(
+            owned_agent_id,
+            AgentMode::Ephemeral,
+            AgentFingerprint::new(),
+            OplogIndex::NONE,
+            100,
+            primary,
+            lower,
+            transfer_tx,
+            transfer_fiber,
+            service,
+            Box::new(|| {}),
+        )
+        .await,
+    )
+}
+
+#[test]
+#[timeout("30s")]
+async fn a_failed_drop_on_one_layer_leaves_the_deeper_layers() {
+    let first = Arc::new(GatedArchive::default());
+    first.drop_fails.store(true, Ordering::Release);
+    let deeper = Arc::new(GatedArchive::default());
+    deeper
+        .entries
+        .lock()
+        .unwrap()
+        .insert(OplogIndex::INITIAL, entry(0));
+    let oplog = two_layer_oplog(first, deeper.clone()).await;
+    assert_eq!(oplog.drop_prefix(OplogIndex::INITIAL).await, 0);
+    assert_eq!(deeper.length().await.unwrap(), 1);
 }
 
 fn entry(n: usize) -> OplogEntry {
@@ -551,6 +636,38 @@ fn refusal(fixture: &Fixture) -> OplogFence {
         expected_epoch: ShardEpoch(5),
         actual_epoch: Some(ShardEpoch(6)),
     }
+}
+
+#[test]
+#[timeout("30s")]
+async fn a_batch_queued_behind_a_failed_one_is_not_written() {
+    let fixture = fixture(100).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    fixture.archive.wait_for_appends(1).await;
+    fixture.oplog.add(entry(1)).await.unwrap();
+    fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    fixture.archive.append_permits.close();
+
+    assert!(matches!(
+        fixture.oplog.commit(CommitLevel::Always).await,
+        Err(OplogError::ArchiveWrite { .. })
+    ));
+    assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[timeout("30s")]
+async fn drop_prefix_reports_the_entries_it_dropped() {
+    let fixture = fixture(100).await;
+    fixture.archive.release(10);
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.oplog.add(entry(1)).await.unwrap();
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    let stored = fixture.archive.length().await.unwrap();
+    assert!(stored > 0);
+    let last = fixture.oplog.current_oplog_index().await;
+    assert_eq!(fixture.oplog.drop_prefix(last).await, stored);
 }
 
 #[test]
