@@ -529,18 +529,52 @@ impl GoBridgeGenerator {
 
     /// The structure a named alias stands for: `body` rendered without its
     /// own name. An alias cannot refer to itself, so a definition that reaches
-    /// itself only through tuples, lists, options and the like is refused.
+    /// itself only through tuples, lists, options and the like, directly or
+    /// through other aliases, is refused.
     fn render_alias_body(
         &self,
         name: &str,
         body: &SchemaType,
         writer: &mut GoWriter,
     ) -> anyhow::Result<String> {
+        let (rendered, aliases) = self.render_alias_structure(body, writer)?;
+        let named = self.named_types();
+        let mut seen: Vec<String> = Vec::new();
+        let mut pending = aliases;
+        while let Some(alias) = pending.pop() {
+            if alias == name {
+                bail!(
+                    "the Go bridge cannot spell {name}: it contains itself without a record, \
+                     variant or union in between, and a Go alias cannot refer to itself"
+                );
+            }
+            if seen.contains(&alias) {
+                continue;
+            }
+            if let Some((typ, _)) = named.iter().find(|(_, n)| *n == alias) {
+                let alias_body = self.resolve(typ);
+                pending.extend(
+                    self.render_alias_structure(alias_body, &mut GoWriter::new())?
+                        .1,
+                );
+            }
+            seen.push(alias);
+        }
+        Ok(rendered)
+    }
+
+    /// Renders an alias body, and returns with it the aliases the rendering
+    /// names: the named definitions without a declaration of their own.
+    fn render_alias_structure(
+        &self,
+        body: &SchemaType,
+        writer: &mut GoWriter,
+    ) -> anyhow::Result<(String, Vec<String>)> {
         let streams = match self.mode {
             GoBridgeMode::GuestWasmRpc => type_ref::Streams::Guest,
             GoBridgeMode::ExternalRest => type_ref::Streams::External,
         };
-        let recursive = std::cell::Cell::new(false);
+        let aliases = std::cell::RefCell::new(Vec::new());
         let rendered = type_ref::render(
             body,
             &|t| {
@@ -548,8 +582,14 @@ impl GoBridgeGenerator {
                     return None;
                 }
                 let found = self.named(t);
-                if found.as_deref() == Some(name) {
-                    recursive.set(true);
+                if let Some(found) = &found {
+                    let resolved = self.resolve(t);
+                    if !self.spelled_by_sdk(t)
+                        && !decl::declares(resolved)
+                        && !matches!(resolved, SchemaType::Quantity { .. })
+                    {
+                        aliases.borrow_mut().push(found.clone());
+                    }
                 }
                 found
             },
@@ -557,13 +597,7 @@ impl GoBridgeGenerator {
             streams,
             writer,
         )?;
-        if recursive.get() {
-            bail!(
-                "the Go bridge cannot spell {name}: it contains itself without a record, \
-                 variant or union in between, and a Go alias cannot refer to itself"
-            );
-        }
-        Ok(rendered)
+        Ok((rendered, aliases.into_inner()))
     }
 
     // --- go.mod ---------------------------------------------------------

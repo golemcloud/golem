@@ -1923,29 +1923,38 @@ func TestEdgeShapesConvertThroughTheWire(t *testing.T) {{
 /// no Go spelling, since a Go alias cannot refer to itself; generation says so.
 #[test]
 fn go_client_refuses_a_named_definition_that_holds_itself_without_a_record() {
-    let looping = agent(
-        "Looping",
-        "rust",
-        vec![field("name", SchemaType::string())],
-        vec![method("tree", vec![], Some(ref_to("shapes.Tree")))],
-        vec![def(
-            "shapes.Tree",
-            SchemaType::tuple(vec![SchemaType::list(ref_to("shapes.Tree"))]),
-        )],
-        AgentMode::Durable,
-    );
-    let dir = TempDir::new().unwrap();
-    let target = Utf8Path::from_path(dir.path()).unwrap();
-    let mut generator =
-        GoBridgeGenerator::new_with_mode(looping, target, GoBridgeMode::GuestWasmRpc)
-            .expect("a generator");
-    let err = generator
-        .generate()
-        .expect_err("a self-referring alias has no Go spelling");
-    assert!(
-        format!("{err:#}").contains("ShapesTree"),
-        "unexpected error: {err:#}"
-    );
+    let direct = vec![def(
+        "shapes.Tree",
+        SchemaType::tuple(vec![SchemaType::list(ref_to("shapes.Tree"))]),
+    )];
+    let through_another = vec![
+        def("shapes.Tree", SchemaType::list(ref_to("shapes.Forest"))),
+        def("shapes.Forest", SchemaType::list(ref_to("shapes.Tree"))),
+    ];
+    for defs in [direct, through_another] {
+        for mode in [GoBridgeMode::GuestWasmRpc, GoBridgeMode::ExternalRest] {
+            let looping = agent(
+                "Looping",
+                "rust",
+                vec![field("name", SchemaType::string())],
+                vec![method("tree", vec![], Some(ref_to("shapes.Tree")))],
+                defs.clone(),
+                AgentMode::Durable,
+            );
+            let dir = TempDir::new().unwrap();
+            let target = Utf8Path::from_path(dir.path()).unwrap();
+            let mut generator =
+                GoBridgeGenerator::new_with_mode(looping, target, mode).expect("a generator");
+            let err = generator
+                .generate()
+                .expect_err("a self-referring alias has no Go spelling");
+            assert!(
+                format!("{err:#}").contains("ShapesTree")
+                    || format!("{err:#}").contains("ShapesForest"),
+                "unexpected error: {err:#}"
+            );
+        }
+    }
 }
 
 /// A quantity default is spelled as a quantity literal with the option's unit
