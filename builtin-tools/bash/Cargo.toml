@@ -40,9 +40,12 @@ incremental = false
 strip = "debuginfo"
 
 [patch.crates-io]
+# Each fork revision below carries a release tag in its fork; the tag names it, the revision pins it.
+# golemcloud/brush tag golem-v2.
 brush-core = { git = "https://github.com/golemcloud/brush", rev = "518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a" }
 brush-builtins = { git = "https://github.com/golemcloud/brush", rev = "518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a" }
 brush-parser = { git = "https://github.com/golemcloud/brush", rev = "518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a" }
+# golemcloud/coreutils tag golem-v1.
 uucore = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
 uu_cat = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
 uu_ls = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
@@ -63,11 +66,11 @@ uu_touch = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7
 uu_sleep = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
 uu_printf = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
 # jq-compatible number printing and null/array updates (jaq-json); jaq-core and jaq-std come from
-# the same revision so the workspace has one copy of each.
+# the same revision so the workspace has one copy of each. golemcloud/jaq tag golem-v1.
 jaq-json = { git = "https://github.com/golemcloud/jaq", rev = "c26f142e19128acda39f0c6668b38a581193b388" }
 jaq-core = { git = "https://github.com/golemcloud/jaq", rev = "c26f142e19128acda39f0c6668b38a581193b388" }
 jaq-std = { git = "https://github.com/golemcloud/jaq", rev = "c26f142e19128acda39f0c6668b38a581193b388" }
-# uutils sed with a line-at-a-time engine for the cooperative shell.
+# uutils sed with a line-at-a-time engine for the cooperative shell. golemcloud/sed tag golem-v1.
 sed = { git = "https://github.com/golemcloud/sed", rev = "794cb2bc9b00ba17432fda74f1bc74d0965e46dc" }
 # Further coreutils utilities, same fork and revision.
 uu_basename = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
