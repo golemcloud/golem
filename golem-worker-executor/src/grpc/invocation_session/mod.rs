@@ -4758,6 +4758,7 @@ mod tests {
         let unreadable = unreadable();
         let (responses, mut received) = mpsc::channel(1);
         send_protocol_failure(&responses, SessionError::Unreadable(unreadable.clone())).await;
+        drop(responses);
 
         let expected = WorkerExecutorError::from(unreadable);
         let Some(InvocationResponse {
