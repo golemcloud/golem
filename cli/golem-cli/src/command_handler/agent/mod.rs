@@ -3556,7 +3556,8 @@ mod tests {
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
+        NamedField, OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
@@ -3776,6 +3777,51 @@ mod tests {
             SchemaValue::Record {
                 fields: vec![SchemaValue::S64(5)]
             }
+        );
+    }
+
+    #[test]
+    fn method_arguments_omit_host_injected_fields() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        let principal = NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            principal.clone(),
+            NamedField::user_supplied("count", SchemaType::u32()),
+        ]);
+        for language in [
+            SourceLanguage::TypeScript,
+            SourceLanguage::Rust,
+            SourceLanguage::Scala,
+            SourceLanguage::MoonBit,
+            SourceLanguage::Go,
+        ] {
+            let arguments = ["\"alice\"", "7"].map(str::to_string).to_vec();
+            assert_eq!(
+                parse_method_parameters_with_error_table(&agent_type, "run", arguments, &language)
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("alice".to_string()),
+                        SchemaValue::U32(7)
+                    ],
+                },
+            );
+        }
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        assert_eq!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec![],
+                &SourceLanguage::TypeScript,
+            )
+            .unwrap(),
+            SchemaValue::Record { fields: vec![] },
         );
     }
 

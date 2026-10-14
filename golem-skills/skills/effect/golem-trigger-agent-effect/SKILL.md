@@ -55,10 +55,14 @@ Trigger that starter agent as `Counter("c1")`, not `CounterAgent("c1")`:
 golem agent invoke --trigger 'Counter("c1")' increment
 ```
 
-CLI constructor and method arguments are positional values. Do not wrap them in the named input
+Pass one native TypeScript literal per user-supplied `input` field in declaration order. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not wrap them in the named input
 objects used by the Effect SDK client. For example, a method declared with
 `input: { amount: Schema.Number }` receives `5` from the CLI, not `{ amount: 5 }`. If a declared
 parameter is itself a record, pass that record value as one shell argument.
+
+No-input methods take no arguments, not `'{}'`. `--format json` selects output formatting,
+not input encoding. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+Load `golem-invoke-agent-effect` for the string fallback and the different HTTP named-body rules.
 
 ## Examples
 
@@ -119,6 +123,9 @@ use **TypeScript syntax** even though contracts are declared with Effect Schema:
 
 Quote each structured value as one shell argument. String values need TypeScript string quotes
 inside the shell quotes:
+
+This example assumes `input: { request: Schema.Struct({ to: Schema.String, subject: Schema.String, body: Schema.String }) }`.
+The unquoted fields belong to the single `request` value, not to the input map:
 
 ```shell
 golem agent invoke --trigger 'MyAgent("user-123")' sendEmail \
