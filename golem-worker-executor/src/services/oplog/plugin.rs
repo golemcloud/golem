@@ -2336,9 +2336,10 @@ impl ForwardingOplogState {
         Ok(())
     }
 
-    /// Logs the checkpoint that found the fence and hands the fence back to the caller, which
-    /// stops forwarding for this agent. Every flush after it sees the latched fence and returns
-    /// before writing anything.
+    /// Logs the checkpoint that the oplog refused and hands the refusal back to the caller, which
+    /// stops this flush. After a fence, every later flush sees the latched fence and returns before
+    /// writing anything. A failed archive write latches no fence: a later flush runs, and the oplog
+    /// refuses its checkpoint with the same error.
     fn stop_forwarding(&self, refusal: OplogRefusal) -> OplogRefusal {
         tracing::info!(
             source_agent = %self.initial_worker_metadata.agent_id,
