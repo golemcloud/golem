@@ -29,7 +29,7 @@ type = "Grpc"
 type = "Sqlite"
 
 [persistence.config]
-database = "golem_shard_manager.db"
+database = "../data/golem_shard_manager.db"
 foreign_keys = false
 max_connections = 10
 
@@ -181,7 +181,7 @@ type = "Disabled"
 # type = "Sqlite"
 #
 # [persistence.config]
-# database = "golem_shard_manager.db"
+# database = "../data/golem_shard_manager.db"
 # foreign_keys = false
 # max_connections = 10
 #
