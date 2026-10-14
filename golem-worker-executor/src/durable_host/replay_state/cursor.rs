@@ -3126,13 +3126,21 @@ impl ReplayState {
                         );
                         None
                     }
-                    OplogEntry::ToolAttachmentRead { observation, .. } => {
+                    OplogEntry::ToolAttachmentRead {
+                        observation,
+                        entity_parent_start_index,
+                        ..
+                    } => {
                         attachments.boundaries.insert(marker_idx);
-                        if let golem_common::model::durable_stream::StreamConsumerObservation::Guest {
-                            parent_start_index,
-                        } = observation.observation {
-                            stream_observations.insert(marker_idx, parent_start_index);
-                        }
+                        let parent = match observation.observation {
+                            golem_common::model::durable_stream::StreamConsumerObservation::Guest {
+                                parent_start_index,
+                            } => parent_start_index,
+                            golem_common::model::durable_stream::StreamConsumerObservation::Host => {
+                                entity_parent_start_index
+                            }
+                        };
+                        stream_observations.insert(marker_idx, parent);
                         None
                     }
                     OplogEntry::StreamSession { record, .. } => {

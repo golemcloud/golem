@@ -42,7 +42,40 @@ impl InputObservationDelivery {
         self,
         recorded_index: Option<OplogIndex>,
         prepare_live: impl Future<Output = Result<EnqueueInputObservation, WorkerExecutorError>>,
+        result: oneshot::Sender<Result<InputReadObserver, WorkerExecutorError>>,
+    ) -> wasmtime::Result<oneshot::Receiver<()>> {
+        self.prepare_inner(recorded_index, prepare_live, result, None)
+            .await
+    }
+
+    /// A host receive takes ownership of the logical item before handing it to its transport.
+    /// Unlike the synchronous guest callback, this boundary can wait for the commit result.
+    pub async fn consume_host(
+        self,
+        recorded_index: Option<OplogIndex>,
+        prepare_live: impl Future<Output = Result<EnqueueInputObservation, WorkerExecutorError>>,
+    ) -> wasmtime::Result<()> {
+        let (prepared, observer) = oneshot::channel();
+        let (completed, completion) = oneshot::channel();
+        let _settled = self
+            .prepare_inner(recorded_index, prepare_live, prepared, Some(completed))
+            .await?;
+        let observer = observer
+            .await
+            .map_err(|_| wasmtime::Error::msg("host observation preparation stopped"))??;
+        observer(TerminalConsumption::Delivered)?;
+        completion
+            .await
+            .map_err(|_| wasmtime::Error::msg("host observation commit stopped"))??;
+        Ok(())
+    }
+
+    async fn prepare_inner(
+        self,
+        recorded_index: Option<OplogIndex>,
+        prepare_live: impl Future<Output = Result<EnqueueInputObservation, WorkerExecutorError>>,
         mut result: oneshot::Sender<Result<InputReadObserver, WorkerExecutorError>>,
+        completed: Option<oneshot::Sender<Result<(), WorkerExecutorError>>>,
     ) -> wasmtime::Result<oneshot::Receiver<()>> {
         let (settled, observation_settled) = oneshot::channel();
         let prepare = async {
@@ -78,6 +111,9 @@ impl InputObservationDelivery {
                     return Err(self.replay.fail_stream_observation(recorded_index.unwrap()));
                 }
                 barrier.acknowledge();
+                if let Some(completed) = completed {
+                    let _ = completed.send(Ok(()));
+                }
                 Ok(())
             })
         } else {
@@ -98,6 +134,9 @@ impl InputObservationDelivery {
                         Err(error) => Err(error),
                     };
                     drop(activity);
+                    if let Some(completed) = completed {
+                        let _ = completed.send(outcome.clone());
+                    }
                     let _ = done.send(outcome);
                     let _ = settled.send(());
                 });

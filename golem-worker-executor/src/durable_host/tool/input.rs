@@ -38,7 +38,8 @@ use wasmtime::component::{
 
 struct PreparedRead {
     item: AttachmentStreamRead,
-    observer: InputReadObserver,
+    observer: Option<InputReadObserver>,
+    observation: StreamConsumerObservation,
     from_journal: bool,
 }
 
@@ -99,7 +100,15 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
         if self.finished {
             return Poll::Ready(Ok(StreamResult::Dropped));
         }
+        let host = destination.remaining(&mut store).is_none();
         let ctx = (self.getter)(store.data_mut());
+        let observation = if host {
+            StreamConsumerObservation::Host
+        } else {
+            StreamConsumerObservation::Guest {
+                parent_start_index: ctx.entity_parent_start_index(),
+            }
+        };
         let ordinal = self.ordinal.load(Ordering::Acquire);
         let recorded = ctx.state.replay_state.tool_attachment_observation(
             self.attachment,
@@ -141,52 +150,72 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                     .into()));
             }
         }
-        if self.pending.is_none() {
-            let live = if recorded.is_none() {
-                Some(std::task::ready!(self.source.poll_read(cx))?)
-            } else {
-                None
-            };
-            let ctx = (self.getter)(store.data_mut());
-            let delivery = InputObservationDelivery {
-                replay: ctx.state.replay_state.clone(),
-                activity: ctx.tail_work_tracker().activity(),
-                runtime_teardown: ctx.stream_runtime_teardown_probe(),
-                cleanup_sink: ctx
-                    .state
-                    .dropped_call_event_sender()
-                    .expect("worker cleanup queue"),
-                trap_context: DurableCallTrapContext {
-                    retry_from: InFunctionRetryHost::current_retry_point(ctx),
-                    in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
-                },
-                live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
-            };
-            let (result, pending) = oneshot::channel();
-            let task = PrepareAttachmentObservation {
-                attachment: self.attachment,
-                invocation: self.invocation.clone(),
-                ordinal,
-                attempt: self.attempt.clone(),
-                parent: ctx.entity_parent_start_index(),
-                recorded,
-                live,
-                delivery,
-                worker: ctx.public_state.worker(),
-                oplog: ctx.state.oplog.clone(),
-                result,
-            };
-            store.as_context_mut().spawn(task);
-            self.pending = Some(pending);
-        }
-        let prepared = std::task::ready!(Pin::new(self.pending.as_mut().unwrap()).poll(cx));
-        self.pending = None;
+        let mut retained_item = None;
+        let prepared = loop {
+            if self.pending.is_none() {
+                let live = if recorded.is_none() {
+                    Some(match retained_item.take() {
+                        Some(item) => item,
+                        None => std::task::ready!(self.source.poll_read(cx))?,
+                    })
+                } else {
+                    None
+                };
+                let ctx = (self.getter)(store.data_mut());
+                let delivery = InputObservationDelivery {
+                    replay: ctx.state.replay_state.clone(),
+                    activity: ctx.tail_work_tracker().activity(),
+                    runtime_teardown: ctx.stream_runtime_teardown_probe(),
+                    cleanup_sink: ctx
+                        .state
+                        .dropped_call_event_sender()
+                        .expect("worker cleanup queue"),
+                    trap_context: DurableCallTrapContext {
+                        retry_from: InFunctionRetryHost::current_retry_point(ctx),
+                        in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
+                    },
+                    live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
+                };
+                let (result, pending) = oneshot::channel();
+                let task = PrepareAttachmentObservation {
+                    attachment: self.attachment,
+                    invocation: self.invocation.clone(),
+                    ordinal,
+                    attempt: self.attempt.clone(),
+                    parent: ctx.entity_parent_start_index(),
+                    observation: observation.clone(),
+                    recorded,
+                    live,
+                    delivery,
+                    worker: ctx.public_state.worker(),
+                    oplog: ctx.state.oplog.clone(),
+                    result,
+                };
+                store.as_context_mut().spawn(task);
+                self.pending = Some(pending);
+            }
+            let prepared = std::task::ready!(Pin::new(self.pending.as_mut().unwrap()).poll(cx));
+            self.pending = None;
+            let prepared = prepared.map_err(|_| {
+                wasmtime::Error::msg("attachment observation preparation stopped")
+            })??;
+            if prepared.observation == observation {
+                break prepared;
+            }
+            if prepared.from_journal || !host || prepared.observer.is_none() {
+                return Poll::Ready(Err(wasmtime::Error::msg(
+                    "attachment read changed its retained observation boundary",
+                )));
+            }
+            prepared.observer.unwrap()(TerminalConsumption::NotDelivered)?;
+            retained_item = Some(prepared.item);
+        };
         let PreparedRead {
             item,
             observer,
             from_journal,
-        } = prepared
-            .map_err(|_| wasmtime::Error::msg("attachment observation preparation stopped"))??;
+            ..
+        } = prepared;
         let ordinal = self.ordinal.clone();
         let controller = self.controller.clone();
         let source = match &item {
@@ -197,7 +226,7 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
             AttachmentStreamRead::Failure { terminal_index, .. } => *terminal_index,
             _ => None,
         };
-        destination.register_read_observer(&mut store, move |consumption| {
+        let observe = move |consumption| -> Result<(), WorkerExecutorError> {
             if consumption == TerminalConsumption::Delivered {
                 if from_journal {
                     if let Some(source) = source {
@@ -209,8 +238,18 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                 }
                 ordinal.fetch_add(1, Ordering::AcqRel);
             }
-            let _ = observer(consumption);
-        })?;
+            if let Some(observer) = observer {
+                observer(consumption)?;
+            }
+            Ok(())
+        };
+        if host {
+            observe(TerminalConsumption::Delivered)?;
+        } else {
+            destination.register_read_observer(&mut store, move |consumption| {
+                let _ = observe(consumption);
+            })?;
+        }
         self.active_attempt = false;
         match item {
             AttachmentStreamRead::Chunk { bytes, .. } => {
@@ -234,6 +273,7 @@ struct PrepareAttachmentObservation<Ctx: WorkerCtx> {
     ordinal: u64,
     attempt: Arc<AtomicU64>,
     parent: Option<OplogIndex>,
+    observation: StreamConsumerObservation,
     recorded: Option<(OplogIndex, Option<(OplogIndex, u64)>)>,
     live: Option<AttachmentStreamRead>,
     delivery: InputObservationDelivery,
@@ -253,6 +293,14 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
                 .replay
                 .hydrate_tool_attachment_observation(boundary.map_or(original, |(index, _)| index))
                 .await?;
+            if let Some((index, _)) = boundary {
+                let entry = self.oplog.read(index).await;
+                if read.observation != self.observation
+                    || entry.entity_parent_start_index() != self.parent
+                {
+                    return Err(self.delivery.replay.fail_stream_observation(index).into());
+                }
+            }
             let item = match &read.outcome {
                 ToolAttachmentReadOutcome::TypedChunk(end) => AttachmentStreamRead::Chunk {
                     bytes: payload.expect("validated data observation"),
@@ -317,9 +365,7 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
         let observation = ToolAttachmentReadObservation {
             attachment: self.attachment,
             logical_invocation: self.invocation,
-            observation: StreamConsumerObservation::Guest {
-                parent_start_index: self.parent,
-            },
+            observation: self.observation.clone(),
             ordinal: self.ordinal,
             read_attempt_ordinal: 0,
             outcome,
@@ -328,44 +374,56 @@ impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservatio
                 .filter(|(_, boundary)| boundary.is_none())
                 .map(|(original, _)| original),
         };
+        let prepare_live = async move {
+            let enqueue: EnqueueInputObservation = Box::new(move || {
+                let mut observation = observation;
+                observation.read_attempt_ordinal = self.attempt.load(Ordering::Acquire) - 1;
+                let receipt = self.oplog.enqueue_add(OplogEntry::ToolAttachmentRead {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: self.parent,
+                    observation: Box::new(observation),
+                    payload,
+                });
+                Ok(Box::pin(async move {
+                    receipt.await?;
+                    self.worker
+                        .commit_oplog_and_update_state(CommitLevel::Always)
+                        .await?;
+                    Ok(())
+                }))
+            });
+            Ok(enqueue)
+        };
+        if self.observation == StreamConsumerObservation::Host {
+            self.delivery
+                .consume_host(recorded_index, prepare_live)
+                .await?;
+            let _ = self.result.send(Ok(PreparedRead {
+                item,
+                observer: None,
+                observation: self.observation,
+                from_journal: self.recorded.is_some(),
+            }));
+            return Ok(());
+        }
         let (prepared, observer) = oneshot::channel();
         let teardown = self.delivery.runtime_teardown.clone();
         let settled = self
             .delivery
-            .prepare(
-                recorded_index,
-                async move {
-                    let enqueue: EnqueueInputObservation = Box::new(move || {
-                        let mut observation = observation;
-                        observation.read_attempt_ordinal = self.attempt.load(Ordering::Acquire) - 1;
-                        let receipt = self.oplog.enqueue_add(OplogEntry::ToolAttachmentRead {
-                            timestamp: Timestamp::now_utc(),
-                            entity_parent_start_index: self.parent,
-                            observation: Box::new(observation),
-                            payload,
-                        });
-                        Ok(Box::pin(async move {
-                            receipt.await?;
-                            self.worker
-                                .commit_oplog_and_update_state(CommitLevel::Always)
-                                .await?;
-                            Ok(())
-                        }))
-                    });
-                    Ok(enqueue)
-                },
-                prepared,
-            )
+            .prepare(recorded_index, prepare_live, prepared)
             .await?;
         let observer = observer
             .await
             .map_err(|_| wasmtime::Error::msg("attachment observer preparation stopped"))??;
         if let Err(Ok(PreparedRead { observer, .. })) = self.result.send(Ok(PreparedRead {
             item,
-            observer,
+            observer: Some(observer),
+            observation: self.observation,
             from_journal: self.recorded.is_some(),
         })) {
-            if !teardown() {
+            if !teardown()
+                && let Some(observer) = observer
+            {
                 observer(TerminalConsumption::NotDelivered)?;
             }
         }

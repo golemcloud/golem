@@ -7563,27 +7563,51 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
                 }
             );
         }
-        drop(executor);
-        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-        assert_eq!(executor.instance_load_count(&worker), 0);
-        let _: String = executor
-            .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
-            .await?
-            .into_typed()?;
-        assert!(executor.instance_load_count(&worker) > 0);
-        let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-        assert_eq!(
-            replayed
-                .iter()
-                .filter(|entry| matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_)))
-                .count(),
-            entries
-                .iter()
-                .filter(|entry| matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_)))
-                .count(),
-            "completed replay must reuse stdin and stdout observations"
-        );
+    } else {
+        use golem_common::model::durable_stream::StreamConsumerObservation;
+        use golem_common::model::oplog::attachment::ToolAttachmentReadObservation;
+        let host_reads = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::ToolAttachmentRead(read) => {
+                    let observation =
+                        ToolAttachmentReadObservation::from_value(read.observation.value())
+                            .expect("decode pipe observation");
+                    (observation.observation == StreamConsumerObservation::Host)
+                        .then_some((observation, read.payload.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(host_reads.len(), 4, "three pipe input chunks and EOF");
+        for (ordinal, (read, payload)) in host_reads.iter().enumerate() {
+            assert_eq!(read.ordinal, ordinal as u64);
+            assert_eq!(
+                payload.as_deref(),
+                expected.chunks(CAPACITY as usize).nth(ordinal),
+            );
+        }
     }
+    drop(executor);
+    executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    assert_eq!(executor.instance_load_count(&worker), 0);
+    let _: String = executor
+        .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert!(executor.instance_load_count(&worker) > 0);
+    let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        replayed
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_)))
+            .count(),
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_)))
+            .count(),
+        "completed replay must reuse stdin and stdout observations"
+    );
     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert_eq!(
         entries
