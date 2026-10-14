@@ -14579,7 +14579,7 @@ fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
         )
     };
 
-    let live = runtime.block_on(read(1));
+    let live = runtime.block_on(read(1)).unwrap();
     assert_eq!(live.get(&OplogIndex::from_u64(1)), Some(&entry));
     let corrupt = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(read(2))));
     assert!(
