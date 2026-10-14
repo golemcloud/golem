@@ -73,6 +73,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	apiRetry "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_retry"
@@ -278,7 +279,7 @@ func (p PropName) Exists() Predicate {
 
 // OneOf matches when the property equals any of the given values.
 func (p PropName) OneOf(vs ...any) Predicate {
-	return Predicate{&predicateNode{kind: prIn, prop: string(p), vals: vs}}
+	return Predicate{&predicateNode{kind: prIn, prop: string(p), vals: slices.Clone(vs)}}
 }
 
 // MatchesGlob matches when the property matches the glob pattern.

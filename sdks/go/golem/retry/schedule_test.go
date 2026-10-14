@@ -382,6 +382,23 @@ func TestEachRunStartsThePolicyAgain(t *testing.T) {
 	}
 }
 
+func TestAScheduleKeepsTheOneOfValuesItWasCheckedWith(t *testing.T) {
+	values := []any{503}
+	s := mustSchedule(t, Immediate().OnlyWhen(StatusCode.OneOf(values...)).MaxRetries(1)).
+		WithProperties(func(err error) map[PropName]any {
+			return map[PropName]any{StatusCode: err.(statusError).status}
+		})
+	values[0] = time.Now()
+	attempts, sleeps := 0, 0
+	_ = s.run(func() error {
+		attempts++
+		return statusError{503}
+	}, fixedRuntime(&sleeps))
+	if attempts != 2 {
+		t.Fatalf("attempts %d", attempts)
+	}
+}
+
 func TestAnUnsupportedPropertyValuePanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "unsupported predicate value type") {
