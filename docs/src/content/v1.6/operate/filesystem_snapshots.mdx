@@ -149,7 +149,31 @@ The helper runs in one of two ways.
 worker-executor xfs-quota-helper --root /var/lib/golem/agents --listen /run/golem-quota/helper.sock
 ```
 
+The executor connects to the helper once, when it starts, and stops when the socket is not there yet. In Kubernetes, run the helper as a native sidecar, an init container with `restartPolicy: Always` and a startup probe on the socket, so that the executor starts only after the helper listens:
+
 ```yaml
+initContainers:
+  - name: xfs-quota-helper
+    image: golemservices/golem-worker-executor:<version>
+    restartPolicy: Always
+    args: [xfs-quota-helper, --root, /var/lib/golem/agents, --listen, /run/golem-quota/helper.sock]
+    startupProbe:
+      exec:
+        command: [test, -S, /run/golem-quota/helper.sock]
+      periodSeconds: 1
+      failureThreshold: 30
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      allowPrivilegeEscalation: true
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: [ALL]
+        add: [SYS_ADMIN]
+    volumeMounts:
+      - { name: agents, mountPath: /var/lib/golem/agents }
+      - { name: quota-socket, mountPath: /run/golem-quota }
 containers:
   - name: worker-executor
     image: golemservices/golem-worker-executor:<version>
@@ -170,27 +194,12 @@ containers:
     volumeMounts:
       - { name: agents, mountPath: /var/lib/golem/agents }
       - { name: quota-socket, mountPath: /run/golem-quota }
-  - name: xfs-quota-helper
-    image: golemservices/golem-worker-executor:<version>
-    args: [xfs-quota-helper, --root, /var/lib/golem/agents, --listen, /run/golem-quota/helper.sock]
-    securityContext:
-      runAsNonRoot: true
-      runAsUser: 65534
-      runAsGroup: 65534
-      allowPrivilegeEscalation: true
-      readOnlyRootFilesystem: true
-      capabilities:
-        drop: [ALL]
-        add: [SYS_ADMIN]
-    volumeMounts:
-      - { name: agents, mountPath: /var/lib/golem/agents }
-      - { name: quota-socket, mountPath: /run/golem-quota }
 volumes:
   - name: quota-socket
     emptyDir: {}
 ```
 
-The helper makes its socket readable and writable only by its own user, and accepts connections only from processes of that user, so the executor and the helper must run as the same uid. The socket volume must be shared by these two containers only. The helper also needs the host user namespace, the `prjquota` volume and a seccomp profile that allows `quotactl_fd`, as above. On connect, the executor checks that the helper is of the same Golem release and serves the same filesystem as its root.
+The helper makes its socket readable and writable only by its own user, and accepts connections only from processes of that user, so the executor and the helper must run as the same uid. The socket volume must be shared by these two containers only. The helper also needs the host user namespace and the `prjquota` volume, mounted read-write: setting a limit writes to the volume. The runtime default seccomp profile already allows `quotactl_fd` in a container that adds `SYS_ADMIN`, so a custom profile for the helper container is optional; the helper runs no agent code, and the executor container keeps the default profile without `SYS_ADMIN`. The helper serves at most 8 connections at once and refuses more; the executor holds one. On connect, the executor checks that the helper is of the same Golem release and serves the same filesystem as its root.
 
 When the helper cannot get `CAP_SYS_ADMIN`, it refuses to start, and the executor stops at startup with the error `the XFS quota helper refused to start: ManagedXfs filesystem storage needs CAP_SYS_ADMIN for its XFS quota helper, which the process is not permitted`, followed by the settings to add.
 
