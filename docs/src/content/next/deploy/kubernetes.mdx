@@ -14,4 +14,4 @@ securityContext:
     drop: [ALL]
 ```
 
-Set `fsGroup: 65534` in the pod `securityContext`, so that the volumes of the pod are writable by the service. See [User and Permissions](/next/deploy#user-and-permissions). The worker executor with `ManagedXfs` agent filesystem storage needs other settings; see [Run the executor in a container](/next/operate/filesystem_snapshots#run-the-executor-in-a-container).
+Set `fsGroup: 65534` in the pod `securityContext`, so that the volumes of the pod are writable by the service. See [User and Permissions](/next/deploy#user-and-permissions). `ManagedXfs` agent filesystem storage also needs the XFS quota helper, a native sidecar with `CAP_SYS_ADMIN`; see [Run the XFS quota helper](/next/operate/filesystem_snapshots#run-the-xfs-quota-helper).

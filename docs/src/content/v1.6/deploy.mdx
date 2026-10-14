@@ -24,7 +24,7 @@ A path that a service writes must belong to uid 65534, or be writable by it:
 - A bind mount takes the owner of the host directory. Give the directory to the user before the first start, for example with `chown -R 65534:65534 <host directory>`.
 - In Kubernetes, set `runAsUser`, `runAsGroup` and `fsGroup` to 65534 in the pod `securityContext`. The kubelet then makes a volume that supports ownership management, such as an `emptyDir` or a persistent volume, writable by group 65534. A `hostPath` volume keeps the owner of the host directory.
 
-Run the services with no capabilities and without privilege escalation: `--cap-drop ALL --security-opt no-new-privileges` with Docker, `capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false` in Kubernetes. Only the XFS quota helper of `ManagedXfs` agent filesystem storage needs a capability, `CAP_SYS_ADMIN`; see [Run the executor in a container](/v1.6/operate/filesystem_snapshots#run-the-executor-in-a-container).
+Run the services with no capabilities and without privilege escalation: `--cap-drop ALL --security-opt no-new-privileges` with Docker, `capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false` in Kubernetes. Only the XFS quota helper of `ManagedXfs` agent filesystem storage, a separate process, needs a capability, `CAP_SYS_ADMIN`; see [Run the XFS quota helper](/v1.6/operate/filesystem_snapshots#run-the-xfs-quota-helper).
 
 ## Golem Services
 

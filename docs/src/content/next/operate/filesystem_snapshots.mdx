@@ -11,7 +11,7 @@ Standalone executors and local servers on other platforms disable filesystem sna
 These requirements apply to production. For local development and tests on macOS, see [Local development on macOS](#local-development-on-macos).
 
 - The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink, in `ReflinkXfs` mode. Each executor has its own XFS filesystem. `ReflinkXfs` needs no capability. See [Prepare XFS storage](#prepare-xfs-storage).
-- Use `ManagedXfs` instead only when you also need per-agent disk quotas or filesystem metering. It needs a volume with project quotas and `CAP_SYS_ADMIN` for the XFS quota helper, a separate process of the executor.
+- Use `ManagedXfs` instead only when you also need per-agent disk quotas or filesystem metering. It needs a volume with project quotas and the XFS quota helper, a separate process with `CAP_SYS_ADMIN` that runs beside the executor.
 - All executors that can run the same agents enable filesystem snapshots, and use the same blob storage and the same `repository_key`.
 - With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
@@ -96,7 +96,7 @@ Filesystem snapshots need storage that makes copy-on-write copies. Both producti
 | Filesystem metering (`resource_usage_metering.filesystem`) | Refused at startup | Supported |
 | Free-space checks of the volume, capture admission, write pressure recovery | Yes | Yes |
 | Mount option | no quota option for projects (`noquota`) | `prjquota` |
-| Privilege | No capability | `CAP_SYS_ADMIN` for the XFS quota helper, host user namespace |
+| Privilege | No capability | `CAP_SYS_ADMIN` for the XFS quota helper, a separate process; host user namespace |
 
 Use `ReflinkXfs`: it gives filesystem snapshots and needs no capability. Use `ManagedXfs` only when the executor must also limit or meter the disk space of each agent.
 
@@ -163,7 +163,7 @@ chown 65534:65534 /var/lib/golem/agents
 
 The executor makes directories in the root, and removes any project from the root itself. Linux lets only the owner of a directory change its project, so write permission through the group is not enough.
 
-The XFS quota helper of the executor reads and sets XFS project quotas, and the executor sets the project of directories. Linux allows the quota calls only for a process with the `CAP_SYS_ADMIN` capability. Linux changes the project of a directory only for a process in the initial user namespace, so a container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`. See [Run the executor in a container](#run-the-executor-in-a-container) for the container settings.
+The XFS quota helper reads and sets XFS project quotas, and the executor sets the project of directories. Linux allows the quota calls only for a process with the `CAP_SYS_ADMIN` capability. Linux changes the project of a directory only for a process in the initial user namespace, so a container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`. See [Run the XFS quota helper](#run-the-xfs-quota-helper) for the settings of the helper.
 
 Set the storage mode to `ManagedXfs`, with the mount point as the root:
 
@@ -179,9 +179,7 @@ The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs`
 
 #### Run the executor in a container
 
-The executor image runs as the user `golem`, uid and gid 65534. The executor binary `/app/worker-executor` has the file capability `cap_sys_admin+p`: `CAP_SYS_ADMIN` is permitted, not effective. Linux grants a file capability only when the container's bounding set holds the capability and privilege escalation is allowed, so in a container that does not add `SYS_ADMIN`, or that sets `no_new_privs`, the binary gets nothing from it. At startup, before it starts any thread, the executor removes `CAP_SYS_ADMIN` from all of its capability sets and sets `no_new_privs`, in every storage mode.
-
-**`ReflinkXfs`, and every mode except `ManagedXfs`.** The executor needs no capability. Drop all of them and set `no_new_privs`:
+The executor image runs as the user `golem`, uid and gid 65534. The executor needs no capability in any storage mode. Drop all of them and set `no_new_privs`:
 
 ```shell
 docker run --cap-drop ALL --security-opt no-new-privileges \
@@ -201,43 +199,56 @@ securityContext:
     drop: [ALL]
 ```
 
-The volume must be XFS with reflink, and must not be mounted with `prjquota` or `pqnoenforce`: `ReflinkXfs` refuses a volume that accounts project quotas. Its root must belong to uid 65534.
+With `ReflinkXfs`, the volume must be XFS with reflink, and must not be mounted with `prjquota` or `pqnoenforce`: `ReflinkXfs` refuses a volume that accounts project quotas. Its root must belong to uid 65534.
 
-**`ManagedXfs`.** Use it only when the executor must limit or meter the disk space of each agent. The executor itself never holds `CAP_SYS_ADMIN`. The project quota calls go to the XFS quota helper, a small process that holds `CAP_SYS_ADMIN` and no other capability, serves only the XFS root, and runs no agent code. It accepts three calls: read the quota state of the volume, read the quota of a project, and set the limits of a project. It refuses a call that would change anything else.
+With `ManagedXfs`, the executor container is the same, and an XFS quota helper runs beside it; see [Run the XFS quota helper](#run-the-xfs-quota-helper). The executor sets the project of its directories itself, which Linux allows only in the initial user namespace, so the container must run in the host user namespace: with Docker, `--userns host` when the daemon remaps user namespaces; in Kubernetes, do not set `hostUsers: false`.
 
-The helper runs in one of two ways.
+The executor never changes its own capabilities. When the deployment gives it `CAP_SYS_ADMIN`, it logs a warning at startup.
 
-*Started by the executor.* Without `quota_helper_socket`, the executor starts the helper from its own binary at startup, and then drops `CAP_SYS_ADMIN` and sets `no_new_privs`. The executor stops when the helper stops. The container needs:
+#### Run the XFS quota helper
 
-- `CAP_SYS_ADMIN` in its bounding set, and no other capability: `--cap-drop ALL --cap-add SYS_ADMIN` with Docker, `capabilities: {drop: [ALL], add: [SYS_ADMIN]}` in Kubernetes. The container runtime gives a non-root process no capability from these settings alone; the helper gets `CAP_SYS_ADMIN` only through the file capability of the binary.
-- Privilege escalation allowed: no `--security-opt no-new-privileges` with Docker, `allowPrivilegeEscalation: true` in Kubernetes. With `no_new_privs`, Linux ignores the file capability. The executor sets `no_new_privs` for itself once the helper runs.
-- The host user namespace: with Docker, `--userns host` when the daemon remaps user namespaces; in Kubernetes, do not set `hostUsers: false`.
-- A volume mounted with `prjquota`, as described in [XFS storage with project quotas](#xfs-storage-with-project-quotas-managedxfs).
-- A seccomp profile that allows `quotactl_fd` and nothing else that `CAP_SYS_ADMIN` would open. The default profiles of Docker and containerd allow `quotactl_fd` only to a container with `CAP_SYS_ADMIN`, and then they also allow `mount`, `umount2`, `unshare`, `setns`, `bpf`, `fsopen`, `fsmount`, `move_mount`, `open_tree`, `perf_event_open`, `quotactl`, `syslog`, `sethostname`, `setdomainname`, and `clone` with namespace flags, to every process of the container. The executor holds no capability for most of these calls, but it can still make a user namespace. Start from the profile that the runtime gives a container without `CAP_SYS_ADMIN`, add `quotactl_fd`, and make the profile refuse the mount, namespace, BPF, key and kernel module calls.
+`ManagedXfs` sets and reads XFS project quotas, which Linux allows only to a process with `CAP_SYS_ADMIN`. That capability also allows `XFS_IOC_OPEN_BY_HANDLE`, which opens a file on the volume, also for writing, without a permission check, so the process that runs the guest Wasm of the agents must not hold it. The executor therefore sends its quota calls over a Unix socket to the XFS quota helper, a separate process that the operator runs beside it and gives `CAP_SYS_ADMIN`. The helper serves one XFS root, runs no agent code, and accepts three calls: read the quota state of the volume, read the quota of a project, and set the limits of a project. It refuses a call that would change anything else. An escape from the Wasm sandbox into the executor can therefore only send these calls: it can change the limits of a project on the volume, but not reach its files.
 
-*Beside the executor.* Run the helper in its own container, and set `quota_helper_socket` to its socket. The executor container then needs no capability, sets `no_new_privs`, and keeps the default seccomp profile, as with `ReflinkXfs`. Only the helper container adds `SYS_ADMIN`. The helper runs from the executor image:
+The helper is the executor binary, run with the `xfs-quota-helper` command:
 
 ```shell
-worker-executor xfs-quota-helper --root /var/lib/golem/agents --listen /run/golem-quota/helper.sock
+worker-executor xfs-quota-helper --root /var/lib/golem/agents --listen /run/golem-quota/helper.sock --allow-uid 65534
 ```
 
-The executor connects to the helper once, when it starts, and stops when the socket is not there yet. In Kubernetes, run the helper as a native sidecar, an init container with `restartPolicy: Always` and a startup probe on the socket, so that the executor starts only after the helper listens:
+- `--root` is the root of the XFS volume, the same filesystem as the executor's root. The helper mounts it read-write: setting a limit writes to the volume.
+- `--listen` is the socket. Put it in a directory that only the helper and the executor share. Any process may open the socket file, but the helper accepts a connection only from a process of one uid: its own, or the uid that `--allow-uid` names. It serves at most 8 connections at once; the executor holds one.
+- The helper needs `CAP_SYS_ADMIN` in its effective set, the host user namespace, and a seccomp profile that allows `quotactl_fd`. It changes no capability itself, and refuses to start without `CAP_SYS_ADMIN`: `the XFS quota helper needs CAP_SYS_ADMIN, which this process does not hold`, followed by the settings to add.
+
+Configure the executor with the socket:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+quota_helper_socket = "/run/golem-quota/helper.sock"
+```
+
+The environment variable is `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__QUOTA_HELPER_SOCKET`. On connect, the executor checks that the helper is of the same Golem release and serves the same filesystem as its root. Each call has a deadline of five seconds. The executor connects when it starts, and stops when the helper does not answer, so the helper must listen before the executor starts.
+
+Docker and containerd give a process that does not run as root no capability from the container settings alone, so in a container the helper runs as root, with `CAP_SYS_ADMIN` as its only capability. In Kubernetes, run it as a native sidecar, an init container with `restartPolicy: Always` and a startup probe on the socket, so that the executor starts only after the helper listens. Kubernetes requires `allowPrivilegeEscalation: true` for a container that adds `SYS_ADMIN`.
 
 ```yaml
 initContainers:
   - name: xfs-quota-helper
     image: golemservices/golem-worker-executor:<version>
     restartPolicy: Always
-    args: [xfs-quota-helper, --root, /var/lib/golem/agents, --listen, /run/golem-quota/helper.sock]
+    args: [xfs-quota-helper, --root, /var/lib/golem/agents, --listen, /run/golem-quota/helper.sock, --allow-uid, "65534"]
     startupProbe:
       exec:
         command: [test, -S, /run/golem-quota/helper.sock]
       periodSeconds: 1
       failureThreshold: 30
     securityContext:
-      runAsNonRoot: true
-      runAsUser: 65534
-      runAsGroup: 65534
+      runAsNonRoot: false
+      runAsUser: 0
+      runAsGroup: 0
       allowPrivilegeEscalation: true
       readOnlyRootFilesystem: true
       capabilities:
@@ -271,11 +282,57 @@ volumes:
     emptyDir: {}
 ```
 
-The helper makes its socket readable and writable only by its own user, and accepts connections only from processes of that user, so the executor and the helper must run as the same uid. The socket volume must be shared by these two containers only. The helper also needs the host user namespace and the `prjquota` volume, mounted read-write: setting a limit writes to the volume. The runtime default seccomp profile already allows `quotactl_fd` in a container that adds `SYS_ADMIN`, so a custom profile for the helper container is optional; the helper runs no agent code, and the executor container keeps the default profile without `SYS_ADMIN`. The helper serves at most 8 connections at once and refuses more; the executor holds one. On connect, the executor checks that the helper is of the same Golem release and serves the same filesystem as its root.
+With Docker Compose, run the helper as a second service from the same image:
 
-When the helper cannot get `CAP_SYS_ADMIN`, it refuses to start, and the executor stops at startup with the error `the XFS quota helper refused to start: ManagedXfs filesystem storage needs CAP_SYS_ADMIN for its XFS quota helper, which the process is not permitted`, followed by the settings to add.
+```yaml
+services:
+  golem-xfs-quota-helper:
+    image: golemservices/golem-worker-executor:<version>
+    command: [xfs-quota-helper, --root, /var/lib/golem/agents, --listen, /run/golem-quota/helper.sock, --allow-uid, "65534"]
+    user: "0"
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN]
+    volumes:
+      - /var/lib/golem/agents:/var/lib/golem/agents
+      - quota-socket:/run/golem-quota
+  golem-worker-executor:
+    # ...
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    environment:
+      GOLEM__FILESYSTEM_STORAGE__MODE__TYPE: ManagedXfs
+      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT: /var/lib/golem/agents
+      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__QUOTA_HELPER_SOCKET: /run/golem-quota/helper.sock
+    volumes:
+      - /var/lib/golem/agents:/var/lib/golem/agents
+      - quota-socket:/run/golem-quota
+    depends_on: [golem-xfs-quota-helper]
+volumes:
+  quota-socket:
+```
 
-The helper keeps `CAP_SYS_ADMIN` out of the process that runs the guest Wasm of the agents. That capability does not bypass the permission checks of `open` (that is `CAP_DAC_OVERRIDE`), but it allows the XFS handle ioctls, and `XFS_IOC_OPEN_BY_HANDLE` opens a file on the volume, also for writing, without a permission check. A process with `CAP_SYS_ADMIN` could therefore write the read-only initial files of agents on the volume, and freeze or shut down the volume. An escape from the Wasm sandbox into the executor can only send the three calls of the helper: it can change the limits of a project on the volume, but not reach its files.
+Without containers, run the helper and the executor as two systemd services of the same user. The helper gets the capability as an ambient capability, so it needs no `--allow-uid`:
+
+```ini
+# golem-xfs-quota-helper.service
+[Service]
+User=golem
+ExecStart=/usr/local/bin/worker-executor xfs-quota-helper --root /var/lib/golem/agents --listen /run/golem-quota/helper.sock
+AmbientCapabilities=CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_ADMIN
+NoNewPrivileges=yes
+RuntimeDirectory=golem-quota
+
+# golem-worker-executor.service
+[Service]
+User=golem
+After=golem-xfs-quota-helper.service
+Requires=golem-xfs-quota-helper.service
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+```
+
+Because the helper runs in its own container or service, it can get a confinement of its own, tighter than the executor's. The runtime default seccomp profile already allows `quotactl_fd` once `SYS_ADMIN` is added, but with `SYS_ADMIN` it also allows `mount`, `unshare`, `setns`, `bpf` and other calls that the helper never makes. A profile for the helper alone can allow only what it uses: `quotactl_fd`, `fstatfs`, `openat`, the socket calls (`accept4`, `read`, `write`, `getsockopt` for the peer credentials), and the calls of the Rust runtime for threads and memory. An SELinux or AppArmor policy can likewise confine the helper to its volume and its socket.
 
 #### Both XFS modes
 
