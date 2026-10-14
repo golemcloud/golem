@@ -49,7 +49,9 @@
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
 //! lock-free.
 
-use super::status::{StatusOplogReader, calculate_status_with_reader, fold_committed_status};
+use super::status::{
+    StatusError, StatusOplogReader, calculate_status_with_reader, fold_committed_status,
+};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
     PendingMemoryGrowth, RetirementReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
@@ -900,6 +902,20 @@ fn queue_status_notification<Ctx: WorkerCtx>(
     }
 }
 
+/// The status a commit of the status task rebuilt from the oplog. The commit landed, but an oplog
+/// that does not read cannot give its status: that is returned as the refusal, so the agent stops
+/// with the cause, and every later commit fails the same way. Any other failure is fail-stop.
+pub(super) fn reconstructed_status(
+    status: Result<Option<AgentStatusRecord>, StatusError>,
+) -> Result<AgentStatusRecord, OplogRefusal> {
+    match status {
+        Ok(Some(status)) => Ok(status),
+        Ok(None) => panic!("worker oplog disappeared during status reconstruction"),
+        Err(StatusError::Unreadable(unreadable)) => Err(OplogRefusal::Unreadable(unreadable)),
+        Err(error) => panic!("oplog status reconstruction: {error}"),
+    }
+}
+
 /// Settles a commit of the status task: answers the receipt, and gives the committed entries or
 /// the refusal. A refused commit committed nothing, and the oplog refuses every later write. Any
 /// other write error is fail-stop.
@@ -1002,8 +1018,9 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     }
 
     /// Acts on a refusal of the oplog and returns it. A fence retires the agent. A failed archive
-    /// write is left to the next write of the agent, which the oplog refuses with the same error:
-    /// that write fails the invocation, or the periodic work, and the agent stops with the cause.
+    /// write, or an oplog that does not read, is left to the next write of the agent, which fails
+    /// with the same error: that write fails the invocation, the start or the periodic work, and
+    /// the agent stops with the cause.
     fn refused(&self, refusal: OplogRefusal) -> OplogRefusal {
         if let Some(fence) = refusal.fence() {
             self.retire_fenced_agent(fence.clone());
@@ -1108,10 +1125,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                             debug!(agent_id = %self.owned_agent_id, %error, "Status checkpoint unavailable; rebuilding from oplog");
                             None
                         })
-                }).await
-                    .unwrap_or_else(|error| panic!("oplog status reconstruction: {error}"))
-                    .unwrap_or_else(|| panic!("worker oplog disappeared during status reconstruction"));
-                (status, true)
+                }).await;
+                (reconstructed_status(status)?, true)
             }
         };
         if receipt_gap || reconstructed {

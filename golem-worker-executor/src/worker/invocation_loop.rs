@@ -4078,13 +4078,14 @@ async fn measured_check<Ctx: WorkerCtx>(
 
 /// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
 /// was not made skips the snapshot. A refused write means the shard has a new owner, and a failed
-/// archive write is latched, so the loop stops; any other failed write retries.
+/// archive write and an oplog that does not read repeat on every later write, so the loop stops;
+/// any other failed write retries.
 fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
     match failure {
         PeriodicFailure::Entry(_) => CommandOutcome::Continue,
-        PeriodicFailure::Write(OplogError::Fenced(_) | OplogError::ArchiveWrite { .. }) => {
-            CommandOutcome::BreakInnerLoop(RetryDecision::None)
-        }
+        PeriodicFailure::Write(
+            OplogError::Fenced(_) | OplogError::ArchiveWrite { .. } | OplogError::Unreadable(_),
+        ) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
         PeriodicFailure::Write(OplogError::Payload(_) | OplogError::Maintenance(_)) => {
             CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
         }

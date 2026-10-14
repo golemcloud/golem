@@ -904,7 +904,9 @@ impl OplogFence {
 /// maintenance returns `Maintenance`, allowing the fenced cleanup to be retried without stopping
 /// the executor. `Payload` is an entry whose payload the caller-supplied builder could not produce.
 /// `ArchiveWrite` is a write to an archive layer that failed after its retries: it is latched, so
-/// the agent stops, and only that agent.
+/// the agent stops, and only that agent. `Unreadable` is a commit whose entries were stored, but
+/// whose status could not be rebuilt because the oplog does not read: the agent stops with the
+/// cause, and only that agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
@@ -915,6 +917,7 @@ pub enum OplogError {
         level: usize,
         details: String,
     },
+    Unreadable(UnreadableOplog),
 }
 
 impl From<String> for OplogError {
@@ -941,6 +944,7 @@ impl From<OplogError> for WorkerExecutorError {
                 agent_id,
                 format!("failed to write oplog data to archive layer {level}: {details}"),
             ),
+            OplogError::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
         }
     }
 }
@@ -968,6 +972,7 @@ impl Display for OplogError {
                 f,
                 "failed to write oplog data of {agent_id} to archive layer {level}: {details}"
             ),
+            OplogError::Unreadable(unreadable) => write!(f, "{unreadable}"),
         }
     }
 }
@@ -975,8 +980,9 @@ impl Display for OplogError {
 impl std::error::Error for OplogError {}
 
 /// A write the oplog refuses, together with every later write: the shard has a new owner
-/// (`Fenced`), or an archive layer of an ephemeral oplog did not store its entries after its
-/// retries (`ArchiveWrite`). Both are latched on the oplog, so a path that cannot report the
+/// (`Fenced`), an archive layer of an ephemeral oplog did not store its entries after its retries
+/// (`ArchiveWrite`), or the status of a commit could not be rebuilt because the oplog does not
+/// read (`Unreadable`). Each one repeats on every later write, so a path that cannot report the
 /// refusal leaves it to the next write that can. Every other `OplogError` stays fail-stop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogRefusal {
@@ -986,6 +992,7 @@ pub enum OplogRefusal {
         level: usize,
         details: String,
     },
+    Unreadable(UnreadableOplog),
 }
 
 impl OplogRefusal {
@@ -993,7 +1000,7 @@ impl OplogRefusal {
     pub fn fence(&self) -> Option<&OplogFence> {
         match self {
             Self::Fenced(fence) => Some(fence),
-            Self::ArchiveWrite { .. } => None,
+            Self::ArchiveWrite { .. } | Self::Unreadable(_) => None,
         }
     }
 }
@@ -1012,6 +1019,7 @@ impl OplogError {
                 level,
                 details,
             }),
+            Self::Unreadable(unreadable) => Ok(OplogRefusal::Unreadable(unreadable)),
             error @ (Self::Payload(_) | Self::Maintenance(_)) => Err(error),
         }
     }
@@ -1030,6 +1038,7 @@ impl From<OplogRefusal> for OplogError {
                 level,
                 details,
             },
+            OplogRefusal::Unreadable(unreadable) => Self::Unreadable(unreadable),
         }
     }
 }

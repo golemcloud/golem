@@ -3564,6 +3564,7 @@ async fn non_existing_oplog() {
         entries: vec![],
         read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
         raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        unreadable_from: None,
     };
 
     let result = calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
@@ -3908,6 +3909,41 @@ async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable
     assert!(
         read_starts.contains(&1),
         "expected a full recompute from idx 1, got {read_starts:?}"
+    );
+}
+
+/// The `Jump` of a startup rollback over an incomplete atomic region makes the status task rebuild
+/// the status from the oplog. When a later archive chunk does not read, the rebuild gives the
+/// unreadable oplog, the commit is refused with it, and the agent fails with `OplogFailed`,
+/// instead of a panic that stops the executor.
+#[test]
+async fn a_rollback_rebuild_over_an_unreadable_oplog_refuses_the_commit() {
+    use crate::services::oplog::{OplogError, OplogRefusal};
+    use crate::worker::state_actor::reconstructed_status;
+
+    let mut test_case = rollback_fixture();
+    let last = test_case.entries.len() as u64;
+    test_case.unreadable_from = Some(last);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(last),
+    );
+
+    let rebuilt = calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+    let Err(super::StatusError::Unreadable(unreadable)) = &rebuilt else {
+        panic!("the rebuild must give the unreadable oplog: {rebuilt:?}");
+    };
+    assert_eq!(unreadable.agent_id, test_case.owned_agent_id.agent_id);
+    let unreadable = unreadable.clone();
+
+    let refusal = reconstructed_status(rebuilt).expect_err("the commit must be refused");
+    assert_eq!(refusal, OplogRefusal::Unreadable(unreadable.clone()));
+    assert_eq!(
+        WorkerExecutorError::from(OplogError::from(refusal)),
+        WorkerExecutorError::from(unreadable)
     );
 }
 
@@ -5072,6 +5108,7 @@ impl TestCaseBuilder {
                 .collect(),
             read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
             raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+            unreadable_from: None,
         }
     }
 }
@@ -5101,6 +5138,8 @@ struct TestCase {
     /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
     read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
     raw_payloads: Arc<std::sync::Mutex<RawPayloads>>,
+    /// The first index that does not read, as an archive chunk that does not decode.
+    unreadable_from: Option<u64>,
 }
 
 impl TestCase {
@@ -5241,6 +5280,17 @@ impl OplogService for TestCase {
         let end = idx_u64
             .checked_add(n - 1)
             .unwrap_or_else(|| panic!("Invalid oplog range starting at {idx} with {n} entries"));
+        if let Some(unreadable) = self.unreadable_from
+            && unreadable <= end
+        {
+            return Err(UnreadableOplog {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+                error: crate::services::oplog::OplogReadError::Gap {
+                    start: OplogIndex::from_u64(unreadable.max(idx_u64)),
+                    end: OplogIndex::from_u64(end),
+                },
+            });
+        }
         for i in idx_u64..=end {
             let entry = i
                 .checked_sub(1)
