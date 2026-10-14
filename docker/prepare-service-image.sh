@@ -7,8 +7,9 @@
 # Wasmtime cache. The group keeps its other members. The user owns each directory given as an
 # argument, such as /data, where the default configuration of the services keeps local data.
 #
-# No program in the image gains privileges when it runs: the script clears every setuid and setgid
-# bit, so a process in the container cannot become root through a program of the base image.
+# The script clears every setuid and setgid bit, so that no program in the image runs as another
+# user or group, and a process in the container cannot become root through a program of the base
+# image.
 set -eu
 
 if user=$(getent passwd 65534); then userdel "${user%%:*}"; fi
