@@ -30,6 +30,27 @@ use std::collections::HashMap;
 use test_r::test;
 use url::Url;
 
+#[test]
+fn node_http_router_ports_match_manifest_schema() {
+    for key in [
+        "1", "3000", "65535", "0", "03000", "+3000", "65536", "3000.0", "port",
+    ] {
+        let document = serde_json::json!({
+            "app": "test-app",
+            "components": {"app:main": {"nodeHttpRouters": {
+                key: {"name": "Web", "mount": "/", "auth": true, "cors": ["https://example.test"]}
+            }}}
+        });
+        let valid = matches!(key, "1" | "3000" | "65535");
+        assert_eq!(
+            serde_json::from_value::<Application>(document.clone()).is_ok(),
+            valid,
+            "{key}"
+        );
+        assert_eq!(JSON_SCHEMA_VALIDATOR.is_valid(&document), valid, "{key}");
+    }
+}
+
 fn arb_opt<T: Clone + std::fmt::Debug + 'static>(
     strategy: BoxedStrategy<T>,
 ) -> BoxedStrategy<Option<T>> {
@@ -474,6 +495,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
                 build_merge_mode,
                 build,
                 custom_commands,
@@ -547,6 +569,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
                 build_merge_mode,
                 build,
                 custom_commands,
@@ -623,6 +646,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
                 build_merge_mode,
                 build,
                 custom_commands,

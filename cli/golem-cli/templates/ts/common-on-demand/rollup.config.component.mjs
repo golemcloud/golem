@@ -215,7 +215,9 @@ function componentRollupConfig() {
                 validateSdkImports(parsedTsConfig);
             },
         },
-        componentPlugin(parsedTsConfig, path.join(componentDir, "src/main.ts")),
+        componentPlugin(parsedTsConfig, path.join(componentDir, "src/main.ts"), {
+            nodeHttpRouters: JSON.parse(process.env.GOLEM_NODE_HTTP_ROUTERS ?? "{}"),
+        }),
         nodeResolve({ extensions: [".mjs", ".js", ".node", ".ts"] }),
         commonjs(),
         json(),
