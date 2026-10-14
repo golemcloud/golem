@@ -7238,19 +7238,15 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
     const CAPACITY: u32 = 64;
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            configure: Some(Arc::new(|config| {
-                config.limits.max_tool_attachment_bytes = CAPACITY as usize;
-                config.retry.max_attempts = 0;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.limits.max_tool_attachment_bytes = CAPACITY as usize;
+            config.retry.max_attempts = 0;
+        })),
+        ..Default::default()
+    };
+    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
@@ -7529,6 +7525,65 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         .flat_map(|(byte, length)| std::iter::repeat_n(byte, length))
         .collect();
     assert_eq!(output, expected);
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    if direct {
+        use golem_common::model::durable_stream::StreamConsumerObservation;
+        use golem_common::model::oplog::attachment::{
+            ToolAttachmentReadObservation, ToolAttachmentSlot,
+        };
+        let stdin_reads = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::ToolAttachmentRead(read) => {
+                    let observation =
+                        ToolAttachmentReadObservation::from_value(read.observation.value())
+                            .expect("decode stdin observation");
+                    (observation.attachment.slot == ToolAttachmentSlot::Stdin)
+                        .then_some((observation, read.payload.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stdin_reads.len(), 4, "three tool stdin chunks and EOF");
+        for (ordinal, (read, payload)) in stdin_reads.iter().enumerate() {
+            assert_eq!(read.ordinal, ordinal as u64);
+            assert!(matches!(
+                read.observation,
+                StreamConsumerObservation::Guest {
+                    parent_start_index: Some(_)
+                }
+            ));
+            assert_eq!(
+                payload.as_deref(),
+                match ordinal {
+                    0 => Some(&expected[..11]),
+                    1 => Some(&expected[11..30]),
+                    2 => Some(&expected[30..]),
+                    _ => None,
+                }
+            );
+        }
+        drop(executor);
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        assert_eq!(executor.instance_load_count(&worker), 0);
+        let _: String = executor
+            .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(executor.instance_load_count(&worker) > 0);
+        let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            replayed
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_)))
+                .count(),
+            entries
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::ToolAttachmentRead(_)))
+                .count(),
+            "completed replay must reuse stdin and stdout observations"
+        );
+    }
     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert_eq!(
         entries

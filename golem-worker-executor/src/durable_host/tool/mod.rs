@@ -2395,7 +2395,21 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     };
     prepare_guest_call(&mut store, &display_name).await;
     let stdin = stdin
-        .map(|stdin| StreamReader::new(store.as_context_mut(), stdin.into_stream_producer()))
+        .map(|stdin| -> anyhow::Result<_> {
+            if stdin.controller().observer().identity().is_some() {
+                let input = input::AttachmentInputProducer::new(
+                    stdin.consumer,
+                    |ctx: &mut Ctx| ctx.durable_ctx_mut(),
+                    store.data().durable_ctx(),
+                )?;
+                Ok(StreamReader::new(store.as_context_mut(), input)?)
+            } else {
+                Ok(StreamReader::new(
+                    store.as_context_mut(),
+                    stdin.into_stream_producer(),
+                )?)
+            }
+        })
         .transpose()
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
     store
