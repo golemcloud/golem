@@ -57,6 +57,7 @@ type CollectedNames = (
 pub struct ScalaToolBridgeGenerator {
     tool: Tool,
     tool_name: String,
+    rpc_tool_name: String,
     target_path: Utf8PathBuf,
     testing: bool,
     inner: ScalaBridgeGenerator,
@@ -73,8 +74,24 @@ impl ScalaToolBridgeGenerator {
             .first()
             .map(|node| node.name.clone())
             .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
+        Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
+    }
+
+    pub fn new_with_rpc_tool_name(
+        tool: Tool,
+        rpc_tool_name: String,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self> {
+        let tool_name = tool
+            .commands
+            .nodes
+            .first()
+            .map(|node| node.name.clone())
+            .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
         let (clients, error_names, reserved) = collect_names(&tool, &tool_name)?;
-        let synthetic = synthetic_agent_type(&tool, &tool_name)?;
+        let mut synthetic = synthetic_agent_type(&tool, &tool_name)?;
+        synthetic.type_name = golem_common::model::agent::AgentTypeName(rpc_tool_name.clone());
         let inner = ScalaBridgeGenerator::new_guest_with_extra_reserved_names(
             synthetic,
             target_path,
@@ -84,6 +101,7 @@ impl ScalaToolBridgeGenerator {
         Ok(Self {
             tool,
             tool_name,
+            rpc_tool_name,
             target_path: target_path.to_path_buf(),
             testing,
             inner,
@@ -106,7 +124,7 @@ impl ScalaToolBridgeGenerator {
     fn write_tool_project_name(&self) -> anyhow::Result<()> {
         let build_sbt_path = self.target_path.join("build.sbt");
         let build_sbt = fs::read_to_string(&build_sbt_path)?;
-        let tool_project_name = tool_bridge_client_directory_name(&self.tool_name);
+        let tool_project_name = tool_bridge_client_directory_name(&self.rpc_tool_name);
         let rewritten = build_sbt
             .lines()
             .map(|line| {
@@ -194,7 +212,7 @@ impl ScalaToolBridgeGenerator {
                     "def apply(): {} = new {}(_root_.golem.runtime.tool.client.ToolRpcClient.transport({}), {LIST}())",
                     client.struct_name,
                     client.struct_name,
-                    scala_string_literal(&self.tool_name)
+                    scala_string_literal(&self.rpc_tool_name)
                 ));
                 writer.line(format!("def newClient(): {} = apply()", client.struct_name));
                 writer.dedent();
@@ -684,7 +702,7 @@ impl ScalaToolBridgeGenerator {
 
     fn client_package_segment(&self) -> String {
         let mut seg: String = self
-            .tool_name
+            .rpc_tool_name
             .as_str()
             .to_snake_case()
             .chars()
@@ -1091,6 +1109,86 @@ mod tests {
         let mut generator = ScalaToolBridgeGenerator::new(tool, &target_path, true).unwrap();
         generator.generate().unwrap();
         target_path
+    }
+
+    #[test]
+    fn tool_generation_separates_presented_root_from_rpc_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator = ScalaToolBridgeGenerator::new_with_rpc_tool_name(
+            grep_tool(),
+            "runtime-search".to_string(),
+            target,
+            true,
+        )
+        .unwrap();
+        generator.generate().unwrap();
+        let source = std::fs::read_to_string(
+            target.join("src/main/scala/golem/bridge/client/runtime_search/GrepClient.scala"),
+        )
+        .unwrap();
+        for expected in [
+            "final class GrepClient",
+            "def grep(",
+            "def replace(",
+            "sealed trait GrepError",
+            "package golem.bridge.client.runtime_search",
+            "ToolRpcClient.transport(\"runtime-search\")",
+            "(rpc, _root_.scala.collection.immutable.List(),",
+            "(rpc, _root_.scala.collection.immutable.List(\"replace\"),",
+            "_root_.golem.bridge.client.runtime_search.ColorMode",
+            "_root_.golem.bridge.client.runtime_search.Codecs",
+        ] {
+            assert!(source.contains(expected), "missing {expected}:\n{source}");
+        }
+        assert!(
+            !source.contains("_root_.golem.bridge.client.grep."),
+            "{source}"
+        );
+        let build = std::fs::read_to_string(target.join("build.sbt")).unwrap();
+        assert!(
+            build.contains("\"runtime-search-tool-guest-client\""),
+            "{build}"
+        );
+    }
+
+    #[test]
+    fn presented_scala_client_schema_references_resolve_to_generated_package() {
+        let refs = regex::Regex::new(r"_root_\.(golem\.bridge\.client\.[A-Za-z0-9_]+)\.").unwrap();
+        for rpc_name in ["grep", "runtime-search"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let target = Utf8Path::from_path(dir.path()).unwrap();
+            ScalaToolBridgeGenerator::new_with_rpc_tool_name(
+                grep_tool(),
+                rpc_name.to_string(),
+                target,
+                true,
+            )
+            .unwrap()
+            .generate()
+            .unwrap();
+            let segment = rpc_name.replace('-', "_");
+            let source = std::fs::read_to_string(target.join(format!(
+                "src/main/scala/golem/bridge/client/{segment}/GrepClient.scala"
+            )))
+            .unwrap();
+            // This project emits all schema types and codecs in its sole client package.
+            // Every fully qualified client reference must resolve within that package.
+            let declared = source
+                .lines()
+                .find_map(|line| line.strip_prefix("package "))
+                .unwrap();
+            let referenced = refs
+                .captures_iter(&source)
+                .map(|c| c[1].to_string())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(!referenced.is_empty());
+            assert_eq!(
+                referenced,
+                std::collections::BTreeSet::from([declared.to_string()]),
+                "rpc_name={rpc_name}: generated schema/codec references have no corresponding package:\n{source}"
+            );
+        }
     }
 
     #[test]

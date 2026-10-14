@@ -51,6 +51,7 @@ type CollectedNames = (
 pub struct MoonBitToolBridgeGenerator {
     tool: Tool,
     tool_name: String,
+    rpc_tool_name: String,
     target_path: Utf8PathBuf,
     inner: MoonBitBridgeGenerator,
     clients: BTreeMap<usize, ClientNode>,
@@ -59,6 +60,21 @@ pub struct MoonBitToolBridgeGenerator {
 
 impl MoonBitToolBridgeGenerator {
     pub fn new(tool: Tool, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
+        let tool_name = tool
+            .commands
+            .nodes
+            .first()
+            .map(|node| node.name.clone())
+            .ok_or_else(|| anyhow!("tool command tree must contain a root command"))?;
+        Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
+    }
+
+    pub fn new_with_rpc_tool_name(
+        tool: Tool,
+        rpc_tool_name: String,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self> {
         let tool_name = tool
             .commands
             .nodes
@@ -77,6 +93,7 @@ impl MoonBitToolBridgeGenerator {
         Ok(Self {
             tool,
             tool_name,
+            rpc_tool_name,
             target_path: target_path.to_path_buf(),
             inner,
             clients,
@@ -99,7 +116,7 @@ impl MoonBitToolBridgeGenerator {
         let mut manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
             .context("failed to parse generated MoonBit module manifest")?;
         manifest["name"] =
-            serde_json::Value::String(tool_bridge_client_directory_name(&self.tool_name));
+            serde_json::Value::String(tool_bridge_client_directory_name(&self.rpc_tool_name));
         fs::write_str(
             path,
             serde_json::to_string_pretty(&manifest)
@@ -179,7 +196,7 @@ impl MoonBitToolBridgeGenerator {
                 writer.indent();
                 writer.line(format!(
                     "{{ client: @tool.ToolClient::new({}), inherited: [], }}",
-                    moonbit_string_literal(&self.tool_name)
+                    moonbit_string_literal(&self.rpc_tool_name)
                 ));
                 writer.dedent();
                 writer.line("}");
@@ -294,7 +311,7 @@ impl MoonBitToolBridgeGenerator {
         }
         writer.line(format!(
             "{{ client: @tool.ToolClient::new({}), inherited, }}",
-            moonbit_string_literal(&self.tool_name)
+            moonbit_string_literal(&self.rpc_tool_name)
         ));
         writer.dedent();
         writer.line("}");
@@ -1188,6 +1205,49 @@ mod tests {
             },
             schema: SchemaGraph::empty(),
         }
+    }
+
+    #[test]
+    fn tool_generation_separates_presented_root_from_rpc_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator = MoonBitToolBridgeGenerator::new_with_rpc_tool_name(
+            test_tool(),
+            "runtime-search".to_string(),
+            target,
+            true,
+        )
+        .unwrap();
+        generator.generate().unwrap();
+        let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+        for expected in [
+            "pub(all) struct SearchClient",
+            "pub(all) struct SearchAdminClient",
+            "pub(all) enum SearchError",
+            "pub fn SearchClient::search(",
+            "pub fn SearchClient::admin(",
+            "pub fn SearchAdminClient::reset(",
+            "self.client.start([],",
+            "self.client.start([\"admin\", \"reset\"],",
+            "self.client.start([\"required-pair\"],",
+            "self.client.invoke_and_await_no_tool_error([\"value-only\"],",
+            "self.client.start([\"optional-stdout\"],",
+            "self.client.invoke_and_await_no_tool_error([\"empty\"],",
+        ] {
+            assert!(source.contains(expected), "missing {expected}:\n{source}");
+        }
+        assert_eq!(
+            source
+                .matches("@tool.ToolClient::new(\"runtime-search\")")
+                .count(),
+            2,
+            "{source}"
+        );
+        assert!(!source.contains("@tool.ToolClient::new(\"search\")"));
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(target.join("moon.mod.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["name"], "runtime-search-tool-guest-client");
     }
 
     #[test]

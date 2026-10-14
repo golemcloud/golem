@@ -38,7 +38,7 @@ use crate::model::tool_deployment::{
 };
 use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::tool_middleware::ToolMiddlewareInstallation;
@@ -887,34 +887,6 @@ async fn collect_dependency_guest_bridge_targets(
             );
         }
     }
-    let mut agent_components = extracted
-        .iter()
-        .flat_map(|(component_name, metadata)| {
-            metadata
-                .agent_types
-                .iter()
-                .map(move |agent| (agent.type_name.clone(), component_name.clone()))
-        })
-        .collect::<BTreeMap<AgentTypeName, ComponentName>>();
-    let dependency_consumers = selection_scope_component_names
-        .iter()
-        .filter(|component_name| {
-            ctx.application()
-                .component(component_name)
-                .properties()
-                .dependencies
-                .iter()
-                .any(|dependency| matches!(dependency, ComponentDependency::Tool { .. }))
-        })
-        .collect::<Vec<_>>();
-    if let [consumer] = dependency_consumers.as_slice() {
-        for agent_name in ctx.application().agent_ids() {
-            agent_components
-                .entry(agent_name.clone())
-                .or_insert_with(|| (*consumer).clone());
-        }
-    }
-    let resolved_agents = ctx.application().resolve_agents(&agent_components)?;
     let mut middleware_definitions = extracted
         .values()
         .flat_map(|metadata| metadata.tool_middlewares.iter().cloned())
@@ -1074,74 +1046,150 @@ async fn collect_dependency_guest_bridge_targets(
         }
     }
 
-    for target in &mut targets {
+    let mut ready_targets = Vec::new();
+    for mut target in targets {
         let BridgeSdkTargetSubject::Tool {
             definition,
             rpc_name,
         } = &mut target.subject
         else {
+            ready_targets.push(target);
             continue;
         };
-        if target.target_language != GuestLanguage::Rust {
+        let environment = environment_bindings.get(rpc_name.as_str());
+        if local_tool_middleware_components(ctx, environment)?
+            .iter()
+            .any(|component| !extracted.contains_key(component))
+        {
             continue;
         }
-        let consumers = selection_scope_component_names.iter().filter(|name| {
-            ctx.application().component(name).guest_language() == Some(target.target_language)
-                && ctx.application().component(name).properties().dependencies.iter().any(|dependency| {
-                    matches!(dependency, ComponentDependency::Tool { tool_name, .. } if tool_name.as_str() == rpc_name)
-                })
-        }).cloned().collect::<Vec<_>>();
-        *definition = effective_dependency_tool_definition(
+        *definition = apply_presented_tool_definitions(
             definition,
-            rpc_name,
-            &consumers,
-            &agent_components,
-            &resolved_agents,
-            environment_bindings.get(rpc_name.as_str()),
+            environment,
+            None,
             &middleware_definitions,
         )?;
+        ready_targets.push(target);
     }
 
-    Ok(targets)
+    Ok(ready_targets)
 }
 
-fn effective_dependency_tool_definition(
-    tool: &Tool,
-    tool_name: &str,
-    consumer_components: &[ComponentName],
-    agent_components: &BTreeMap<AgentTypeName, ComponentName>,
-    resolved_agents: &crate::model::app::Agents,
-    environment: Option<&ToolBindingState>,
-    middleware_definitions: &[ToolMiddleware],
-) -> anyhow::Result<Tool> {
-    let mut effective = None;
-    for (agent_name, component_name) in agent_components {
-        if !consumer_components.contains(component_name) {
-            continue;
-        }
-        let Some(agent) = resolved_agents.agent(agent_name) else {
+pub(crate) fn local_tool_middleware_components(
+    ctx: &BuildContext<'_>,
+    binding: Option<&ToolBindingState>,
+) -> anyhow::Result<BTreeSet<ComponentName>> {
+    let installations = binding
+        .map(ToolBindingState::middleware_installations)
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .flatten()
+        .unwrap_or_default();
+    Ok(installations
+        .iter()
+        .filter_map(|installation| {
+            ctx.application()
+                .tool_middleware_declarations()
+                .get(&installation.name)
+                .and_then(|declaration| declaration.value.component.clone())
+        })
+        .collect())
+}
+
+pub(crate) fn validate_dependency_tool_bridge_presentations(
+    ctx: &BuildContext<'_>,
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+    targets: &[BridgeSdkTarget],
+) -> anyhow::Result<()> {
+    let agent_components = extracted
+        .iter()
+        .flat_map(|(component, metadata)| {
+            metadata
+                .agent_types
+                .iter()
+                .map(move |agent| (agent.type_name.clone(), component.clone()))
+        })
+        .collect();
+    let agents = ctx.application().resolve_agents(&agent_components)?;
+    let environment_bindings = ctx.application().environment_tool_bindings();
+    let mut middleware_definitions = extracted
+        .values()
+        .flat_map(|metadata| metadata.tool_middlewares.iter().cloned())
+        .collect::<Vec<_>>();
+    middleware_definitions.extend(ctx.remote_middleware_definitions()?);
+
+    for target in targets {
+        let BridgeSdkTargetSubject::Tool {
+            definition,
+            rpc_name,
+        } = &target.subject
+        else {
             continue;
         };
-        let candidate = apply_presented_tool_definitions(
-            tool,
-            environment,
-            agent.tool_bindings().get(tool_name),
-            middleware_definitions,
-        )?;
-        if effective
-            .as_ref()
-            .is_some_and(|current| current != &candidate)
-        {
-            bail!(
-                "Tool '{tool_name}' has different middleware-presented definitions across generated-client consumers"
-            );
+        let tool_name = ToolName::try_from(rpc_name.as_str()).map_err(anyhow::Error::msg)?;
+        let (source, tool) = match &target.source {
+            BridgeSdkTargetSource::Local { component_name } => (
+                crate::model::app::SubjectSource::Local {
+                    component_name: component_name.clone(),
+                },
+                extracted
+                    .get(component_name)
+                    .and_then(|metadata| {
+                        metadata
+                            .tools
+                            .iter()
+                            .find(|tool| tool.name() == Some(rpc_name.as_str()))
+                    })
+                    .with_context(|| {
+                        format!(
+                            "Tool '{rpc_name}' was not discovered in component '{component_name}'"
+                        )
+                    })?
+                    .clone(),
+            ),
+            BridgeSdkTargetSource::RemoteRelease { .. } => (
+                crate::model::app::SubjectSource::RemoteRelease,
+                ctx.release_grant_by_name(&tool_name)
+                    .with_context(|| format!("Tool '{rpc_name}' has no environment release grant"))?
+                    .release
+                    .definition
+                    .clone(),
+            ),
+            BridgeSdkTargetSource::AmbientNative { .. }
+            | BridgeSdkTargetSource::McpImport { .. } => (
+                crate::model::app::SubjectSource::EnvironmentTool,
+                match ctx.environment_tool(&tool_name)? {
+                    ResolvedEnvironmentTool::Ambient(tool) => tool.definition.clone(),
+                    ResolvedEnvironmentTool::Mcp(tool) => tool.definition.clone(),
+                },
+            ),
+        };
+        let dependency = ComponentDependency::Tool { source, tool_name };
+        for (agent_name, component_name) in &agent_components {
+            let component = ctx.application().component(component_name);
+            if component.guest_language() != Some(target.target_language)
+                || !component.properties().dependencies.contains(&dependency)
+            {
+                continue;
+            }
+            let agent = agents
+                .agent(agent_name)
+                .expect("extracted agent has resolved bindings");
+            let effective = apply_presented_tool_definitions(
+                &tool,
+                environment_bindings.get(rpc_name.as_str()),
+                agent.tool_bindings().get(rpc_name.as_str()),
+                &middleware_definitions,
+            )?;
+            if &effective != definition {
+                bail!(
+                    "Agent '{agent_name}' in component '{component_name}' has a middleware-presented definition for tool '{rpc_name}' that differs from the environment-generated {} bridge. Dependency tool bridges use environment-level presentation; agent and component overrides must preserve that definition.",
+                    target.target_language
+                );
+            }
         }
-        effective = Some(candidate);
     }
-    match effective {
-        Some(effective) => Ok(effective),
-        None => apply_presented_tool_definitions(tool, environment, None, middleware_definitions),
-    }
+    Ok(())
 }
 
 fn apply_presented_tool_definitions(
@@ -1608,23 +1656,23 @@ async fn gen_bridge_sdk_target(
                         }
                         (GuestLanguage::Scala, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
-                            ScalaToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                            ScalaToolBridgeGenerator::new_with_rpc_tool_name(tool, rpc_name, &output_dir, false)?.generate()
                         }
                         (GuestLanguage::TypeScript, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
-                            TypeScriptToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                            TypeScriptToolBridgeGenerator::new_with_rpc_tool_name(tool, rpc_name, &output_dir, false)?.generate()
                         }
                         (GuestLanguage::Effect, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
-                            EffectToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                            EffectToolBridgeGenerator::new_with_rpc_tool_name(tool, rpc_name, &output_dir, false)?.generate()
                         }
                         (GuestLanguage::MoonBit, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
-                            MoonBitToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                            MoonBitToolBridgeGenerator::new_with_rpc_tool_name(tool, rpc_name, &output_dir, false)?.generate()
                         }
                         (GuestLanguage::Go, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
-                            GoToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                            GoToolBridgeGenerator::new_with_rpc_tool_name(tool, rpc_name, &output_dir, false)?.generate()
                         }
                         _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala, MoonBit and Go guest bridges"),
                     },
@@ -2949,7 +2997,10 @@ components:
 
     #[test]
     async fn generated_clients_present_remote_and_environment_tools_using_installed_middleware() {
-        for remote in [false, true] {
+        for (language, remote) in ["rust", "ts", "effect", "scala", "moonbit", "go"]
+            .into_iter()
+            .flat_map(|language| [false, true].map(|remote| (language, remote)))
+        {
             let declaration = if remote {
                 "  search:\n    release:\n      releaseId: 00000000-0000-0000-0000-000000000001\n"
             } else {
@@ -2966,12 +3017,12 @@ environments:
         middleware:
           - name: adapter
 componentTemplates:
-  rust-consumer:
-    guestLanguage: rust
+  consumer:
+    guestLanguage: {language}
     componentWasm: consumer.wasm
 components:
   app:consumer:
-    templates: rust-consumer
+    templates: consumer
     dependencies:
       tools: [search]
 tools:
@@ -3078,93 +3129,187 @@ tools:
                     BridgeSdkTargetSubject::Tool { definition, rpc_name }
                     if definition == &tool("presented") && rpc_name == "search"
                 ),
-                "remote={remote}: {:?}",
+                "language={language}, remote={remote}: {:?}",
                 plan.targets[0]
             );
         }
     }
 
     #[test]
-    fn generated_client_applies_environment_only_presented_definition() {
-        let (application, _dir) = application_from_manifest(
-            r#"
-app: environment-presentation
+    async fn dependency_tool_bridges_wait_for_local_middleware_for_every_sdk() {
+        for language in ["rust", "ts", "effect", "scala", "moonbit", "go"] {
+            let (application, _dir) = application_from_manifest(&format!(
+                r#"
+app: local-middleware
 environments:
   local:
     server: local
+    tools:
+      search:
+        middleware: [adapter]
+componentTemplates:
+  consumer:
+    guestLanguage: {language}
+    componentWasm: consumer.wasm
 components:
   app:consumer:
-    componentWasm: consumer.wasm
-"#,
-        );
-        let component = ComponentName("app:consumer".into());
-        let agents = BTreeMap::from([(AgentTypeName("Consumer".into()), component.clone())]);
-        let resolved = application.resolve_agents(&agents).unwrap();
-        let environment = ToolBindingState::from_binding(
-            serde_json::from_value(serde_json::json!({"middleware": [{"name": "adapter"}]}))
-                .unwrap(),
-        );
-
-        let effective = effective_dependency_tool_definition(
-            &tool("search"),
-            "search",
-            &[component],
-            &agents,
-            &resolved,
-            Some(&environment),
-            &[presenting_adapter()],
-        )
-        .unwrap();
-
-        assert_eq!(effective, tool("presented"));
+    templates: consumer
+    dependencies:
+      tools: [search]
+  app:middleware:
+    componentWasm: middleware.wasm
+tools:
+  middleware:
+    adapter:
+      component: app:middleware
+"#
+            ));
+            let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+            let build_config = crate::model::app::BuildConfig::default();
+            let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+                environment_id: golem_common::model::environment::EnvironmentId::new(),
+                ambient_tools: vec![ambient_tool("search")],
+                mcp_tools: vec![],
+                mcp_diagnostics: vec![],
+            };
+            let ctx = BuildContext::new(&app_ctx, &build_config)
+                .with_environment_tools(&environment_tools);
+            let plan = plan_dependency_guest_bridge_generation_for_components_lenient(
+                &ctx,
+                &[],
+                &[ComponentName("app:consumer".into())],
+            )
+            .await
+            .unwrap();
+            assert!(
+                plan.targets.is_empty(),
+                "{language}: generated before local middleware discovery"
+            );
+        }
     }
 
     #[test]
-    fn generated_client_rejects_mixed_inherited_and_explicit_presentations() {
-        let (application, _dir) = application_from_manifest(
-            r#"
-app: mixed-presentation
+    fn dependency_tool_bridges_validate_agent_and_component_overrides_for_every_sdk() {
+        for language in ["rust", "ts", "effect", "scala", "moonbit", "go"] {
+            for (binding, allowed) in [
+                ("{}", true),
+                (
+                    "{ middleware: [adapter], middlewareMergeMode: replace }",
+                    true,
+                ),
+                (
+                    "{ middleware: [transparent], middlewareMergeMode: prepend }",
+                    true,
+                ),
+                (
+                    "{ middleware: [transparent], middlewareMergeMode: append }",
+                    true,
+                ),
+                ("{ middleware: [], middlewareMergeMode: replace }", false),
+            ] {
+                for component_override in [false, true] {
+                    let component_binding = if component_override { binding } else { "{}" };
+                    let agent_binding = if component_override { "{}" } else { binding };
+                    let (application, _dir) = application_from_manifest(&format!(
+                        r#"
+app: consumer-bindings
 environments:
   local:
     server: local
-components:
-  app:consumer:
-    componentWasm: consumer.wasm
-agents:
-  Explicit:
     tools:
       search:
-        middleware: []
-        middlewareMergeMode: replace
-"#,
-        );
-        let component = ComponentName("app:consumer".into());
-        let agents = BTreeMap::from([
-            (AgentTypeName("Explicit".into()), component.clone()),
-            (AgentTypeName("Inherited".into()), component.clone()),
-        ]);
-        let resolved = application.resolve_agents(&agents).unwrap();
-        let environment = ToolBindingState::from_binding(
-            serde_json::from_value(serde_json::json!({"middleware": [{"name": "adapter"}]}))
-                .unwrap(),
-        );
-
-        let error = effective_dependency_tool_definition(
-            &tool("search"),
-            "search",
-            &[component],
-            &agents,
-            &resolved,
-            Some(&environment),
-            &[presenting_adapter()],
-        )
-        .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("different middleware-presented definitions")
-        );
+        middleware: [adapter]
+componentTemplates:
+  consumer:
+    guestLanguage: {language}
+components:
+  app:first:
+    templates: consumer
+    componentWasm: first.wasm
+    tools:
+      search: {component_binding}
+    dependencies:
+      tools: [search]
+  app:second:
+    templates: consumer
+    componentWasm: second.wasm
+    dependencies:
+      tools: [search]
+  app:middleware:
+    componentWasm: middleware.wasm
+tools:
+  middleware:
+    adapter:
+      component: app:middleware
+    transparent:
+      component: app:middleware
+agents:
+  First:
+    tools:
+      search: {agent_binding}
+"#
+                    ));
+                    let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+                    let build_config = crate::model::app::BuildConfig::default();
+                    let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+                        environment_id: golem_common::model::environment::EnvironmentId::new(),
+                        ambient_tools: vec![ambient_tool("search")],
+                        mcp_tools: vec![],
+                        mcp_diagnostics: vec![],
+                    };
+                    let ctx = BuildContext::new(&app_ctx, &build_config)
+                        .with_environment_tools(&environment_tools);
+                    let mut target = environment_tool_bridge_target(
+                        &ctx,
+                        &ToolName::try_from("search").unwrap(),
+                        ctx.application()
+                            .component(&ComponentName("app:first".into()))
+                            .guest_language()
+                            .unwrap(),
+                        BridgeMode::Guest,
+                        "generated".into(),
+                    )
+                    .unwrap();
+                    target.subject = BridgeSdkTargetSubject::Tool {
+                        definition: tool("presented"),
+                        rpc_name: "search".into(),
+                    };
+                    let mut transparent = presenting_adapter();
+                    transparent.name = "transparent".into();
+                    transparent.scope = ToolMiddlewareScope::Universal;
+                    let metadata = |agent| ExtractedComponentMetadata {
+                        agent_types: vec![agent_type(agent)],
+                        tools: vec![],
+                        tool_middlewares: vec![],
+                    };
+                    let extracted = BTreeMap::from([
+                        (ComponentName("app:first".into()), metadata("First")),
+                        (ComponentName("app:second".into()), metadata("Second")),
+                        (
+                            ComponentName("app:middleware".into()),
+                            ExtractedComponentMetadata {
+                                agent_types: vec![],
+                                tools: vec![],
+                                tool_middlewares: vec![presenting_adapter(), transparent],
+                            },
+                        ),
+                    ]);
+                    let result =
+                        validate_dependency_tool_bridge_presentations(&ctx, &extracted, &[target]);
+                    assert_eq!(
+                        result.is_ok(),
+                        allowed,
+                        "language={language}, component_override={component_override}, binding={binding}: {result:?}"
+                    );
+                    if let Err(error) = result {
+                        let diagnostic = error.to_string();
+                        for expected in ["First", "app:first", "search", "environment-generated"] {
+                            assert!(diagnostic.contains(expected), "{diagnostic}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
