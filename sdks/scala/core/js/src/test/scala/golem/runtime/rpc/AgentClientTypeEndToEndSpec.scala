@@ -55,14 +55,16 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
         val rpc = new RpcInvoker {
           override def invokeAndAwait(
             functionName: String,
-            input: JsSchemaValueTree
+            input: JsSchemaValueTree,
+            scopeCard: Option[golem.host.PermissionsApi.ScopeCard]
           ): Either[String, Option[JsSchemaValueTree]] =
             if (functionName != "echo") Left(s"unexpected method: $functionName")
             else Right(SchemaRpcCodec.encodeSingleResult("hello world"))
 
           override def asyncInvokeAndAwait(
             functionName: String,
-            input: JsSchemaValueTree
+            input: JsSchemaValueTree,
+            scopeCard: Option[golem.host.PermissionsApi.ScopeCard]
           ): scala.concurrent.Future[Option[JsSchemaValueTree]] =
             if (functionName != "echo")
               scala.concurrent.Future.failed(js.JavaScriptException(s"unexpected method: $functionName"))
@@ -70,9 +72,10 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
 
           override def cancelableAsyncInvokeAndAwait(
             functionName: String,
-            input: JsSchemaValueTree
+            input: JsSchemaValueTree,
+            scopeCard: Option[golem.host.PermissionsApi.ScopeCard]
           ): (scala.concurrent.Future[Option[JsSchemaValueTree]], CancellationToken) =
-            (asyncInvokeAndAwait(functionName, input), CancellationToken.fromFunction(() => ()))
+            (asyncInvokeAndAwait(functionName, input, scopeCard), CancellationToken.fromFunction(() => ()))
 
           override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
             Left("not used")

@@ -17,6 +17,7 @@
 package golem.runtime.rpc
 
 import golem.config.ConfigOverride
+import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
 import golem.host.SchemaWireInterop
 import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
@@ -62,9 +63,56 @@ object AgentClientRuntime {
       try Right(SchemaWireInterop.valueTreeToJs(codec.encodeValue(value)))
       catch { case NonFatal(error) => Left(String.valueOf(error.getMessage)) }
 
-  private def encodeWireAsync[A](codec: ConcreteCodec[A], value: A): Future[JsSchemaValueTree] =
-    try SchemaWireInterop.ownedValueTreeToJsAsync(codec.encodeValue(value))
-    catch { case NonFatal(error) => Future.failed(error) }
+  private val ScopeCardMoved =
+    "the scope card has been released or moved; derive a new scope card in this invocation"
+
+  /**
+   * The lowered input of an awaited call. Lowering takes the owned handles of
+   * argument cards, tokens and secrets; [[call]] gives them back when the scope
+   * card is gone, so a failure before the host call never loses an argument.
+   */
+  private final class AwaitedInput(
+    wit: WitSchemaValueTree,
+    lowered: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard]
+  ) {
+
+    /** Checks the scope card again in the same turn as the host call. */
+    def call[A](host: JsSchemaValueTree => A): A = {
+      if (scopeCard.exists(!_.isPresent)) {
+        SchemaWireInterop.returnCapabilityHandles(wit, lowered)
+        throw new IllegalStateException(ScopeCardMoved)
+      }
+      host(lowered)
+    }
+  }
+
+  /**
+   * Checks the scope card before encoding, so a moved card never consumes an
+   * argument.
+   */
+  private def awaitedInput(scopeCard: Option[ScopeCard])(
+    encode: => Future[(WitSchemaValueTree, JsSchemaValueTree)]
+  ): Future[AwaitedInput] =
+    if (scopeCard.exists(!_.isPresent)) Future.failed(new IllegalStateException(ScopeCardMoved))
+    else {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      (try encode
+      catch { case NonFatal(error) => Future.failed(error) }).map { case (wit, lowered) =>
+        new AwaitedInput(wit, lowered, scopeCard)
+      }
+    }
+
+  private def encodeWireAsync[A](
+    codec: ConcreteCodec[A],
+    value: A,
+    scopeCard: Option[ScopeCard]
+  ): Future[AwaitedInput] =
+    awaitedInput(scopeCard) {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      val wit         = codec.encodeValue(value)
+      SchemaWireInterop.ownedValueTreeToJsAsync(wit).map(lowered => (wit, lowered))
+    }
 
   private def decodeWire[A](codec: Option[ConcreteCodec[A]], value: Option[JsSchemaValueTree]): A =
     codec match {
@@ -132,9 +180,10 @@ object AgentClientRuntime {
 
   private def encodeInputAsync[In](
     inputCodec: golem.runtime.InputRecordCodec[In],
-    input: In
-  ): Future[JsSchemaValueTree] =
-    SchemaRpcCodec.encodeArgsAsync(input)(inputCodec)
+    input: In,
+    scopeCard: Option[ScopeCard]
+  ): Future[AwaitedInput] =
+    awaitedInput(scopeCard)(golem.runtime.autowire.SchemaPayload.encodeWithWireAsync(input)(inputCodec))
 
   private def decodeOutputAsync[Out](outputCodec: OutputCodec[Out], result: Option[JsSchemaValueTree]): Future[Out] =
     outputCodec.metadata match {
@@ -160,8 +209,26 @@ object AgentClientRuntime {
       case None         => RemoteAgentClient.resolve(agentTypeName, payload, phantom, configOverrides)
     }
 
-  final case class ResolvedAgent[Trait](agentType: AgentType[Trait, Any], client: RemoteAgentClient) {
+  /**
+   * `scopeCard` is attached to the awaited invocations (`await`,
+   * `cancelableAwait` and their metadata variants) and borrowed for each call.
+   * Fire-and-forget and scheduled invocations never carry a scope card.
+   */
+  final case class ResolvedAgent[Trait](
+    agentType: AgentType[Trait, Any],
+    client: RemoteAgentClient,
+    scopeCard: Option[ScopeCard] = None
+  ) {
     def agentId: String = client.agentId
+
+    /**
+     * A view of this agent whose awaited invocations borrow `card` as the scope
+     * card.
+     */
+    def withScopeCard(card: ScopeCard): ResolvedAgent[Trait] = copy(scopeCard = Some(card))
+
+    /** A view of this agent whose awaited invocations carry no scope card. */
+    def withoutScopeCard: ResolvedAgent[Trait] = copy(scopeCard = None)
 
     private lazy val methodsByName: Map[String, AgentType.AnyMethod[Trait]] =
       agentType.methods.iterator.map(m => m.metadata.name -> m).toMap
@@ -198,10 +265,12 @@ object AgentClientRuntime {
 
     def awaitWithMetadata[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[InvocationResult[Out]] = {
       implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      encodeInputAsync(method.inputCodec, input).flatMap { params =>
-        FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, params)).flatMap { raw =>
-          raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)).map(InvocationResult(raw.metadata, _))
-        }
+      encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
+        FutureInterop
+          .fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, _, scopeCard)))
+          .flatMap { raw =>
+            raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)).map(InvocationResult(raw.metadata, _))
+          }
       }
     }
 
@@ -210,14 +279,16 @@ object AgentClientRuntime {
       input: In
     ): Future[CancelableAsyncInvocation[Out]] = {
       implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      encodeInputAsync(method.inputCodec, input).flatMap { params =>
-        FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, params)).map { raw =>
-          CancelableAsyncInvocation(
-            raw.metadata,
-            raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)),
-            raw.cancellationToken
-          )
-        }
+      encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
+        FutureInterop
+          .fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, _, scopeCard)))
+          .map { raw =>
+            CancelableAsyncInvocation(
+              raw.metadata,
+              raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)),
+              raw.cancellationToken
+            )
+          }
       }
     }
 
@@ -249,8 +320,8 @@ object AgentClientRuntime {
 
     private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
       implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      encodeInputAsync(method.inputCodec, input)
-        .flatMap(params => client.rpc.asyncInvokeAndAwait(method.functionName, params))
+      encodeInputAsync(method.inputCodec, input, scopeCard)
+        .flatMap(params => params.call(client.rpc.asyncInvokeAndAwait(method.functionName, _, scopeCard)))
         .flatMap(decodeOutputAsync(method.outputCodec, _))
     }
 
@@ -265,8 +336,9 @@ object AgentClientRuntime {
         cancelled = true
         underlying.foreach(_.cancel())
       }
-      val result = encodeInputAsync(method.inputCodec, input).flatMap { params =>
-        val (rawFuture, rawToken) = client.rpc.cancelableAsyncInvokeAndAwait(method.functionName, params)
+      val result = encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
+        val (rawFuture, rawToken) =
+          params.call(client.rpc.cancelableAsyncInvokeAndAwait(method.functionName, _, scopeCard))
         underlying = Some(rawToken)
         if (cancelled) rawToken.cancel()
         rawFuture.flatMap(decodeOutputAsync(method.outputCodec, _))
@@ -307,8 +379,26 @@ object AgentClientRuntime {
     }
   }
 
-  final case class WireResolvedAgent[Trait](agentType: WireAgentClientType[Trait, ?], client: RemoteAgentClient) {
+  /**
+   * `scopeCard` is attached to the awaited invocations (`await`,
+   * `cancelableAwait` and their metadata variants) and borrowed for each call.
+   * Fire-and-forget and scheduled invocations never carry a scope card.
+   */
+  final case class WireResolvedAgent[Trait](
+    agentType: WireAgentClientType[Trait, ?],
+    client: RemoteAgentClient,
+    scopeCard: Option[ScopeCard] = None
+  ) {
     def agentId: String = client.agentId
+
+    /**
+     * A view of this agent whose awaited invocations borrow `card` as the scope
+     * card.
+     */
+    def withScopeCard(card: ScopeCard): WireResolvedAgent[Trait] = copy(scopeCard = Some(card))
+
+    /** A view of this agent whose awaited invocations carry no scope card. */
+    def withoutScopeCard: WireResolvedAgent[Trait] = copy(scopeCard = None)
 
     private lazy val methods = agentType.methods.iterator.map(m => m.name -> m).toMap
 
@@ -324,8 +414,8 @@ object AgentClientRuntime {
       input: In
     ): Future[Out] = {
       implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      encodeWireAsync(method.input, input)
-        .flatMap(client.rpc.asyncInvokeAndAwait(method.name, _))
+      encodeWireAsync(method.input, input, scopeCard)
+        .flatMap(params => params.call(client.rpc.asyncInvokeAndAwait(method.name, _, scopeCard)))
         .map(r => decodeWire(method.output, r))
     }
 
@@ -337,8 +427,8 @@ object AgentClientRuntime {
       var underlying  = Option.empty[CancellationToken]
       var cancelled   = false
       val token       = CancellationToken.fromFunction { () => cancelled = true; underlying.foreach(_.cancel()) }
-      val result      = encodeWireAsync(method.input, input).flatMap { params =>
-        val (future, raw) = client.rpc.cancelableAsyncInvokeAndAwait(method.name, params)
+      val result      = encodeWireAsync(method.input, input, scopeCard).flatMap { params =>
+        val (future, raw) = params.call(client.rpc.cancelableAsyncInvokeAndAwait(method.name, _, scopeCard))
         underlying = Some(raw)
         if (cancelled) raw.cancel()
         future.map(r => decodeWire(method.output, r))
@@ -367,8 +457,10 @@ object AgentClientRuntime {
       input: In
     ): Future[InvocationResult[Out]] = {
       implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      encodeWireAsync(method.input, input)
-        .flatMap(params => FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, params)))
+      encodeWireAsync(method.input, input, scopeCard)
+        .flatMap(params =>
+          FutureInterop.fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, _, scopeCard)))
+        )
         .flatMap(raw => raw.result.map(r => decodeWire(method.output, r)).map(InvocationResult(raw.metadata, _)))
     }
     def cancelableAwaitWithMetadata[In, Out](
@@ -376,8 +468,10 @@ object AgentClientRuntime {
       input: In
     ): Future[CancelableAsyncInvocation[Out]] = {
       implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      encodeWireAsync(method.input, input)
-        .flatMap(params => FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, params)))
+      encodeWireAsync(method.input, input, scopeCard)
+        .flatMap(params =>
+          FutureInterop.fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, _, scopeCard)))
+        )
         .map { raw =>
           CancelableAsyncInvocation(
             raw.metadata,
