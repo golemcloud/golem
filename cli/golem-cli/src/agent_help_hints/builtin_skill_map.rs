@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Static mapping of CLI command paths to relevant skills shipped under
-//! `golem-skills/skills/{common,ts,effect,rust,scala,moonbit}`.
+//! `golem-skills/skills/{common,ts,effect,rust,scala,moonbit,go}`.
 //!
 //! Each `SkillBinding` says: "if the user runs `--help` on this CLI command
 //! and the named skill is installed under `<app_dir>/.agents/skills/`, link
@@ -25,7 +25,7 @@
 //! `SkillKind::PerLanguage(langs)` means there is one variant per listed
 //! language, installed as `.agents/skills/<basename>-<lang>/SKILL.md`. We use
 //! the short language tag exactly as `GuestLanguage::to_string()` produces
-//! it (`rust`, `ts`, `effect`, `scala`, `moonbit`).
+//! it (`rust`, `ts`, `effect`, `scala`, `moonbit`, `go`).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
@@ -34,6 +34,7 @@ pub enum Lang {
     Effect,
     Scala,
     MoonBit,
+    Go,
 }
 
 impl Lang {
@@ -45,6 +46,7 @@ impl Lang {
             Lang::Effect => "effect",
             Lang::Scala => "scala",
             Lang::MoonBit => "moonbit",
+            Lang::Go => "go",
         }
     }
 
@@ -56,6 +58,7 @@ impl Lang {
             Lang::Effect => "Effect",
             Lang::Scala => "Scala",
             Lang::MoonBit => "MoonBit",
+            Lang::Go => "Go",
         }
     }
 }
@@ -67,6 +70,7 @@ pub const ALL_LANGS: &[Lang] = &[
     Lang::Rust,
     Lang::Scala,
     Lang::MoonBit,
+    Lang::Go,
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -226,8 +230,8 @@ mod test {
     }
 
     fn skill_dir_exists_anywhere(skills_root: &std::path::Path, name: &str) -> bool {
-        // golem-skills/skills/{common,ts,effect,rust,scala,moonbit}/<name>/SKILL.md
-        for sub in &["common", "ts", "effect", "rust", "scala", "moonbit"] {
+        // golem-skills/skills/{common,ts,effect,rust,scala,moonbit,go}/<name>/SKILL.md
+        for sub in &["common", "ts", "effect", "rust", "scala", "moonbit", "go"] {
             let candidate = skills_root.join(sub).join(name).join("SKILL.md");
             if candidate.is_file() {
                 return true;

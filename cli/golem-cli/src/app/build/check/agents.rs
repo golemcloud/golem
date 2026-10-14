@@ -121,6 +121,7 @@ mod tests {
             GuestLanguage::Effect,
             GuestLanguage::Rust,
             GuestLanguage::MoonBit,
+            GuestLanguage::Go,
         ] {
             let source = repo
                 .common_template_file_contents(language, Path::new("AGENTS.md"))

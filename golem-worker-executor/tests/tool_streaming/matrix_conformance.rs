@@ -102,6 +102,8 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
     #[tagged_as("tool_streaming_moonbit")] moonbit: &PrecompiledComponent,
     #[tagged_as("tool_streaming_effect_provider")] effect_provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_effect_caller")] effect_caller: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_go_provider")] go_provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_go_caller")] go_caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -160,6 +162,13 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
             agent_type: "",
             method: "",
         },
+        MatrixFixture {
+            language: "go",
+            component: go_provider,
+            package: "golem-it:tool-streaming-go-provider",
+            agent_type: "",
+            method: "",
+        },
     ];
     let callers = [
         MatrixFixture {
@@ -195,6 +204,13 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
             component: effect_caller,
             package: "",
             agent_type: "EffectToolStreamingCaller",
+            method: "matrix_core_observation",
+        },
+        MatrixFixture {
+            language: "go",
+            component: go_caller,
+            package: "",
+            agent_type: "GoToolStreamingCaller",
             method: "matrix_core_observation",
         },
     ];

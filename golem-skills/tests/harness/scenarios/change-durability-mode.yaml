@@ -19,6 +19,7 @@ steps:
         and deploys successfully.
       scala: *change-to-ephemeral-prompt
       moonbit: *change-to-ephemeral-prompt
+      go: *change-to-ephemeral-prompt
     expectedSkills:
       rust:
         - "golem-configure-durability-rust"
@@ -30,6 +31,8 @@ steps:
         - "golem-configure-durability-scala"
       moonbit:
         - "golem-configure-durability-moonbit"
+      go:
+        - "golem-configure-durability-go"
     verify:
       build: true
       deploy: true
@@ -54,6 +57,7 @@ steps:
         and deploys successfully.
       scala: *change-to-durable-prompt
       moonbit: *change-to-durable-prompt
+      go: *change-to-durable-prompt
     expectedSkills:
       rust:
         - "golem-configure-durability-rust"
@@ -65,6 +69,8 @@ steps:
         - "golem-configure-durability-scala"
       moonbit:
         - "golem-configure-durability-moonbit"
+      go:
+        - "golem-configure-durability-go"
     verify:
       build: true
       deploy: true

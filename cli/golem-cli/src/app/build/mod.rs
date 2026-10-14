@@ -47,6 +47,8 @@ pub mod command;
 pub mod componentize;
 pub mod extract_component_metadata;
 pub mod gen_bridge;
+pub mod go_inputs;
+pub mod go_toolchain;
 pub mod task_result_marker;
 pub mod up_to_date_check;
 

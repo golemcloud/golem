@@ -143,6 +143,30 @@ steps:
            or `get_phantom`) and returns its total.
 
         Make sure the project builds successfully.
+      go: >
+        In the test-app project, add a second agent type called `Collector` with a single
+        constructor parameter for its name. It must expose three externally invokable methods:
+        `addValue(value int64)`, `getValues() []int64`, and `getTotal() int64`. `addValue`
+        appends the value to the agent's durable state. `getValues` returns all stored values in
+        insertion order. `getTotal` returns the sum of all stored values.
+
+        Then modify the existing `CounterAgent` so it has three new externally invokable methods:
+
+        1. `spawnAndFillPhantom` — creates a **new phantom** instance of the `Collector`
+           agent using the counter's own name as the constructor parameter (use the phantom
+           agent / `NewPhantom` API), calls `addValue(10)` and then
+           `addValue(20)` on it, and returns the phantom collector's total (should be 30).
+
+        2. `spawnTwoPhantoms` — creates **two** new phantom `Collector` instances (both
+           using the counter's own name as the constructor parameter). Calls `addValue(1)`
+           on the first phantom and `addValue(2)` on the second phantom. Then returns the
+           total from each as a two-element list: `[total_of_first, total_of_second]`.
+
+        3. `readNonPhantomCollector` — gets the **non-phantom** `Collector` agent with
+           the counter's own name (using the regular `Get` constructor, not `NewPhantom`
+           or a phantom id) and returns its total.
+
+        Make sure the project builds successfully.
     expectedSkills:
       rust:
         - "golem-multi-instance-agent-rust"
@@ -154,6 +178,8 @@ steps:
         - "golem-multi-instance-agent-scala"
       moonbit:
         - "golem-multi-instance-agent-moonbit"
+      go:
+        - "golem-multi-instance-agent-go"
     verify:
       build: true
       deploy: true
@@ -168,6 +194,7 @@ steps:
         effect: "spawnAndFillPhantom"
         scala: "spawnAndFillPhantom"
         moonbit: "spawn_and_fill_phantom"
+        go: "spawnAndFillPhantom"
     expect:
       result_json:
         - path: "$"
@@ -183,6 +210,7 @@ steps:
         effect: "spawnTwoPhantoms"
         scala: "spawnTwoPhantoms"
         moonbit: "spawn_two_phantoms"
+        go: "spawnTwoPhantoms"
     expect:
       result_json:
         - path: "$[0]"
@@ -200,6 +228,7 @@ steps:
         effect: "getTotal"
         scala: "getTotal"
         moonbit: "get_total"
+        go: "getTotal"
     expect:
       result_json:
         - path: "$"
@@ -215,6 +244,7 @@ steps:
         effect: "readNonPhantomCollector"
         scala: "readNonPhantomCollector"
         moonbit: "read_non_phantom_collector"
+        go: "readNonPhantomCollector"
     expect:
       result_json:
         - path: "$"
