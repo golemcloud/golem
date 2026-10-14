@@ -84,9 +84,17 @@ where
         agent_mode,
         last_known,
         || async move {
+            // The checkpoint is only a fold baseline, and this function has no way to report a
+            // read failure: falling back to a full recompute costs time, not correctness.
             worker_service
                 .read_status_checkpoint(owned_agent_id, agent_mode)
                 .await
+                .unwrap_or_else(|err| {
+                    tracing::error!(
+                        "Failed to read the status checkpoint for {owned_agent_id}: {err}"
+                    );
+                    None
+                })
         },
     )
     .await
@@ -215,6 +223,21 @@ pub fn update_status_with_new_entries(
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
     default_retry_policy: &RetryConfig,
 ) -> Option<AgentStatusRecord> {
+    fold_status_with_new_entries(agent_mode, last_known, new_entries, default_retry_policy).ok()
+}
+
+/// Folds `new_entries` onto `last_known`, consuming it.
+///
+/// `Err` hands `last_known` back untouched when the status cannot be computed from the new
+/// entries alone (a jump or revert covered its oplog index) and needs recalculating from the
+/// beginning. Returning the record rather than dropping it lets a caller that took it out of a
+/// lock put the same record back instead of a copy.
+pub fn fold_status_with_new_entries(
+    agent_mode: AgentMode,
+    last_known: AgentStatusRecord,
+    new_entries: BTreeMap<OplogIndex, OplogEntry>,
+    default_retry_policy: &RetryConfig,
+) -> Result<AgentStatusRecord, AgentStatusRecord> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
 
@@ -252,7 +275,7 @@ pub fn update_status_with_new_entries(
         // We might have already calculated the status with these skipped regions as an override during a snapshot update.
         // No need to recompute in this case, we are already up to date.
         if effective_skipped_regions_changed {
-            return None;
+            return Err(last_known);
         }
     }
 
@@ -356,7 +379,7 @@ pub fn update_status_with_new_entries(
         agent_mode,
     };
 
-    Some(result)
+    Ok(result)
 }
 
 fn calculate_latest_worker_status(
@@ -1716,6 +1739,64 @@ mod test {
             .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
             .revert(OplogIndex::from_u64(5))
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    /// Two snapshot-based updates that both succeed, which is the sequence the
+    /// runtime got wrong: the first update's region has to stay folded into the
+    /// skipped regions while the second one's override sits on top of it.
+    ///
+    /// `multiple_manual_updates_with_jump_and_revert` cannot reach this shape —
+    /// its first update fails, and `FailedUpdate` drops the override without
+    /// folding it, so nothing ever accumulates.
+    #[test]
+    async fn two_successful_manual_updates() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+        let update2 = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(3).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+
+        let test_case = TestCase::builder(1)
+            .agent_invocation_started("a", vec![], k1.clone())
+            .host_call(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k1,
+                ComponentRevision::INITIAL,
+            )
+            .pending_update(&update1, |_| {})
+            .successful_update(update1, 1000, &HashSet::new())
+            // Work between the two updates. On a second manual update this is
+            // the suffix the runtime used to leave behind to replay.
+            .agent_invocation_started("c", vec![], k2.clone())
+            .host_call(
+                "d",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(2.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k2,
+                ComponentRevision::new(2).unwrap(),
+            )
+            .pending_update(&update2, |_| {})
+            .successful_update(update2, 2000, &HashSet::new())
             .build();
 
         run_test_case(test_case).await;

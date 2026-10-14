@@ -487,6 +487,7 @@ impl DbConfig {
             port: 5432,
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         })
     }
 }
@@ -536,6 +537,17 @@ pub struct DbPostgresConfig {
     pub port: u16,
     pub max_connections: u32,
     pub schema: Option<String>,
+    /// How long a caller waits for a free pooled connection before giving up.
+    ///
+    /// `None` leaves sqlx's own default (30s) in place. Deliberately not shortened here: this
+    /// struct is shared by every Postgres pool in the workspace, and a pool whose caller does not
+    /// retry is better off waiting out a load spike than failing N times sooner.
+    ///
+    /// Shortening it is worthwhile only where something above the pool retries, because a retry
+    /// loop cannot make progress while a single attempt is still parked - see the key-value
+    /// storage pool, which picks its own shorter fallback for exactly that reason.
+    #[serde(default, with = "humantime_serde")]
+    pub acquire_timeout: Option<Duration>,
 }
 
 impl DbPostgresConfig {

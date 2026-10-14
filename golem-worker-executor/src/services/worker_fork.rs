@@ -454,7 +454,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
 
-        let target_metadata = self.worker_service.get(&owned_target_agent_id).await;
+        let target_metadata = self.worker_service.get(&owned_target_agent_id).await?;
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
@@ -470,7 +470,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         self.worker_service
             .get(&owned_source_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;

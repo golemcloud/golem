@@ -25,6 +25,7 @@ pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
+pub mod oplog_sweep;
 pub mod promise;
 pub mod quota;
 pub mod rdbms;

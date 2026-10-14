@@ -225,7 +225,7 @@ impl DefaultWorkerEnumerationService {
                 .worker_service
                 .get(&owned_agent_id)
                 .instrument(tracing::info_span!("get_worker_metadata"))
-                .await;
+                .await?;
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {

@@ -82,6 +82,7 @@ async fn build_namespace_routed_kvs(
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         },
     };
 
@@ -101,10 +102,10 @@ async fn routes_worker_namespace_to_redis(deps: &WorkerExecutorTestDependencies)
     let (kvs, redis, postgres, _postgres_container) = build_namespace_routed_kvs(deps).await;
 
     let ns = KeyValueStorageNamespace::Worker {
-        agent_id: AgentId {
+        agent_id: std::sync::Arc::new(AgentId {
             component_id: ComponentId::new(),
             agent_id: "route-test-agent".to_string(),
-        },
+        }),
     };
     let key = "worker-route-key";
     let value = b"worker-route-value";
@@ -132,7 +133,7 @@ async fn routes_non_worker_namespace_to_postgres(deps: &WorkerExecutorTestDepend
 
     let ns = KeyValueStorageNamespace::UserDefined {
         environment_id: EnvironmentId(uuid!("2ae7a48f-84fc-4951-b9ec-87d09fcb0fa4")),
-        bucket: "route-test-bucket".to_string(),
+        bucket: "route-test-bucket".into(),
     };
     let key = "user-route-key";
     let value = b"user-route-value";

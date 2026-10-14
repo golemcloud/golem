@@ -50,9 +50,9 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
-    OwnedAgentId,
+    AgentId, AgentInvocation, AgentInvocationOutput, IdempotencyKey, OplogIndex, OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
@@ -365,11 +365,15 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
 
     /// Gets how many times the worker has been retried to recover from an error, and what
     /// error was stored in the last entry.
+    ///
+    /// `deleted_regions` is the latest status record's `deleted_regions`: the only part of the
+    /// record the search needs, taken alone so the invoke path can pass it without copying the
+    /// record (whose `invocation_results` grows with every invocation served).
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
+        deleted_regions: &DeletedRegions,
     ) -> Option<LastError>;
 
     /// Resume the replay of a worker instance. Note that if the previous replay

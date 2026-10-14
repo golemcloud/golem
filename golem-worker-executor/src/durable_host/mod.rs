@@ -103,7 +103,7 @@ use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
     OplogIndex, PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
@@ -345,8 +345,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         debug!("Created file system root at {:?}", worker_dir.path());
 
         debug!(
-            "Worker {} initialized with deleted regions {}",
-            owned_agent_id.agent_id, worker_config.deleted_regions
+            "Worker {} initialized with skipped regions {}",
+            owned_agent_id.agent_id, worker_config.skipped_regions
         );
 
         debug!(
@@ -474,7 +474,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 owned_agent_id.clone(),
                 rpc,
                 worker_proxy,
-                worker_config.deleted_regions.clone(),
+                worker_config.skipped_regions.clone(),
                 component_metadata,
                 worker_config.total_linear_memory_size,
                 worker_config.current_filesystem_storage_usage,
@@ -2522,14 +2522,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let in_atomic_region = !self.state.active_atomic_regions.is_empty();
 
-        let latest_status_before = self
+        // Only the retry state (one entry per active retry point) is needed here, so copy that
+        // rather than the whole record.
+        let current_retry_state_before = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .with_non_detached_last_known_status(|status| status.current_retry_state.clone())
             .await;
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
-                &latest_status_before.current_retry_state,
+                &current_retry_state_before,
                 trap_type,
                 in_atomic_region,
                 full_function_name,
@@ -2563,10 +2565,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             self.public_state.worker().add_and_commit_oplog(entry).await;
         };
 
-        let latest_status = self
+        let latest_agent_status = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .with_non_detached_last_known_status(|status| status.status)
             .await;
 
         let giving_up = matches!(
@@ -2576,7 +2578,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             }
         ) || matches!(
-            latest_status.status,
+            latest_agent_status,
             AgentStatus::Interrupted | AgentStatus::Exited
         ) || decision == RetryDecision::None;
 
@@ -2598,7 +2600,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         debug!(
             "Recovery decision for {trap_type:?} with {:?} retries (in_atomic_region={in_atomic_region}): {:?}",
-            latest_status_before.current_retry_state, decision
+            current_retry_state_before, decision
         );
 
         decision
@@ -2973,9 +2975,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this: &T,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
+        deleted_regions: &DeletedRegions,
     ) -> Option<LastError> {
-        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
+        last_error(this, owned_agent_id, agent_mode, deleted_regions).await
     }
 
     async fn resume_replay(
@@ -3380,7 +3382,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-        let workers = this.worker_service().get_running_workers_in_shards().await;
+        let workers = this
+            .worker_service()
+            .get_running_workers_in_shards()
+            .await?;
 
         debug!(workers = ?workers, "Recovering running workers");
 
@@ -3680,7 +3685,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    latest_worker_status: &AgentStatusRecord,
+    deleted_regions: &DeletedRegions,
 ) -> Option<LastError> {
     let mut idx = this
         .oplog_service()
@@ -3693,10 +3698,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
         let mut first_retry_from = OplogIndex::NONE;
         let mut last_error_index = idx;
         loop {
-            if latest_worker_status
-                .deleted_regions
-                .is_in_deleted_region(idx)
-            {
+            if deleted_regions.is_in_deleted_region(idx) {
                 if idx > OplogIndex::INITIAL {
                     idx = idx.previous();
                     continue;
@@ -4228,7 +4230,7 @@ impl PrivateDurableWorkerState {
         owned_agent_id: OwnedAgentId,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        deleted_regions: DeletedRegions,
+        skipped_regions: DeletedRegions,
         component_metadata: Component,
         total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
@@ -4247,20 +4249,14 @@ impl PrivateDurableWorkerState {
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Result<Self, WorkerExecutorError> {
-        let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
-            let mut regions = deleted_regions;
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            regions.set_override(snapshot_skip);
-            regions
-        } else {
-            deleted_regions
-        };
+        // `skipped_regions` already carries the snapshot baseline: the status reducer opens
+        // an override at a snapshot-based `PendingUpdate` and folds it into the regions
+        // proper on `SuccessfulUpdate`. `last_snapshot_index` is kept only for reading the
+        // snapshot payload back; deriving a region from it here would restate what the
+        // reducer computed, and `set_override` replaces rather than merges, so it used to
+        // overwrite a pending update's override with the previous update's narrower one.
         let replay_state =
-            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
+            ReplayState::new(owned_agent_id.clone(), oplog.clone(), skipped_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         Ok(Self {
@@ -4575,7 +4571,7 @@ impl PrivateDurableWorkerState {
                 &self.owned_agent_id.agent_id,
                 self.current_oplog_index().await,
             )
-            .await;
+            .await?;
 
         let schedule_id = self
             .scheduler_service

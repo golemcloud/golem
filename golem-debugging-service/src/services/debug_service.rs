@@ -186,6 +186,7 @@ impl DebugServiceDefault {
             .worker_service()
             .get(&owned_agent_id)
             .await
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?
             .ok_or_else(|| {
                 DebugServiceError::conflict(
                     agent_id.clone(),

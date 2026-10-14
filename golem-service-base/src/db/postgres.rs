@@ -41,8 +41,12 @@ impl PostgresPool {
             config.host, config.port, config.database, schema
         );
 
-        let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections)
+        let mut options = PgPoolOptions::new().max_connections(config.max_connections);
+        // Left at sqlx's own default when unset; see `DbPostgresConfig::acquire_timeout`.
+        if let Some(acquire_timeout) = config.acquire_timeout {
+            options = options.acquire_timeout(acquire_timeout);
+        }
+        let pool = options
             .after_connect(move |conn, _meta| {
                 let s = schema.clone();
                 Box::pin(async move {

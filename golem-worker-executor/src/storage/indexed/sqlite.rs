@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
@@ -203,6 +203,57 @@ impl IndexedStorage for SqliteIndexedStorage {
         Ok((new_cursor, keys))
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // Every stored key is non-empty, so the empty string is a lower bound below all of them and
+        // the first page needs no separate query.
+        let after = match resume {
+            Some(ScanResume::Marker(key)) => key,
+            Some(ScanResume::Cursor(_)) => {
+                return Err(IndexedStorageError::Other(
+                    "SQLite indexed storage was handed a resume token it did not produce"
+                        .to_string(),
+                ));
+            }
+            None => String::new(),
+        };
+        let query = match prefix {
+            Some(prefix) => {
+                let like = Self::to_like_prefix(prefix);
+                sqlx::query_as(
+                    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? AND key LIKE ? ESCAPE '\\' ORDER BY key LIMIT ?;",
+                )
+                .bind(Self::meta_namespace(namespace))
+                .bind(after)
+                .bind(like)
+                .bind(sqlx::types::Json(count))
+            }
+            None => sqlx::query_as(
+                "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? ORDER BY key LIMIT ?;",
+            )
+            .bind(Self::meta_namespace(namespace))
+            .bind(after)
+            .bind(sqlx::types::Json(count)),
+        };
+
+        let keys = self
+            .pool
+            .with_ro(svc_name, api_name)
+            .fetch_all_as::<(String,), _>(query)
+            .await
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map_err(Self::classify_repo_error)?;
+
+        Ok((super::last_key_resume(&keys, count), keys))
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -339,6 +390,28 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
+            .map_err(Self::classify_repo_error)
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let query = sqlx::query_as::<_, (i64,)>(
+            "SELECT id FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 1;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key);
+
+        self.pool
+            .with_ro(svc_name, api_name)
+            .fetch_optional_as::<(i64,), _>(query)
+            .await
+            .map(|op| op.map(|row| row.0 as u64))
             .map_err(Self::classify_repo_error)
     }
 

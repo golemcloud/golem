@@ -14,12 +14,12 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
 use regex::Regex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::ops::Bound::Included;
 use std::time::Duration;
 
@@ -182,6 +182,55 @@ impl IndexedStorage for InMemoryIndexedStorage {
         }
     }
 
+    async fn scan_stable(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        let after = match resume {
+            Some(ScanResume::Marker(key)) => Some(key),
+            Some(ScanResume::Cursor(_)) => {
+                return Err(IndexedStorageError::Other(
+                    "In-memory indexed storage was handed a resume token it did not produce"
+                        .to_string(),
+                ));
+            }
+            None => None,
+        };
+        let matcher = Self::match_key(namespace, prefix);
+
+        // The map has no order of its own, so the page cannot be taken by seeking. Sorting the
+        // whole matching set would hold every key in the namespace at once; a max-heap capped at
+        // `count` keeps the same page for the same walk while holding only the page. The SQL
+        // backends let their index do the same job.
+        let limit = count as usize;
+        let mut page: BinaryHeap<String> = BinaryHeap::new();
+        self.data
+            .iter_async(|key, _| {
+                if let Some(key) = matcher(key)
+                    && after.as_deref().is_none_or(|after| key.as_str() > after)
+                {
+                    if page.len() < limit {
+                        page.push(key);
+                    } else if let Some(highest) = page.peek()
+                        && key < *highest
+                    {
+                        page.pop();
+                        page.push(key);
+                    }
+                }
+                true
+            })
+            .await;
+        let matched = page.into_sorted_vec();
+
+        Ok((super::last_key_resume(&matched, count), matched))
+    }
+
     async fn append(
         &self,
         _svc_name: &'static str,
@@ -295,6 +344,24 @@ impl IndexedStorage for InMemoryIndexedStorage {
             .flatten())
     }
 
+    async fn last_id(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| {
+                entry.last_key_value().map(|(id, _)| *id)
+            })
+            .await
+            .flatten())
+    }
+
     async fn closest(
         &self,
         _svc_name: &'static str,
@@ -339,7 +406,9 @@ impl IndexedStorage for InMemoryIndexedStorage {
 mod tests {
     use test_r::test;
 
-    use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
+    use crate::storage::indexed::{
+        IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    };
     use assert2::check;
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
@@ -354,6 +423,56 @@ mod tests {
                 agent_id: "worker".to_string(),
             })
             .clone()
+    }
+
+    #[test]
+    async fn scan_stable_pages_in_order_and_hands_a_key_back_once() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let agent_mode = golem_common::model::agent::AgentMode::Durable;
+
+        for key in ["k1", "k2", "k3", "k4", "k5"] {
+            api.append(
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode,
+                },
+                key,
+                1,
+                &100,
+            )
+            .await
+            .unwrap();
+        }
+
+        let mut pages: Vec<Vec<String>> = Vec::new();
+        let mut resume = None;
+        for _ in 0..8 {
+            let (next, page) = storage
+                .with("test", "test")
+                .scan_stable(
+                    IndexedStorageMetaNamespace::Oplog { agent_mode },
+                    None,
+                    resume,
+                    2,
+                )
+                .await
+                .unwrap();
+            pages.push(page);
+            match next {
+                Some(next) => resume = Some(next),
+                None => break,
+            }
+        }
+
+        // The short page is what ends the walk, so five keys cost three pages and not a fourth,
+        // and no key appears in two of them.
+        let expected: Vec<Vec<String>> = vec![
+            vec!["k1".to_string(), "k2".to_string()],
+            vec!["k3".to_string(), "k4".to_string()],
+            vec!["k5".to_string()],
+        ];
+        check!(pages == expected);
     }
 
     #[test]

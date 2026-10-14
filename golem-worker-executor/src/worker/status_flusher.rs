@@ -156,11 +156,10 @@ impl AgentStatusFlusher {
     /// synchronously (only when the tracking predicate transitions) and then either marks the
     /// worker dirty for the background sweeper or, when background flushing is disabled, flushes the
     /// blob synchronously.
-    pub async fn on_status_changed(
-        &self,
-        previous_status: &AgentStatusRecord,
-        new_status: &AgentStatusRecord,
-    ) {
+    /// `previous_tracked` is whether the status being replaced satisfied
+    /// [`DefaultWorkerService::should_track_for_assignment_recovery`]; the new status is read from
+    /// the shared `current_status`, which the caller has already updated.
+    pub async fn on_status_changed(&self, previous_tracked: bool) {
         if self.is_ephemeral {
             return;
         }
@@ -168,13 +167,30 @@ impl AgentStatusFlusher {
         // Recovery index: keep it synchronous (it must be timely for crash/reshard recovery), but
         // only touch the KV store when the predicate actually changes, to avoid a round-trip per
         // commit.
-        let track_now = DefaultWorkerService::should_track_for_assignment_recovery(new_status);
-        let track_before =
-            DefaultWorkerService::should_track_for_assignment_recovery(previous_status);
-        if track_now != track_before {
-            self.worker_service
-                .set_assignment_tracking(&self.owned_agent_id, new_status)
-                .await;
+        let track_now = {
+            let status = self.current_status.read().await;
+            DefaultWorkerService::should_track_for_assignment_recovery(&status)
+        };
+        if track_now != previous_tracked
+            && let Err(err) = self
+                .worker_service
+                .set_assignment_tracking(&self.owned_agent_id, track_now)
+                .await
+        {
+            // Fatal, deliberately. This index is what a reshard or a crash consults to decide which
+            // workers to resume, so an agent missing from it is an agent that silently stops being
+            // running - the one property this executor exists to uphold. Carrying on would trade a
+            // visible failure for an invisible one.
+            //
+            // What changed is when this fires, not whether it does: the storage retry budget now
+            // absorbs a transient backend blip, so reaching this line means the write kept failing
+            // for the whole budget. At that point this executor cannot maintain its own recovery
+            // index, and replacing it beats leaving it running with agents it can no longer
+            // account for.
+            panic!(
+                "failed to update the running workers recovery index for {}: {err}",
+                self.owned_agent_id
+            );
         }
 
         // Blob: defer to the sweeper, or write inline if background flushing is off.
@@ -394,6 +410,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{AgentId, AgentStatus, AgentStatusRecord};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
     use uuid::Uuid;
 
@@ -407,8 +424,9 @@ mod tests {
     #[derive(Default)]
     struct MockState {
         writes: Vec<RecordedWrite>,
-        tracking_calls: Vec<AgentStatus>,
+        tracking_calls: Vec<bool>,
         fail_writes: bool,
+        fail_tracking: bool,
     }
 
     #[derive(Default)]
@@ -422,6 +440,9 @@ mod tests {
         }
         fn set_fail(&self, fail: bool) {
             self.state.lock().unwrap().fail_writes = fail;
+        }
+        fn set_fail_tracking(&self, fail: bool) {
+            self.state.lock().unwrap().fail_tracking = fail;
         }
         fn write_count(&self) -> usize {
             self.state.lock().unwrap().writes.len()
@@ -451,16 +472,31 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for MockWorkerService {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
-        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+        async fn get_running_workers_in_shards(
+            &self,
+        ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
-        async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
-        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
-            None
+        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+        async fn remove_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+        async fn get_agent_mode(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
+            Ok(None)
         }
         async fn write_cached_status(
             &self,
@@ -482,8 +518,8 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> Option<AgentStatusRecord> {
-            None
+        ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+            Ok(None)
         }
         async fn write_status_checkpoint(
             &self,
@@ -496,13 +532,14 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            status_value: &AgentStatusRecord,
-        ) {
-            self.state
-                .lock()
-                .unwrap()
-                .tracking_calls
-                .push(status_value.status);
+            tracked: bool,
+        ) -> Result<(), String> {
+            let mut state = self.state.lock().unwrap();
+            state.tracking_calls.push(tracked);
+            if state.fail_tracking {
+                return Err("injected tracking failure".to_string());
+            }
+            Ok(())
         }
     }
 
@@ -735,14 +772,10 @@ mod tests {
     async fn ephemeral_is_noop() {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
-        let (flusher, _current, _) = make_flusher(true, true, ws.clone(), queue.clone());
+        let (flusher, current, _) = make_flusher(true, true, ws.clone(), queue.clone());
 
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Idle, 0),
-                &status(AgentStatus::Running, 1),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Running, 1);
+        flusher.on_status_changed(false).await;
         flusher.mark_dirty();
         let _ = flusher.flush(FlushReason::Forced).await;
         queue.sweep().await;
@@ -756,31 +789,20 @@ mod tests {
     async fn assignment_tracking_fires_only_on_transition() {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
-        let (flusher, _current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
 
         // Idle -> Running: predicate transitions false -> true, fires.
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Idle, 0),
-                &status(AgentStatus::Running, 1),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Running, 1);
+        flusher.on_status_changed(false).await;
         // Running -> Running: no transition, does not fire.
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Running, 1),
-                &status(AgentStatus::Running, 2),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Running, 2);
+        flusher.on_status_changed(true).await;
         // Running -> Idle: transitions true -> false, fires.
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Running, 2),
-                &status(AgentStatus::Idle, 3),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Idle, 3);
+        flusher.on_status_changed(true).await;
 
         assert_eq!(ws.tracking_count(), 2);
+        assert_eq!(ws.state.lock().unwrap().tracking_calls, vec![true, false]);
     }
 
     #[test]
@@ -790,12 +812,7 @@ mod tests {
         let (flusher, current, _) = make_flusher(false, false, ws.clone(), queue.clone());
 
         *current.write().await = status(AgentStatus::Running, 1);
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Idle, 0),
-                &status(AgentStatus::Running, 1),
-            )
-            .await;
+        flusher.on_status_changed(false).await;
 
         // Blob written synchronously, nothing left in the queue.
         assert_eq!(ws.write_count(), 1);
@@ -810,5 +827,39 @@ mod tests {
         let (a, _, _) = make_flusher(false, true, ws.clone(), queue.clone());
         let (b, _, _) = make_flusher(false, true, ws.clone(), queue.clone());
         assert_ne!(a.queue_id, b.queue_id);
+    }
+
+    /// A failed recovery-index update fails the whole call, and the blob is not written after it.
+    /// Reporting success would let the caller go on to run a worker that `RunningWorkers` does not
+    /// list - one that no crash or reshard would resume - while the blob left behind makes it look
+    /// accounted for.
+    #[test]
+    async fn update_cached_status_fails_when_tracking_fails() {
+        let service = MockWorkerService::arc();
+        service.set_fail_tracking(true);
+
+        let result = service
+            .update_cached_status(&agent_id(), None, status(AgentStatus::Running, 1))
+            .await;
+
+        assert_eq!(result, Err("injected tracking failure".to_string()));
+        assert_eq!(service.tracking_count(), 1);
+        assert_eq!(service.write_count(), 0);
+    }
+
+    /// The blob write is reported too: it is the caller's only signal that the status it just
+    /// computed did not reach storage.
+    #[test]
+    async fn update_cached_status_reports_a_failed_status_write() {
+        let service = MockWorkerService::arc();
+        service.set_fail(true);
+
+        let result = service
+            .update_cached_status(&agent_id(), None, status(AgentStatus::Running, 1))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(service.tracking_count(), 1);
+        assert_eq!(service.write_count(), 0);
     }
 }

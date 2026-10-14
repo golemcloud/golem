@@ -759,12 +759,12 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     }
 
     async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState> {
-        let latest_status = self
-            .public_state
+        self.public_state
             .worker()
-            .get_non_detached_last_known_status()
-            .await;
-        latest_status.current_retry_state.get(&retry_from).cloned()
+            .with_non_detached_last_known_status(|status| {
+                status.current_retry_state.get(&retry_from).cloned()
+            })
+            .await
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
@@ -907,16 +907,21 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         failure: Error,
         properties: RetryProperties,
     ) -> anyhow::Result<()> {
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
         let current_retry_point = if let Some(region) = self.state.active_atomic_regions.last() {
             region.begin_index
         } else {
             self.state.current_retry_point
         };
+        let current_state = self
+            .public_state
+            .worker()
+            .with_non_detached_last_known_status(|status| {
+                status
+                    .current_retry_state
+                    .get(&current_retry_point)
+                    .cloned()
+            })
+            .await;
 
         // Resolve the matching named retry policy. The synthesized
         // default-from-config policy (with `Predicate::True`) is always
@@ -947,10 +952,6 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 }
             };
 
-        let current_state = latest_status
-            .current_retry_state
-            .get(&current_retry_point)
-            .cloned();
         let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
 
         match evaluate_named_policy_step_resetting_on_invalid_state(

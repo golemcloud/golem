@@ -1266,11 +1266,13 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 let execution_status = retry_params.execution_status;
                 let current_retry_policy_state = retry_params
                     .worker
-                    .get_non_detached_last_known_status()
-                    .await
-                    .current_retry_state
-                    .get(&retry_params.retry_point)
-                    .cloned();
+                    .with_non_detached_last_known_status(|status| {
+                        status
+                            .current_retry_state
+                            .get(&retry_params.retry_point)
+                            .cloned()
+                    })
+                    .await;
                 let task_ctx = crate::durable_host::durability::TaskRetryContext {
                     retry_point: retry_params.retry_point,
                     environment_state_service: retry_params.environment_state_service,

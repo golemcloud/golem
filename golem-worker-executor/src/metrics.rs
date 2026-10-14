@@ -86,6 +86,12 @@ const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
     2.5, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0,
 ];
 
+/// Tick-duration buckets for the oplog sweep. They reach well past the shared set's minute: a
+/// tick is a budgeted walk of a storage namespace, so slow storage is exactly when its duration
+/// is worth reading, and the shared buckets saturate there.
+const OPLOG_SWEEP_TICK_BUCKETS: &[f64; 9] =
+    &[0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0];
+
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
 /// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
 /// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
@@ -1009,6 +1015,26 @@ pub mod oplog {
             &["account_id", "environment_id"]
         )
         .unwrap();
+        static ref OPLOG_SWEEP_OUTCOME_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_outcome_total",
+            "Keys the oplog sweep examined, by what it decided about each. One outcome per key, \
+             so the outcomes sum to what a tick decided",
+            &["route", "outcome"]
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TICK_TIME: HistogramVec = register_histogram_vec!(
+            "oplog_sweep_tick_seconds",
+            "Time taken by one oplog sweep tick",
+            &["route"],
+            crate::metrics::OPLOG_SWEEP_TICK_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_truncated_total",
+            "Oplog sweep ticks that hit a budget or their deadline before reaching the end of the namespace",
+            &["route"]
+        )
+        .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
             "Number of oplog storage operation retries due to transient errors",
@@ -1031,6 +1057,25 @@ pub mod oplog {
         OPLOG_STORAGE_RETRY_TOTAL
             .with_label_values(&[op_name])
             .inc();
+    }
+
+    pub fn record_oplog_sweep_outcome(route: &str, outcome: &'static str, count: u64) {
+        if count > 0 {
+            OPLOG_SWEEP_OUTCOME_TOTAL
+                .with_label_values(&[route, outcome])
+                .inc_by(count as f64);
+        }
+    }
+
+    pub fn record_oplog_sweep_tick(route: &str, duration: std::time::Duration, truncated: bool) {
+        OPLOG_SWEEP_TICK_TIME
+            .with_label_values(&[route])
+            .observe(duration.as_secs_f64());
+        if truncated {
+            OPLOG_SWEEP_TRUNCATED_TOTAL
+                .with_label_values(&[route])
+                .inc();
+        }
     }
 
     pub fn record_scheduled_archive(duration: std::time::Duration, has_more: bool) {
