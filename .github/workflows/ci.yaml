@@ -1677,6 +1677,24 @@ jobs:
         working-directory: golem-skills/tests/harness
         run: npm test
 
+  docker-image-checks:
+    # Builds the linux/amd64 images without pushing them, and checks their user, writable
+    # directories, setuid and setgid files, and the file capability and startup of xfs-quotad.
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-make: 'false'
+      - name: Build xfs-quotad
+        run: cargo build --release -p golem-xfs-quotad --target x86_64-unknown-linux-gnu
+      - name: Check the images
+        run: docker/check-images.sh
+
   docker-targets-build:
     env:
       CARGO_BUILD_JOBS: 10
@@ -1741,6 +1759,7 @@ jobs:
     runs-on: blacksmith
     needs:
       - docker-targets-build
+      - docker-image-checks
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - uses: actions/checkout@v5
@@ -1771,6 +1790,7 @@ jobs:
     runs-on: blacksmith
     needs:
       - docker-targets-build
+      - docker-image-checks
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - uses: actions/checkout@v5
