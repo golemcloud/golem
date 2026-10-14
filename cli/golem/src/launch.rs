@@ -83,6 +83,7 @@ pub async fn launch_golem_services(
         preflight_registry_db_compat(&config.data_dir)
             .await
             .map_err(anyhow::Error::from)?;
+        write_registry_db_compat(&config.data_dir).await?;
     }
 
     let startup_progress = StartupProgress::default();
@@ -101,9 +102,6 @@ pub async fn launch_golem_services(
     );
 
     let started_components = start_components(config, &startup_progress, &mut join_set).await?;
-    if uses_local_registry_db {
-        write_registry_db_compat(&config.data_dir).await?;
-    }
 
     if accounts_with_well_known_token(config).is_empty()
         && revoke_well_known_token(&started_components.registry_service.endpoint).await?

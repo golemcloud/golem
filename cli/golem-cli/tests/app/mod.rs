@@ -54,6 +54,8 @@ mod scala_tool_sources;
 mod secrets;
 mod self_identity;
 mod server_config;
+#[cfg(unix)]
+mod server_restart;
 mod ssh;
 mod tool_metadata_conformance;
 mod tool_middleware;
@@ -1170,6 +1172,11 @@ impl TestContext {
     }
 
     async fn start_server(&mut self) {
+        self.spawn_server();
+        self.wait_for_server_startup().await;
+    }
+
+    fn spawn_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
         install_builtin_artifact_cache(self.data_dir.path());
 
@@ -1219,7 +1226,9 @@ impl TestContext {
         }
 
         self.server_process = Some(command.spawn().unwrap());
+    }
 
+    async fn wait_for_server_startup(&mut self) {
         {
             let start = Instant::now();
             let timeout = Duration::from_secs(60);
