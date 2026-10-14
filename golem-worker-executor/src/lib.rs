@@ -34,19 +34,6 @@ pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
 
-/// The XFS quota helper of `ManagedXfs` storage: a separate process that holds `CAP_SYS_ADMIN`.
-pub mod xfs_quota_helper {
-    #[cfg(target_os = "linux")]
-    pub use crate::sandbox_filesystem::xfs::quota_helper::{
-        HELPER_COMMAND, run_if_requested, start_in_process,
-    };
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn run_if_requested() -> Option<anyhow::Result<()>> {
-        None
-    }
-}
-
 #[cfg(test)]
 pub mod span_test_support;
 

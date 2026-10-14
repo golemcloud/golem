@@ -19,7 +19,6 @@ use golem_worker_executor::metrics;
 use golem_worker_executor::process_capabilities;
 use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loader};
 use golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
-use golem_worker_executor::xfs_quota_helper;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
@@ -28,9 +27,6 @@ use tracing::{info, warn};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> Result<(), anyhow::Error> {
-    if let Some(result) = xfs_quota_helper::run_if_requested() {
-        return result;
-    }
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
             config.validate()?;
@@ -43,9 +39,9 @@ fn main() -> Result<(), anyhow::Error> {
             info!("Using configuration:\n{}", config.to_safe_string_indented());
             if process_capabilities::holds_sys_admin()? {
                 warn!(
-                    "The executor process holds CAP_SYS_ADMIN, which it does not need: only the \
-                     XFS quota helper of ManagedXfs storage needs it. Drop it from the executor \
-                     container"
+                    "The executor process holds CAP_SYS_ADMIN, which it does not need: only \
+                     xfs-quotad, which serves the quota calls of ManagedXfs storage, needs it. \
+                     Drop it from the executor"
                 );
             }
 

@@ -376,7 +376,7 @@ enum FilesystemVolumeMode {
         identity: FilesystemIdentity,
         /// The quota helper of a managed XFS volume.
         #[cfg(target_os = "linux")]
-        project_quotas: Option<Arc<xfs::quota_helper::XfsQuotaHelper>>,
+        project_quotas: Option<Arc<golem_xfs_quotad::XfsQuotadClient>>,
     },
 }
 
@@ -411,7 +411,7 @@ impl FilesystemVolume {
 
     /// The volume with the quota helper `quotas`, which serves its project quotas.
     #[cfg(target_os = "linux")]
-    fn with_project_quotas(mut self, quotas: Arc<xfs::quota_helper::XfsQuotaHelper>) -> Self {
+    fn with_project_quotas(mut self, quotas: Arc<golem_xfs_quotad::XfsQuotadClient>) -> Self {
         if let FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } = &mut self.mode {
             *project_quotas = Some(quotas);
         }
@@ -419,7 +419,7 @@ impl FilesystemVolume {
     }
 
     #[cfg(target_os = "linux")]
-    fn project_quotas(&self) -> Option<&xfs::quota_helper::XfsQuotaHelper> {
+    fn project_quotas(&self) -> Option<&golem_xfs_quotad::XfsQuotadClient> {
         match &self.mode {
             FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } => project_quotas.as_deref(),
             FilesystemVolumeMode::UnmanagedDevelopment => None,
@@ -1012,8 +1012,8 @@ impl SandboxFilesystemProvisioning {
             }
             FilesystemStorageMode::ManagedXfs {
                 root,
-                quota_helper_socket,
-            } => configured_managed(root, quota_helper_socket, &cleanup_retry)?,
+                xfs_quotad_socket,
+            } => configured_managed(root, xfs_quotad_socket, &cleanup_retry)?,
             FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry)?,
             FilesystemStorageMode::Apfs { root } => configured_apfs(root, cleanup_retry)?,
         };
@@ -1098,14 +1098,11 @@ fn development(
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
-    quota_helper_socket: &Path,
+    xfs_quotad_socket: &Path,
     cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
-    let managed = xfs::ManagedProvisioning::new(
-        xfs::XfsRoot::open(root)?,
-        quota_helper_socket,
-        cleanup_retry,
-    )?;
+    let managed =
+        xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, xfs_quotad_socket, cleanup_retry)?;
     let volume = managed.volume().clone();
     Ok((
         volume,
@@ -1128,7 +1125,7 @@ fn configured_reflink(
 #[cfg(not(target_os = "linux"))]
 fn configured_managed(
     root: &Path,
-    _quota_helper_socket: &Path,
+    _xfs_quotad_socket: &Path,
     _cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
@@ -2122,7 +2119,7 @@ mod tests {
                 FilesystemStorageMode::Directory { root: root.clone() },
                 FilesystemStorageMode::ManagedXfs {
                     root: root.clone(),
-                    quota_helper_socket: root.clone(),
+                    xfs_quotad_socket: root.clone(),
                 },
                 FilesystemStorageMode::ReflinkXfs { root: root.clone() },
                 FilesystemStorageMode::Apfs { root },

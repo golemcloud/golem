@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod quota_helper;
-
 use super::*;
-use quota_helper::XfsQuotaHelper;
+use golem_xfs_quotad::{
+    FS_DQUOT_VERSION, FS_PROJ_QUOTA, FS_QSTATV_VERSION1, FsDiskQuota, FsQuotaStatV,
+    PROJECT_DATA_LIMIT_FIELDS, PROJECT_LIMIT_FIELDS, XfsQuotadClient,
+};
 use rustix::fs::{
     AtFlags, FlockOperation, Mode, OFlags, StatVfsMountFlags, StatxAttributes, StatxFlags, flock,
     fstatfs, fstatvfs, ioctl_ficlone, mkdirat, openat, statx,
@@ -39,24 +40,8 @@ const XFS_FSOP_GEOM_FLAGS_DIRV2CI: u32 = 1 << 12;
 const XFS_IOC_FSGEOMETRY_V1: rustix::ioctl::Opcode =
     rustix::ioctl::opcode::read::<XfsGeometryV1>(b'X', 100);
 const XFS_BASIC_BLOCK_BYTES: u64 = 512;
-const XQM_PRJQUOTA: u32 = 2;
-const Q_XGETQUOTA: u32 = (b'X' as u32) << 8 | 3;
-const Q_XSETQLIM: u32 = (b'X' as u32) << 8 | 4;
-const Q_XGETQSTATV: u32 = (b'X' as u32) << 8 | 8;
-const FS_DQUOT_VERSION: i8 = 1;
-const FS_QSTATV_VERSION1: i8 = 1;
-const FS_PROJ_QUOTA: i8 = 1 << 1;
 const FS_QUOTA_PDQ_ACCT: u16 = 1 << 4;
 const FS_QUOTA_PDQ_ENFD: u16 = 1 << 5;
-const FS_DQ_ISOFT: u16 = 1 << 0;
-const FS_DQ_IHARD: u16 = 1 << 1;
-const FS_DQ_BSOFT: u16 = 1 << 2;
-const FS_DQ_BHARD: u16 = 1 << 3;
-const FS_DQ_RTBSOFT: u16 = 1 << 4;
-const FS_DQ_RTBHARD: u16 = 1 << 5;
-const PROJECT_LIMIT_FIELDS: u16 =
-    FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD | FS_DQ_RTBSOFT | FS_DQ_RTBHARD;
-const PROJECT_DATA_LIMIT_FIELDS: u16 = FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD;
 
 #[derive(Clone, Copy)]
 pub(super) struct ValidatedXfsNameMode {
@@ -86,66 +71,6 @@ fn validated_xfs_name_mode(
 struct ProjectAllocator {
     next: u32,
     active: HashMap<NonZeroU32, Box<Path>>,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct FsDiskQuota {
-    d_version: i8,
-    d_flags: i8,
-    d_fieldmask: u16,
-    d_id: u32,
-    d_blk_hardlimit: u64,
-    d_blk_softlimit: u64,
-    d_ino_hardlimit: u64,
-    d_ino_softlimit: u64,
-    d_bcount: u64,
-    d_icount: u64,
-    d_itimer: i32,
-    d_btimer: i32,
-    d_iwarns: u16,
-    d_bwarns: u16,
-    d_itimer_hi: i8,
-    d_btimer_hi: i8,
-    d_rtbtimer_hi: i8,
-    d_padding2: i8,
-    d_rtb_hardlimit: u64,
-    d_rtb_softlimit: u64,
-    d_rtbcount: u64,
-    d_rtbtimer: i32,
-    d_rtbwarns: u16,
-    d_padding3: i16,
-    d_padding4: [i8; 8],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct FsQuotaFileStatV {
-    qfs_ino: u64,
-    qfs_nblks: u64,
-    qfs_nextents: u32,
-    qfs_pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct FsQuotaStatV {
-    qs_version: i8,
-    qs_pad1: u8,
-    qs_flags: u16,
-    qs_incoredqs: u32,
-    qs_uquota: FsQuotaFileStatV,
-    qs_gquota: FsQuotaFileStatV,
-    qs_pquota: FsQuotaFileStatV,
-    qs_btimelimit: i32,
-    qs_itimelimit: i32,
-    qs_rtbtimelimit: i32,
-    qs_bwarnlimit: u16,
-    qs_iwarnlimit: u16,
-    qs_rtbwarnlimit: u16,
-    qs_pad3: u16,
-    qs_pad4: u32,
-    qs_pad2: [u64; 7],
 }
 
 /// `struct xfs_fsop_geom_v1` of `xfs_fs.h`, the output of `XFS_IOC_FSGEOMETRY_V1`.
@@ -179,7 +104,7 @@ pub(super) struct ManagedProvisioning {
     volume: FilesystemVolume,
     root: Arc<Path>,
     root_fd: Arc<File>,
-    quotas: Arc<XfsQuotaHelper>,
+    quotas: Arc<XfsQuotadClient>,
     allocator: Arc<Mutex<ProjectAllocator>>,
     filesystem_block_bytes: NonZeroU64,
     validated_name_mode: ValidatedXfsNameMode,
@@ -359,14 +284,14 @@ fn reflink_probe_contents(probe: &Path) -> std::io::Result<()> {
 
 impl ManagedProvisioning {
     /// Binds managed XFS storage with project quotas on the opened root `root`. The quota calls go
-    /// to the XFS quota helper on `quota_helper_socket`.
+    /// to `xfs-quotad` on `xfs_quotad_socket`.
     ///
     /// The function removes any project from the root, checks that project quota accounting and
     /// enforcement are on and that the helper may query and change project quotas, and probes
     /// project inheritance and reflink.
     pub(super) fn new(
         root: XfsRoot,
-        quota_helper_socket: &Path,
+        xfs_quotad_socket: &Path,
         cleanup_retry: &RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
         let XfsRoot {
@@ -378,14 +303,10 @@ impl ManagedProvisioning {
             filesystem_block_bytes,
             ..
         } = root;
-        let quotas = XfsQuotaHelper::connect(quota_helper_socket, identity.device)
+        let quotas = XfsQuotadClient::connect(xfs_quotad_socket, identity.device)
             .map(Arc::new)
             .map_err(|error| {
-                FilesystemStorageError::io(
-                    "connect to the XFS quota helper",
-                    &configured_root,
-                    error,
-                )
+                FilesystemStorageError::io("connect to xfs-quotad", &configured_root, error)
             })?;
         clear_root_project_assignment(&root_fd, &configured_root)?;
         let backend = Self {
@@ -1229,13 +1150,13 @@ pub(super) fn install_project_limits(
     Ok(())
 }
 
-fn volume_quotas(volume: &FilesystemVolume) -> &XfsQuotaHelper {
+fn volume_quotas(volume: &FilesystemVolume) -> &XfsQuotadClient {
     volume
         .project_quotas()
         .expect("managed XFS operation requires a managed volume")
 }
 
-fn project_quota(quotas: &XfsQuotaHelper, project_id: u32) -> std::io::Result<FsDiskQuota> {
+fn project_quota(quotas: &XfsQuotadClient, project_id: u32) -> std::io::Result<FsDiskQuota> {
     let mut quota = FsDiskQuota::default();
     if let Err(error) = quotas.get_project_quota(project_id, &mut quota) {
         if quota_record_is_missing(&error) {
@@ -1745,6 +1666,15 @@ fn errno_to_io(error: rustix::io::Errno) -> std::io::Error {
     std::io::Error::from_raw_os_error(error.raw_os_error())
 }
 
+/// The socket of `xfs-quotad` on a thread of this test process, for the XFS root `root`. The test
+/// process holds `CAP_SYS_ADMIN` itself.
+#[cfg(test)]
+pub(crate) fn in_process_xfs_quotad(root: impl AsRef<Path>) -> Box<Path> {
+    golem_xfs_quotad::start_in_process(root.as_ref())
+        .expect("failed to start xfs-quotad in the test process")
+        .into_boxed_path()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2213,8 +2143,7 @@ mod tests {
             .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
-                quota_helper_socket:
-                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
+                xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
                 root: root.clone().into(),
             },
             RetryConfig::default(),
@@ -2224,7 +2153,7 @@ mod tests {
         assert!(
             SandboxFilesystemProvisioning::provision(
                 &FilesystemStorageMode::ManagedXfs {
-                    quota_helper_socket: crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
+                    xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
                     root: root.clone().into(),
                 },
                 RetryConfig::default()
@@ -2687,8 +2616,7 @@ mod tests {
         assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
-                quota_helper_socket:
-                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
+                xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
                 root: root.clone().into(),
             },
             RetryConfig::default(),
@@ -2907,8 +2835,7 @@ mod tests {
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
-                quota_helper_socket:
-                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
+                xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
                 root: root.clone().into(),
             },
             RetryConfig::default(),
@@ -3002,8 +2929,7 @@ mod tests {
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
-                quota_helper_socket:
-                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
+                xfs_quotad_socket: crate::sandbox_filesystem::xfs::in_process_xfs_quotad(&root),
                 root: root.clone().into(),
             },
             RetryConfig::default(),

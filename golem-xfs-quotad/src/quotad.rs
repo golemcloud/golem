@@ -12,27 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The XFS quota helper: the only code that calls `quotactl_fd`.
-//!
-//! Linux allows the project quota calls of `ManagedXfs` storage only with `CAP_SYS_ADMIN`. The
-//! executor runs guest Wasm, so it must not hold that capability. It sends each quota call to a
-//! helper process over a Unix socket instead. The helper serves one XFS root, runs no guest code,
-//! and accepts three calls: read the quota state of the volume, read the quota of a project, and
-//! set the limits of a project.
-//!
-//! The operator runs the helper beside the executor, for example as a sidecar container or a
-//! second service (`xfs-quota-helper --root <root> --listen <socket>`), gives it `CAP_SYS_ADMIN`,
-//! and configures its socket in `ManagedXfs` mode. Neither process changes its own capabilities:
-//! the helper only refuses to start without `CAP_SYS_ADMIN`.
-//!
-//! The helper accepts a connection only from a process of one uid, its own unless `--allow-uid`
-//! names another. On connect, it sends a greeting with the protocol version and the device of its
-//! root, and the client refuses a helper of another version or of another filesystem.
-
-use super::{
-    FS_DQUOT_VERSION, FS_PROJ_QUOTA, FsDiskQuota, FsQuotaFileStatV, FsQuotaStatV,
-    PROJECT_LIMIT_FIELDS, Q_XGETQSTATV, Q_XGETQUOTA, Q_XSETQLIM, XFS_SUPER_MAGIC, XQM_PRJQUOTA,
-};
 use anyhow::{Context, anyhow, bail};
 use std::ffi::OsString;
 use std::fs::File;
@@ -45,23 +24,103 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// The first argument that runs the binary as the quota helper.
-pub const HELPER_COMMAND: &str = "xfs-quota-helper";
+/// The documentation of the deployment of `xfs-quotad`.
+pub const XFS_QUOTAD_DOCS: &str =
+    "https://learn.golem.cloud/operate/filesystem_snapshots#run-xfs-quotad";
 
-/// The documentation of the deployment of the helper.
-pub const HELPER_DOCS: &str =
-    "https://learn.golem.cloud/operate/filesystem_snapshots#run-the-xfs-quota-helper";
+const XFS_SUPER_MAGIC: u64 = 0x5846_5342;
+const XQM_PRJQUOTA: u32 = 2;
+const Q_XGETQUOTA: u32 = (b'X' as u32) << 8 | 3;
+const Q_XSETQLIM: u32 = (b'X' as u32) << 8 | 4;
+const Q_XGETQSTATV: u32 = (b'X' as u32) << 8 | 8;
+pub const FS_DQUOT_VERSION: i8 = 1;
+pub const FS_QSTATV_VERSION1: i8 = 1;
+pub const FS_PROJ_QUOTA: i8 = 1 << 1;
+pub const FS_DQ_ISOFT: u16 = 1 << 0;
+pub const FS_DQ_IHARD: u16 = 1 << 1;
+pub const FS_DQ_BSOFT: u16 = 1 << 2;
+pub const FS_DQ_BHARD: u16 = 1 << 3;
+pub const FS_DQ_RTBSOFT: u16 = 1 << 4;
+pub const FS_DQ_RTBHARD: u16 = 1 << 5;
+/// Every limit field of a project quota record.
+pub const PROJECT_LIMIT_FIELDS: u16 =
+    FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD | FS_DQ_RTBSOFT | FS_DQ_RTBHARD;
+/// The limit fields of a project quota record for the data device.
+pub const PROJECT_DATA_LIMIT_FIELDS: u16 = FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD;
+
+/// `struct fs_disk_quota` of `linux/dqblk_xfs.h`: the quota record of one project.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FsDiskQuota {
+    pub d_version: i8,
+    pub d_flags: i8,
+    pub d_fieldmask: u16,
+    pub d_id: u32,
+    pub d_blk_hardlimit: u64,
+    pub d_blk_softlimit: u64,
+    pub d_ino_hardlimit: u64,
+    pub d_ino_softlimit: u64,
+    pub d_bcount: u64,
+    pub d_icount: u64,
+    pub d_itimer: i32,
+    pub d_btimer: i32,
+    pub d_iwarns: u16,
+    pub d_bwarns: u16,
+    pub d_itimer_hi: i8,
+    pub d_btimer_hi: i8,
+    pub d_rtbtimer_hi: i8,
+    pub d_padding2: i8,
+    pub d_rtb_hardlimit: u64,
+    pub d_rtb_softlimit: u64,
+    pub d_rtbcount: u64,
+    pub d_rtbtimer: i32,
+    pub d_rtbwarns: u16,
+    pub d_padding3: i16,
+    pub d_padding4: [i8; 8],
+}
+
+/// `struct fs_qfilestatv` of `linux/dqblk_xfs.h`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FsQuotaFileStatV {
+    pub qfs_ino: u64,
+    pub qfs_nblks: u64,
+    pub qfs_nextents: u32,
+    pub qfs_pad: u32,
+}
+
+/// `struct fs_quota_statv` of `linux/dqblk_xfs.h`: the quota state of a volume.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FsQuotaStatV {
+    pub qs_version: i8,
+    pub qs_pad1: u8,
+    pub qs_flags: u16,
+    pub qs_incoredqs: u32,
+    pub qs_uquota: FsQuotaFileStatV,
+    pub qs_gquota: FsQuotaFileStatV,
+    pub qs_pquota: FsQuotaFileStatV,
+    pub qs_btimelimit: i32,
+    pub qs_itimelimit: i32,
+    pub qs_rtbtimelimit: i32,
+    pub qs_bwarnlimit: u16,
+    pub qs_iwarnlimit: u16,
+    pub qs_rtbwarnlimit: u16,
+    pub qs_pad3: u16,
+    pub qs_pad4: u32,
+    pub qs_pad2: [u64; 7],
+}
 
 const GREETING_MAGIC: [u8; 4] = *b"GQH1";
 const GREETING_READY: u8 = 0;
 const GREETING_REFUSED: u8 = 1;
 
-/// The most connections that the helper serves at once. The executor holds one; the limit stops
-/// a client from exhausting the threads or the memory of the helper.
+/// The most connections that xfs-quotad serves at once. The executor holds one; the limit stops
+/// a client from exhausting the threads or the memory of xfs-quotad.
 const MAX_CONNECTIONS: usize = 8;
 
-/// How long a client waits for the helper to take a request or to answer it, and how long the
-/// helper waits for a client to take an answer. Each call is one quota system call, which takes
+/// How long a client waits for xfs-quotad to take a request or to answer it, and how long the
+/// server waits for a client to take an answer. Each call is one quota system call, which takes
 /// microseconds, so only a stalled process misses it.
 const CALL_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -74,23 +133,23 @@ const QUOTA_STATE_BYTES: usize = 160;
 const REQUEST_BYTES: usize = 1 + 4 + QUOTA_BYTES;
 const RESPONSE_BYTES: usize = 4 + QUOTA_STATE_BYTES;
 
-/// A connection to the quota helper of one XFS root.
-pub struct XfsQuotaHelper {
+/// A connection to xfs-quotad of one XFS root.
+pub struct XfsQuotadClient {
     connection: Mutex<Connection>,
 }
 
 struct Connection {
-    /// The socket of the helper. A connection without one cannot be made again.
+    /// The socket of xfs-quotad. A connection without one cannot be made again.
     socket: Option<PathBuf>,
-    /// The device of the XFS root that the helper must serve.
+    /// The device of the XFS root that xfs-quotad must serve.
     device: u64,
     stream: Option<UnixStream>,
 }
 
-impl XfsQuotaHelper {
-    /// Connects to the helper that listens on `socket`, and checks that it serves the filesystem
+impl XfsQuotadClient {
+    /// Connects to xfs-quotad that listens on `socket`, and checks that it serves the filesystem
     /// with the device `device`.
-    pub(super) fn connect(socket: &Path, device: u64) -> std::io::Result<Self> {
+    pub fn connect(socket: &Path, device: u64) -> std::io::Result<Self> {
         let stream = connect_socket(socket, device)?;
         Ok(Self {
             connection: Mutex::new(Connection {
@@ -101,7 +160,7 @@ impl XfsQuotaHelper {
         })
     }
 
-    pub(super) fn get_quota_state(&self, state: &mut FsQuotaStatV) -> std::io::Result<()> {
+    pub fn get_quota_state(&self, state: &mut FsQuotaStatV) -> std::io::Result<()> {
         let mut request = [0u8; REQUEST_BYTES];
         request[0] = OPERATION_QUOTA_STATE;
         let response = self.call(&request)?;
@@ -109,7 +168,7 @@ impl XfsQuotaHelper {
         Ok(())
     }
 
-    pub(super) fn get_project_quota(
+    pub fn get_project_quota(
         &self,
         project_id: u32,
         quota: &mut FsDiskQuota,
@@ -120,7 +179,7 @@ impl XfsQuotaHelper {
         Ok(())
     }
 
-    pub(super) fn set_project_quota_record(
+    pub fn set_project_quota_record(
         &self,
         project_id: u32,
         quota: &FsDiskQuota,
@@ -137,13 +196,13 @@ impl XfsQuotaHelper {
         let mut connection = self
             .connection
             .lock()
-            .expect("XFS quota helper lock poisoned");
+            .expect("XFS quota server lock poisoned");
         match connection.exchange(request) {
             Ok(result) => return result,
             Err(Transport(error)) => {
                 connection.stream = None;
                 let Some(socket) = connection.socket.clone() else {
-                    return Err(helper_lost(error));
+                    return Err(server_lost(error));
                 };
                 connection.stream = Some(connect_socket(&socket, connection.device)?);
             }
@@ -152,14 +211,14 @@ impl XfsQuotaHelper {
             Ok(result) => result,
             Err(Transport(error)) => {
                 connection.stream = None;
-                Err(helper_lost(error))
+                Err(server_lost(error))
             }
         }
     }
 }
 
 #[cfg(test)]
-impl XfsQuotaHelper {
+impl XfsQuotadClient {
     /// Wraps a connected `stream` whose greeting was read already. It is not connected again.
     fn over(stream: UnixStream, device: u64) -> Self {
         Self {
@@ -172,7 +231,7 @@ impl XfsQuotaHelper {
     }
 }
 
-/// A failure to reach the helper, as opposed to an error of the call that the helper made.
+/// A failure to reach xfs-quotad, as opposed to an error of the call that xfs-quotad made.
 struct Transport(std::io::Error);
 
 impl Connection {
@@ -185,7 +244,7 @@ impl Connection {
             None => {
                 return Err(Transport(std::io::Error::new(
                     ErrorKind::NotConnected,
-                    "the XFS quota helper connection is closed",
+                    "xfs-quotad connection is closed",
                 )));
             }
         };
@@ -207,7 +266,7 @@ fn transport(error: std::io::Error) -> Transport {
     Transport(match error.kind() {
         ErrorKind::WouldBlock | ErrorKind::TimedOut => std::io::Error::new(
             ErrorKind::TimedOut,
-            format!("the XFS quota helper did not answer within {CALL_DEADLINE:?}"),
+            format!("xfs-quotad did not answer within {CALL_DEADLINE:?}"),
         ),
         _ => error,
     })
@@ -219,10 +278,10 @@ fn set_deadlines(stream: &UnixStream) -> std::io::Result<()> {
     stream.set_write_timeout(Some(CALL_DEADLINE))
 }
 
-fn helper_lost(error: std::io::Error) -> std::io::Error {
+fn server_lost(error: std::io::Error) -> std::io::Error {
     std::io::Error::new(
         error.kind(),
-        format!("lost the connection to the XFS quota helper: {error}"),
+        format!("lost the connection to xfs-quotad: {error}"),
     )
 }
 
@@ -231,7 +290,7 @@ fn connect_socket(socket: &Path, device: u64) -> std::io::Result<UnixStream> {
         std::io::Error::new(
             error.kind(),
             format!(
-                "failed to connect to the XFS quota helper at {}: {error}. See {HELPER_DOCS}",
+                "failed to connect to xfs-quotad at {}: {error}. See {XFS_QUOTAD_DOCS}",
                 socket.display()
             ),
         )
@@ -241,25 +300,25 @@ fn connect_socket(socket: &Path, device: u64) -> std::io::Result<UnixStream> {
     Ok(stream)
 }
 
-/// Reads the greeting of the helper on `stream`, and checks that the helper is ready and serves
+/// Reads the greeting of xfs-quotad on `stream`, and checks that xfs-quotad is ready and serves
 /// the filesystem with the device `device`.
 fn read_greeting(stream: &mut impl Read, device: u64) -> std::io::Result<()> {
     let mut header = [0u8; 4 + 1 + 8 + 2];
     stream.read_exact(&mut header).map_err(|error| {
         std::io::Error::new(
             error.kind(),
-            format!("the XFS quota helper sent no greeting: {error}"),
+            format!("xfs-quotad sent no greeting: {error}"),
         )
     })?;
     if header[..4] != GREETING_MAGIC {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
-            "the XFS quota helper speaks another protocol version; run the helper and the \
+            "xfs-quotad speaks another protocol version; run xfs-quotad and the \
              executor from the same Golem release",
         ));
     }
     let status = header[4];
-    let helper_device = u64::from_le_bytes(header[5..13].try_into().unwrap());
+    let server_device = u64::from_le_bytes(header[5..13].try_into().unwrap());
     let message_length = u16::from_le_bytes(header[13..15].try_into().unwrap()) as usize;
     let mut message = vec![0u8; message_length];
     stream.read_exact(&mut message)?;
@@ -267,13 +326,13 @@ fn read_greeting(stream: &mut impl Read, device: u64) -> std::io::Result<()> {
     if status != GREETING_READY {
         return Err(std::io::Error::new(
             ErrorKind::PermissionDenied,
-            format!("the XFS quota helper refused the connection: {message}"),
+            format!("xfs-quotad refused the connection: {message}"),
         ));
     }
-    if helper_device != device {
+    if server_device != device {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "the XFS quota helper serves another filesystem than the executor's XFS root",
+            "xfs-quotad serves another filesystem than the executor's XFS root",
         ));
     }
     Ok(())
@@ -306,53 +365,47 @@ pub fn start_in_process(root: &Path) -> std::io::Result<PathBuf> {
     let root_file = open_root(root).map_err(std::io::Error::other)?;
     let device = root_file.metadata()?.dev();
     let directory = tempfile::Builder::new()
-        .prefix("xfs-quota-helper")
+        .prefix("xfs-quotad")
         .tempdir()?
         .keep();
-    let socket = directory.join("helper.sock");
+    let socket = directory.join("xfs-quotad.sock");
     let listener = bind(&socket).map_err(std::io::Error::other)?;
     let uid = rustix::process::geteuid();
     std::thread::Builder::new()
-        .name("xfs-quota-helper".to_string())
+        .name("xfs-quotad".to_string())
         .spawn(move || serve_connections(listener, Arc::new(root_file), device, uid))?;
     Ok(socket)
 }
 
-/// The socket of a quota helper on a thread of this test process, for the XFS root `root`.
-#[cfg(test)]
-pub(crate) fn in_process_quota_helper(root: impl AsRef<Path>) -> Box<Path> {
-    start_in_process(root.as_ref())
-        .expect("failed to start the XFS quota helper in the test process")
-        .into_boxed_path()
+// --- The xfs-quotad process ---
+
+/// Runs `xfs-quotad` with the command line arguments `args`, without the program name, until the
+/// process stops.
+pub fn run(args: impl Iterator<Item = OsString>) -> anyhow::Result<()> {
+    let args = Args::parse(args)?;
+    require_sys_admin()?;
+    let root = open_root(&args.root)?;
+    let device = root.metadata()?.dev();
+    let listener = bind(&args.socket)?;
+    let allowed_uid = match args.allowed_uid {
+        Some(uid) => rustix::process::Uid::from_raw(uid),
+        None => rustix::process::geteuid(),
+    };
+    serve_connections(listener, Arc::new(root), device, allowed_uid);
+    Ok(())
 }
 
-// --- The helper process ---
-
-/// Runs the quota helper when the first argument of the process is [`HELPER_COMMAND`], and gives
-/// its result. Gives `None` for any other command line.
-pub fn run_if_requested() -> Option<anyhow::Result<()>> {
-    let mut args = std::env::args_os().skip(1);
-    if args.next()? != HELPER_COMMAND {
-        return None;
-    }
-    Some(
-        HelperArgs::parse(args)
-            .and_then(run_helper)
-            .context("XFS quota helper"),
-    )
-}
-
-struct HelperArgs {
+struct Args {
     root: PathBuf,
     socket: PathBuf,
     allowed_uid: Option<u32>,
 }
 
-impl HelperArgs {
+impl Args {
     fn parse(mut args: impl Iterator<Item = OsString>) -> anyhow::Result<Self> {
         let usage = || {
             anyhow!(
-                "usage: {HELPER_COMMAND} --root <XFS root> --listen <socket> [--allow-uid <uid>]"
+                "usage: golem-xfs-quotad --root <XFS root> --listen <socket> [--allow-uid <uid>]"
             )
         };
         let mut root = None;
@@ -382,20 +435,33 @@ impl HelperArgs {
     }
 }
 
-fn run_helper(args: HelperArgs) -> anyhow::Result<()> {
-    crate::process_capabilities::require_sys_admin_for_quota_helper()?;
-    let root = open_root(&args.root)?;
-    let device = root.metadata()?.dev();
-    let listener = bind(&args.socket)?;
-    let allowed_uid = match args.allowed_uid {
-        Some(uid) => rustix::process::Uid::from_raw(uid),
-        None => rustix::process::geteuid(),
-    };
-    serve_connections(listener, Arc::new(root), device, allowed_uid);
-    Ok(())
+/// Fails, naming the settings to add, when this process does not hold `CAP_SYS_ADMIN` in its
+/// effective set. The process only reads its capabilities; the deployment gives them.
+fn require_sys_admin() -> anyhow::Result<()> {
+    let current = rustix::thread::capabilities(None)
+        .context("failed to read the capabilities of the process")?;
+    if current
+        .effective
+        .contains(rustix::thread::CapabilitySet::SYS_ADMIN)
+    {
+        Ok(())
+    } else {
+        Err(missing_sys_admin())
+    }
 }
 
-/// Opens the XFS root `root`. The helper does not lock the root: the executor holds that lock.
+fn missing_sys_admin() -> anyhow::Error {
+    anyhow!(
+        "xfs-quotad needs CAP_SYS_ADMIN, which this process does not hold. The binary of the \
+         xfs-quotad image has the file capability cap_sys_admin+ep, which Linux grants only when \
+         the container adds the SYS_ADMIN capability (Kubernetes: capabilities.add: [SYS_ADMIN]; \
+         Docker: --cap-add SYS_ADMIN) and allows privilege escalation (Kubernetes: \
+         allowPrivilegeEscalation: true; Docker: no --security-opt no-new-privileges). Without \
+         containers, run it with AmbientCapabilities=CAP_SYS_ADMIN. See {XFS_QUOTAD_DOCS}"
+    )
+}
+
+/// Opens the XFS root `root`. xfs-quotad does not lock the root: the executor holds that lock.
 fn open_root(root: &Path) -> anyhow::Result<File> {
     let file = File::open(root)
         .with_context(|| format!("failed to open the XFS root {}", root.display()))?;
@@ -407,9 +473,9 @@ fn open_root(root: &Path) -> anyhow::Result<File> {
     Ok(file)
 }
 
-/// Listens on `socket`, in place of a file that an earlier helper left there. Any process may
-/// open the socket: the helper checks the uid of each connection itself, and the operator keeps
-/// the socket in a directory that only the helper and the executor share.
+/// Listens on `socket`, in place of a file that an earlier server left there. Any process may
+/// open the socket: xfs-quotad checks the uid of each connection itself, and the operator keeps
+/// the socket in a directory that only xfs-quotad and the executor share.
 fn bind(socket: &Path) -> anyhow::Result<UnixListener> {
     match std::fs::remove_file(socket) {
         Err(error) if error.kind() != ErrorKind::NotFound => {
@@ -443,7 +509,7 @@ fn serve_connections(
             _ => {
                 let _ = write_greeting(
                     &mut stream,
-                    Some("the helper accepts connections of another uid"),
+                    Some("xfs-quotad accepts connections of another uid"),
                     device,
                 );
                 continue;
@@ -453,14 +519,14 @@ fn serve_connections(
             served.fetch_sub(1, Ordering::AcqRel);
             let _ = write_greeting(
                 &mut stream,
-                Some("the helper serves the most connections it allows"),
+                Some("xfs-quotad serves the most connections it allows"),
                 device,
             );
             continue;
         }
         let root = Arc::clone(&root);
         let spawned = std::thread::Builder::new()
-            .name("xfs-quota-helper-connection".to_string())
+            .name("xfs-quotad-connection".to_string())
             .spawn({
                 let served = Arc::clone(&served);
                 move || {
@@ -494,7 +560,7 @@ fn answer(root: &File, request: &[u8; REQUEST_BYTES]) -> [u8; RESPONSE_BYTES] {
     let result = match request[0] {
         OPERATION_QUOTA_STATE => {
             let mut state = FsQuotaStatV {
-                qs_version: super::FS_QSTATV_VERSION1,
+                qs_version: FS_QSTATV_VERSION1,
                 ..FsQuotaStatV::default()
             };
             // SAFETY: Q_XGETQSTATV writes exactly one `fs_quota_statv` record.
@@ -816,7 +882,7 @@ mod tests {
             qfs_pad: base as u32 + 3,
         };
         let state = FsQuotaStatV {
-            qs_version: super::super::FS_QSTATV_VERSION1,
+            qs_version: FS_QSTATV_VERSION1,
             qs_pad1: 1,
             qs_flags: 0x30,
             qs_incoredqs: 2,
@@ -884,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn the_client_reports_a_refused_helper() {
+    fn the_client_reports_a_refused_connection() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         write_greeting(&mut server, Some("no CAP_SYS_ADMIN"), 0).unwrap();
         let_assert!(Err(error) = read_greeting(&mut client, 0));
@@ -896,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn the_client_refuses_a_helper_of_another_filesystem() {
+    fn the_client_refuses_a_server_of_another_filesystem() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         write_greeting(&mut server, None, 7).unwrap();
         let_assert!(Err(error) = read_greeting(&mut client, 8));
@@ -912,62 +978,62 @@ mod tests {
     }
 
     #[test]
-    fn the_helper_answers_calls_and_returns_their_errors() {
-        // A directory that is not on XFS: every quotactl_fd call fails, and the helper gives the
+    fn the_server_answers_calls_and_returns_their_errors() {
+        // A directory that is not on XFS: every quotactl_fd call fails, and xfs-quotad gives the
         // error of the kernel back instead of closing the connection.
         let directory = tempfile::tempdir().unwrap();
         let root = File::open(directory.path()).unwrap();
         let (client, server) = UnixStream::pair().unwrap();
         let server_thread = std::thread::spawn(move || serve(&root, server));
-        let helper = XfsQuotaHelper::over(client, 0);
+        let client = XfsQuotadClient::over(client, 0);
 
         let mut quota = FsDiskQuota::default();
-        let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
+        let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(error.raw_os_error().is_some());
         let mut state = FsQuotaStatV::default();
-        let_assert!(Err(_) = helper.get_quota_state(&mut state));
+        let_assert!(Err(_) = client.get_quota_state(&mut state));
 
         let refused = FsDiskQuota {
             d_id: 2,
             ..FsDiskQuota::default()
         };
-        let_assert!(Err(error) = helper.set_project_quota_record(1, &refused));
+        let_assert!(Err(error) = client.set_project_quota_record(1, &refused));
         assert!(error.raw_os_error() == Some(libc::EINVAL));
 
-        drop(helper);
+        drop(client);
         server_thread.join().unwrap();
     }
 
     #[test]
-    fn a_helper_that_is_gone_fails_its_calls() {
+    fn a_server_that_is_gone_fails_its_calls() {
         let (client, server) = UnixStream::pair().unwrap();
         drop(server);
-        let helper = XfsQuotaHelper::over(client, 0);
+        let client = XfsQuotadClient::over(client, 0);
         let mut quota = FsDiskQuota::default();
-        let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
+        let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(
             error
                 .to_string()
-                .contains("lost the connection to the XFS quota helper")
+                .contains("lost the connection to xfs-quotad")
         );
     }
 
     #[test]
-    fn a_helper_that_does_not_answer_fails_the_call_at_the_deadline() {
+    fn a_server_that_does_not_answer_fails_the_call_at_the_deadline() {
         let (client, _silent) = UnixStream::pair().unwrap();
         client
             .set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
-        let helper = XfsQuotaHelper::over(client, 0);
+        let client = XfsQuotadClient::over(client, 0);
         let start = std::time::Instant::now();
         let mut quota = FsDiskQuota::default();
-        let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
+        let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(start.elapsed() < Duration::from_secs(5));
         assert!(error.kind() == ErrorKind::TimedOut);
         assert!(error.to_string().contains("did not answer"));
 
         // The connection is closed, so a late answer cannot be taken for the next call.
-        let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
+        let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(error.to_string().contains("connection is closed"));
     }
 
@@ -975,7 +1041,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = File::open(directory.path()).unwrap();
         let device = root.metadata().unwrap().dev();
-        let socket = directory.path().join("helper.sock");
+        let socket = directory.path().join("xfs-quotad.sock");
         let listener = bind(&socket).unwrap();
         std::thread::spawn(move || {
             serve_connections(listener, Arc::new(root), device, allowed_uid)
@@ -984,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn a_listening_helper_serves_a_client_of_the_allowed_uid() {
+    fn a_listening_server_serves_a_client_of_the_allowed_uid() {
         // The root is not on XFS, so the call reaches the kernel and fails there: the failure
         // comes back as the error of the call, which proves the connection, the greeting and the
         // peer check worked.
@@ -992,42 +1058,53 @@ mod tests {
         let mode = std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
         assert!(mode == 0o666);
 
-        let_assert!(Ok(helper) = XfsQuotaHelper::connect(&socket, device));
+        let_assert!(Ok(client) = XfsQuotadClient::connect(&socket, device));
         let mut quota = FsDiskQuota::default();
-        let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
+        let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(error.raw_os_error().is_some());
-        assert!(!error.to_string().contains("XFS quota helper"));
+        assert!(!error.to_string().contains("XFS quota server"));
 
-        let_assert!(Err(error) = XfsQuotaHelper::connect(&socket, device + 1));
+        let_assert!(Err(error) = XfsQuotadClient::connect(&socket, device + 1));
         assert!(error.to_string().contains("another filesystem"));
 
-        // `helper` holds one connection; the helper serves up to MAX_CONNECTIONS at once.
-        let held: Vec<XfsQuotaHelper> = (1..MAX_CONNECTIONS)
-            .map(|_| XfsQuotaHelper::connect(&socket, device).unwrap())
+        // `client` holds one connection; xfs-quotad serves up to MAX_CONNECTIONS at once.
+        let held: Vec<XfsQuotadClient> = (1..MAX_CONNECTIONS)
+            .map(|_| XfsQuotadClient::connect(&socket, device).unwrap())
             .collect();
-        let_assert!(Err(error) = XfsQuotaHelper::connect(&socket, device));
+        let_assert!(Err(error) = XfsQuotadClient::connect(&socket, device));
         assert!(error.to_string().contains("serves the most connections"));
 
         // A closed connection frees its place.
         drop(held);
         let connected = (0..200).any(|_| {
             std::thread::sleep(Duration::from_millis(5));
-            XfsQuotaHelper::connect(&socket, device).is_ok()
+            XfsQuotadClient::connect(&socket, device).is_ok()
         });
         assert!(connected);
     }
 
     #[test]
-    fn a_listening_helper_refuses_a_client_of_another_uid() {
+    fn a_listening_server_refuses_a_client_of_another_uid() {
         let other = rustix::process::geteuid().as_raw().wrapping_add(1);
         let (_directory, socket, device) = start_listening(rustix::process::Uid::from_raw(other));
-        let_assert!(Err(error) = XfsQuotaHelper::connect(&socket, device));
+        let_assert!(Err(error) = XfsQuotadClient::connect(&socket, device));
         assert!(error.to_string().contains("connections of another uid"));
     }
 
     #[test]
-    fn helper_arguments_name_a_root_a_socket_and_an_allowed_uid() {
-        let parse = |args: &[&str]| HelperArgs::parse(args.iter().map(OsString::from));
+    fn the_missing_capability_error_names_the_settings() {
+        let message = missing_sys_admin().to_string();
+        assert!(message.contains("CAP_SYS_ADMIN"));
+        assert!(message.contains("capabilities.add: [SYS_ADMIN]"));
+        assert!(message.contains("--cap-add SYS_ADMIN"));
+        assert!(message.contains("allowPrivilegeEscalation: true"));
+        assert!(message.contains("AmbientCapabilities=CAP_SYS_ADMIN"));
+        assert!(message.contains(XFS_QUOTAD_DOCS));
+    }
+
+    #[test]
+    fn arguments_name_a_root_a_socket_and_an_allowed_uid() {
+        let parse = |args: &[&str]| Args::parse(args.iter().map(OsString::from));
         let_assert!(Ok(args) = parse(&["--root", "/xfs", "--listen", "/run/q.sock"]));
         assert!(args.root == Path::new("/xfs"));
         assert!(args.socket == Path::new("/run/q.sock"));

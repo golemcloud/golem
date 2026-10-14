@@ -29,7 +29,7 @@ RUN update-ca-certificates
 
 # Runs the service as uid and gid 65534; see the script.
 RUN --mount=type=bind,source=docker/prepare-service-image.sh,target=/tmp/prepare-service-image.sh \
-    sh /tmp/prepare-service-image.sh
+    sh /tmp/prepare-service-image.sh /data /data/blob_storage
 
 ENV HOME=/home/golem
 USER 65534:65534
