@@ -319,7 +319,11 @@ retries, fails the open with `OplogFailed`, and the open-oplog cache keeps nothi
 session index rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
 type up to `OplogFailed`. An ephemeral oplog whose writer task cannot store a batch in the first
 archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
-refused, so the agent stops. Entries committed with `CommitLevel::Deferred` before the failure
+refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
+(`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write
+that cannot report it (`Worker::add_to_oplog_or_retire`, the log policy, the oplog processor
+checkpoint) leaves it to the next write that can. Only the fence records a retirement. Any other
+`OplogError` on those paths stays fail-stop. Entries committed with `CommitLevel::Deferred` before the failure
 were already acknowledged and are missing from the archived history; an ephemeral agent is never
 resumed from that history, so the agent stops instead of the process. The storage failures of the
 primary oplog are outside this rule and still stop the executor.
