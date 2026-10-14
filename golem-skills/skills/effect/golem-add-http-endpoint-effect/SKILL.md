@@ -155,9 +155,11 @@ searchItems: method({
 - `headers` maps HTTP header names to method parameter names.
 - A parameter can be bound from only one of path, query, or headers in a given endpoint.
 - `Http.get` has no body, so every parameter must be bound explicitly.
-- For `post`, `put`, `del`, and other bodyful endpoints, every unbound parameter comes from a JSON
-  object field with the same TypeScript name. For example, unbound `inStock` expects
-  `{ "inStock": true }`.
+- For ordinary structured bodies, each unbound user-supplied parameter comes from a JSON object
+  field with the same TypeScript name. For example, unbound `inStock` expects `{ "inStock": true }`.
+  A single object input named `request` needs `{ "request": { "text": "hello" } }`, not the bare
+  inner object. Unstructured text and binary inputs instead consume raw bodies. Load
+  `golem-http-params-effect` for the body mapping rules and the contrast with CLI arguments.
 
 Endpoint paths start with `/`. A `{*rest}` catch-all is allowed only as the final endpoint path
 segment.
