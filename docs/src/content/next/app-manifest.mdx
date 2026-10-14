@@ -917,13 +917,32 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     ***Optional map of presets*** used to define preset variations for a component.
 
     A _preset_ contains the same fields as a component. Presets can also specify a <FieldLink path="components.<component-name>.presets.<preset-name>.default"/> flag to mark it as the default preset for selection.
+
+    A component with custom presets always applies at least one custom preset. If no preset selected by the environment or the CLI matches this component, it applies the custom preset marked `default: true`. If none is marked, it applies the first custom preset in declaration order. The same rule applies independently to each component template and agent with custom presets.
+
+    Presets named `app-env:<environment-name>` are environment presets, not custom presets. They apply only for the matching environment and do not participate in default selection.
+
+    To keep a preset opt-in, add an empty preset marked `default: true`:
+
+    ```yaml
+    components:
+      my-app:service:
+        presets:
+          standard:
+            default: true
+          debug:
+            env:
+              RUST_LOG: debug
+    ```
+
+    The `standard` preset adds no overrides. The `debug` preset applies only when selected by `componentPresets: debug` in the environment or by `-P debug` on the CLI. Use the same empty-default pattern under a template's or agent's `presets` to keep its other presets opt-in.
   </Field>
 
   <Field meta={{
     path: "components.<component-name>.presets.<preset-name>.default",
     since: Release.R_1_4_0
   }}>
-    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+    ***Optional boolean*** which when set to true marks the custom preset as the default for selection. The default applies when no selected preset name matches this component. If no custom preset is marked `default: true`, the first custom preset in declaration order is the default, even if it is the only custom preset. Environment presets (`app-env:<environment-name>`) do not participate in default selection.
   </Field>
 
   <Field meta={{
@@ -1918,13 +1937,15 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Optional map of presets*** for the agent.
+
+    An agent with custom presets always applies at least one custom preset. If no selected preset name matches this agent, it applies the custom preset marked `default: true`, or the first custom preset in declaration order if none is marked. Environment presets (`app-env:<environment-name>`) apply only for the matching environment and do not participate in default selection. To keep other custom presets opt-in, add an empty preset marked `default: true`, as shown for <FieldLink path="components.<component-name>.presets"/>.
   </Field>
 
   <Field meta={{
     path: "agents.<agent-type-name>.presets.<preset-name>.default",
     since: Release.R_1_5_0
   }}>
-    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+    ***Optional boolean*** which when set to true marks the custom preset as the default for selection. The default applies when no selected preset name matches this agent. If no custom preset is marked `default: true`, the first custom preset in declaration order is the default, even if it is the only custom preset. Environment presets (`app-env:<environment-name>`) do not participate in default selection.
   </Field>
 
   <Field meta={{
