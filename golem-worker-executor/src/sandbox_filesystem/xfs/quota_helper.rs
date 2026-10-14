@@ -15,54 +15,49 @@
 //! The XFS quota helper: the only code that calls `quotactl_fd`.
 //!
 //! Linux allows the project quota calls of `ManagedXfs` storage only with `CAP_SYS_ADMIN`. The
-//! executor runs guest Wasm, so it does not hold that capability. It sends each quota call to a
-//! helper process over a Unix socket instead. The helper serves one XFS root, holds no capability
-//! other than `CAP_SYS_ADMIN`, runs no guest code, and accepts three calls: read the quota state of
-//! the volume, read the quota of a project, and set the limits of a project.
+//! executor runs guest Wasm, so it must not hold that capability. It sends each quota call to a
+//! helper process over a Unix socket instead. The helper serves one XFS root, runs no guest code,
+//! and accepts three calls: read the quota state of the volume, read the quota of a project, and
+//! set the limits of a project.
 //!
-//! The helper runs in one of two ways:
+//! The operator runs the helper beside the executor, for example as a sidecar container or a
+//! second service (`xfs-quota-helper --root <root> --listen <socket>`), gives it `CAP_SYS_ADMIN`,
+//! and configures its socket in `ManagedXfs` mode. Neither process changes its own capabilities:
+//! the helper only refuses to start without `CAP_SYS_ADMIN`.
 //!
-//! - The executor starts it as a child process, from its own binary, before it starts any thread
-//!   ([`start_for_storage`]). The child gets `CAP_SYS_ADMIN` the way the executor got it: from the
-//!   file capability of the binary, or as root. The executor then drops the capability.
-//! - An operator runs it beside the executor, for example as a sidecar container
-//!   (`xfs-quota-helper --root <root> --listen <socket>`), and configures the socket in
-//!   `ManagedXfs` mode. The executor then needs no capability at all.
-//!
-//! On connect, the helper sends a greeting with the protocol version and the device of its root,
-//! and the client refuses a helper of another version or of another filesystem.
+//! The helper accepts a connection only from a process of one uid, its own unless `--allow-uid`
+//! names another. On connect, it sends a greeting with the protocol version and the device of its
+//! root, and the client refuses a helper of another version or of another filesystem.
 
 use super::{
     FS_DQUOT_VERSION, FS_PROJ_QUOTA, FsDiskQuota, FsQuotaFileStatV, FsQuotaStatV,
     PROJECT_LIMIT_FIELDS, Q_XGETQSTATV, Q_XGETQUOTA, Q_XSETQLIM, XFS_SUPER_MAGIC, XQM_PRJQUOTA,
 };
 use anyhow::{Context, anyhow, bail};
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The first argument that runs the binary as the quota helper.
 pub const HELPER_COMMAND: &str = "xfs-quota-helper";
 
-/// The descriptor on which a helper that the executor starts finds its connection.
-const CHILD_CONNECTION_FD: RawFd = 3;
+/// The documentation of the deployment of the helper.
+pub const HELPER_DOCS: &str =
+    "https://learn.golem.cloud/operate/filesystem_snapshots#run-the-xfs-quota-helper";
 
 const GREETING_MAGIC: [u8; 4] = *b"GQH1";
 const GREETING_READY: u8 = 0;
 const GREETING_REFUSED: u8 = 1;
 
-/// The most connections that a listening helper serves at once. The executor holds one; the limit
-/// stops a client from exhausting the threads or the memory of the helper.
+/// The most connections that the helper serves at once. The executor holds one; the limit stops
+/// a client from exhausting the threads or the memory of the helper.
 const MAX_CONNECTIONS: usize = 8;
 
 /// How long a client waits for the helper to take a request or to answer it, and how long the
@@ -85,50 +80,25 @@ pub struct XfsQuotaHelper {
 }
 
 struct Connection {
-    endpoint: Endpoint,
+    /// The socket of the helper. A connection without one cannot be made again.
+    socket: Option<PathBuf>,
     /// The device of the XFS root that the helper must serve.
     device: u64,
     stream: Option<UnixStream>,
 }
 
-enum Endpoint {
-    /// A connection that the executor made when it started the helper. It cannot be made again.
-    Started,
-    /// A socket of a helper that runs beside the executor.
-    Socket(PathBuf),
-}
-
 impl XfsQuotaHelper {
     /// Connects to the helper that listens on `socket`, and checks that it serves the filesystem
     /// with the device `device`.
-    pub(crate) fn connect(socket: &Path, device: u64) -> std::io::Result<Self> {
+    pub(super) fn connect(socket: &Path, device: u64) -> std::io::Result<Self> {
         let stream = connect_socket(socket, device)?;
         Ok(Self {
             connection: Mutex::new(Connection {
-                endpoint: Endpoint::Socket(socket.to_path_buf()),
+                socket: Some(socket.to_path_buf()),
                 device,
                 stream: Some(stream),
             }),
         })
-    }
-
-    /// Wraps the connected `stream` of a started helper whose greeting was read already. The
-    /// stream must have its deadlines ([`set_deadlines`]).
-    fn started(stream: UnixStream, device: u64) -> Self {
-        Self {
-            connection: Mutex::new(Connection {
-                endpoint: Endpoint::Started,
-                device,
-                stream: Some(stream),
-            }),
-        }
-    }
-
-    fn device(&self) -> u64 {
-        self.connection
-            .lock()
-            .expect("XFS quota helper lock poisoned")
-            .device
     }
 
     pub(super) fn get_quota_state(&self, state: &mut FsQuotaStatV) -> std::io::Result<()> {
@@ -161,33 +131,43 @@ impl XfsQuotaHelper {
 
     /// Sends `request` and gives the payload of the response, or the error of the call. A
     /// connection that breaks or misses [`CALL_DEADLINE`] is closed, so that a late answer is
-    /// never read as the answer of the next request. A helper that listens on a socket is
-    /// connected again once; every call is idempotent, so a repeat cannot apply a change twice. A
-    /// started helper is not: it exits when the executor closes its connection.
+    /// never read as the answer of the next request, and connected again once; every call is
+    /// idempotent, so a repeat cannot apply a change twice.
     fn call(&self, request: &[u8; REQUEST_BYTES]) -> std::io::Result<[u8; QUOTA_STATE_BYTES]> {
         let mut connection = self
             .connection
             .lock()
             .expect("XFS quota helper lock poisoned");
         match connection.exchange(request) {
+            Ok(result) => return result,
             Err(Transport(error)) => {
                 connection.stream = None;
-                match &connection.endpoint {
-                    Endpoint::Started => Err(helper_lost(error)),
-                    Endpoint::Socket(socket) => {
-                        let socket = socket.clone();
-                        connection.stream = Some(connect_socket(&socket, connection.device)?);
-                        match connection.exchange(request) {
-                            Err(Transport(error)) => {
-                                connection.stream = None;
-                                Err(helper_lost(error))
-                            }
-                            Ok(result) => result,
-                        }
-                    }
-                }
+                let Some(socket) = connection.socket.clone() else {
+                    return Err(helper_lost(error));
+                };
+                connection.stream = Some(connect_socket(&socket, connection.device)?);
             }
+        }
+        match connection.exchange(request) {
             Ok(result) => result,
+            Err(Transport(error)) => {
+                connection.stream = None;
+                Err(helper_lost(error))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl XfsQuotaHelper {
+    /// Wraps a connected `stream` whose greeting was read already. It is not connected again.
+    fn over(stream: UnixStream, device: u64) -> Self {
+        Self {
+            connection: Mutex::new(Connection {
+                socket: None,
+                device,
+                stream: Some(stream),
+            }),
         }
     }
 }
@@ -251,7 +231,7 @@ fn connect_socket(socket: &Path, device: u64) -> std::io::Result<UnixStream> {
         std::io::Error::new(
             error.kind(),
             format!(
-                "failed to connect to the XFS quota helper at {}: {error}",
+                "failed to connect to the XFS quota helper at {}: {error}. See {HELPER_DOCS}",
                 socket.display()
             ),
         )
@@ -287,7 +267,7 @@ fn read_greeting(stream: &mut impl Read, device: u64) -> std::io::Result<()> {
     if status != GREETING_READY {
         return Err(std::io::Error::new(
             ErrorKind::PermissionDenied,
-            format!("the XFS quota helper refused to start: {message}"),
+            format!("the XFS quota helper refused the connection: {message}"),
         ));
     }
     if helper_device != device {
@@ -319,172 +299,31 @@ fn write_greeting(
     stream.write_all(&greeting)
 }
 
-// --- The helpers of each XFS root that this process uses ---
-
-fn helpers() -> &'static Mutex<HashMap<PathBuf, Arc<XfsQuotaHelper>>> {
-    static HELPERS: OnceLock<Mutex<HashMap<PathBuf, Arc<XfsQuotaHelper>>>> = OnceLock::new();
-    HELPERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn register(root: &Path, helper: XfsQuotaHelper) {
-    helpers()
-        .lock()
-        .expect("XFS quota helper registry lock poisoned")
-        .insert(root.to_path_buf(), Arc::new(helper));
-}
-
-/// The helper for the XFS root `root`, whose filesystem has the device `device`: the helper on
-/// `socket` when one is configured, otherwise the helper that this process started for `root`.
-pub(super) fn helper_for_root(
-    root: &Path,
-    socket: Option<&Path>,
-    device: u64,
-) -> std::io::Result<Arc<XfsQuotaHelper>> {
-    if let Some(socket) = socket {
-        return XfsQuotaHelper::connect(socket, device).map(Arc::new);
-    }
-    let registered = helpers()
-        .lock()
-        .expect("XFS quota helper registry lock poisoned")
-        .get(root)
-        .cloned();
-    #[cfg(test)]
-    let registered = match registered {
-        Some(helper) => Some(helper),
-        None => {
-            start_in_process(root)?;
-            return helper_for_root(root, None, device);
-        }
-    };
-    match registered {
-        Some(helper) if helper.device() == device => Ok(helper),
-        Some(_) => Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            "the XFS quota helper serves another filesystem than the executor's XFS root",
-        )),
-        None => Err(std::io::Error::new(
-            ErrorKind::NotFound,
-            "no XFS quota helper serves this root: configure the socket of a helper, or start \
-             the worker-executor binary, which starts a helper for ManagedXfs storage",
-        )),
-    }
-}
-
-// --- Starting a helper ---
-
-/// A helper that this process started as a child process. Dropping it stops the helper.
-pub struct StartedHelper {
-    child: Child,
-}
-
-impl StartedHelper {
-    /// Waits until the helper exits, and gives a description of how it ended.
-    pub fn wait(&mut self) -> String {
-        match self.child.wait() {
-            Ok(status) => format!("the XFS quota helper exited with {status}"),
-            Err(error) => format!("failed to wait for the XFS quota helper: {error}"),
-        }
-    }
-
-    /// Gives a description of how the helper ended when it has exited, and `None` while it runs.
-    pub fn try_wait(&mut self) -> Option<String> {
-        match self.child.try_wait() {
-            Ok(None) => None,
-            Ok(Some(status)) => Some(format!("the XFS quota helper exited with {status}")),
-            Err(error) => Some(format!("failed to wait for the XFS quota helper: {error}")),
-        }
-    }
-}
-
-impl Drop for StartedHelper {
-    fn drop(&mut self) {
-        if let Ok(None) = self.child.try_wait() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-}
-
-/// Starts the quota helper for `ManagedXfs` storage without a configured helper socket, and gives
-/// it to the storage of this process. Does nothing for another storage mode.
-///
-/// The helper is this binary, run again with [`HELPER_COMMAND`]. It gets `CAP_SYS_ADMIN` from the
-/// file capability of the binary, or as root. It refuses to start without it, and this function
-/// then fails with the reason.
-pub fn start_for_storage(
-    mode: &crate::services::golem_config::FilesystemStorageMode,
-) -> anyhow::Result<Option<StartedHelper>> {
-    let crate::services::golem_config::FilesystemStorageMode::ManagedXfs {
-        root,
-        quota_helper_socket: None,
-    } = mode
-    else {
-        return Ok(None);
-    };
-    let device = root_device(root)?;
-    let (parent, child_end) =
-        UnixStream::pair().context("failed to create the XFS quota helper connection")?;
-    let child_fd = child_end.as_raw_fd();
-    let mut command = Command::new("/proc/self/exe");
-    command
-        .arg(HELPER_COMMAND)
-        .arg("--root")
-        .arg(&**root)
-        .arg("--fd")
-        .arg(CHILD_CONNECTION_FD.to_string());
-    // SAFETY: `dup2` and `fcntl` are async-signal-safe. They give the child its end of the
-    // connection on a fixed descriptor that stays open across `exec`. `dup2` onto the same
-    // descriptor keeps its close-on-exec flag, so that case clears the flag itself.
-    unsafe {
-        command.pre_exec(move || {
-            let result = if child_fd == CHILD_CONNECTION_FD {
-                libc::fcntl(child_fd, libc::F_SETFD, 0)
-            } else {
-                libc::dup2(child_fd, CHILD_CONNECTION_FD)
-            };
-            if result == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let child = command
-        .spawn()
-        .context("failed to start the XFS quota helper")?;
-    drop(child_end);
-    let helper = StartedHelper { child };
-    let mut parent = parent;
-    set_deadlines(&parent).context("failed to set the deadlines of the XFS quota helper")?;
-    read_greeting(&mut parent, device).map_err(|error| anyhow!("{error}"))?;
-    register(root, XfsQuotaHelper::started(parent, device));
-    Ok(Some(helper))
-}
-
-/// Serves the quota calls for the XFS root `root` on a thread of this process, and gives the
-/// helper to the storage of this process. The process must hold `CAP_SYS_ADMIN` itself; this is
-/// for a process that runs no guest code, such as a test.
-pub fn start_in_process(root: &Path) -> std::io::Result<()> {
+/// Serves the quota calls for the XFS root `root` on a thread of this process, on a socket in a
+/// new temporary directory, and gives the path of the socket. The process must hold
+/// `CAP_SYS_ADMIN` itself; this is for a process that runs no guest code, such as a test.
+pub fn start_in_process(root: &Path) -> std::io::Result<PathBuf> {
     let root_file = open_root(root).map_err(std::io::Error::other)?;
     let device = root_file.metadata()?.dev();
-    let (mut client, server) = UnixStream::pair()?;
-    set_deadlines(&client)?;
+    let directory = tempfile::Builder::new()
+        .prefix("xfs-quota-helper")
+        .tempdir()?
+        .keep();
+    let socket = directory.join("helper.sock");
+    let listener = bind(&socket).map_err(std::io::Error::other)?;
+    let uid = rustix::process::geteuid();
     std::thread::Builder::new()
         .name("xfs-quota-helper".to_string())
-        .spawn(move || {
-            let mut server = server;
-            if write_greeting(&mut server, None, device).is_ok() {
-                serve(&root_file, server);
-            }
-        })?;
-    read_greeting(&mut client, device)?;
-    register(root, XfsQuotaHelper::started(client, device));
-    Ok(())
+        .spawn(move || serve_connections(listener, Arc::new(root_file), device, uid))?;
+    Ok(socket)
 }
 
-fn root_device(root: &Path) -> anyhow::Result<u64> {
-    Ok(std::fs::metadata(root)
-        .with_context(|| format!("failed to inspect the XFS root {}", root.display()))?
-        .dev())
+/// The socket of a quota helper on a thread of this test process, for the XFS root `root`.
+#[cfg(test)]
+pub(crate) fn in_process_quota_helper(root: impl AsRef<Path>) -> Box<Path> {
+    start_in_process(root.as_ref())
+        .expect("failed to start the XFS quota helper in the test process")
+        .into_boxed_path()
 }
 
 // --- The helper process ---
@@ -505,73 +344,55 @@ pub fn run_if_requested() -> Option<anyhow::Result<()>> {
 
 struct HelperArgs {
     root: PathBuf,
-    connection: HelperConnection,
-}
-
-enum HelperConnection {
-    Descriptor(RawFd),
-    Listen(PathBuf),
+    socket: PathBuf,
+    allowed_uid: Option<u32>,
 }
 
 impl HelperArgs {
     fn parse(mut args: impl Iterator<Item = OsString>) -> anyhow::Result<Self> {
         let usage = || {
             anyhow!(
-                "usage: {HELPER_COMMAND} --root <XFS root> (--listen <socket> | --fd <descriptor>)"
+                "usage: {HELPER_COMMAND} --root <XFS root> --listen <socket> [--allow-uid <uid>]"
             )
         };
         let mut root = None;
-        let mut connection = None;
+        let mut socket = None;
+        let mut allowed_uid = None;
         while let Some(arg) = args.next() {
             let value = args.next().ok_or_else(usage)?;
             match arg.to_str() {
                 Some("--root") => root = Some(PathBuf::from(value)),
-                Some("--listen") => connection = Some(HelperConnection::Listen(value.into())),
-                Some("--fd") => {
-                    let fd = value
-                        .to_str()
-                        .and_then(|value| value.parse().ok())
-                        .ok_or_else(usage)?;
-                    connection = Some(HelperConnection::Descriptor(fd))
+                Some("--listen") => socket = Some(PathBuf::from(value)),
+                Some("--allow-uid") => {
+                    allowed_uid = Some(
+                        value
+                            .to_str()
+                            .and_then(|value| value.parse().ok())
+                            .ok_or_else(usage)?,
+                    )
                 }
                 _ => return Err(usage()),
             }
         }
         Ok(Self {
             root: root.ok_or_else(usage)?,
-            connection: connection.ok_or_else(usage)?,
+            socket: socket.ok_or_else(usage)?,
+            allowed_uid,
         })
     }
 }
 
 fn run_helper(args: HelperArgs) -> anyhow::Result<()> {
-    let setup = crate::process_capabilities::retain_only_sys_admin().and_then(|()| {
-        let root = open_root(&args.root)?;
-        let device = root.metadata()?.dev();
-        Ok((root, device))
-    });
-    match args.connection {
-        HelperConnection::Descriptor(fd) => {
-            // SAFETY: The executor gives the helper its end of the connection on this descriptor,
-            // and nothing else in this process uses it.
-            let mut stream = unsafe { UnixStream::from_raw_fd(fd) };
-            match setup {
-                Ok((root, device)) => {
-                    write_greeting(&mut stream, None, device)?;
-                    serve(&root, stream);
-                    Ok(())
-                }
-                Err(error) => {
-                    let _ = write_greeting(&mut stream, Some(&format!("{error:#}")), 0);
-                    Err(error)
-                }
-            }
-        }
-        HelperConnection::Listen(socket) => {
-            let (root, device) = setup?;
-            listen(Arc::new(root), device, &socket)
-        }
-    }
+    crate::process_capabilities::require_sys_admin_for_quota_helper()?;
+    let root = open_root(&args.root)?;
+    let device = root.metadata()?.dev();
+    let listener = bind(&args.socket)?;
+    let allowed_uid = match args.allowed_uid {
+        Some(uid) => rustix::process::Uid::from_raw(uid),
+        None => rustix::process::geteuid(),
+    };
+    serve_connections(listener, Arc::new(root), device, allowed_uid);
+    Ok(())
 }
 
 /// Opens the XFS root `root`. The helper does not lock the root: the executor holds that lock.
@@ -586,9 +407,10 @@ fn open_root(root: &Path) -> anyhow::Result<File> {
     Ok(file)
 }
 
-/// Accepts connections on `socket` from processes of the user of this process only, and serves
-/// each on its own thread. While [`MAX_CONNECTIONS`] connections are served, it refuses more.
-fn listen(root: Arc<File>, device: u64, socket: &Path) -> anyhow::Result<()> {
+/// Listens on `socket`, in place of a file that an earlier helper left there. Any process may
+/// open the socket: the helper checks the uid of each connection itself, and the operator keeps
+/// the socket in a directory that only the helper and the executor share.
+fn bind(socket: &Path) -> anyhow::Result<UnixListener> {
     match std::fs::remove_file(socket) {
         Err(error) if error.kind() != ErrorKind::NotFound => {
             return Err(error).with_context(|| format!("failed to remove {}", socket.display()));
@@ -597,15 +419,35 @@ fn listen(root: Arc<File>, device: u64, socket: &Path) -> anyhow::Result<()> {
     }
     let listener = UnixListener::bind(socket)
         .with_context(|| format!("failed to listen on {}", socket.display()))?;
-    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("failed to restrict {}", socket.display()))?;
-    let uid = rustix::process::geteuid();
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o666))
+        .with_context(|| format!("failed to open {} to the executor", socket.display()))?;
+    Ok(listener)
+}
+
+/// Accepts connections on `listener` from processes of the uid `allowed_uid` only, and serves each
+/// on its own thread. While [`MAX_CONNECTIONS`] connections are served, it refuses more.
+fn serve_connections(
+    listener: UnixListener,
+    root: Arc<File>,
+    device: u64,
+    allowed_uid: rustix::process::Uid,
+) {
     let served = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
+        if stream.set_write_timeout(Some(CALL_DEADLINE)).is_err() {
+            continue;
+        }
         match rustix::net::sockopt::socket_peercred(&stream) {
-            Ok(peer) if peer.uid == uid => {}
-            _ => continue,
+            Ok(peer) if peer.uid == allowed_uid => {}
+            _ => {
+                let _ = write_greeting(
+                    &mut stream,
+                    Some("the helper accepts connections of another uid"),
+                    device,
+                );
+                continue;
+            }
         }
         if served.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
             served.fetch_sub(1, Ordering::AcqRel);
@@ -632,15 +474,11 @@ fn listen(root: Arc<File>, device: u64, socket: &Path) -> anyhow::Result<()> {
             served.fetch_sub(1, Ordering::AcqRel);
         }
     }
-    Ok(())
 }
 
 /// Answers the calls on `stream` until the client closes it, or does not take an answer within
-/// [`CALL_DEADLINE`]. A connection may stay idle between calls for any time.
+/// the write deadline of `stream`. A connection may stay idle between calls for any time.
 fn serve(root: &File, mut stream: UnixStream) {
-    if stream.set_write_timeout(Some(CALL_DEADLINE)).is_err() {
-        return;
-    }
     let mut request = [0u8; REQUEST_BYTES];
     while stream.read_exact(&mut request).is_ok() {
         let response = answer(root, &request);
@@ -1053,7 +891,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("refused to start: no CAP_SYS_ADMIN")
+                .contains("refused the connection: no CAP_SYS_ADMIN")
         );
     }
 
@@ -1081,7 +919,7 @@ mod tests {
         let root = File::open(directory.path()).unwrap();
         let (client, server) = UnixStream::pair().unwrap();
         let server_thread = std::thread::spawn(move || serve(&root, server));
-        let helper = XfsQuotaHelper::started(client, 0);
+        let helper = XfsQuotaHelper::over(client, 0);
 
         let mut quota = FsDiskQuota::default();
         let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
@@ -1101,10 +939,10 @@ mod tests {
     }
 
     #[test]
-    fn a_started_helper_that_is_gone_fails_its_calls() {
+    fn a_helper_that_is_gone_fails_its_calls() {
         let (client, server) = UnixStream::pair().unwrap();
         drop(server);
-        let helper = XfsQuotaHelper::started(client, 0);
+        let helper = XfsQuotaHelper::over(client, 0);
         let mut quota = FsDiskQuota::default();
         let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
         assert!(
@@ -1120,7 +958,7 @@ mod tests {
         client
             .set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
-        let helper = XfsQuotaHelper::started(client, 0);
+        let helper = XfsQuotaHelper::over(client, 0);
         let start = std::time::Instant::now();
         let mut quota = FsDiskQuota::default();
         let_assert!(Err(error) = helper.get_project_quota(1, &mut quota));
@@ -1133,31 +971,26 @@ mod tests {
         assert!(error.to_string().contains("connection is closed"));
     }
 
-    #[test]
-    fn a_listening_helper_serves_a_client_of_its_own_user() {
-        // The root is not on XFS, so the call reaches the kernel and fails there: the failure
-        // comes back as the error of the call, which proves the connection, the greeting and the
-        // peer check worked.
+    fn start_listening(allowed_uid: rustix::process::Uid) -> (tempfile::TempDir, PathBuf, u64) {
         let directory = tempfile::tempdir().unwrap();
         let root = File::open(directory.path()).unwrap();
         let device = root.metadata().unwrap().dev();
         let socket = directory.path().join("helper.sock");
-        let listening = socket.clone();
-        let listener = std::thread::spawn(move || listen(Arc::new(root), device, &listening));
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !socket.exists() {
-            if listener.is_finished() {
-                let_assert!(Ok(result) = listener.join());
-                panic!("the helper stopped before it listened: {result:?}");
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the helper did not listen within 10s"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let listener = bind(&socket).unwrap();
+        std::thread::spawn(move || {
+            serve_connections(listener, Arc::new(root), device, allowed_uid)
+        });
+        (directory, socket, device)
+    }
+
+    #[test]
+    fn a_listening_helper_serves_a_client_of_the_allowed_uid() {
+        // The root is not on XFS, so the call reaches the kernel and fails there: the failure
+        // comes back as the error of the call, which proves the connection, the greeting and the
+        // peer check worked.
+        let (_directory, socket, device) = start_listening(rustix::process::geteuid());
         let mode = std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
-        assert!(mode == 0o600);
+        assert!(mode == 0o666);
 
         let_assert!(Ok(helper) = XfsQuotaHelper::connect(&socket, device));
         let mut quota = FsDiskQuota::default();
@@ -1185,18 +1018,35 @@ mod tests {
     }
 
     #[test]
-    fn helper_arguments_name_a_root_and_one_connection() {
+    fn a_listening_helper_refuses_a_client_of_another_uid() {
+        let other = rustix::process::geteuid().as_raw().wrapping_add(1);
+        let (_directory, socket, device) = start_listening(rustix::process::Uid::from_raw(other));
+        let_assert!(Err(error) = XfsQuotaHelper::connect(&socket, device));
+        assert!(error.to_string().contains("connections of another uid"));
+    }
+
+    #[test]
+    fn helper_arguments_name_a_root_a_socket_and_an_allowed_uid() {
         let parse = |args: &[&str]| HelperArgs::parse(args.iter().map(OsString::from));
         let_assert!(Ok(args) = parse(&["--root", "/xfs", "--listen", "/run/q.sock"]));
         assert!(args.root == Path::new("/xfs"));
-        assert!(
-            matches!(args.connection, HelperConnection::Listen(path) if path == Path::new("/run/q.sock"))
+        assert!(args.socket == Path::new("/run/q.sock"));
+        assert!(args.allowed_uid.is_none());
+        let_assert!(
+            Ok(args) = parse(&[
+                "--root",
+                "/xfs",
+                "--listen",
+                "/run/q.sock",
+                "--allow-uid",
+                "65534"
+            ])
         );
-        let_assert!(Ok(args) = parse(&["--root", "/xfs", "--fd", "3"]));
-        assert!(matches!(args.connection, HelperConnection::Descriptor(3)));
+        assert!(args.allowed_uid == Some(65534));
         assert!(parse(&["--root", "/xfs"]).is_err());
         assert!(parse(&["--listen", "/run/q.sock"]).is_err());
-        assert!(parse(&["--root", "/xfs", "--fd", "x"]).is_err());
+        assert!(parse(&["--root", "/xfs", "--listen", "/q", "--allow-uid", "x"]).is_err());
+        assert!(parse(&["--root", "/xfs", "--fd", "3"]).is_err());
         assert!(parse(&["--root"]).is_err());
     }
 }

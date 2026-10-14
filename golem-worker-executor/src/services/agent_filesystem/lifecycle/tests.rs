@@ -6816,8 +6816,9 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
         mode: FilesystemStorageMode::ManagedXfs {
+            quota_helper_socket:
+                crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
             root: root.into(),
-            quota_helper_socket: None,
         },
         ..FilesystemStorageConfig::default()
     };
@@ -6866,8 +6867,9 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
         mode: FilesystemStorageMode::ManagedXfs {
+            quota_helper_socket:
+                crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
             root: root.into(),
-            quota_helper_socket: None,
         },
         ..FilesystemStorageConfig::default()
     };

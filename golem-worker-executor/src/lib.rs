@@ -34,34 +34,16 @@ pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
 
-/// The XFS quota helper of `ManagedXfs` storage: the only process that holds `CAP_SYS_ADMIN`.
+/// The XFS quota helper of `ManagedXfs` storage: a separate process that holds `CAP_SYS_ADMIN`.
 pub mod xfs_quota_helper {
     #[cfg(target_os = "linux")]
     pub use crate::sandbox_filesystem::xfs::quota_helper::{
-        HELPER_COMMAND, StartedHelper, run_if_requested, start_for_storage, start_in_process,
+        HELPER_COMMAND, run_if_requested, start_in_process,
     };
-
-    /// A helper that this process started. No platform other than Linux starts one.
-    #[cfg(not(target_os = "linux"))]
-    pub enum StartedHelper {}
-
-    #[cfg(not(target_os = "linux"))]
-    impl StartedHelper {
-        pub fn wait(self) -> String {
-            match self {}
-        }
-    }
 
     #[cfg(not(target_os = "linux"))]
     pub fn run_if_requested() -> Option<anyhow::Result<()>> {
         None
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn start_for_storage(
-        _mode: &crate::services::golem_config::FilesystemStorageMode,
-    ) -> anyhow::Result<Option<StartedHelper>> {
-        Ok(None)
     }
 }
 

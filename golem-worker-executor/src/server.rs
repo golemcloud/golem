@@ -22,7 +22,7 @@ use golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
 use golem_worker_executor::xfs_quota_helper;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -34,11 +34,6 @@ fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
             config.validate()?;
-            // Both run before any thread starts: the helper gets CAP_SYS_ADMIN from the binary as
-            // this process did, and the restriction applies to every later thread.
-            let quota_helper =
-                xfs_quota_helper::start_for_storage(&config.filesystem_storage.mode)?;
-            let sys_admin = process_capabilities::restrict_executor()?;
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .expect("Failed to install crypto provider");
@@ -46,20 +41,12 @@ fn main() -> Result<(), anyhow::Error> {
             config.add_port_to_tracing_file_name_if_enabled();
             init_tracing_with_default_env_filter(&config.tracing);
             info!("Using configuration:\n{}", config.to_safe_string_indented());
-            info!(
-                sys_admin = ?sys_admin,
-                quota_helper = quota_helper.is_some(),
-                "Restricted the capabilities of the executor process"
-            );
-            if let Some(mut quota_helper) = quota_helper {
-                // The executor cannot change project quotas without its helper, so it stops with it.
-                std::thread::Builder::new()
-                    .name("xfs-quota-helper-watch".to_string())
-                    .spawn(move || {
-                        let ended = quota_helper.wait();
-                        error!(ended, "The XFS quota helper stopped; stopping the executor");
-                        std::process::exit(1);
-                    })?;
+            if process_capabilities::holds_sys_admin()? {
+                warn!(
+                    "The executor process holds CAP_SYS_ADMIN, which it does not need: only the \
+                     XFS quota helper of ManagedXfs storage needs it. Drop it from the executor \
+                     container"
+                );
             }
 
             let prometheus = metrics::register_all();

@@ -359,15 +359,14 @@ fn reflink_probe_contents(probe: &Path) -> std::io::Result<()> {
 
 impl ManagedProvisioning {
     /// Binds managed XFS storage with project quotas on the opened root `root`. The quota calls go
-    /// to the quota helper on `quota_helper_socket`, or to the helper that this process started for
-    /// the root.
+    /// to the XFS quota helper on `quota_helper_socket`.
     ///
     /// The function removes any project from the root, checks that project quota accounting and
     /// enforcement are on and that the helper may query and change project quotas, and probes
     /// project inheritance and reflink.
     pub(super) fn new(
         root: XfsRoot,
-        quota_helper_socket: Option<&Path>,
+        quota_helper_socket: &Path,
         cleanup_retry: &RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
         let XfsRoot {
@@ -379,9 +378,9 @@ impl ManagedProvisioning {
             filesystem_block_bytes,
             ..
         } = root;
-        let quotas =
-            quota_helper::helper_for_root(&configured_root, quota_helper_socket, identity.device)
-                .map_err(|error| {
+        let quotas = XfsQuotaHelper::connect(quota_helper_socket, identity.device)
+            .map(Arc::new)
+            .map_err(|error| {
                 FilesystemStorageError::io(
                     "connect to the XFS quota helper",
                     &configured_root,
@@ -2214,8 +2213,9 @@ mod tests {
             .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
+                quota_helper_socket:
+                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
                 root: root.clone().into(),
-                quota_helper_socket: None,
             },
             RetryConfig::default(),
         )
@@ -2224,8 +2224,8 @@ mod tests {
         assert!(
             SandboxFilesystemProvisioning::provision(
                 &FilesystemStorageMode::ManagedXfs {
+                    quota_helper_socket: crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
                     root: root.clone().into(),
-                    quota_helper_socket: None,
                 },
                 RetryConfig::default()
             )
@@ -2687,8 +2687,9 @@ mod tests {
         assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
+                quota_helper_socket:
+                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
                 root: root.clone().into(),
-                quota_helper_socket: None,
             },
             RetryConfig::default(),
         )
@@ -2906,8 +2907,9 @@ mod tests {
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
+                quota_helper_socket:
+                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
                 root: root.clone().into(),
-                quota_helper_socket: None,
             },
             RetryConfig::default(),
         )
@@ -3000,8 +3002,9 @@ mod tests {
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::ManagedXfs {
+                quota_helper_socket:
+                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
                 root: root.clone().into(),
-                quota_helper_socket: None,
             },
             RetryConfig::default(),
         )

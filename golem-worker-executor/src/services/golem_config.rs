@@ -2250,13 +2250,11 @@ pub enum FilesystemStorageMode {
     /// XFS with project quotas, at the root of a dedicated XFS filesystem. Each agent filesystem
     /// is a project, which enforces its disk limits and measures its usage. Copies are reflinks.
     ///
-    /// The quota calls go to an XFS quota helper, the only process that holds `CAP_SYS_ADMIN`.
-    /// Without `quota_helper_socket`, the executor starts the helper as a child process. With it,
-    /// the executor connects to a helper that runs beside it.
+    /// The quota calls go to the XFS quota helper that listens on `quota_helper_socket`, a
+    /// separate process that holds `CAP_SYS_ADMIN`, so that the executor needs no capability.
     ManagedXfs {
         root: Box<Path>,
-        #[serde(default)]
-        quota_helper_socket: Option<Box<Path>>,
+        quota_helper_socket: Box<Path>,
     },
     /// XFS with reflink and without project quotas, at the root of a dedicated XFS filesystem.
     /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
@@ -2296,11 +2294,7 @@ impl SafeDisplay for FilesystemStorageMode {
             Self::Directory { root } => format!("directory at {}", root.display()),
             Self::ManagedXfs {
                 root,
-                quota_helper_socket: None,
-            } => format!("managed XFS at {}", root.display()),
-            Self::ManagedXfs {
-                root,
-                quota_helper_socket: Some(socket),
+                quota_helper_socket: socket,
             } => format!(
                 "managed XFS at {}, with the quota helper at {}",
                 root.display(),
@@ -3393,7 +3387,7 @@ mod tests {
                 super::FilesystemStorageMode::Directory { root: root() },
                 super::FilesystemStorageMode::ManagedXfs {
                     root: root(),
-                    quota_helper_socket: None
+                    quota_helper_socket: root(),
                 },
                 super::FilesystemStorageMode::ReflinkXfs { root: root() },
                 super::FilesystemStorageMode::Apfs { root: root() },
@@ -3735,7 +3729,7 @@ mod tests {
             FilesystemStorageMode::Directory { root: root.clone() },
             FilesystemStorageMode::ManagedXfs {
                 root: root.clone(),
-                quota_helper_socket: None,
+                quota_helper_socket: root.clone(),
             },
             FilesystemStorageMode::ReflinkXfs { root: root.clone() },
             FilesystemStorageMode::Apfs { root },

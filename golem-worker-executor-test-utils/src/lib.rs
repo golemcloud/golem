@@ -4399,7 +4399,9 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     // The test process runs no separate quota helper: it holds CAP_SYS_ADMIN itself and serves
     // the quota calls on a thread.
-    golem_worker_executor::xfs_quota_helper::start_in_process(&managed_xfs_root)?;
+    let quota_helper_socket: Box<Path> =
+        golem_worker_executor::xfs_quota_helper::start_in_process(&managed_xfs_root)?
+            .into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4410,7 +4412,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
-                    quota_helper_socket: None,
+                    quota_helper_socket: quota_helper_socket.clone(),
                 };
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -4653,7 +4655,9 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     // The test process runs no separate quota helper: it holds CAP_SYS_ADMIN itself and serves
     // the quota calls on a thread.
-    golem_worker_executor::xfs_quota_helper::start_in_process(&managed_xfs_root)?;
+    let quota_helper_socket: Box<Path> =
+        golem_worker_executor::xfs_quota_helper::start_in_process(&managed_xfs_root)?
+            .into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4664,7 +4668,7 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
-                    quota_helper_socket: None,
+                    quota_helper_socket: quota_helper_socket.clone(),
                 };
                 config.filesystem_storage.pressure = pressure.clone();
                 config.resource_usage_metering = metering;
@@ -4731,7 +4735,9 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     // The test process runs no separate quota helper: it holds CAP_SYS_ADMIN itself and serves
     // the quota calls on a thread.
-    golem_worker_executor::xfs_quota_helper::start_in_process(&managed_xfs_root)?;
+    let quota_helper_socket: Box<Path> =
+        golem_worker_executor::xfs_quota_helper::start_in_process(&managed_xfs_root)?
+            .into_boxed_path();
     let executor = run_production_context_bootstrap(
         deps,
         context,
@@ -4742,7 +4748,7 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
-                    quota_helper_socket: None,
+                    quota_helper_socket: quota_helper_socket.clone(),
                 };
                 config.resource_usage_metering = metering;
                 config.filesystem_storage.filesystem_object_limit_policy =

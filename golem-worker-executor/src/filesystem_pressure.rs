@@ -1155,8 +1155,9 @@ mod tests {
         let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
         let provisioning = SandboxFilesystemProvisioning::new(
             &FilesystemStorageMode::ManagedXfs {
+                quota_helper_socket:
+                    crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
                 root: root.clone().into(),
-                quota_helper_socket: None,
             },
             golem_common::model::RetryConfig::default(),
         )

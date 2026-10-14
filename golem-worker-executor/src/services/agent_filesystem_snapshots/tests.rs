@@ -3410,8 +3410,9 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     a_volume_below_the_pressure_target_admits_no_periodic_upload(
         FilesystemStorageMode::ManagedXfs {
+            quota_helper_socket:
+                crate::sandbox_filesystem::xfs::quota_helper::in_process_quota_helper(&root),
             root: root.into(),
-            quota_helper_socket: None,
         },
         "managed-xfs-pressure",
     )
