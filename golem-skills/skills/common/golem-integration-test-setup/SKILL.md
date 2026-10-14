@@ -199,7 +199,7 @@ golem -E test deploy
 
 Because the environment sets `cli.autoConfirm: true` and `cli.reset: true`, this is equivalent to `golem deploy --yes --reset` — every test run gets a freshly redeployed application with no agents carried over from earlier runs.
 
-For faster iteration during test development, reuse the same server process across multiple deploys; `--reset` only deletes the agents and environment on the server, not the server itself.
+For faster iteration during test development, reuse the same server process across multiple deploys. `--reset` deploys, then deletes existing agents of the deployed components; it does not delete the environment or restart the server. It does not clear domains, HTTP and MCP deployments, secrets, retry policies, plugins, or component revision history. The deployment still reconciles the manifest and can update these resources, including replacement of incompatible agent secrets.
 
 ## 6. Send Requests From Tests
 
