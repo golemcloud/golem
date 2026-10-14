@@ -1761,6 +1761,11 @@ jobs:
           image-name: golemservices/golem-shard-manager
           dockerfile: ./golem-shard-manager/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-xfs-quotad
+          dockerfile: ./golem-xfs-quotad/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
 
   docker-publish-2:
     runs-on: blacksmith
