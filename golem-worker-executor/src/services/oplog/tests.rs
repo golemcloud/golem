@@ -7384,6 +7384,75 @@ async fn blob_archive_object_delete_failure_does_not_fail_the_drop(_tracing: &Tr
     );
 }
 
+/// A blob container whose bytes do not decode is corrupt data, not a storage outage: the read
+/// fails for good, so the agent is not retried forever over bytes that never change.
+#[test]
+async fn a_listed_blob_chunk_that_does_not_decode_is_corruption(_tracing: &Tracing) {
+    let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-truncated-listed-chunk".to_string(),
+        },
+    );
+    service
+        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .await
+        .unwrap()
+        .append(&transfer_test_entries().into_iter().collect::<Vec<_>>())
+        .await
+        .unwrap();
+
+    let namespace = BlobStorageNamespace::CompressedOplog {
+        environment_id: owned_agent_id.environment_id(),
+        component_id: owned_agent_id.component_id(),
+        agent_mode: AgentMode::Durable,
+        level: 1,
+    };
+    let objects = storage
+        .list_dir(
+            "blob_oplog",
+            "test",
+            namespace.clone(),
+            Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(objects.len(), 1);
+    let bytes = storage
+        .get_raw("blob_oplog", "test", namespace.clone(), &objects[0])
+        .await
+        .unwrap()
+        .unwrap();
+    storage
+        .put_raw(
+            "blob_oplog",
+            "test",
+            namespace,
+            &objects[0],
+            &bytes[..bytes.len() / 2],
+        )
+        .await
+        .unwrap();
+
+    let error = service
+        .open(&owned_agent_id, AgentMode::Durable, None)
+        .await
+        .unwrap()
+        .read_source(OplogIndex::INITIAL, 2)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, OplogReadError::Corruption { source, detail }
+            if *source == OplogReadSource::Archive(1)
+                && detail.contains("failed to decode the compressed oplog chunk")),
+        "{error:?}"
+    );
+    assert!(!error.is_transient());
+}
+
 #[test]
 async fn missing_listed_blob_chunk_is_reported_as_corruption(_tracing: &Tracing) {
     let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());

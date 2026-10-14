@@ -29,6 +29,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
+use golem_common::serialization::deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, agent_path_segment, join_blob_key,
@@ -372,10 +373,12 @@ impl BlobOplogArchive {
         chunk_ref: &BlobChunkRef,
     ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, OplogReadError> {
         let source = OplogReadSource::Archive(self.level);
-        let Some(chunk) = self
+        // The bytes are fetched first and decoded apart, so that a failed storage call is
+        // classified by the storage and a container that does not decode is corrupt data.
+        let Some(bytes) = self
             .blob_storage
             .with("blob_oplog", "read")
-            .get::<CompressedOplogChunk>(self.namespace(), Path::new(&chunk_ref.object))
+            .get_raw(self.namespace(), Path::new(&chunk_ref.object))
             .await
             .map_err(|error| {
                 OplogReadError::of_archive(
@@ -392,6 +395,14 @@ impl BlobOplogArchive {
         else {
             return Ok(None);
         };
+        let chunk: CompressedOplogChunk = deserialize(&bytes).map_err(|error| {
+            OplogReadError::corruption(
+                source,
+                format!(
+                    "failed to decode the compressed oplog chunk ending at {last_idx} in blob storage: {error}"
+                ),
+            )
+        })?;
         if chunk.count != chunk_ref.count {
             return Err(OplogReadError::corruption(
                 source,
