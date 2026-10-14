@@ -303,7 +303,13 @@ An oplog read that does not give the requested entries (an archive chunk that do
 blob or indexed storage failure of an archive level, a gap) is never treated as absent data. It
 returns `UnreadableOplog` (`services/oplog/reader.rs`: the agent id and the `OplogReadError` with
 its source, such as `archive layer 1`), and the read paths of replay, status folding and recovery
-carry it up as `WorkerExecutorError::OplogFailed`. It fails that agent only, fail-stop: the
+carry it up. The read error is classified: a storage that did not answer after its retries
+(`OplogReadError::SourceUnavailable`, from `OplogArchiveError::Unavailable`: an indexed storage
+`Transient` or `Indeterminate` error, or a blob error that `BlobFailure` calls transient or
+refused) becomes `RecoveryRequired`, which the start and the invocation retry with backoff and
+shard-assignment recovery retries by failing the assignment. Corrupt data, a gap, an invalid range
+or any other storage error becomes `WorkerExecutorError::OplogFailed`. It fails that agent only,
+fail-stop: the
 start ends through `StartProblem::OplogFailed`, which passes the error in every column of the
 outcome table (no skipped or rejected record, no failed update), and the recovery path records it
 as a terminal `Error` entry, so the agent is `Failed` with the cause. Shard-assignment recovery
