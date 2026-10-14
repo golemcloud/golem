@@ -31,9 +31,11 @@ COPY --from=capability /golem-xfs-quotad ./
 
 RUN apt-get update && apt-get install -y tini
 
-# Runs xfs-quotad as uid and gid 65534; see the script.
+# Runs xfs-quotad as uid and gid 65534; see the script. /run/golem-quota is the directory of the
+# socket in the documented deployments. A new Docker volume that is mounted there takes the owner
+# of this directory, so xfs-quotad can create its socket in it.
 RUN --mount=type=bind,source=docker/prepare-service-image.sh,target=/tmp/prepare-service-image.sh \
-    sh /tmp/prepare-service-image.sh
+    sh /tmp/prepare-service-image.sh /run/golem-quota
 
 USER 65534:65534
 
