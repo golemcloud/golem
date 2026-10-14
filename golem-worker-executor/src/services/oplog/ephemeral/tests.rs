@@ -159,16 +159,16 @@ impl OplogArchiveService for SingletonArchiveService {
         _: &OwnedAgentId,
         _: AgentMode,
         _: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
-        self.0.clone()
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+        Ok(self.0.clone())
     }
     async fn open_fresh(
         &self,
         _: &OwnedAgentId,
         _: AgentMode,
         _: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
-        self.0.clone()
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+        Ok(self.0.clone())
     }
     async fn delete(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<()> {
         Ok(())

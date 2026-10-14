@@ -24,7 +24,7 @@ use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
     agent_oplog_length, archived_oplog_chunks, start_with_oplog_config,
-    truncate_first_archived_oplog_chunk,
+    truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -105,7 +105,7 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
     wait_until_archived(deps, &context, &healthy_owned).await?;
     drop(executor);
 
-    truncate_first_archived_oplog_chunk(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
+    truncate_archived_oplog_chunk(deps, &context, &unreadable_owned, ARCHIVE_LEVEL, 0).await?;
     let corrupt = archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
 
     // The executor starts on the data, and recovers every agent it can read.
@@ -137,6 +137,93 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
     );
 
     // Nothing deleted or rewrote the unreadable history.
+    drop(executor);
+    assert_eq!(
+        archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?,
+        corrupt
+    );
+    Ok(())
+}
+
+/// The `Create` of the agent reads, and a later archived chunk does not: the agent is found, its
+/// start replays into the chunk and fails with the cause, and the agent is not run.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let unreadable = agent_id!("Counter", "unreadable-later-chunk");
+    let healthy = agent_id!("Counter", "healthy-later-chunk");
+    let unreadable_id = executor
+        .start_agent(&component.id, unreadable.clone())
+        .await?;
+    let healthy_id = executor.start_agent(&component.id, healthy.clone()).await?;
+    let unreadable_owned = OwnedAgentId::new(context.default_environment_id, &unreadable_id);
+    let healthy_owned = OwnedAgentId::new(context.default_environment_id, &healthy_id);
+    // Two rounds of invocations, each archived on its own, leave two chunks per agent.
+    for _ in 0..2 {
+        for agent in [&unreadable, &healthy] {
+            for _ in 0..2 {
+                executor
+                    .invoke_and_await_agent(&component, agent, "increment", data_value!())
+                    .await?;
+            }
+        }
+        wait_until_archived(deps, &context, &unreadable_owned).await?;
+        wait_until_archived(deps, &context, &healthy_owned).await?;
+    }
+    drop(executor);
+
+    let chunks = archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
+    anyhow::ensure!(
+        chunks.len() >= 2,
+        "expected two archived chunks, got {}",
+        chunks.len()
+    );
+    truncate_archived_oplog_chunk(
+        deps,
+        &context,
+        &unreadable_owned,
+        ARCHIVE_LEVEL,
+        chunks.len() - 1,
+    )
+    .await?;
+    let corrupt = archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
+
+    let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
+
+    let error = executor
+        .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
+        .await
+        .expect_err("an agent whose oplog does not read must not run");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains(&unreadable_id.to_string())
+            && error.contains("archive layer 1")
+            && error.contains("failed to decode compressed oplog chunk")
+            && error.contains("Input ended unexpectedly"),
+        "the failure does not name the agent, the archive layer and the decode error: {error}"
+    );
+
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &healthy, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        5
+    );
+
     drop(executor);
     assert_eq!(
         archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?,

@@ -905,6 +905,21 @@ struct AccessStartCleanup {
     atomic_lease: Option<Arc<AtomicRegionLease>>,
 }
 
+/// Pairs a failure of an access start with the cleanup that releases `atomic_lease`.
+fn with_access_cleanup(
+    atomic_lease: &Option<Arc<AtomicRegionLease>>,
+) -> impl Fn(WorkerExecutorError) -> (WorkerExecutorError, AccessStartCleanup) {
+    let atomic_lease = atomic_lease.clone();
+    move |error| {
+        (
+            error,
+            AccessStartCleanup {
+                atomic_lease: atomic_lease.clone(),
+            },
+        )
+    }
+}
+
 /// Context handed to the request builder of [`DurableCallSession::start_access_with`], available after the
 /// durable scope (if any) has been opened but before the host-call `Start` is written or claimed.
 pub(crate) struct AccessStartContext {
@@ -2816,14 +2831,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .replay_state
                     .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                     .await
-                    .map_err(|error| {
-                        (
-                            error,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?
+                    .map_err(with_access_cleanup(&prepared.atomic_lease))?
                     .is_none()
                 {
                     switch_prepared_access_to_live(prepared, store, get_ctx)
@@ -2862,14 +2870,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         OplogEntry::track_scope_membership,
                     )
                     .await
-                    .map_err(|error| {
-                        (
-                            error,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
+                    .map_err(with_access_cleanup(&prepared.atomic_lease))?;
 
                 match lookup_result {
                     OplogEntryLookupResult::Found { .. } => Ok(AccessOpenedScope {
@@ -2890,14 +2891,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             .replay_state
                             .has_attempt_suffix(begin_index)
                             .await
-                            .map_err(|error| {
-                                (
-                                    error,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            })?
+                            .map_err(with_access_cleanup(&prepared.atomic_lease))?
                         {
                             switch_prepared_access_to_live(prepared, store, get_ctx)
                                 .await

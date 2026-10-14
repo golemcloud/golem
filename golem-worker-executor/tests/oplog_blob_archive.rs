@@ -168,7 +168,10 @@ async fn append_worker(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) {
-    let archive = service.open(owned_agent_id, agent_mode, None).await;
+    let archive = service
+        .open(owned_agent_id, agent_mode, None)
+        .await
+        .unwrap();
     archive
         .append(&[(
             OplogIndex::INITIAL,
@@ -458,7 +461,8 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
 
     let former_owner = through_relay
         .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
-        .await;
+        .await
+        .unwrap();
     let appending = tokio::spawn({
         let entries = entries.clone();
         async move { former_owner.append(&entries).await }
@@ -469,7 +473,8 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
         .expect("the manifest append never reached Redis");
     let new_owner = direct
         .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
-        .await;
+        .await
+        .unwrap();
     relay.resume.notify_one();
     let appended = tokio::time::timeout(Duration::from_secs(30), appending)
         .await
@@ -756,7 +761,8 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
         .unwrap();
     let archive = service
         .open(&owned_agent_id, AgentMode::Durable, None)
-        .await;
+        .await
+        .unwrap();
     let length = archive.length().await.unwrap();
     let read = archive.read_source(OplogIndex::INITIAL, 2).await.unwrap();
     let reads_before_a_chunk = storage.reads.load(Ordering::SeqCst);
@@ -772,6 +778,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
     let appended = service
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
+        .unwrap()
         .read_source(OplogIndex::INITIAL, 2)
         .await
         .unwrap();

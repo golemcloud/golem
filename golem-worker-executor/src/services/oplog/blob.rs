@@ -103,8 +103,8 @@ impl OplogArchiveService for BlobOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
-        Arc::new(
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+        Ok(Arc::new(
             BlobOplogArchive::opened(
                 owned_agent_id.clone(),
                 agent_mode,
@@ -114,8 +114,8 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 self.retry_config.clone(),
                 shard_epoch,
             )
-            .await,
-        )
+            .await?,
+        ))
     }
 
     async fn open_fresh(
@@ -123,7 +123,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         self.open(owned_agent_id, agent_mode, shard_epoch).await
     }
 
@@ -160,7 +160,12 @@ impl OplogArchiveService for BlobOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-        let archive = self.open(owned_agent_id, agent_mode, None).await;
+        let archive = self
+            .open(owned_agent_id, agent_mode, None)
+            .await
+            .map_err(|error| {
+                OplogReadError::source_failure(OplogReadSource::Archive(self.level), error)
+            })?;
         archive.read_source(idx, n).await
     }
 
@@ -242,7 +247,8 @@ struct BlobOplogArchive {
 
 impl BlobOplogArchive {
     /// A handle that writes as the owner of `shard_epoch`, recorded on the manifest; `None`
-    /// records and asserts nothing, for reads and executors without a shard assignment.
+    /// records and asserts nothing, for reads and executors without a shard assignment. A record
+    /// that fails for another reason than a newer owner's fails the open.
     async fn opened(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
@@ -251,7 +257,7 @@ impl BlobOplogArchive {
         level: usize,
         retry_config: RetryConfig,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Self {
+    ) -> OplogArchiveResult<Self> {
         let manifest = FencedIndexedStream::opened(
             owned_agent_id.agent_id(),
             Self::manifest_namespace(&owned_agent_id, agent_mode, level),
@@ -260,8 +266,13 @@ impl BlobOplogArchive {
             retry_config.clone(),
             shard_epoch,
         )
-        .await;
-        BlobOplogArchive {
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to record the owning epoch of the blob oplog manifest of {owned_agent_id} at level {level}: {error}"
+            )
+        })?;
+        Ok(BlobOplogArchive {
             owned_agent_id,
             agent_mode,
             blob_storage,
@@ -270,7 +281,7 @@ impl BlobOplogArchive {
             retry_config,
             manifest,
             cache: Mutex::new(EvictingCacheMap::new()),
-        }
+        })
     }
 
     fn manifest_namespace(
@@ -665,7 +676,7 @@ impl OplogArchive for BlobOplogArchive {
             self.retry_config.clone(),
             None,
         )
-        .await;
+        .await?;
         let actual = uncached
             .read_source(*start, entries.len() as u64)
             .await

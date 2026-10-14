@@ -491,7 +491,10 @@ mod tests {
             _agent_mode: AgentMode,
             _fingerprint: golem_common::model::AgentFingerprint,
             _public_session_id: &str,
-        ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
+        ) -> Result<
+            Option<golem_common::model::DurableStreamPublicBinding>,
+            crate::durable_host::durable_stream::SessionError,
+        > {
             unimplemented!()
         }
 
@@ -508,7 +511,10 @@ mod tests {
             _fingerprint: golem_common::model::AgentFingerprint,
             _status: &AgentStatusRecord,
             _key: &golem_common::model::IdempotencyKey,
-        ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
+        ) -> Result<
+            Option<golem_common::model::DurableStreamSessionStatus>,
+            crate::durable_host::durable_stream::SessionError,
+        > {
             unimplemented!()
         }
         async fn get_running_workers_in_shards(

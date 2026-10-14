@@ -185,6 +185,7 @@ async fn check_that_each_agent_name_gets_its_own_archive(
                 service
                     .open(agent, MODE, None)
                     .await
+                    .unwrap()
                     .append(&[(OplogIndex::INITIAL, entry.clone())])
                     .await
                     .unwrap();
@@ -273,7 +274,7 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     let component_id = ComponentId::new();
     let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
     let second = log_entry("second");
-    let archive = service.open(&agent, MODE, None).await;
+    let archive = service.open(&agent, MODE, None).await.unwrap();
 
     archive
         .append(&[(OplogIndex::INITIAL, log_entry("first"))])
@@ -346,6 +347,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
     service
         .open(&agent, MODE, None)
         .await
+        .unwrap()
         .append(&[(OplogIndex::INITIAL, entry.clone())])
         .await
         .unwrap();

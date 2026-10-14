@@ -7390,8 +7390,10 @@ fn recovered_status(
 /// unfenced. `OplogFenced` means another executor claimed the agent's oplog at a newer epoch
 /// before this one wrote to it. Either way the agent belongs to the shard's new owner, which
 /// recovers it there. This is a skip, like an oplog that is gone. Failing the whole assignment for
-/// it would stop every other agent in the scan from being resumed. Any other restart failure still
-/// fails the assignment.
+/// it would stop every other agent in the scan from being resumed. An agent whose oplog does not
+/// read (`OplogFailed`, for example from rebuilding its stream session index) is skipped too:
+/// no retry of the assignment reads that oplog. Any other restart failure still fails the
+/// assignment.
 fn recovered_restart<W>(
     owned_agent_id: &OwnedAgentId,
     restarted: Result<W, WorkerExecutorError>,
@@ -7402,9 +7404,23 @@ fn recovered_restart<W>(
             debug!(agent_id = %owned_agent_id, "Worker's shard left the assignment during shard-assignment recovery; skipping agent");
             Ok(())
         }
+        // As for a status that does not fold: no retry of the assignment reads the oplog.
+        Err(error) if is_failed_oplog(&error) => {
+            error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
+            Ok(())
+        }
         Err(error) => Err(anyhow!(
             "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
         )),
+    }
+}
+
+/// Whether `error` is an oplog that failed, also when a failed resume carries it.
+fn is_failed_oplog(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::OplogFailed { .. } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog(reason),
+        _ => false,
     }
 }
 
@@ -7657,7 +7673,7 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
 }
 
 /// The error that ends a replay outside the guest's failure handling: a reconstruction that is
-/// required, or an oplog that does not read. Either ends the start with the error.
+/// required, or an oplog that failed. Either ends the start with the error.
 fn selected_replay_recovery_error(
     owner_failure_selected: bool,
     agent_mode: AgentMode,
@@ -7669,7 +7685,7 @@ fn selected_replay_recovery_error(
     match result {
         Err(
             error @ (WorkerExecutorError::RecoveryRequired { .. }
-            | WorkerExecutorError::OplogUnreadable { .. }),
+            | WorkerExecutorError::OplogFailed { .. }),
         ) => Some(error),
         _ => None,
     }
@@ -8080,7 +8096,7 @@ mod tests {
     /// An oplog that does not read ends the replay with its error instead of failing the guest.
     #[test]
     fn replay_recovery_branch_selects_an_unreadable_oplog() {
-        let result = Err(WorkerExecutorError::oplog_unreadable(
+        let result = Err(WorkerExecutorError::oplog_failed(
             AgentId {
                 component_id: ComponentId(Uuid::new_v4()),
                 agent_id: "unreadable".to_string(),
@@ -9802,6 +9818,27 @@ mod tests {
             recovered_status(&recovered_agent(), Err(StatusError::Unreadable(unreadable))),
             Ok(None)
         ));
+    }
+
+    /// An agent whose restart finds its oplog unreadable, for example while rebuilding its stream
+    /// session index, is skipped: the other agents of the scan are still resumed.
+    #[test]
+    fn shard_assignment_recovery_skips_a_restart_that_finds_the_oplog_failed() {
+        let unreadable = WorkerExecutorError::oplog_failed(
+            recovered_agent().agent_id(),
+            "corrupt oplog data from archive layer 1",
+        );
+        assert!(recovered_restart::<()>(&recovered_agent(), Err(unreadable.clone())).is_ok());
+        assert!(
+            recovered_restart::<()>(
+                &recovered_agent(),
+                Err(WorkerExecutorError::failed_to_resume_worker(
+                    recovered_agent().agent_id(),
+                    unreadable,
+                )),
+            )
+            .is_ok()
+        );
     }
 
     /// A revoke that races recovery refuses the worker an epoch. That agent is skipped, so the rest

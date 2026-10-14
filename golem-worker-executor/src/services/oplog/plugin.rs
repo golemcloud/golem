@@ -585,7 +585,7 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             if self.fresh {
                 self.inner
@@ -628,6 +628,14 @@ impl OplogConstructor for CreateOplogConstructor {
                 )
                 .await
         };
+        // A failed open caches nothing, so its slot is released at once.
+        let inner = match inner {
+            Ok(inner) => inner,
+            Err(error) => {
+                close();
+                return Err(error);
+            }
+        };
         // Taken from the opened inner oplog, not read up front: the inner open claims the shard
         // epoch, so an index read before it could be behind a losing executor's last commit, and
         // the forwarding buffer would then label its entries with indexes already in use.
@@ -636,7 +644,7 @@ impl OplogConstructor for CreateOplogConstructor {
             None => inner.current_oplog_index().await,
         };
 
-        Arc::new(
+        Ok(Arc::new(
             ForwardingOplog::new(
                 inner,
                 self.oplog_plugins,
@@ -649,7 +657,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 self.plugin_max_elapsed_time,
             )
             .await,
-        )
+        ))
     }
 }
 
@@ -763,7 +771,7 @@ impl OplogService for ForwardingOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -798,7 +806,7 @@ impl OplogService for ForwardingOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -833,7 +841,7 @@ impl OplogService for ForwardingOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,

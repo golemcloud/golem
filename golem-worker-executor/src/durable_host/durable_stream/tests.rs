@@ -9589,3 +9589,42 @@ async fn byte_output_drain_publishes_only_the_live_suffix() {
             .is_err()
     );
 }
+
+/// An unreadable oplog keeps its type through the stream and session errors, so the agent fails
+/// with `OplogFailed`, at a boundary and in a trap alike, rather than with a runtime error.
+#[test]
+fn an_unreadable_oplog_keeps_its_type_through_stream_and_session_errors() {
+    use super::SessionError;
+    use crate::services::oplog::{OplogReadError, UnreadableOplog};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    let unreadable = UnreadableOplog {
+        agent_id: golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "unreadable".to_string(),
+        },
+        error: OplogReadError::Gap {
+            start: OplogIndex::INITIAL,
+            end: OplogIndex::from_u64(2),
+        },
+    };
+    let expected = WorkerExecutorError::from(unreadable.clone());
+
+    let session = SessionError::from(StreamStoreError::from(SessionError::from(
+        StreamStoreError::from(unreadable.clone()),
+    )));
+    assert_eq!(session, SessionError::Unreadable(unreadable));
+    assert_eq!(
+        session
+            .clone()
+            .into_worker_executor_error(WorkerExecutorError::runtime),
+        expected
+    );
+    assert_eq!(
+        session
+            .into_trap()
+            .downcast_ref::<WorkerExecutorError>()
+            .cloned(),
+        Some(expected)
+    );
+}

@@ -86,8 +86,8 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
-        Arc::new(
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+        Ok(Arc::new(
             CompressedOplogArchive::opened(
                 owned_agent_id.agent_id(),
                 agent_mode,
@@ -96,8 +96,8 @@ impl OplogArchiveService for CompressedOplogArchiveService {
                 self.retry_config.clone(),
                 shard_epoch,
             )
-            .await,
-        )
+            .await?,
+        ))
     }
 
     async fn open_fresh(
@@ -105,7 +105,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         self.open(owned_agent_id, agent_mode, shard_epoch).await
     }
 
@@ -124,7 +124,12 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-        let archive = self.open(owned_agent_id, agent_mode, None).await;
+        let archive = self
+            .open(owned_agent_id, agent_mode, None)
+            .await
+            .map_err(|error| {
+                OplogReadError::source_failure(OplogReadSource::Archive(self.level), error)
+            })?;
         archive.read_source(idx, n).await
     }
 
@@ -230,6 +235,7 @@ impl CompressedOplogArchive {
     /// A handle that writes as the owner of `shard_epoch`: records it on this level's key (a
     /// monotonic compare-and-set, as the primary oplog does at open) and asserts it on every
     /// write. A newer owner's record refuses the open, and the handle is returned already fenced.
+    /// A record that fails for another reason fails the open.
     pub async fn opened(
         agent_id: AgentId,
         agent_mode: AgentMode,
@@ -237,7 +243,7 @@ impl CompressedOplogArchive {
         level: usize,
         retry_config: RetryConfig,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Self {
+    ) -> OplogArchiveResult<Self> {
         let stream = FencedIndexedStream::opened(
             agent_id.clone(),
             Self::namespace(agent_id.clone(), agent_mode, level),
@@ -246,15 +252,20 @@ impl CompressedOplogArchive {
             retry_config.clone(),
             shard_epoch,
         )
-        .await;
-        Self::with_stream(
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to record the owning epoch of the compressed oplog of {agent_id} at level {level}: {error}"
+            )
+        })?;
+        Ok(Self::with_stream(
             agent_id,
             agent_mode,
             indexed_storage,
             level,
             retry_config,
             stream,
-        )
+        ))
     }
 
     fn with_stream(

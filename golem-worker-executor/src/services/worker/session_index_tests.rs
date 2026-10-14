@@ -306,7 +306,8 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let mapping = StreamSessionMappingRecord {
         transport_stream_id: 7,
         role: SessionStreamRole::Output,
@@ -441,7 +442,8 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let foreign_attachment = StreamAttachmentKey {
         consumer_environment_id: foreign.environment_id,
         consumer: foreign.agent_id.clone(),
@@ -738,6 +740,7 @@ async fn create_oplog_with_identity(
             None,
         )
         .await
+        .unwrap()
 }
 
 async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> OplogIndex {
@@ -994,7 +997,8 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
                 suspended_status(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
         for _ in 0..2050 {
             append_noop(oplog.as_ref()).await;
@@ -1103,7 +1107,8 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     append_session(
         oplog.as_ref(),
         prepared_with_reader(&foreign, &foreign_session.idempotency_key),
@@ -1310,7 +1315,8 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     append_session(oplog.as_ref(), prepared_with_reader(&owner, &key)).await;
     let reader = local_reader(OplogIndex::from_u64(2), 0);
     let mut retained = Vec::new();
@@ -3223,7 +3229,8 @@ async fn identity_resolution_distinguishes_absent_and_malformed_oplogs() {
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
     assert!(service.resolve_agent_identity(&malformed).await.is_err());
 }
@@ -3923,7 +3930,8 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let raw = reopened
         .raw_durable_stream_session_status(&session_key)
         .await;
@@ -3986,7 +3994,8 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let takeover_attempt = AttemptId::fresh();
     append_session(
         second.as_ref(),
@@ -4285,7 +4294,8 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let raw = reopened
         .raw_durable_stream_session_status(&session_key)
         .await;
@@ -4361,7 +4371,8 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     storage.reset();
     assert_eq!(
         reopened
@@ -4488,4 +4499,117 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
             );
         }
     }
+}
+
+/// Stores `chunk` as the chunk ending at `last_idx` of the compressed archive level 1 of the agent.
+async fn store_archived_chunk(
+    storage: &InMemoryIndexedStorage,
+    id: &OwnedAgentId,
+    last_idx: u64,
+    chunk: &crate::services::oplog::CompressedOplogChunk,
+) {
+    crate::storage::indexed::IndexedStorageLabelledApi::with_entity(
+        storage,
+        "compressed_oplog",
+        "append",
+        "compressed_entry",
+    )
+    .append(
+        crate::storage::indexed::IndexedStorageNamespace::CompressedOpLog {
+            agent_id: id.agent_id(),
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        },
+        &id.agent_id().to_redis_key(),
+        last_idx,
+        chunk,
+        None,
+    )
+    .await
+    .unwrap();
+}
+
+/// An agent whose `Create` reads, but whose later archived chunk does not decode: rebuilding its
+/// stream session index fails with the unreadable oplog itself, not with its text, so the start
+/// and the shard-assignment recovery can fail and skip that agent alone.
+#[test]
+async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unreadable_oplog() {
+    use crate::services::oplog::CompressedOplogChunk;
+
+    let indexed = Arc::new(InMemoryIndexedStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed.clone(),
+        1,
+        RetryConfig::default(),
+    ));
+    let oplog: Arc<dyn OplogService> =
+        Arc::new(MultiLayerOplogService::new(primary, nev![archive], 10, 10));
+    let id = owned_agent("unreadable-later-chunk", ComponentId::new());
+    let create = create_entry(
+        &id,
+        AgentMode::Durable,
+        AccountId::new(),
+        test_fingerprint(),
+    );
+    store_archived_chunk(
+        &indexed,
+        &id,
+        1,
+        &CompressedOplogChunk::compress(vec![create]).unwrap(),
+    )
+    .await;
+    let later = vec![OplogEntry::no_op(None), OplogEntry::no_op(None)];
+    let encoded = golem_common::serialization::serialize(&later).unwrap();
+    store_archived_chunk(
+        &indexed,
+        &id,
+        3,
+        &CompressedOplogChunk {
+            count: 2,
+            compressed_data: zstd::encode_all(&encoded[..encoded.len() / 2], 0).unwrap(),
+        },
+    )
+    .await;
+    let service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog,
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+
+    let error = service
+        .lookup_durable_stream_producer_metadata(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            vec![ProducerMetadataKey::Global],
+        )
+        .await
+        .err()
+        .expect("the rebuild over an undecodable chunk must fail");
+
+    let SessionError::Unreadable(unreadable) = &error else {
+        panic!("the unreadable oplog lost its type: {error:?}");
+    };
+    assert_eq!(unreadable.agent_id, id.agent_id);
+    assert!(
+        matches!(
+            WorkerExecutorError::from(unreadable.clone()),
+            WorkerExecutorError::OplogFailed { details, .. }
+                if details.contains("archive layer 1") && details.contains("ending at 3")
+        ),
+        "{error}"
+    );
 }

@@ -1074,6 +1074,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         SessionError::Fenced(fence) => Some(
                             WorkerExecutorError::from(OplogError::Fenced(fence.clone())).into(),
                         ),
+                        SessionError::Unreadable(unreadable) => {
+                            Some(WorkerExecutorError::from(unreadable.clone()).into())
+                        }
                         SessionError::Failed(_) => None,
                     };
                     send_rejection_with_worker_error(
@@ -3248,6 +3251,9 @@ async fn send_protocol_failure(
                 WorkerExecutorError::from(OplogError::Fenced(fence)),
             )
             .await
+        }
+        SessionError::Unreadable(unreadable) => {
+            send_worker_failure(responses, WorkerExecutorError::from(unreadable)).await
         }
         SessionError::Failed(details) => {
             send_failure(

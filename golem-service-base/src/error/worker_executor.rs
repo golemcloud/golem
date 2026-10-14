@@ -158,10 +158,11 @@ pub enum WorkerExecutorError {
         kind: ComponentServiceRefusal,
         reason: String,
     },
-    /// The agent's oplog does not give the entries a replay or a recovery needs: a source of the
-    /// oplog failed or gave corrupt data. The agent fails and does not run; its oplog is left as
-    /// it is, so it can be inspected. Crosses the wire as `RuntimeError` with this text.
-    OplogUnreadable {
+    /// The agent's oplog failed: it does not give the entries a replay or a recovery needs (a
+    /// source of the oplog failed or gave corrupt data), or an archive layer did not store its
+    /// entries. The agent fails and does not run; its oplog is left as it is, so it can be
+    /// inspected. Crosses the wire as `RuntimeError` with this text.
+    OplogFailed {
         agent_id: AgentId,
         details: String,
     },
@@ -317,8 +318,8 @@ impl WorkerExecutorError {
         }
     }
 
-    pub fn oplog_unreadable(agent_id: AgentId, details: impl Into<String>) -> Self {
-        Self::OplogUnreadable {
+    pub fn oplog_failed(agent_id: AgentId, details: impl Into<String>) -> Self {
+        Self::OplogFailed {
             agent_id,
             details: details.into(),
         }
@@ -495,8 +496,8 @@ impl Display for WorkerExecutorError {
                 "The component service refused {} ({kind}): {reason}",
                 ComponentRef(component_id, component_revision.as_ref())
             ),
-            Self::OplogUnreadable { agent_id, details } => {
-                write!(f, "The oplog of {agent_id} is unreadable: {details}")
+            Self::OplogFailed { agent_id, details } => {
+                write!(f, "The oplog of {agent_id} failed: {details}")
             }
         }
     }
@@ -545,7 +546,7 @@ impl Error for WorkerExecutorError {
             Self::OplogFenced { .. } => "Oplog write fenced: the shard has a new owner",
             Self::ComponentServiceUnavailable { .. } => "Component service unavailable",
             Self::ComponentServiceRefused { .. } => "Component service refused the request",
-            Self::OplogUnreadable { .. } => "Oplog unreadable",
+            Self::OplogFailed { .. } => "Oplog failed",
         }
     }
 }
@@ -585,7 +586,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::OplogFenced { .. } => "OplogFenced",
             Self::ComponentServiceUnavailable { .. } => "ComponentServiceUnavailable",
             Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
-            Self::OplogUnreadable { .. } => "OplogUnreadable",
+            Self::OplogFailed { .. } => "OplogFailed",
         }
     }
 
@@ -623,7 +624,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::FileSystemError { .. }
             | Self::ReadOnlyViolation { .. }
             | Self::PermissionDenied { .. }
-            | Self::OplogUnreadable { .. } => false,
+            | Self::OplogFailed { .. } => false,
         }
     }
 
@@ -972,10 +973,10 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     },
                 )),
             },
-            unreadable @ WorkerExecutorError::OplogUnreadable { .. } => Self {
+            failed @ WorkerExecutorError::OplogFailed { .. } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError {
-                        details: unreadable.to_string(),
+                        details: failed.to_string(),
                     },
                 )),
             },

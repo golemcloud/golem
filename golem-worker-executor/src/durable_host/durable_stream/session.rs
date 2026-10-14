@@ -265,7 +265,6 @@ impl DurableStreamStore {
             .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key))
             .await
             .map(Some)
-            .map_err(SessionError::from)
     }
 
     /// Refreshes a disposable control projection from this owner's complete local journal.

@@ -699,7 +699,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 // The source is read, never written, so this handle asserts no epoch.
                 None,
             )
-            .await;
+            .await?;
         let source_oplog = Ctx::wrap_oplog(
             owned_source_agent_id.clone(),
             source_oplog,

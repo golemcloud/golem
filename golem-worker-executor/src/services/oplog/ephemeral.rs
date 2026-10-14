@@ -30,7 +30,9 @@ use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{AgentFingerprint, DurableStreamSessionStatus, OwnedAgentId, ShardEpoch};
+use golem_common::model::{
+    AgentFingerprint, AgentId, DurableStreamSessionStatus, OwnedAgentId, ShardEpoch,
+};
 use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
@@ -48,7 +50,7 @@ const MAX_RETAINED_RECEIPT_BATCHES: usize = 32;
 
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
-use tracing::{Instrument, Level, debug, info, warn};
+use tracing::{Instrument, Level, debug, error, info, warn};
 
 /// Oplog implementation for ephemeral agents, writing directly to archive layers.
 ///
@@ -167,14 +169,21 @@ struct EphemeralOplogState {
     last_added_non_hint_entry: Option<OplogIndex>,
     durable_stream_sessions: super::raw_session::RawSessionCache,
     fence: Arc<OnceLock<OplogFence>>,
+    /// The archive write the writer task could not store, latched like the fence.
+    failure: Arc<OnceLock<OplogError>>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
 }
 
 impl EphemeralOplogState {
     /// Refuses a new write once the writer, or a transfer between the archive layers, has met a
-    /// newer owner's epoch: nothing this handle writes can land any more.
+    /// newer owner's epoch, or once the writer could not store a batch: nothing this handle
+    /// writes can land any more, so the agent stops.
     fn refuse_if_fenced(&self) -> Result<(), OplogError> {
-        refuse_if_fenced(fenced(&self.fence, &self.lower).as_ref())
+        refuse_if_fenced(fenced(&self.fence, &self.lower).as_ref())?;
+        match self.failure.get() {
+            Some(failure) => Err(failure.clone()),
+            None => Ok(()),
+        }
     }
 
     /// Pushes an entry into the in-memory buffer and advances the oplog index,
@@ -328,11 +337,14 @@ impl EphemeralOplog {
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
         let (writer, writer_rx) = tokio::sync::mpsc::channel(MAX_QUEUED_WRITE_BATCHES);
         let writer_watermark = Arc::new(AtomicU64::new(last_oplog_idx.as_u64()));
+        let failure = Arc::new(OnceLock::new());
         let writer_task = tokio::spawn(Self::write_batches(
+            owned_agent_id.agent_id(),
             target,
             writer_rx,
             writer_watermark.clone(),
             fence.clone(),
+            failure.clone(),
         ));
         let mut state = EphemeralOplogState {
             buffer: VecDeque::new(),
@@ -346,6 +358,7 @@ impl EphemeralOplog {
             last_added_non_hint_entry: None,
             durable_stream_sessions: super::raw_session::RawSessionCache::default(),
             fence: fence.clone(),
+            failure,
             lower: lower.clone(),
         };
 
@@ -530,7 +543,7 @@ impl EphemeralOplog {
             service_to_close.abort_transfer_in_drop(&transfer_to_close);
             let transfer = transfer_closed.await;
             actor.map_err(|error| error.to_string())?;
-            writer.map_err(|error| error.to_string())?;
+            writer.map_err(|error| error.to_string())??;
             transfer
         });
         let closed = async move { cleanup.await.map_err(|error| error.to_string())? }
@@ -556,20 +569,29 @@ impl EphemeralOplog {
     }
 
     /// Writes each batch to the first archive layer. Once the layer refuses one, the fence is
-    /// latched and no later batch is written, so none lands out of order after a refused one; the
+    /// latched, and once it fails to store one after its retries, `failure` is latched; either
+    /// way no later batch is written, so none lands out of order after one that did not land. The
     /// watermark stays at the last stored batch. Barriers are always released, and the waiter
-    /// reads the fence.
+    /// reads the latch.
+    ///
+    /// A batch committed with `CommitLevel::Deferred` was acknowledged before it was written, so
+    /// a failure can leave acknowledged entries out of the archived history. An ephemeral agent is
+    /// never resumed from that history, which exists to observe the agent, so the agent stops
+    /// instead of the process.
     async fn write_batches(
+        agent_id: AgentId,
         target: Arc<dyn OplogArchive + Send + Sync>,
         mut rx: Receiver<WriteCommand>,
         watermark: Arc<AtomicU64>,
         fence: Arc<OnceLock<OplogFence>>,
-    ) {
+        failure: Arc<OnceLock<OplogError>>,
+    ) -> Result<(), String> {
         while let Some(command) = rx.recv().await {
             match command {
                 WriteCommand::Append { entries, barrier } => {
                     if let Some((end, _)) = entries.last()
                         && fence.get().is_none()
+                        && failure.get().is_none()
                     {
                         match target.append(&entries).await {
                             Ok(_) => watermark.store(end.as_u64(), Ordering::Release),
@@ -577,7 +599,17 @@ impl EphemeralOplog {
                                 let _ = fence.set(refusal);
                             }
                             Err(error) => {
-                                panic!("Failed to commit required ephemeral oplog entries: {error}")
+                                error!(
+                                    agent_id = %agent_id,
+                                    archive_layer = 0,
+                                    error = %error,
+                                    "Failed to write ephemeral oplog entries to the archive; the agent stops"
+                                );
+                                let _ = failure.set(OplogError::ArchiveWrite {
+                                    agent_id: agent_id.clone(),
+                                    level: 0,
+                                    details: error.to_string(),
+                                });
                             }
                         }
                     }
@@ -586,6 +618,11 @@ impl EphemeralOplog {
                     }
                 }
             }
+        }
+        // A latched failure is the result of the writer, which the close of the oplog reports.
+        match failure.get() {
+            Some(failure) => Err(failure.to_string()),
+            None => Ok(()),
         }
     }
 
@@ -859,7 +896,7 @@ impl EphemeralOplog {
         multi_layer_oplog_service: &MultiLayerOplogService,
         fresh: bool,
         shard_epoch: Option<ShardEpoch>,
-    ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
+    ) -> Result<NEVec<Arc<dyn OplogArchive + Send + Sync>>, UnreadableOplog> {
         let mut shard_epoch = shard_epoch;
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
@@ -869,7 +906,13 @@ impl EphemeralOplog {
                     .await
             } else {
                 layer.open(owned_agent_id, agent_mode, shard_epoch).await
-            };
+            }
+            .map_err(|error| {
+                UnreadableOplog::new(
+                    &owned_agent_id.agent_id,
+                    OplogReadError::source_failure(OplogReadSource::Archive(i), error),
+                )
+            })?;
             // A refused claim leaves the oplog finished: every write is refused on its fence, and
             // nothing ever writes the layers below, so they are opened without an epoch rather
             // than paying a refused write, a warning, or a stale claim on each.
@@ -911,7 +954,7 @@ impl EphemeralOplog {
                 )));
             }
         }
-        NEVec::try_from_vec(lower).expect("At least one lower layer is required")
+        Ok(NEVec::try_from_vec(lower).expect("At least one lower layer is required"))
     }
 }
 
@@ -1115,8 +1158,15 @@ impl Oplog for EphemeralOplog {
                 Ok(count) => dropped += count,
                 // The layer latched the refusal, where `fence` reports it.
                 Err(OplogError::Fenced(_)) => break,
+                // Maintenance: the entries stay where they are, and a later archive drops them.
                 Err(error) => {
-                    panic!("Failed to drop ephemeral oplog archive layer {level} prefix: {error}")
+                    warn!(
+                        agent_id = %self.owned_agent_id,
+                        archive_layer = level,
+                        error = %error,
+                        "Failed to drop the prefix of an ephemeral oplog archive layer"
+                    );
+                    break;
                 }
             }
         }

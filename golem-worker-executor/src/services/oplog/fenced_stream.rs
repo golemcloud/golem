@@ -14,8 +14,9 @@
 
 use crate::metrics::oplog::record_oplog_storage_retry;
 use crate::services::oplog::{
-    OplogError, OplogFence, PrimaryOplogService, decode_scan_cursor, next_scan_cursor,
-    record_epoch_verdict, record_owning_epoch, refuse_if_fenced, retry_scan_storage_op,
+    OplogError, OplogFence, PrimaryOplogService, decode_scan_cursor, epoch_record_service,
+    epoch_record_verdict, next_scan_cursor, record_epoch_verdict, refuse_if_fenced,
+    retry_scan_storage_op,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -132,7 +133,8 @@ impl FencedIndexedStream {
 
     /// A stream that writes as the owner of `shard_epoch`: records it on the key (a monotonic
     /// compare-and-set, as the primary oplog does at open) and asserts it on every write. A newer
-    /// owner's record refuses the open, and the stream is returned already fenced.
+    /// owner's record refuses the open, and the stream is returned already fenced. A record that
+    /// fails for another reason, after the retries, fails the open.
     pub async fn opened(
         agent_id: AgentId,
         namespace: IndexedStorageNamespace,
@@ -140,25 +142,28 @@ impl FencedIndexedStream {
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         retry_config: RetryConfig,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Self {
+    ) -> Result<Self, IndexedStorageError> {
         let mut stream = Self::new(agent_id, namespace, labels, indexed_storage, retry_config);
         let Some(shard_epoch) = shard_epoch else {
-            return stream;
+            return Ok(stream);
         };
         stream.shard_epoch = Some(shard_epoch);
-        if let Some(fence) = record_owning_epoch(
-            &*stream.indexed_storage,
-            &stream.retry_config,
-            stream.namespace.clone(),
-            &stream.agent_id,
-            &stream.key,
-            shard_epoch,
-        )
-        .await
-        {
+        let svc_name = epoch_record_service(&stream.namespace);
+        let outcome = retry_storage_op(&stream.retry_config, "set_key_epoch", &stream.key, || {
+            let storage = stream.indexed_storage.clone();
+            let namespace = stream.namespace.clone();
+            let key = stream.key.clone();
+            async move {
+                storage
+                    .set_key_epoch(svc_name, "set_key_epoch", namespace, &key, shard_epoch)
+                    .await
+            }
+        })
+        .await;
+        if let Some(fence) = epoch_record_verdict(&stream.namespace, &stream.agent_id, outcome)? {
             let _ = stream.fence.set(fence);
         }
-        stream
+        Ok(stream)
     }
 
     pub fn fence(&self) -> Option<OplogFence> {

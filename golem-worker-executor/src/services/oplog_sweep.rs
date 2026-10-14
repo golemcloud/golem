@@ -1961,6 +1961,7 @@ mod tests {
                 archive
                     .open(&owned_agent_id, AgentMode::Ephemeral, None)
                     .await
+                    .unwrap()
                     .append(&[(at, OplogEntry::suspend())])
                     .await
                     .unwrap();
@@ -2100,7 +2101,8 @@ mod tests {
                     execution_lock(),
                     None,
                 )
-                .await;
+                .await
+                .unwrap();
             Ok(match MultiLayerOplog::try_archive_blocking(&oplog).await {
                 Ok(Some(more)) => Some(more),
                 Ok(None) => EphemeralOplog::try_archive_blocking(&oplog)
@@ -2229,7 +2231,8 @@ mod tests {
                 execution_lock(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         oplog.add(OplogEntry::suspend()).await.unwrap();
         oplog.add(OplogEntry::exited()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
@@ -2818,7 +2821,8 @@ mod tests {
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
         let layer = archive
             .open(&owned_agent_id, AgentMode::Ephemeral, None)
-            .await;
+            .await
+            .unwrap();
         layer
             .append(&[
                 (OplogIndex::INITIAL, create_entry(agent_id, environment_id)),
@@ -3091,7 +3095,8 @@ mod tests {
                 execution_lock(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         oplog.add(OplogEntry::suspend()).await.unwrap();
         oplog.add(OplogEntry::exited()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
@@ -3379,7 +3384,8 @@ mod tests {
                 execution_lock(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         oplog.add(OplogEntry::suspend()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
@@ -3705,15 +3711,15 @@ mod tests {
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
             shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn OplogArchive + Send + Sync> {
-            Arc::new(MiscountingArchive {
+        ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+            Ok(Arc::new(MiscountingArchive {
                 inner: self
                     .inner
                     .open(owned_agent_id, agent_mode, shard_epoch)
-                    .await,
+                    .await?,
                 keeps_entries: self.keeps_entries,
                 appends: self.appends.clone(),
-            })
+            }))
         }
 
         async fn open_fresh(
@@ -3721,15 +3727,15 @@ mod tests {
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
             shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn OplogArchive + Send + Sync> {
-            Arc::new(MiscountingArchive {
+        ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+            Ok(Arc::new(MiscountingArchive {
                 inner: self
                     .inner
                     .open_fresh(owned_agent_id, agent_mode, shard_epoch)
-                    .await,
+                    .await?,
                 keeps_entries: self.keeps_entries,
                 appends: self.appends.clone(),
-            })
+            }))
         }
 
         async fn delete(

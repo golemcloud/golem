@@ -567,7 +567,8 @@ pub(crate) mod tests {
                     ))),
                     None,
                 )
-                .await;
+                .await
+                .unwrap();
             Self {
                 service,
                 oplog,

@@ -528,7 +528,7 @@ impl PrimaryOplogService {
         shard_epoch: Option<ShardEpoch>,
         epoch_record: EpochRecord,
         reconcile_last_index: bool,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_oplog_call("open");
 
         let key = Self::oplog_key(&owned_agent_id.agent_id);
@@ -830,7 +830,7 @@ impl OplogService for PrimaryOplogService {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_oplog_call("create");
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
@@ -912,7 +912,7 @@ impl OplogService for PrimaryOplogService {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_oplog_call("create_fresh");
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
@@ -973,7 +973,7 @@ impl OplogService for PrimaryOplogService {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         // An index handed in by a caller was read before this open claims the epoch.
         let reconcile_last_index = last_oplog_index.is_some();
         self.open_with(
@@ -1353,7 +1353,7 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         _lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         // Recorded before the oplog is usable, so an executor whose shard has moved is refused
         // at its very first write rather than after replaying the new owner's entries.
         let fence = match (self.epoch_record, self.shard_epoch) {
@@ -1396,7 +1396,7 @@ impl OplogConstructor for CreateOplogConstructor {
             Some(idx) => idx,
         };
 
-        Arc::new(PrimaryOplog::new(
+        Ok(Arc::new(PrimaryOplog::new(
             self.shard_epoch,
             fence,
             self.indexed_storage,
@@ -1414,7 +1414,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.fingerprint,
             self.stream_session_index,
             close,
-        ))
+        )))
     }
 }
 

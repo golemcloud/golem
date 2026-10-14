@@ -164,7 +164,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key.idempotency_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?
+            .map_err(StreamStoreError::from)?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
@@ -254,7 +254,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         if !metadata.is_loaded() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
@@ -349,7 +349,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let readers = control.readers_for_attachment(key);
         if readers.is_empty() {
             return Ok(None);
@@ -569,7 +569,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let readers = control.readers_for_attachment(key);
         if readers.is_empty() {
             return Ok(None);
@@ -588,7 +588,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                     .collect(),
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let heads = rows
             .into_iter()
             .map(|row| match row {

@@ -2339,24 +2339,29 @@ pub async fn archived_oplog_chunks(
         .await?)
 }
 
-/// Replaces the first chunk of the compressed archive `level` of the durable agent with a
-/// truncated encoding of its entries: the chunk decompresses, but its entries do not deserialize,
-/// as with a chunk whose write was cut short. The other chunks stay as they are. The storage is
-/// reached as by [`take_agent_oplog_over_at_epoch`], so no executor may run on it meanwhile.
-pub async fn truncate_first_archived_oplog_chunk(
+/// Replaces the chunk at `position` (0 is the oldest) of the compressed archive `level` of the
+/// durable agent with a truncated encoding of its entries: the chunk decompresses, but its entries
+/// do not deserialize, as with a chunk whose write was cut short. The other chunks stay as they
+/// are. The storage is reached as by [`take_agent_oplog_over_at_epoch`], so no executor may run on
+/// it meanwhile.
+pub async fn truncate_archived_oplog_chunk(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     owned_agent_id: &OwnedAgentId,
     level: usize,
+    position: usize,
 ) -> anyhow::Result<()> {
     use golem_worker_executor::services::oplog::CompressedOplogChunk;
 
     let chunks = archived_oplog_chunks(deps, context, owned_agent_id, level).await?;
-    let (first_id, first) = chunks
-        .first()
-        .ok_or_else(|| anyhow!("archive level {level} holds no chunk of {owned_agent_id}"))?;
+    let (truncated_id, stored) = chunks.get(position).ok_or_else(|| {
+        anyhow!(
+            "archive level {level} holds {} chunks of {owned_agent_id}, none at {position}",
+            chunks.len()
+        )
+    })?;
     let chunk: CompressedOplogChunk =
-        golem_common::serialization::deserialize(first).map_err(|err| anyhow!(err))?;
+        golem_common::serialization::deserialize(stored).map_err(|err| anyhow!(err))?;
     let entries = chunk.decompress()?;
     let encoded = golem_common::serialization::serialize(&entries).map_err(|err| anyhow!(err))?;
     let truncated = CompressedOplogChunk {
@@ -2383,7 +2388,7 @@ pub async fn truncate_first_archived_oplog_chunk(
         )
         .await?;
     for (id, value) in &chunks {
-        let value = if id == first_id {
+        let value = if id == truncated_id {
             golem_common::serialization::serialize(&truncated).map_err(|err| anyhow!(err))?
         } else {
             value.clone()

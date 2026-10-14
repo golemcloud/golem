@@ -526,7 +526,7 @@ fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<WorkerExecutorError> {
     error
         .chain()
         .find_map(|cause| match cause.downcast_ref::<WorkerExecutorError>() {
-            Some(error @ WorkerExecutorError::OplogUnreadable { .. }) => Some(error.clone()),
+            Some(error @ WorkerExecutorError::OplogFailed { .. }) => Some(error.clone()),
             _ => cause
                 .downcast_ref::<UnreadableOplog>()
                 .map(|error| error.clone().into()),

@@ -121,7 +121,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync>;
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>>;
 
     /// Opens a new, known-empty archive without probing persistent storage. The epoch as for
     /// [`Self::open`].
@@ -130,7 +130,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync>;
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>>;
 
     /// Deletes the oplog archive for a worker completely, together with any writer generation
     /// recorded for it.
@@ -639,14 +639,15 @@ impl CreateOplogConstructor {
         }
     }
 
-    /// The last index stored for the agent in any layer. An open cannot fail, so a layer whose
-    /// index does not read stops the executor here, as a primary oplog whose index does not read
-    /// does in its own open.
-    async fn stored_last_index(&self, agent_mode: AgentMode) -> OplogIndex {
+    /// The last index stored for the agent in any layer. A layer whose index does not read fails
+    /// the open.
+    async fn stored_last_index(
+        &self,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.service
             .get_last_index(&self.owned_agent_id, agent_mode)
             .await
-            .unwrap_or_else(|error| panic!("Failed to open the oplog: {error}"))
     }
 }
 
@@ -660,7 +661,14 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        // A failed open caches nothing, so its slot is released at once.
+        let failed = |close: Box<dyn FnOnce() + Send + Sync>,
+                      error: WorkerExecutorError|
+         -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            close();
+            Err(error)
+        };
         let agent_mode = self.agent_mode;
         let account_id = self.initial_worker_metadata.created_by;
         let fingerprint = self.initial_worker_metadata.fingerprint;
@@ -669,7 +677,10 @@ impl OplogConstructor for CreateOplogConstructor {
             AgentMode::Durable => {
                 let last_oplog_index = match self.last_oplog_index {
                     Some(idx) => idx,
-                    None => self.stored_last_index(agent_mode).await,
+                    None => match self.stored_last_index(agent_mode).await {
+                        Ok(idx) => idx,
+                        Err(error) => return failed(close, error.into()),
+                    },
                 };
                 let primary = if let Some(initial_entry) = self.initial_entry {
                     if self.fresh {
@@ -713,6 +724,10 @@ impl OplogConstructor for CreateOplogConstructor {
                         )
                         .await
                 };
+                let primary = match primary {
+                    Ok(primary) => primary,
+                    Err(error) => return failed(close, error),
+                };
                 MultiLayerOplog::new(
                     self.owned_agent_id,
                     agent_mode,
@@ -723,6 +738,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.shard_epoch,
                 )
                 .await
+                .map_err(WorkerExecutorError::from)
             }
             AgentMode::Ephemeral => {
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -739,6 +755,10 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.shard_epoch,
                 )
                 .await;
+                let lower = match lower {
+                    Ok(lower) => lower,
+                    Err(error) => return failed(close, error.into()),
+                };
 
                 // Read after the layers record the epoch, as the primary oplog reads its last index
                 // after its claim: an index a caller read before can be behind by whatever an
@@ -752,9 +772,15 @@ impl OplogConstructor for CreateOplogConstructor {
                             && self.shard_epoch.is_some()
                             && lower.iter().all(|layer| layer.fence().is_none()) =>
                     {
-                        OplogIndex::from_u64(idx.as_u64().max(stored_last_index().await.as_u64()))
+                        stored_last_index()
+                            .await
+                            .map(|stored| OplogIndex::from_u64(idx.as_u64().max(stored.as_u64())))
                     }
-                    Some(idx) => idx,
+                    Some(idx) => Ok(idx),
+                };
+                let last_oplog_index = match last_oplog_index {
+                    Ok(idx) => idx,
+                    Err(error) => return failed(close, error.into()),
                 };
 
                 if let Some(initial_entry) = self.initial_entry {
@@ -766,8 +792,15 @@ impl OplogConstructor for CreateOplogConstructor {
                         .await
                     {
                         Ok(_) | Err(OplogError::Fenced(_)) => {}
+                        // Nothing of the oplog is persisted, so the create can be tried again.
                         Err(error) => {
-                            panic!("Failed to persist the initial ephemeral oplog entry: {error}")
+                            return failed(
+                                close,
+                                WorkerExecutorError::runtime(format!(
+                                    "failed to persist the initial ephemeral oplog entry of {}: {error}",
+                                    self.owned_agent_id
+                                )),
+                            );
                         }
                     }
                 }
@@ -785,7 +818,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 );
                 MultiLayerOplogService::start_transfer(&transfer_fiber, start_tx, transfer).await;
 
-                Arc::new(
+                Ok(Arc::new(
                     EphemeralOplog::new(
                         self.owned_agent_id,
                         agent_mode,
@@ -800,7 +833,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         close,
                     )
                     .await,
-                )
+                ))
             }
         }
     }
@@ -881,7 +914,7 @@ impl OplogService for MultiLayerOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -913,7 +946,7 @@ impl OplogService for MultiLayerOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -945,7 +978,7 @@ impl OplogService for MultiLayerOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -1274,7 +1307,7 @@ impl MultiLayerOplog {
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, UnreadableOplog> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Every layer is opened, recording `shard_epoch` on it, before the archive watermark is
@@ -1287,8 +1320,15 @@ impl MultiLayerOplog {
         let shard_epoch = shard_epoch.filter(|_| primary.fence().is_none());
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
+            // A layer that does not open fails the open of the oplog, and nothing is cached.
+            let raw = match layer.open(&owned_agent_id, agent_mode, shard_epoch).await {
+                Ok(raw) => raw,
+                Err(error) => {
+                    close();
+                    return Err(unreadable_archive(&owned_agent_id, i, error));
+                }
+            };
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
-                let raw = layer.open(&owned_agent_id, agent_mode, shard_epoch).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -1306,7 +1346,6 @@ impl MultiLayerOplog {
                     .await,
                 ));
             } else {
-                let raw = layer.open(&owned_agent_id, agent_mode, shard_epoch).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -1370,7 +1409,7 @@ impl MultiLayerOplog {
             .set_background_transfer(start_tx, transfer_fiber)
             .await;
 
-        result
+        Ok(result)
     }
 
     async fn set_background_transfer(&self, start: Sender<()>, fiber: tokio::task::JoinHandle<()>) {
@@ -2372,7 +2411,8 @@ mod transfer_lifecycle_tests {
                 default_execution_status(AgentMode::Durable),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         let service = MultiLayerOplogService::new(primary_service, nev![archive], 100, 100);
         let oplog = MultiLayerOplog::new(
             owned_agent_id,
@@ -2383,7 +2423,8 @@ mod transfer_lifecycle_tests {
             Box::new(|| {}),
             None,
         )
-        .await;
+        .await
+        .unwrap();
         (oplog, service, agent_id)
     }
 
@@ -2508,7 +2549,8 @@ mod transfer_lifecycle_tests {
                 default_execution_status(AgentMode::Durable),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         let entries = (1..=archived + 10)
             .map(|index| {
                 OplogEntry::Error {
@@ -2528,7 +2570,10 @@ mod transfer_lifecycle_tests {
             writer.add(entry.clone()).await.unwrap();
         }
         writer.commit(CommitLevel::Always).await.unwrap();
-        let deep_archive = deepest.open(&owned, AgentMode::Durable, None).await;
+        let deep_archive = deepest
+            .open(&owned, AgentMode::Durable, None)
+            .await
+            .unwrap();
         if archived > 0 {
             let prefix = entries[..archived as usize]
                 .iter()
@@ -2549,7 +2594,8 @@ mod transfer_lifecycle_tests {
                 default_execution_status(AgentMode::Durable),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         assert_eq!(
             observer.current_oplog_index().await,
             OplogIndex::from_u64(captured)
@@ -2570,7 +2616,8 @@ mod transfer_lifecycle_tests {
             Box::new(|| {}),
             None,
         )
-        .await;
+        .await
+        .unwrap();
         let layered = downcast_oplog::<MultiLayerOplog>(&observer).unwrap();
         assert_eq!(
             layered.last_transfer_point.get(),

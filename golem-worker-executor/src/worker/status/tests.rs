@@ -5166,7 +5166,7 @@ impl OplogService for TestCase {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         _shard_epoch: Option<golem_common::model::ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -5180,7 +5180,7 @@ impl OplogService for TestCase {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         _shard_epoch: Option<golem_common::model::ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -5194,7 +5194,7 @@ impl OplogService for TestCase {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         _shard_epoch: Option<golem_common::model::ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         unreachable!()
     }
 

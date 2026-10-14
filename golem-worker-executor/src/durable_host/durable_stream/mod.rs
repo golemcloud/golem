@@ -405,7 +405,10 @@ pub enum StreamStoreError {
     FencedByTerminal(CommittedProducerStreamEventPayload),
     ClosedByOtherProducer,
     EventConflict,
-    SequenceGap { expected: u64, actual: u64 },
+    SequenceGap {
+        expected: u64,
+        actual: u64,
+    },
     CounterOverflow,
     ItemTooLarge,
     InvalidPackedU8Batch,
@@ -417,8 +420,14 @@ pub enum StreamStoreError {
     CursorUnavailable,
     SessionFinished(StreamSessionKey),
     AttachmentConflict,
-    StaleEpoch { current: u64, actual: u64 },
-    InvalidEpoch { current: u64, actual: u64 },
+    StaleEpoch {
+        current: u64,
+        actual: u64,
+    },
+    InvalidEpoch {
+        current: u64,
+        actual: u64,
+    },
     InvalidAttachmentState,
     ProducerDeleting,
     ConsumerDeleting,
@@ -427,6 +436,8 @@ pub enum StreamStoreError {
     CorruptHistory(String),
     Fenced(OplogFence),
     Oplog(String),
+    /// The oplog of the agent does not read: the agent fails, not the stream operation alone.
+    Unreadable(UnreadableOplog),
     RecoveryRequired,
     LiveBus(DurableLiveStreamBusError),
 }
@@ -438,9 +449,9 @@ impl From<OplogError> for StreamStoreError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
-                Self::Oplog(error.to_string())
-            }
+            error @ (OplogError::Payload(_)
+            | OplogError::Maintenance(_)
+            | OplogError::ArchiveWrite { .. }) => Self::Oplog(error.to_string()),
         }
     }
 }
@@ -459,6 +470,8 @@ impl std::error::Error for StreamStoreError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionError {
     Fenced(OplogFence),
+    /// The oplog of the agent does not read. It keeps its type, so the agent fails with it.
+    Unreadable(UnreadableOplog),
     Failed(String),
 }
 
@@ -481,33 +494,35 @@ impl SessionError {
     ) -> WorkerExecutorError {
         match self {
             Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            Self::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
             Self::Failed(text) => otherwise(text),
         }
     }
 
-    /// Converts for a host function: a fence traps as the lost shard it is, and every other
-    /// failure traps with its text.
+    /// Converts for a host function: a fence traps as the lost shard it is, an unreadable oplog
+    /// as the failure of the agent it is, and every other failure traps with its text.
     pub(crate) fn into_trap(self) -> anyhow::Error {
         match self {
             Self::Fenced(fence) => {
                 anyhow::Error::from(WorkerExecutorError::from(OplogError::Fenced(fence)))
+            }
+            Self::Unreadable(unreadable) => {
+                anyhow::Error::from(WorkerExecutorError::from(unreadable))
             }
             Self::Failed(text) => anyhow::Error::msg(text),
         }
     }
 }
 
-/// An oplog that does not read fails the stream operation that read it, with the cause as text.
 impl From<UnreadableOplog> for StreamStoreError {
     fn from(error: UnreadableOplog) -> Self {
-        Self::Oplog(error.to_string())
+        Self::Unreadable(error)
     }
 }
 
-/// An oplog that does not read fails the session operation that read it, with the cause as text.
 impl From<UnreadableOplog> for SessionError {
     fn from(error: UnreadableOplog) -> Self {
-        Self::Failed(error.to_string())
+        Self::Unreadable(error)
     }
 }
 
@@ -515,6 +530,7 @@ impl From<SessionError> for StreamStoreError {
     fn from(error: SessionError) -> Self {
         match error {
             SessionError::Fenced(fence) => Self::Fenced(fence),
+            SessionError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             SessionError::Failed(text) => Self::Oplog(text),
         }
     }
@@ -524,6 +540,7 @@ impl From<StreamStoreError> for SessionError {
     fn from(error: StreamStoreError) -> Self {
         match error {
             StreamStoreError::Fenced(fence) => Self::Fenced(fence),
+            StreamStoreError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             error => Self::Failed(error.to_string()),
         }
     }
@@ -533,9 +550,9 @@ impl From<OplogError> for SessionError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
-                Self::Failed(error.to_string())
-            }
+            error @ (OplogError::Payload(_)
+            | OplogError::Maintenance(_)
+            | OplogError::ArchiveWrite { .. }) => Self::Failed(error.to_string()),
         }
     }
 }
@@ -573,6 +590,7 @@ impl std::fmt::Display for SessionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Fenced(fence) => write!(formatter, "{}", OplogError::Fenced(fence.clone())),
+            Self::Unreadable(unreadable) => write!(formatter, "{unreadable}"),
             Self::Failed(text) => formatter.write_str(text),
         }
     }

@@ -549,7 +549,9 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
                     "The periodic snapshot record was not written: the shard of the agent moved"
                 ),
                 PeriodicFailure::Write(
-                    error @ (OplogError::Payload(_) | OplogError::Maintenance(_)),
+                    error @ (OplogError::Payload(_)
+                    | OplogError::Maintenance(_)
+                    | OplogError::ArchiveWrite { .. }),
                 ) => {
                     tracing::warn!(error = %error, "Failed to append the periodic snapshot record")
                 }

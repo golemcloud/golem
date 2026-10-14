@@ -415,7 +415,8 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let timestamp = Timestamp::now_utc();
     assert_eq!(
         oplog
@@ -481,7 +482,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     let agent_entry = oplog.add(OplogEntry::no_op(None)).await.unwrap();
     let observational_owner = oplog
@@ -1060,7 +1062,8 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     let non_start = oplog.add(OplogEntry::no_op(None)).await.unwrap();
     let non_entity_start = oplog
@@ -1218,7 +1221,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     let cases: Vec<(HostFunctionName, HostRequest, HostResponse)> = vec![
         (

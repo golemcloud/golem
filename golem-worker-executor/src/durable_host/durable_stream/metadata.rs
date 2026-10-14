@@ -1258,7 +1258,7 @@ impl DurableStreamStore {
                 vec![ProducerMetadataKey::Global, ProducerMetadataKey::Lineage],
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         if rows.len() != 2 {
             return Err(StreamStoreError::CorruptHistory(
                 "producer metadata lookup returned an incorrect row count".into(),
@@ -1631,7 +1631,7 @@ impl DurableStreamStore {
             let (_, rows) = service
                 .lookup_durable_stream_producer_metadata(&owner, *mode, *fingerprint, batch.clone())
                 .await
-                .map_err(StreamStoreError::Oplog)?;
+                .map_err(StreamStoreError::from)?;
             if rows.len() != batch.len() {
                 return Err(StreamStoreError::CorruptHistory(
                     "producer metadata lookup returned an incorrect row count".into(),
@@ -1704,7 +1704,7 @@ impl DurableStreamStore {
                 vec![ProducerMetadataKey::Global],
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let Some(ProducerMetadataRow::Global {
             active_attachments: count,
             deleting,
@@ -1744,7 +1744,7 @@ impl DurableStreamStore {
                     .collect(),
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let mut catalogue = HashMap::new();
         for (page, row) in pages.into_iter().zip(rows) {
             let Some(ProducerMetadataRow::AttachmentPage(slots)) = row else {
@@ -1775,7 +1775,7 @@ impl DurableStreamStore {
         let (_, rows) = service
             .lookup_durable_stream_producer_metadata(&owner, *mode, *fingerprint, keys)
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let mut candidates = Vec::new();
         for pair in rows.as_chunks::<2>().0 {
             let [
@@ -1855,7 +1855,7 @@ impl DurableStreamStore {
                     keys,
                 )
                 .await
-                .map_err(StreamStoreError::Oplog)?;
+                .map_err(StreamStoreError::from)?;
             let mut rows = rows.into_iter();
             let Some(Some(ProducerMetadataRow::Stream(stream))) = rows.next() else {
                 return Err(StreamStoreError::InvalidHandle);
@@ -2159,7 +2159,8 @@ mod tests {
                     ))),
                     None,
                 )
-                .await;
+                .await
+                .unwrap();
             Self {
                 identity,
                 service,

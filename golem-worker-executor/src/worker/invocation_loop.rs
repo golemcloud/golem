@@ -3926,19 +3926,19 @@ fn selected_infrastructure_recovery_error<'a>(
     match result {
         Err(
             error @ (WorkerExecutorError::RecoveryRequired { .. }
-            | WorkerExecutorError::OplogUnreadable { .. }),
+            | WorkerExecutorError::OplogFailed { .. }),
         ) => Some(error),
         _ => None,
     }
 }
 
 /// Whether an infrastructure failure of an invocation stops the agent instead of reconstructing
-/// it: the shard is lost, or the oplog does not read, so a reconstruction would fail again.
+/// it: the shard is lost, or the oplog failed, so a reconstruction would fail again.
 fn infrastructure_failure_stops_the_agent(
     retired_for_lost_shard: bool,
     error: &WorkerExecutorError,
 ) -> bool {
-    retired_for_lost_shard || matches!(error, WorkerExecutorError::OplogUnreadable { .. })
+    retired_for_lost_shard || matches!(error, WorkerExecutorError::OplogFailed { .. })
 }
 
 fn is_recovery_required_error(error: &WorkerExecutorError) -> bool {
@@ -4077,12 +4077,12 @@ async fn measured_check<Ctx: WorkerCtx>(
 }
 
 /// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
-/// was not made skips the snapshot. A refused write means the shard has a new owner, so the loop
-/// stops; any other failed write retries.
+/// was not made skips the snapshot. A refused write means the shard has a new owner, and a failed
+/// archive write is latched, so the loop stops; any other failed write retries.
 fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
     match failure {
         PeriodicFailure::Entry(_) => CommandOutcome::Continue,
-        PeriodicFailure::Write(OplogError::Fenced(_)) => {
+        PeriodicFailure::Write(OplogError::Fenced(_) | OplogError::ArchiveWrite { .. }) => {
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
         }
         PeriodicFailure::Write(OplogError::Payload(_) | OplogError::Maintenance(_)) => {
@@ -5323,7 +5323,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_oplog_stops_the_agent_on_a_shard_it_still_owns() {
-        let unreadable = WorkerExecutorError::oplog_unreadable(
+        let unreadable = WorkerExecutorError::oplog_failed(
             golem_common::model::AgentId {
                 component_id: golem_common::model::component::ComponentId::new(),
                 agent_id: "unreadable".to_string(),

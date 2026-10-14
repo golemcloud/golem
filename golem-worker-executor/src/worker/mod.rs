@@ -912,7 +912,7 @@ impl DurableTopologyRecoveryCache {
         owner: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         let metadata = service
             .lookup_durable_stream_recovery_metadata(owner, mode, fingerprint)
             .await?;
@@ -943,7 +943,7 @@ impl DurableTopologyRecoveryCache {
         owner: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         let current = oplog.current_oplog_index().await;
         self.refresh_through(current, oplog, service, owner, mode, fingerprint)
             .await
@@ -957,7 +957,7 @@ impl DurableTopologyRecoveryCache {
         owner: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         if !self.initialized {
             self.reload(service, owner, mode, fingerprint).await?;
         }
@@ -1159,7 +1159,6 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
             )
             .await
             .map(|session| session.and_then(|session| session.finished))
-            .map_err(SessionError::from)
     }
 }
 
@@ -1803,7 +1802,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if let Err(error) = self.add_and_commit_oplog(entry).await {
                             let fence = match error {
                                 OplogError::Fenced(fence) => Some(fence),
-                                OplogError::Payload(_) | OplogError::Maintenance(_) => None,
+                                OplogError::Payload(_)
+                                | OplogError::Maintenance(_)
+                                | OplogError::ArchiveWrite { .. } => None,
                             };
                             self.record_retirement(
                                 InterruptKind::ShardLost,
@@ -7543,7 +7544,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 session_key,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let mut resume_offset = match attempt {
             Some(attempt) => service
                 .lookup_durable_stream_resume_offset(
@@ -7554,7 +7555,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     attempt,
                 )
                 .await
-                .map_err(WorkerExecutorError::runtime)?,
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?,
             None => None,
         };
         let current = self.oplog.current_oplog_index().await;
@@ -7582,7 +7583,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 session_key,
                             )
                             .await
-                            .map_err(WorkerExecutorError::runtime)?;
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?;
                         if metadata.covered_through() < index {
                             return Err(WorkerExecutorError::runtime(
                                 "fork marker is not committed to the session index",
@@ -7598,7 +7601,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     attempt,
                                 )
                                 .await
-                                .map_err(WorkerExecutorError::runtime)?,
+                                .map_err(|error| {
+                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                                })?,
                             None => None,
                         };
                         continue 'suffix;
@@ -7675,7 +7680,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 idempotency_key,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
 
     async fn read_stream_session_record(
@@ -8179,7 +8184,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
             if cache.consumer_deleting {
-                return Ok::<_, String>(Vec::new());
+                return Ok::<_, SessionError>(Vec::new());
             }
             Ok(cache
                 .dirty
@@ -8198,7 +8203,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .finish_on_drop(refresh)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let mut recoverable = Vec::new();
         let mut first_error = None;
         for (key, metadata) in sessions {
@@ -9440,7 +9445,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 key,
                             )
                             .await
-                            .map_err(WorkerExecutorError::runtime)?
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?
                             .is_some_and(|session| session.prepared.is_some())
                     {
                         entries.push(DurableStreamOplogRecord::InlineEntry(
@@ -10496,7 +10503,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
                 shard_epoch,
             )
-            .await;
+            .await?;
 
         Ok(GetOrCreateWorkerResult {
             initial_worker_metadata,
@@ -10737,7 +10744,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             shard_epoch,
                         )
                         .await
-                };
+                }?;
 
                 {
                     let mut status = initial_status.load_full().as_ref().clone();

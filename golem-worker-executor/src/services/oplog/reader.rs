@@ -131,7 +131,7 @@ impl Error for UnreadableOplog {}
 
 impl From<UnreadableOplog> for WorkerExecutorError {
     fn from(value: UnreadableOplog) -> Self {
-        WorkerExecutorError::oplog_unreadable(value.agent_id, value.error.to_string())
+        WorkerExecutorError::oplog_failed(value.agent_id, value.error.to_string())
     }
 }
 

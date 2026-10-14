@@ -75,6 +75,7 @@ impl Fixture {
                 None,
             )
             .await
+            .unwrap()
     }
 }
 
@@ -183,7 +184,8 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
             execution_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     for value in 1..initial_entries {
         oplog.add(entry(value)).await.unwrap();

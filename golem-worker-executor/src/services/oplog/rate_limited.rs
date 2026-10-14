@@ -491,7 +491,7 @@ impl OplogService for RateLimitedOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
         let resource_entry = self.entry_for(account_id).await;
@@ -507,13 +507,13 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
                 shard_epoch,
             )
-            .await;
-        Arc::new(RateLimitedOplog::new(
+            .await?;
+        Ok(Arc::new(RateLimitedOplog::new(
             inner_oplog,
             resource_entry,
             account_id,
             environment_id,
-        ))
+        )))
     }
 
     async fn create_fresh(
@@ -526,7 +526,7 @@ impl OplogService for RateLimitedOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
         let resource_entry = self.entry_for(account_id).await;
@@ -542,13 +542,13 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
                 shard_epoch,
             )
-            .await;
-        Arc::new(RateLimitedOplog::new(
+            .await?;
+        Ok(Arc::new(RateLimitedOplog::new(
             inner_oplog,
             resource_entry,
             account_id,
             environment_id,
-        ))
+        )))
     }
 
     async fn open(
@@ -561,7 +561,7 @@ impl OplogService for RateLimitedOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
         let resource_entry = self.entry_for(account_id).await;
@@ -577,13 +577,13 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
                 shard_epoch,
             )
-            .await;
-        Arc::new(RateLimitedOplog::new(
+            .await?;
+        Ok(Arc::new(RateLimitedOplog::new(
             inner_oplog,
             resource_entry,
             account_id,
             environment_id,
-        ))
+        )))
     }
 
     async fn get_last_index(
@@ -854,6 +854,7 @@ mod tests {
                 None,
             )
             .await
+            .unwrap()
     }
 
     fn dummy_entry() -> OplogEntry {
