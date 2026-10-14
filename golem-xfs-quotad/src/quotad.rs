@@ -22,7 +22,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The documentation of the deployment of `xfs-quotad`.
 pub const XFS_QUOTAD_DOCS: &str =
@@ -119,10 +119,16 @@ const GREETING_REFUSED: u8 = 1;
 /// a client from exhausting the threads or the memory of xfs-quotad.
 const MAX_CONNECTIONS: usize = 8;
 
-/// How long a client waits for xfs-quotad to take a request or to answer it, and how long the
-/// server waits for a client to take an answer. Each call is one quota system call, which takes
-/// microseconds, so only a stalled process misses it.
+/// How long a call of a client may take in all, from a connection that the call makes, through
+/// the greeting, to the end of the answer; and how long the server waits for a client to take an
+/// answer. Each call is one quota system call, which takes microseconds, so only a stalled process
+/// misses it.
 const CALL_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The status of a response to a limit change that xfs-quotad did not apply, because the change
+/// came on a connection that is not the newest; see [`Fence`]. Every other status is 0 or an
+/// errno, which is positive.
+const STATUS_FENCED: i32 = -1;
 
 const OPERATION_QUOTA_STATE: u8 = 1;
 const OPERATION_PROJECT_QUOTA: u8 = 2;
@@ -143,6 +149,8 @@ struct Connection {
     socket: Option<PathBuf>,
     /// The device of the XFS root that xfs-quotad must serve.
     device: u64,
+    /// The time that one call may take in all.
+    call_deadline: Duration,
     stream: Option<UnixStream>,
 }
 
@@ -150,11 +158,12 @@ impl XfsQuotadClient {
     /// Connects to xfs-quotad that listens on `socket`, and checks that it serves the filesystem
     /// with the device `device`.
     pub fn connect(socket: &Path, device: u64) -> std::io::Result<Self> {
-        let stream = connect_socket(socket, device)?;
+        let stream = connect_socket(socket, device, Instant::now() + CALL_DEADLINE)?;
         Ok(Self {
             connection: Mutex::new(Connection {
                 socket: Some(socket.to_path_buf()),
                 device,
+                call_deadline: CALL_DEADLINE,
                 stream: Some(stream),
             }),
         })
@@ -188,26 +197,33 @@ impl XfsQuotadClient {
         self.call(&request).map(|_| ())
     }
 
-    /// Sends `request` and gives the payload of the response, or the error of the call. A
-    /// connection that breaks or misses [`CALL_DEADLINE`] is closed, so that a late answer is
-    /// never read as the answer of the next request, and connected again once; every call is
-    /// idempotent, so a repeat cannot apply a change twice.
+    /// Sends `request` and gives the payload of the response, or the error of the call. The whole
+    /// call, with a connection that it makes, has one deadline. A connection that fails is closed,
+    /// so that a late answer is never read as the answer of the next request. When the connection
+    /// broke or xfs-quotad fenced it, and the deadline has not passed, the call connects again and
+    /// sends the request once more; every call is idempotent, so a repeat cannot apply a change
+    /// twice. The new connection fences the old one, so a request on the old connection that
+    /// xfs-quotad reads late cannot apply a change after the requests on the new one.
     fn call(&self, request: &[u8; REQUEST_BYTES]) -> std::io::Result<[u8; QUOTA_STATE_BYTES]> {
         let mut connection = self
             .connection
             .lock()
             .expect("XFS quota server lock poisoned");
-        match connection.exchange(request) {
+        let deadline = Instant::now() + connection.call_deadline;
+        match connection.exchange(request, deadline) {
             Ok(result) => return result,
             Err(Transport(error)) => {
                 connection.stream = None;
                 let Some(socket) = connection.socket.clone() else {
                     return Err(server_lost(error));
                 };
-                connection.stream = Some(connect_socket(&socket, connection.device)?);
+                if error.kind() == ErrorKind::TimedOut {
+                    return Err(server_lost(error));
+                }
+                connection.stream = Some(connect_socket(&socket, connection.device, deadline)?);
             }
         }
-        match connection.exchange(request) {
+        match connection.exchange(request, deadline) {
             Ok(result) => result,
             Err(Transport(error)) => {
                 connection.stream = None;
@@ -220,11 +236,12 @@ impl XfsQuotadClient {
 #[cfg(test)]
 impl XfsQuotadClient {
     /// Wraps a connected `stream` whose greeting was read already. It is not connected again.
-    fn over(stream: UnixStream, device: u64) -> Self {
+    fn over(stream: UnixStream, device: u64, call_deadline: Duration) -> Self {
         Self {
             connection: Mutex::new(Connection {
                 socket: None,
                 device,
+                call_deadline,
                 stream: Some(stream),
             }),
         }
@@ -238,7 +255,19 @@ impl Connection {
     fn exchange(
         &mut self,
         request: &[u8; REQUEST_BYTES],
+        deadline: Instant,
     ) -> Result<std::io::Result<[u8; QUOTA_STATE_BYTES]>, Transport> {
+        let call_deadline = self.call_deadline;
+        let transport = |error: std::io::Error| {
+            Transport(if error.kind() == ErrorKind::TimedOut {
+                std::io::Error::new(
+                    ErrorKind::TimedOut,
+                    format!("xfs-quotad did not answer within {call_deadline:?}"),
+                )
+            } else {
+                error
+            })
+        };
         let stream = match &mut self.stream {
             Some(stream) => stream,
             None => {
@@ -248,34 +277,71 @@ impl Connection {
                 )));
             }
         };
-        stream.write_all(request).map_err(transport)?;
+        write_by(stream, request, deadline).map_err(transport)?;
         let mut response = [0u8; RESPONSE_BYTES];
-        stream.read_exact(&mut response).map_err(transport)?;
-        let errno = i32::from_le_bytes(response[..4].try_into().unwrap());
+        read_by(stream, &mut response, deadline).map_err(transport)?;
+        let status = i32::from_le_bytes(response[..4].try_into().unwrap());
         let mut payload = [0u8; QUOTA_STATE_BYTES];
         payload.copy_from_slice(&response[4..]);
-        Ok(if errno == 0 {
-            Ok(payload)
-        } else {
-            Err(std::io::Error::from_raw_os_error(errno))
-        })
+        match status {
+            0 => Ok(Ok(payload)),
+            STATUS_FENCED => Err(Transport(std::io::Error::new(
+                ErrorKind::ConnectionReset,
+                "xfs-quotad has a newer connection, and changes limits only on that one",
+            ))),
+            errno => Ok(Err(std::io::Error::from_raw_os_error(errno))),
+        }
     }
 }
 
-fn transport(error: std::io::Error) -> Transport {
-    Transport(match error.kind() {
-        ErrorKind::WouldBlock | ErrorKind::TimedOut => std::io::Error::new(
-            ErrorKind::TimedOut,
-            format!("xfs-quotad did not answer within {CALL_DEADLINE:?}"),
-        ),
-        _ => error,
-    })
+/// The time left until `deadline`, or a `TimedOut` error when it has passed.
+fn time_left(deadline: Instant) -> std::io::Result<Duration> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        Err(ErrorKind::TimedOut.into())
+    } else {
+        Ok(left)
+    }
 }
 
-/// Gives the reads and writes on `stream` the deadline [`CALL_DEADLINE`].
-fn set_deadlines(stream: &UnixStream) -> std::io::Result<()> {
-    stream.set_read_timeout(Some(CALL_DEADLINE))?;
-    stream.set_write_timeout(Some(CALL_DEADLINE))
+/// A `TimedOut` error in place of the `WouldBlock` error of a socket timeout.
+fn timed_out(error: std::io::Error) -> std::io::Error {
+    if error.kind() == ErrorKind::WouldBlock {
+        ErrorKind::TimedOut.into()
+    } else {
+        error
+    }
+}
+
+/// Reads exactly `buffer.len()` bytes from `stream`, and fails when that does not end by
+/// `deadline`, also when every read makes progress.
+fn read_by(stream: &mut UnixStream, buffer: &mut [u8], deadline: Instant) -> std::io::Result<()> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        stream.set_read_timeout(Some(time_left(deadline)?))?;
+        match stream.read(&mut buffer[filled..]) {
+            Ok(0) => return Err(ErrorKind::UnexpectedEof.into()),
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(timed_out(error)),
+        }
+    }
+    Ok(())
+}
+
+/// Writes all of `buffer` to `stream`, and fails when that does not end by `deadline`.
+fn write_by(stream: &mut UnixStream, buffer: &[u8], deadline: Instant) -> std::io::Result<()> {
+    let mut written = 0;
+    while written < buffer.len() {
+        stream.set_write_timeout(Some(time_left(deadline)?))?;
+        match stream.write(&buffer[written..]) {
+            Ok(0) => return Err(ErrorKind::WriteZero.into()),
+            Ok(count) => written += count,
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(timed_out(error)),
+        }
+    }
+    Ok(())
 }
 
 fn server_lost(error: std::io::Error) -> std::io::Error {
@@ -285,8 +351,22 @@ fn server_lost(error: std::io::Error) -> std::io::Error {
     )
 }
 
-fn connect_socket(socket: &Path, device: u64) -> std::io::Result<UnixStream> {
-    let mut stream = UnixStream::connect(socket).map_err(|error| {
+/// Connects to xfs-quotad on `socket` and reads its greeting, by `deadline`. The send timeout
+/// also bounds the connect, which waits while the backlog of the socket is full.
+fn connect_socket(socket: &Path, device: u64, deadline: Instant) -> std::io::Result<UnixStream> {
+    let connect = || -> std::io::Result<UnixStream> {
+        let stream = UnixStream::from(rustix::net::socket_with(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::STREAM,
+            rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )?);
+        stream.set_write_timeout(Some(time_left(deadline)?))?;
+        rustix::net::connect(&stream, &rustix::net::SocketAddrUnix::new(socket)?)
+            .map_err(|errno| timed_out(errno.into()))?;
+        Ok(stream)
+    };
+    let mut stream = connect().map_err(|error| {
         std::io::Error::new(
             error.kind(),
             format!(
@@ -295,16 +375,15 @@ fn connect_socket(socket: &Path, device: u64) -> std::io::Result<UnixStream> {
             ),
         )
     })?;
-    set_deadlines(&stream)?;
-    read_greeting(&mut stream, device)?;
+    read_greeting(&mut stream, device, deadline)?;
     Ok(stream)
 }
 
-/// Reads the greeting of xfs-quotad on `stream`, and checks that xfs-quotad is ready and serves
-/// the filesystem with the device `device`.
-fn read_greeting(stream: &mut impl Read, device: u64) -> std::io::Result<()> {
+/// Reads the greeting of xfs-quotad on `stream` by `deadline`, and checks that xfs-quotad is
+/// ready and serves the filesystem with the device `device`.
+fn read_greeting(stream: &mut UnixStream, device: u64, deadline: Instant) -> std::io::Result<()> {
     let mut header = [0u8; 4 + 1 + 8 + 2];
-    stream.read_exact(&mut header).map_err(|error| {
+    read_by(stream, &mut header, deadline).map_err(|error| {
         std::io::Error::new(
             error.kind(),
             format!("xfs-quotad sent no greeting: {error}"),
@@ -313,15 +392,14 @@ fn read_greeting(stream: &mut impl Read, device: u64) -> std::io::Result<()> {
     if header[..4] != GREETING_MAGIC {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
-            "xfs-quotad speaks another protocol version; run xfs-quotad and the \
-             executor from the same Golem release",
+            "xfs-quotad speaks another version of its protocol than the executor",
         ));
     }
     let status = header[4];
     let server_device = u64::from_le_bytes(header[5..13].try_into().unwrap());
     let message_length = u16::from_le_bytes(header[13..15].try_into().unwrap()) as usize;
     let mut message = vec![0u8; message_length];
-    stream.read_exact(&mut message)?;
+    read_by(stream, &mut message, deadline)?;
     let message = String::from_utf8_lossy(&message);
     if status != GREETING_READY {
         return Err(std::io::Error::new(
@@ -499,6 +577,7 @@ fn serve_connections(
     allowed_uid: rustix::process::Uid,
 ) {
     let served = Arc::new(AtomicUsize::new(0));
+    let fence = Arc::new(Fence::default());
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         if stream.set_write_timeout(Some(CALL_DEADLINE)).is_err() {
@@ -525,13 +604,15 @@ fn serve_connections(
             continue;
         }
         let root = Arc::clone(&root);
+        let fence = Arc::clone(&fence);
         let spawned = std::thread::Builder::new()
             .name("xfs-quotad-connection".to_string())
             .spawn({
                 let served = Arc::clone(&served);
                 move || {
+                    let ticket = fence.enter();
                     if write_greeting(&mut stream, None, device).is_ok() {
-                        serve(&root, stream);
+                        serve(&root, &fence, ticket, stream);
                     }
                     served.fetch_sub(1, Ordering::AcqRel);
                 }
@@ -542,19 +623,55 @@ fn serve_connections(
     }
 }
 
-/// Answers the calls on `stream` until the client closes it, or does not take an answer within
-/// the write deadline of `stream`. A connection may stay idle between calls for any time.
-fn serve(root: &File, mut stream: UnixStream) {
+/// Orders the limit changes of all connections. Each connection takes a ticket before its
+/// greeting, and xfs-quotad applies a limit change only on the connection with the newest ticket.
+/// A client connects again only after it gave up on its connection, so a request on the old
+/// connection that xfs-quotad reads late cannot apply a change after the requests on the new one.
+#[derive(Default)]
+struct Fence {
+    newest: Mutex<u64>,
+}
+
+impl Fence {
+    /// Gives the ticket of a new connection, which fences all older connections.
+    fn enter(&self) -> u64 {
+        let mut newest = self.newest.lock().expect("xfs-quotad fence lock poisoned");
+        *newest += 1;
+        *newest
+    }
+
+    /// Runs `change` when `ticket` is the newest ticket, and gives `None` otherwise. No connection
+    /// takes a ticket while `change` runs, so a change that runs ends before the greeting of a
+    /// newer connection.
+    fn apply(
+        &self,
+        ticket: u64,
+        change: impl FnOnce() -> std::io::Result<()>,
+    ) -> Option<std::io::Result<()>> {
+        let newest = self.newest.lock().expect("xfs-quotad fence lock poisoned");
+        (*newest == ticket).then(change)
+    }
+}
+
+/// Answers the calls on `stream`, the connection with the ticket `ticket`, until the client
+/// closes it, or does not take an answer within the write deadline of `stream`. A connection may
+/// stay idle between calls for any time.
+fn serve(root: &File, fence: &Fence, ticket: u64, mut stream: UnixStream) {
     let mut request = [0u8; REQUEST_BYTES];
     while stream.read_exact(&mut request).is_ok() {
-        let response = answer(root, &request);
+        let response = answer(root, fence, ticket, &request);
         if stream.write_all(&response).is_err() {
             return;
         }
     }
 }
 
-fn answer(root: &File, request: &[u8; REQUEST_BYTES]) -> [u8; RESPONSE_BYTES] {
+fn answer(
+    root: &File,
+    fence: &Fence,
+    ticket: u64,
+    request: &[u8; REQUEST_BYTES],
+) -> [u8; RESPONSE_BYTES] {
     let mut response = [0u8; RESPONSE_BYTES];
     let project_id = u32::from_le_bytes(request[1..5].try_into().unwrap());
     let result = match request[0] {
@@ -583,15 +700,22 @@ fn answer(root: &File, request: &[u8; REQUEST_BYTES]) -> [u8; RESPONSE_BYTES] {
         OPERATION_SET_PROJECT_LIMITS => {
             let mut quota = decode_quota(&request[5..]);
             if is_project_limit_change(&quota, project_id) {
-                // SAFETY: Q_XSETQLIM reads exactly one `fs_disk_quota` record.
-                unsafe {
-                    quotactl(
-                        root,
-                        Q_XSETQLIM,
-                        project_id,
-                        std::ptr::from_mut(&mut quota).cast(),
-                    )
-                }
+                let applied = fence.apply(ticket, || {
+                    // SAFETY: Q_XSETQLIM reads exactly one `fs_disk_quota` record.
+                    unsafe {
+                        quotactl(
+                            root,
+                            Q_XSETQLIM,
+                            project_id,
+                            std::ptr::from_mut(&mut quota).cast(),
+                        )
+                    }
+                });
+                let Some(result) = applied else {
+                    response[..4].copy_from_slice(&STATUS_FENCED.to_le_bytes());
+                    return response;
+                };
+                result
             } else {
                 Err(std::io::Error::from_raw_os_error(libc::EINVAL))
             }
@@ -953,7 +1077,7 @@ mod tests {
     fn the_client_reports_a_refused_connection() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         write_greeting(&mut server, Some("no CAP_SYS_ADMIN"), 0).unwrap();
-        let_assert!(Err(error) = read_greeting(&mut client, 0));
+        let_assert!(Err(error) = read_greeting(&mut client, 0, Instant::now() + CALL_DEADLINE));
         assert!(
             error
                 .to_string()
@@ -965,7 +1089,7 @@ mod tests {
     fn the_client_refuses_a_server_of_another_filesystem() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         write_greeting(&mut server, None, 7).unwrap();
-        let_assert!(Err(error) = read_greeting(&mut client, 8));
+        let_assert!(Err(error) = read_greeting(&mut client, 8, Instant::now() + CALL_DEADLINE));
         assert!(error.to_string().contains("another filesystem"));
     }
 
@@ -973,8 +1097,12 @@ mod tests {
     fn the_client_refuses_another_protocol() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         server.write_all(b"GQH2\0\0\0\0\0\0\0\0\0\0\0").unwrap();
-        let_assert!(Err(error) = read_greeting(&mut client, 0));
-        assert!(error.to_string().contains("another protocol version"));
+        let_assert!(Err(error) = read_greeting(&mut client, 0, Instant::now() + CALL_DEADLINE));
+        assert!(
+            error
+                .to_string()
+                .contains("another version of its protocol")
+        );
     }
 
     #[test]
@@ -984,8 +1112,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = File::open(directory.path()).unwrap();
         let (client, server) = UnixStream::pair().unwrap();
-        let server_thread = std::thread::spawn(move || serve(&root, server));
-        let client = XfsQuotadClient::over(client, 0);
+        let server_thread = std::thread::spawn(move || serve(&root, &Fence::default(), 0, server));
+        let client = XfsQuotadClient::over(client, 0, CALL_DEADLINE);
 
         let mut quota = FsDiskQuota::default();
         let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
@@ -1008,7 +1136,7 @@ mod tests {
     fn a_server_that_is_gone_fails_its_calls() {
         let (client, server) = UnixStream::pair().unwrap();
         drop(server);
-        let client = XfsQuotadClient::over(client, 0);
+        let client = XfsQuotadClient::over(client, 0, CALL_DEADLINE);
         let mut quota = FsDiskQuota::default();
         let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(
@@ -1021,10 +1149,7 @@ mod tests {
     #[test]
     fn a_server_that_does_not_answer_fails_the_call_at_the_deadline() {
         let (client, _silent) = UnixStream::pair().unwrap();
-        client
-            .set_read_timeout(Some(Duration::from_millis(50)))
-            .unwrap();
-        let client = XfsQuotadClient::over(client, 0);
+        let client = XfsQuotadClient::over(client, 0, Duration::from_millis(50));
         let start = std::time::Instant::now();
         let mut quota = FsDiskQuota::default();
         let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
@@ -1035,6 +1160,72 @@ mod tests {
         // The connection is closed, so a late answer cannot be taken for the next call.
         let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
         assert!(error.to_string().contains("connection is closed"));
+    }
+
+    #[test]
+    fn a_server_that_answers_slowly_fails_the_call_at_the_deadline() {
+        // The server sends one byte of the answer every 10 ms. Each read makes progress, so a
+        // timeout of each read alone would wait for the whole answer, for more than a second.
+        let (client, mut server) = UnixStream::pair().unwrap();
+        std::thread::spawn(move || {
+            let mut request = [0u8; REQUEST_BYTES];
+            server.read_exact(&mut request).unwrap();
+            for _ in 0..RESPONSE_BYTES {
+                std::thread::sleep(Duration::from_millis(10));
+                if server.write_all(&[0]).is_err() {
+                    return;
+                }
+            }
+        });
+        let client = XfsQuotadClient::over(client, 0, Duration::from_millis(200));
+        let start = Instant::now();
+        let mut quota = FsDiskQuota::default();
+        let_assert!(Err(error) = client.get_project_quota(1, &mut quota));
+        assert!(start.elapsed() < Duration::from_millis(1000));
+        assert!(error.kind() == ErrorKind::TimedOut);
+        assert!(error.to_string().contains("did not answer"));
+    }
+
+    fn limit_change(project_id: u32) -> FsDiskQuota {
+        FsDiskQuota {
+            d_version: FS_DQUOT_VERSION,
+            d_flags: FS_PROJ_QUOTA,
+            d_fieldmask: FS_DQ_BHARD,
+            d_id: project_id,
+            ..FsDiskQuota::default()
+        }
+    }
+
+    #[test]
+    fn the_server_changes_limits_only_on_the_newest_connection() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = File::open(directory.path()).unwrap();
+        let fence = Fence::default();
+        let old = fence.enter();
+        let new = fence.enter();
+        let status =
+            |response: [u8; RESPONSE_BYTES]| i32::from_le_bytes(response[..4].try_into().unwrap());
+        let change = encode_request(OPERATION_SET_PROJECT_LIMITS, 7, &limit_change(7));
+        assert!(status(answer(&root, &fence, old, &change)) == STATUS_FENCED);
+        // The root is not on XFS, so the kernel refuses the change of the newest connection.
+        assert!(status(answer(&root, &fence, new, &change)) > 0);
+        // A fenced connection still reads quotas, which changes nothing.
+        let read = encode_request(OPERATION_PROJECT_QUOTA, 7, &FsDiskQuota::default());
+        assert!(status(answer(&root, &fence, old, &read)) > 0);
+    }
+
+    #[test]
+    fn a_fenced_client_that_cannot_connect_again_fails_the_change() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = File::open(directory.path()).unwrap();
+        let fence = Arc::new(Fence::default());
+        let ticket = fence.enter();
+        fence.enter();
+        let (client, server) = UnixStream::pair().unwrap();
+        std::thread::spawn(move || serve(&root, &fence, ticket, server));
+        let client = XfsQuotadClient::over(client, 0, CALL_DEADLINE);
+        let_assert!(Err(error) = client.set_project_quota_record(7, &limit_change(7)));
+        assert!(error.to_string().contains("has a newer connection"));
     }
 
     fn start_listening(allowed_uid: rustix::process::Uid) -> (tempfile::TempDir, PathBuf, u64) {
@@ -1081,6 +1272,16 @@ mod tests {
             XfsQuotadClient::connect(&socket, device).is_ok()
         });
         assert!(connected);
+    }
+
+    #[test]
+    fn a_fenced_client_connects_again_and_sends_the_change_once_more() {
+        let (_directory, socket, device) = start_listening(rustix::process::geteuid());
+        let_assert!(Ok(fenced) = XfsQuotadClient::connect(&socket, device));
+        let_assert!(Ok(_newer) = XfsQuotadClient::connect(&socket, device));
+        // The root is not on XFS: an errno of the kernel, and not the fence, fails the change.
+        let_assert!(Err(error) = fenced.set_project_quota_record(7, &limit_change(7)));
+        assert!(error.raw_os_error().is_some());
     }
 
     #[test]
