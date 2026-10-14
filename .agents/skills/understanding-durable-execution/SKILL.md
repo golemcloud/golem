@@ -1659,6 +1659,13 @@ backoff without consuming the invocation retry budget. Interruption keeps its ex
 retirement or a pending terminal interrupt still stops reconstruction. Ordinary parse errors
 remain target failures; generic metadata and instantiation errors keep their existing outcomes.
 
+Other tasks whose handles nothing aborts are joined through
+`services/shutdown.rs::join_or_park_at_runtime_shutdown`: oplog entry and payload deserialization,
+durable call and tool terminal encoding, and the detached stream session index tasks. Only the
+shutdown of the runtime cancels such a task, for example during the final status flush sweep, so
+a cancelled join parks the caller until the runtime drops it instead of failing it as a storage
+error. A panicked join still fails, and a fail-fast read still panics on a corrupt entry.
+
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
 agent differ from its initial files.
