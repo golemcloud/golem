@@ -141,18 +141,32 @@ func TestAToolThatStopsReadingClosesABlockedSource(t *testing.T) {
 // closingReader is a source that records whether it was closed.
 type closingReader struct {
 	io.Reader
-	closed bool
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newClosingReader(r io.Reader) *closingReader {
+	return &closingReader{Reader: r, closed: make(chan struct{})}
 }
 
 func (c *closingReader) Close() error {
-	c.closed = true
+	c.once.Do(func() { close(c.closed) })
 	return nil
+}
+
+func (c *closingReader) wasClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 // A source the pump reads to its end is finished, and the stream closing
 // afterwards does not close it.
 func TestASourceReadToItsEndIsFinishedAndNotClosed(t *testing.T) {
-	src := &closingReader{Reader: strings.NewReader("haystack")}
+	src := newClosingReader(strings.NewReader("haystack"))
 	sink := &fakeStdin{}
 	watch := newWatcher()
 	done := pumpInBackground(src, sink, watch)
@@ -164,7 +178,7 @@ func TestASourceReadToItsEndIsFinishedAndNotClosed(t *testing.T) {
 	if got.written != "haystack" || !got.finished || got.released != 1 {
 		t.Fatalf("sink: %+v", got)
 	}
-	if src.closed {
+	if src.wasClosed() {
 		t.Fatal("a source read to its end was closed")
 	}
 }
@@ -180,4 +194,49 @@ func TestARefusedWriteStopsThePump(t *testing.T) {
 	if got := sink.state(); got.released != 1 || got.finished || got.failed {
 		t.Fatalf("sink: %+v", got)
 	}
+}
+
+// A refused write stops the pump before the stream closes; the source is
+// closed all the same, so its producer does not block.
+func TestARefusedWriteStillClosesTheSource(t *testing.T) {
+	src := newClosingReader(strings.NewReader("x"))
+	sink := &fakeStdin{refuse: true}
+	watch := newWatcher()
+	done := pumpInBackground(src, sink, watch)
+	within(t, "the pump ending", done)
+	watch.closeStream()
+	within(t, "the source closing", src.closed)
+}
+
+// emptyAfterRelease is a source whose first Read waits for its release and
+// then returns no bytes and no error; a second Read never returns.
+type emptyAfterRelease struct {
+	reading chan struct{}
+	release chan struct{}
+	reads   chan struct{}
+}
+
+func (e *emptyAfterRelease) Read([]byte) (int, error) {
+	select {
+	case e.reads <- struct{}{}:
+	default:
+		select {}
+	}
+	close(e.reading)
+	<-e.release
+	return 0, nil
+}
+
+// A Read that returns nothing after the stream closed is not followed by
+// another Read.
+func TestAStoppedPumpStartsNoOtherRead(t *testing.T) {
+	src := &emptyAfterRelease{reading: make(chan struct{}), release: make(chan struct{}), reads: make(chan struct{}, 1)}
+	sink := &fakeStdin{}
+	watch := newWatcher()
+	done := pumpInBackground(src, sink, watch)
+	within(t, "the first read", src.reading)
+	watch.closeStream()
+	within(t, "the watcher's release", watch.released)
+	close(src.release)
+	within(t, "the pump ending", done)
 }

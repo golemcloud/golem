@@ -40,6 +40,9 @@ type stdinPump struct {
 
 	mu      sync.Mutex
 	stopped bool
+	// drained is set when the pump read the source to its end or to a read
+	// error; such a source is not closed.
+	drained bool
 }
 
 // pumpStdin runs the pump and its watcher. wait returns when the stream
@@ -49,26 +52,36 @@ func pumpStdin(src io.Reader, sink stdinSink, wait func(), release func()) {
 	p := &stdinPump{src: src, sink: sink}
 	go func() {
 		wait()
-		release()
-		if p.stop() {
-			if closer, ok := src.(io.Closer); ok {
-				_ = closer.Close()
-			}
+		p.stop()
+		if closer, ok := src.(io.Closer); ok && !p.isDrained() {
+			_ = closer.Close()
 		}
+		release()
 	}()
 	p.run()
 }
 
-// stop releases the sink once; it reports whether this call did it.
-func (p *stdinPump) stop() bool {
+// stop releases the sink once.
+func (p *stdinPump) stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.stopped {
-		return false
+		return
 	}
 	p.stopped = true
 	p.sink.release()
-	return true
+}
+
+func (p *stdinPump) isStopped() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stopped
+}
+
+func (p *stdinPump) isDrained() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.drained
 }
 
 // with runs op on the sink unless the pump has stopped; op runs under the
@@ -87,14 +100,14 @@ func (p *stdinPump) with(op func() bool) bool {
 func (p *stdinPump) run() {
 	defer p.stop()
 	buf := make([]byte, 64*1024)
-	for {
+	for !p.isStopped() {
 		n, err := p.src.Read(buf)
 		if n > 0 && !p.with(func() bool { return p.sink.write(slices.Clone(buf[:n])) }) {
 			return
 		}
 		switch {
 		case errors.Is(err, io.EOF):
-			p.with(func() bool { p.sink.finish(); return true })
+			p.with(func() bool { p.drained = true; p.sink.finish(); return true })
 			return
 		case err != nil:
 			failure := OutputFailed(err.Error())
@@ -102,7 +115,7 @@ func (p *stdinPump) run() {
 			if errors.As(err, &se) {
 				failure = se.Failure
 			}
-			p.with(func() bool { p.sink.fail(failure); return true })
+			p.with(func() bool { p.drained = true; p.sink.fail(failure); return true })
 			return
 		}
 	}
