@@ -11,10 +11,11 @@ use crate::model::mcp::{
     McpImportAuthorization, McpImportAuthorizeView, McpImportCompleteView, McpImportDisconnectView,
     McpImportOAuthStatus, McpImportStatusView, McpImportToolsView,
 };
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
 use golem_client::api::{DeploymentClient, EnvironmentClient};
 use golem_client::model::McpImportOAuthCallback;
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{DeploymentPlanMcpImportEntry, DeploymentRevision};
+use golem_common::model::diff::{Hash, Hashable};
 use std::sync::Arc;
 
 pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow::Result<()> {
@@ -27,44 +28,46 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
     ) {
         return handle_declared(ctx, command).await;
     }
-    let environment = ctx
-        .environment_handler()
-        .resolve_environment(EnvironmentResolveMode::Any)
-        .await?;
-    let (index, requested) = match &command {
-        McpImportSubcommand::Tools {
-            import_index,
-            revision,
-        }
-        | McpImportSubcommand::Refresh {
-            import_index,
-            revision,
-        }
+    let (selector, requested) = match &command {
+        McpImportSubcommand::Tools { import, revision }
+        | McpImportSubcommand::Refresh { import, revision }
         | McpImportSubcommand::Authorize {
-            import_index,
-            revision,
-            ..
+            import, revision, ..
         }
         | McpImportSubcommand::Complete {
-            import_index,
-            revision,
-            ..
+            import, revision, ..
         }
         | McpImportSubcommand::Status {
-            import_index,
-            revision,
-            ..
+            import, revision, ..
         }
         | McpImportSubcommand::Disconnect {
-            import_index,
-            revision,
-            ..
-        } => (*import_index, *revision),
+            import, revision, ..
+        } => (import.clone(), *revision),
     };
+    let import = {
+        let app_ctx = ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err().context(
+            "MCP import commands require a local manifest for the selected environment; select an environment name from the manifest",
+        )?;
+        declared_import(app_ctx.application(), &selector)?
+    };
+    let environment = ctx
+        .environment_handler()
+        .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+        .await?;
     let revision = resolve_revision(requested, || {
         Ok(environment.current_deployment_or_err()?.deployment_revision)
     })?;
     let clients = ctx.golem_clients().await?;
+    let (descriptor, _) = import
+        .into_parts(environment.environment_id)
+        .map_err(anyhow::Error::msg)?;
+    let summary = clients
+        .environment
+        .get_deployment_summary(&environment.environment_id.0, revision.get())
+        .await
+        .map_service_error()?;
+    let index = deployed_import_index(&summary.mcp_imports, &descriptor.hash()?, revision)?;
     match command {
         McpImportSubcommand::Tools { .. } => {
             let result = clients
@@ -72,7 +75,8 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .get_mcp_import_tools(&environment.environment_id.0, revision.get(), index)
                 .await
                 .map_service_error()?;
-            ctx.log_handler().log_output(McpImportToolsView(result))?;
+            ctx.log_handler()
+                .log_output(McpImportToolsView((result, selector).into()))?;
         }
         McpImportSubcommand::Refresh { .. } => {
             let result = clients
@@ -80,7 +84,8 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .refresh_mcp_import_tools(&environment.environment_id.0, revision.get(), index)
                 .await
                 .map_service_error()?;
-            ctx.log_handler().log_output(McpImportToolsView(result))?;
+            ctx.log_handler()
+                .log_output(McpImportToolsView((result, selector).into()))?;
         }
         McpImportSubcommand::Authorize { .. } => {
             let result = clients
@@ -89,7 +94,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportAuthorizeView(result.into()))?;
+                .log_output(McpImportAuthorizeView((result, selector).into()))?;
         }
         McpImportSubcommand::Complete { callback_url, .. } => {
             let callback = parse_callback(callback_url.into_inner())?;
@@ -104,7 +109,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportCompleteView(result.into()))?;
+                .log_output(McpImportCompleteView((result, selector).into()))?;
         }
         McpImportSubcommand::Status { .. } => {
             let result = clients
@@ -117,7 +122,7 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportStatusView(result.into()))?;
+                .log_output(McpImportStatusView((result, selector).into()))?;
         }
         McpImportSubcommand::Disconnect { .. } => {
             let result = clients
@@ -126,24 +131,24 @@ pub async fn handle(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow:
                 .await
                 .map_service_error()?;
             ctx.log_handler()
-                .log_output(McpImportDisconnectView(result.into()))?;
+                .log_output(McpImportDisconnectView((result, selector).into()))?;
         }
     }
     Ok(())
 }
 
 async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> anyhow::Result<()> {
-    let index = match &command {
-        McpImportSubcommand::Authorize { import_index, .. }
-        | McpImportSubcommand::Complete { import_index, .. }
-        | McpImportSubcommand::Status { import_index, .. }
-        | McpImportSubcommand::Disconnect { import_index, .. } => *import_index,
+    let selector = match &command {
+        McpImportSubcommand::Authorize { import, .. }
+        | McpImportSubcommand::Complete { import, .. }
+        | McpImportSubcommand::Status { import, .. }
+        | McpImportSubcommand::Disconnect { import, .. } => import.clone(),
         _ => unreachable!(),
     };
     let import = {
         let app_ctx = ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-        declared_import(app_ctx.application(), index)?
+        declared_import(app_ctx.application(), &selector)?
     };
     let environment = ctx
         .environment_handler()
@@ -162,7 +167,7 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
             ctx.log_handler()
                 .log_output(McpImportAuthorizeView(McpImportAuthorization {
                     authorization_url: result.authorization_url,
-                    import_index: index,
+                    import: selector,
                     deployment_revision: None,
                 }))?;
         }
@@ -178,7 +183,7 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
                 .map_service_error()?;
             ctx.log_handler()
                 .log_output(McpImportCompleteView(McpImportOAuthStatus::declared(
-                    result, index,
+                    result, selector,
                 )))?;
         }
         McpImportSubcommand::Status { .. } => {
@@ -189,7 +194,7 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
                 .map_service_error()?;
             ctx.log_handler()
                 .log_output(McpImportStatusView(McpImportOAuthStatus::declared(
-                    result, index,
+                    result, selector,
                 )))?;
         }
         McpImportSubcommand::Disconnect { .. } => {
@@ -199,7 +204,7 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
                 .await
                 .map_service_error()?;
             ctx.log_handler().log_output(McpImportDisconnectView(
-                McpImportOAuthStatus::declared(result, index),
+                McpImportOAuthStatus::declared(result, selector),
             ))?;
         }
         _ => unreachable!(),
@@ -209,19 +214,79 @@ async fn handle_declared(ctx: &Arc<Context>, command: McpImportSubcommand) -> an
 
 fn declared_import(
     application: &Application,
-    index: u32,
+    selector: &str,
 ) -> anyhow::Result<golem_common::model::mcp_import::McpImportDeployment> {
-    let import = application
+    let imports = application
         .mcp_imports(application.environment_name())
-        .and_then(|imports| imports.get(index as usize))
-        .cloned()
-        .with_context(|| {
-            format!(
-                "MCP import {index} is not declared for environment '{}'",
-                application.environment_name()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let index = select_import(imports, selector).with_context(|| {
+        format!(
+            "Selecting an MCP import in environment '{}'",
+            application.environment_name()
+        )
+    })?;
+    let import = crate::command_handler::app::resolve_mcp_import_env_vars(
+        imports[index].import.clone(),
+        index,
+    )?;
+    Ok(import)
+}
+
+fn select_import(
+    imports: &[crate::model::app_raw::McpImport],
+    selector: &str,
+) -> anyhow::Result<usize> {
+    if let Some(index) = imports
+        .iter()
+        .position(|entry| entry.name.as_deref() == Some(selector))
+    {
+        return Ok(index);
+    }
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+    let mut matches = Vec::new();
+    for (index, entry) in imports.iter().enumerate() {
+        let url = renderer.render_str(&entry.import.url).map_err(|_| anyhow::anyhow!(
+            "Cannot resolve an MCP import URL; supply its environment variables or select an explicit import name"
+        ))?;
+        if url == selector {
+            matches.push(index);
+        }
+    }
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => {
+            let names = imports
+                .iter()
+                .filter_map(|entry| entry.name.as_deref())
+                .collect::<Vec<_>>();
+            bail!(
+                "No MCP import matches the selector. Use a declared name or exact full URL. Available names: {}",
+                names.join(", ")
             )
-        })?;
-    crate::command_handler::app::resolve_mcp_import_env_vars(import, index as usize)
+        }
+        _ => bail!("Multiple MCP imports use this URL; add distinct names and select one"),
+    }
+}
+
+fn deployed_import_index(
+    imports: &[DeploymentPlanMcpImportEntry],
+    hash: &Hash,
+    revision: DeploymentRevision,
+) -> anyhow::Result<u32> {
+    let matches = imports
+        .iter()
+        .filter(|entry| &entry.hash == hash)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [entry] => Ok(entry.index),
+        [] => bail!(
+            "The selected MCP import configuration does not match deployment revision {revision}; use the declaration and environment values for that revision, deploy the changed configuration, or use --manifest for pre-deployment OAuth"
+        ),
+        _ => bail!(
+            "Deployment revision {revision} contains identical MCP import configurations; CLI names cannot distinguish them. Deploy distinct configurations before selecting this import"
+        ),
+    }
 }
 
 fn resolve_revision(
@@ -276,7 +341,14 @@ mod tests {
         use clap::Parser;
 
         for action in ["authorize", "complete", "status", "disconnect"] {
-            let mut args = vec!["golem", "api", "mcp-import", action, "3", "--manifest"];
+            let mut args = vec![
+                "golem",
+                "api",
+                "mcp-import",
+                action,
+                "catalog",
+                "--manifest",
+            ];
             if action == "complete" {
                 args.push("https://callback.example/?state=s&code=c");
             }
@@ -287,24 +359,24 @@ mod tests {
             else {
                 panic!("expected MCP command")
             };
-            let (index, revision, manifest) = match subcommand {
+            let (import, revision, manifest) = match subcommand {
                 McpImportSubcommand::Authorize {
-                    import_index,
+                    import,
                     revision,
                     manifest,
-                } if action == "authorize" => (import_index, revision, manifest),
+                } if action == "authorize" => (import, revision, manifest),
                 McpImportSubcommand::Status {
-                    import_index,
+                    import,
                     revision,
                     manifest,
-                } if action == "status" => (import_index, revision, manifest),
+                } if action == "status" => (import, revision, manifest),
                 McpImportSubcommand::Disconnect {
-                    import_index,
+                    import,
                     revision,
                     manifest,
-                } if action == "disconnect" => (import_index, revision, manifest),
+                } if action == "disconnect" => (import, revision, manifest),
                 McpImportSubcommand::Complete {
-                    import_index,
+                    import,
                     revision,
                     manifest,
                     callback_url,
@@ -312,11 +384,11 @@ mod tests {
                     let callback = parse_callback(callback_url.into_inner()).unwrap();
                     assert_eq!(callback.state, "s");
                     assert_eq!(callback.code.as_deref(), Some("c"));
-                    (import_index, revision, manifest)
+                    (import, revision, manifest)
                 }
                 other => panic!("wrong action: {other:?}"),
             };
-            assert_eq!(index, 3);
+            assert_eq!(import, "catalog");
             assert!(revision.is_none());
             assert!(manifest);
             args.extend(["--revision", "42"]);
@@ -325,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn declared_oauth_selects_exact_manifest_environment_and_index() {
+    fn declared_oauth_selects_exact_manifest_environment_and_name() {
         use crate::model::app::{Application, ComponentPresetSelector};
         use crate::model::app_raw::ApplicationWithSource;
 
@@ -349,7 +421,8 @@ mcp:
       - url: https://wrong.example/mcp
     staging:
       - url: https://first.example/mcp
-      - url: https://selected.example/mcp
+      - name: selected
+        url: https://selected.example/mcp
         securityScheme: selected-oauth
 "#,
         )
@@ -372,13 +445,16 @@ mcp:
         .into_product();
         assert!(errors.is_empty(), "{errors:?}");
         let application = application.unwrap();
-        let selected = super::declared_import(&application, 1).unwrap();
+        let selected = super::declared_import(&application, "selected").unwrap();
         assert_eq!(selected.url, "https://selected.example/mcp");
         assert_eq!(
             selected.security_scheme.unwrap().to_string(),
             "selected-oauth"
         );
-        assert!(super::declared_import(&application, 2).is_err());
+        let first = super::declared_import(&application, "https://first.example/mcp").unwrap();
+        assert_eq!(first.url, "https://first.example/mcp");
+        assert!(super::declared_import(&application, "0").is_err());
+        assert!(super::declared_import(&application, "https://wrong.example/mcp").is_err());
     }
 
     #[test]
@@ -393,7 +469,7 @@ mcp:
                 "api",
                 "mcp-import",
                 action,
-                "3",
+                "https://catalog.example/mcp?scope=read&mode=full",
                 "--revision",
                 "42",
             ])
@@ -404,18 +480,16 @@ mcp:
             else {
                 panic!("expected MCP import command");
             };
-            let (import_index, revision) = match subcommand {
-                McpImportSubcommand::Tools {
-                    import_index,
-                    revision,
-                } if action == "tools" => (import_index, revision),
-                McpImportSubcommand::Refresh {
-                    import_index,
-                    revision,
-                } if action == "refresh" => (import_index, revision),
+            let (import, revision) = match subcommand {
+                McpImportSubcommand::Tools { import, revision } if action == "tools" => {
+                    (import, revision)
+                }
+                McpImportSubcommand::Refresh { import, revision } if action == "refresh" => {
+                    (import, revision)
+                }
                 other => panic!("wrong action: {other:?}"),
             };
-            assert_eq!(import_index, 3);
+            assert_eq!(import, "https://catalog.example/mcp?scope=read&mode=full");
             assert_eq!(revision.unwrap().get(), 42);
         }
     }
@@ -425,6 +499,86 @@ mcp:
         let revision = DeploymentRevision::try_from(42_u64).unwrap();
         let resolved = resolve_revision(Some(revision), || anyhow::bail!("no deployment"));
         assert_eq!(resolved.unwrap(), revision);
+    }
+
+    #[test]
+    fn import_selectors_are_stable_and_deployed_matching_fails_closed() {
+        use super::{deployed_import_index, select_import};
+        use golem_common::model::deployment::DeploymentPlanMcpImportEntry;
+        use golem_common::model::diff::Hashable;
+        use golem_common::model::environment::EnvironmentId;
+
+        let mut imports: Vec<crate::model::app_raw::McpImport> = serde_json::from_value(serde_json::json!([
+            {"name": "read", "url": "https://shared.example/mcp", "include": ["read_*"], "auth": {"bearer": "secret-one"}},
+            {"name": "write", "url": "https://shared.example/mcp", "include": ["write_*"], "auth": {"bearer": "secret-two"}},
+            {"url": "https://unique.example/mcp?mode=read&limit=7"}
+        ])).unwrap();
+        assert_eq!(select_import(&imports, "write").unwrap(), 1);
+        assert_eq!(
+            select_import(&imports, "https://unique.example/mcp?mode=read&limit=7").unwrap(),
+            2
+        );
+        assert!(
+            select_import(&imports, "https://shared.example/mcp")
+                .unwrap_err()
+                .to_string()
+                .contains("distinct names")
+        );
+        assert!(select_import(&imports, "0").is_err());
+        let environment = EnvironmentId::new();
+        let hash = imports[1]
+            .import
+            .clone()
+            .into_parts(environment)
+            .unwrap()
+            .0
+            .hash()
+            .unwrap();
+        let revision = DeploymentRevision::try_from(42_u64).unwrap();
+        let entries = vec![DeploymentPlanMcpImportEntry { index: 9, hash }];
+        imports.reverse();
+        let selected = &imports[select_import(&imports, "write").unwrap()];
+        let selected_hash = selected
+            .import
+            .clone()
+            .into_parts(environment)
+            .unwrap()
+            .0
+            .hash()
+            .unwrap();
+        assert_eq!(
+            deployed_import_index(&entries, &selected_hash, revision).unwrap(),
+            9
+        );
+        let mut changed = selected.import.clone();
+        changed.include = Some(vec!["delete_*".into()]);
+        let changed_hash = changed.into_parts(environment).unwrap().0.hash().unwrap();
+        assert!(deployed_import_index(&entries, &changed_hash, revision).is_err());
+        let other_environment_hash = selected
+            .import
+            .clone()
+            .into_parts(EnvironmentId::new())
+            .unwrap()
+            .0
+            .hash()
+            .unwrap();
+        assert!(deployed_import_index(&entries, &other_environment_hash, revision).is_err());
+        let duplicates = vec![
+            DeploymentPlanMcpImportEntry {
+                index: 4,
+                hash: selected_hash,
+            },
+            DeploymentPlanMcpImportEntry {
+                index: 9,
+                hash: selected_hash,
+            },
+        ];
+        assert!(
+            deployed_import_index(&duplicates, &selected_hash, revision)
+                .unwrap_err()
+                .to_string()
+                .contains("identical")
+        );
     }
 
     #[test]

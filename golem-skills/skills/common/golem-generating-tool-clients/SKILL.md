@@ -166,7 +166,8 @@ URL with the server's Streamable HTTP endpoint:
 mcp:
   imports:
     local:
-      - url: https://tools.example.com/mcp
+      - name: catalog
+        url: https://tools.example.com/mcp
         include: [catalog-lookup]
 
 components:
@@ -198,14 +199,17 @@ For an OAuth-protected import, configure its `securityScheme`, create the select
 environment and security scheme, and complete consent before generation:
 
 ```shell
-golem api mcp-import authorize 0 --manifest
+golem api mcp-import authorize catalog --manifest
 # Open the printed URL, then copy the full callback URL.
-golem api mcp-import complete 0 --manifest '<callback-url>'
-golem api mcp-import status 0 --manifest
+golem api mcp-import complete catalog --manifest '<callback-url>'
+golem api mcp-import status catalog --manifest
 ```
 
-The index is zero-based in the selected environment's import list. Keep the import
-and its rendered environment variables unchanged during consent. For bearer or
+The name is optional CLI metadata, unique within the environment. Without a name,
+select the import by its exact resolved full URL. If several imports use the same
+URL, add distinct names and select one. These commands do not add imports;
+declaring an OAuth-protected upstream does not authorize it. Keep the import
+configuration and its rendered environment variables unchanged during consent. For bearer or
 basic authentication, use environment-variable templates for secret values, not
 literal credentials in committed manifests. For example, set `auth.bearer` to
 `"{{ MCP_TOKEN }}"` and supply `MCP_TOKEN` in the CLI environment. Generated clients

@@ -7017,33 +7017,37 @@ fn arb_api_retry_policy_with_depth(
 }
 
 fn arb_mcp_import_authorize_result() -> OutputDocumentStrategy {
-    serialized_output((any::<u64>(), any::<Option<u64>>(), any::<u32>()).prop_map(
-        |(authorization_id, deployment_revision, import_index)| {
-            crate::model::mcp::McpImportAuthorizeView(crate::model::mcp::McpImportAuthorization {
-                authorization_url: format!(
-                    "https://provider.example/authorize?id={authorization_id}"
-                ),
-                deployment_revision,
-                import_index,
-            })
-        },
-    ))
+    serialized_output(
+        (any::<u64>(), any::<Option<u64>>(), any::<String>()).prop_map(
+            |(authorization_id, deployment_revision, import)| {
+                crate::model::mcp::McpImportAuthorizeView(
+                    crate::model::mcp::McpImportAuthorization {
+                        authorization_url: format!(
+                            "https://provider.example/authorize?id={authorization_id}"
+                        ),
+                        deployment_revision,
+                        import,
+                    },
+                )
+            },
+        ),
+    )
 }
 
 fn arb_mcp_import_oauth_status() -> impl Strategy<Value = crate::model::mcp::McpImportOAuthStatus> {
     (
         any::<u128>(),
         any::<Option<u64>>(),
-        any::<u32>(),
+        any::<String>(),
         any::<String>(),
         any::<String>(),
     )
         .prop_map(
-            |(environment_id, deployment_revision, import_index, security_scheme, status)| {
+            |(environment_id, deployment_revision, import, security_scheme, status)| {
                 crate::model::mcp::McpImportOAuthStatus {
                     environment_id: uuid::Uuid::from_u128(environment_id),
                     deployment_revision,
-                    import_index,
+                    import,
                     security_scheme,
                     status,
                 }
@@ -7074,7 +7078,7 @@ fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
         (
             any::<u128>(),
             any::<u64>(),
-            any::<u32>(),
+            any::<String>(),
             any::<String>(),
             prop::collection::vec((any::<String>(), any::<String>()), 0..3),
             prop::collection::vec((any::<String>(), any::<String>()), 0..3),
@@ -7083,15 +7087,15 @@ fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
                 |(
                     environment_id,
                     deployment_revision,
-                    import_index,
+                    import,
                     protocol_version,
                     tools,
                     diagnostics,
                 )| {
-                    crate::model::mcp::McpImportToolsView(golem_client::model::McpImportTools {
+                    crate::model::mcp::McpImportToolsView(crate::model::mcp::McpImportTools {
                         environment_id: uuid::Uuid::from_u128(environment_id),
                         deployment_revision,
-                        import_index,
+                        import,
                         protocol_version,
                         tools: tools
                             .into_iter()

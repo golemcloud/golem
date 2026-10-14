@@ -1207,6 +1207,11 @@
         { "not": { "required": ["include", "exclude"] } }
       ],
       "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Optional CLI name, unique within the environment. Commands can also select an import by its unique full URL. Names are not sent to the server."
+        },
         "url": { "type": "string" },
         "auth": { "$ref": "#/definitions/mcpImportAuth" },
         "securityScheme": { "type": "string" },
