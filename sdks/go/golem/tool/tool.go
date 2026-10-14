@@ -160,6 +160,9 @@ func init() {
 		stderr toolExports.Stderr,
 		principal common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+		// The input's cards are this component's: the ones no decode took or
+		// call sent go back to the host however the invocation ends.
+		defer engine.ReleaseCardsIn(input.Value.ValueNodes, link.ReleaseCard)
 		e, ok := toolDefs.get(toolName)
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
@@ -202,6 +205,9 @@ func init() {
 		principal common.Principal,
 		wrapped *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+		// The input's cards are this component's: the ones no decode took or
+		// call sent go back to the host however the invocation ends.
+		defer engine.ReleaseCardsIn(input.Value.ValueNodes, link.ReleaseCard)
 		return defs.invokeMiddleware(middlewareName, &middlewareInvocation{
 			toolName:    toolName,
 			tool:        toolMetadata,

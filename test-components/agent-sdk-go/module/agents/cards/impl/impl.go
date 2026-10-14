@@ -209,10 +209,14 @@ func init() {
 		empty.Release()
 		return out
 	})
-	issuer.Handle(cards.UseStaleScope, func(ctx *golem.Context[issuerState], _ golem.Unit) string {
+	issuer.Handle(cards.UseStaleScope, func(ctx *golem.Context[issuerState], _ golem.Unit) []string {
 		recv := cards.Receiver.Get(cards.ReceiverId{Name: ctx.State.receiver})
 		_, err := cards.Observe.WithScopeCard(ctx.State.stale).Call(recv, golem.Unit{})
-		return errorKind(err)
+		out := []string{"attach=" + errorKind(err)}
+		_, err = golem.DeriveScope(golem.Bounds{}, ctx.State.stale)
+		out = append(out, "derive-from="+errorKind(err))
+		ctx.State.stale.Release()
+		return append(out, "released="+fmt.Sprint(moved(ctx.State.stale)))
 	})
 
 	receiver.Handle(cards.Observe, func(_ *golem.Context[receiverState], _ golem.Unit) string {

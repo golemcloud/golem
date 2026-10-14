@@ -70,7 +70,8 @@ func noScopeCard() witTypes.Option[*types.PermissionCard] {
 //
 // A scope card is valid only during the invocation that derived it. Keeping
 // one, or a client whose default is one, for a later invocation makes that
-// invocation's awaited calls fail: the host denies them.
+// invocation's awaited calls fail: the host retires the card when its
+// invocation ends, and denies them. Releasing a retired card is safe.
 //
 // The scope card is checked before the input is encoded: a released scope card
 // panics with [ErrPermissionCardMoved] and leaves every card in the input with
@@ -257,11 +258,15 @@ func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, 
 
 // decodeOutput decodes a remote result through the LOCAL descriptor's Out codec.
 // That codec checks every node tag, so a remote returning the wrong shape yields
-// an error rather than a panic.
+// an error rather than a panic. The permission cards in the result that the
+// decode does not keep go back to the host.
 func decodeOutput[Out any](target, method string, out witTypes.Option[types.SchemaValueTree]) (Out, error) {
 	var zero Out
 	outType := reflect.TypeFor[Out]()
 	if outType == reflect.TypeFor[Unit]() {
+		if out.IsSome() {
+			engine.ReleaseCardsIn(out.Some().ValueNodes, releaseCard)
+		}
 		return zero, nil
 	}
 	if out.IsNone() {
@@ -280,6 +285,7 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 			Message: "remote returned an undecodable value: " + err.Error(),
 		}
 	}
+	dec.ReleaseRest(releaseCard)
 	return dst.Interface().(Out), nil
 }
 

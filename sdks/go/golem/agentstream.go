@@ -350,6 +350,7 @@ func defaultStreamCodec[T any]() streamCodec[T] {
 				var zero T
 				return zero, err
 			}
+			d.ReleaseRest(releaseCard)
 			return out, nil
 		},
 	}

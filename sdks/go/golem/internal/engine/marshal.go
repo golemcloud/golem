@@ -76,12 +76,13 @@ func (b *ValBuilder) RestoreOnPanic() {
 	}
 }
 
-// ErrPermissionCardTaken reports a permission card that a decode already took
-// out of a value: the value can no longer be decoded or sent whole.
-var ErrPermissionCardTaken = errors.New("golem: the permission card in this value was already decoded")
+// ErrPermissionCardTaken reports a permission card that already moved out of a
+// value, by a decode or a send: the value can no longer be decoded or sent
+// whole.
+var ErrPermissionCardTaken = errors.New("golem: the permission card in this value was already decoded or sent")
 
-// CheckCardsPresent returns [ErrPermissionCardTaken] when a decode took a
-// permission card out of tree. Check a tree that crosses the decode/send
+// CheckCardsPresent returns [ErrPermissionCardTaken] when a permission card
+// was decoded or sent out of tree. Check a tree that crosses the decode/send
 // boundary — a received value sent on — before it is sent.
 func CheckCardsPresent(tree types.SchemaValueTree) error {
 	for _, n := range tree.ValueNodes {

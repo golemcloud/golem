@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	guestExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_agent_guest"
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	perm "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_permissions_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -809,5 +811,31 @@ func TestDecodingParametersReleasesTheCardsItDoesNotKeep(t *testing.T) {
 		if tc.decodes && (f.released[0] != extra || dst.Interface().(oneParam).Card.st.h != first) {
 			t.Errorf("%s: released %v and kept %v", name, f.released, dst.Interface())
 		}
+	}
+}
+
+// An agent invocation refused before its decode, and a result read as Unit,
+// give their cards back to the host.
+func TestRefusedInvocationsAndUnitResultsReleaseTheirCards(t *testing.T) {
+	f := newFakeCards(t)
+	refused := &types.PermissionCard{}
+	prev := active
+	active = nil
+	t.Cleanup(func() { active = prev })
+	input := types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{
+		types.MakeSchemaValueNodePermissionCardHandle(refused), types.MakeSchemaValueNodeRecordValue([]int32{0}),
+	}, Root: 1}
+	if res := guestExports.Exports.Invoke("m", input, common.MakePrincipalAnonymous()); res.IsOk() {
+		t.Fatal("an uninitialized agent ran a method")
+	}
+
+	unit := &types.PermissionCard{}
+	if _, err := decodeOutput[Unit]("target", "m", witTypes.Some(types.SchemaValueTree{
+		ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodePermissionCardHandle(unit)},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(f.released, []*types.PermissionCard{refused, unit}) {
+		t.Errorf("released %v, want the refused input's and the unit result's cards", f.released)
 	}
 }

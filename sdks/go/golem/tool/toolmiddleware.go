@@ -603,7 +603,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 				engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
 				return fail(passThroughToolError(err))
 			}
-			result = witTypes.Some(witOf(v))
+			result = witTypes.Some(sendOnce(witOf(v)))
 		}
 		return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
 			Result: result, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
@@ -656,7 +656,7 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 			engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
 			return fail(passThroughToolError(err))
 		}
-		wire = witTypes.Some(witOf(v))
+		wire = witTypes.Some(sendOnce(witOf(v)))
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
 		Result: wire, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),

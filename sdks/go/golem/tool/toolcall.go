@@ -115,10 +115,11 @@ type CallError struct {
 	// ErrorName is the declared error case, for [CallDeclaredError].
 	ErrorName string
 	payload   golem.TypedValue
-	// decoded holds the payload as the first successful Match decoded it.
-	// Decoding moves a permission card out of the payload, so every later
-	// Match, and every copy of the error, reads it from here.
-	decoded *decodedPayload
+	// decoded holds the payload as each successful Match decoded it, by Go
+	// type. Decoding moves a permission card out of the payload, so every
+	// later Match for that type, and every copy of the error, reads it from
+	// here.
+	decoded *decodedPayloads
 	// wire is the tool's own error, kept so a middleware passing the failure
 	// on returns it unchanged.
 	wire *types.ToolError
@@ -132,28 +133,29 @@ type CallError struct {
 // fails for it. Match decodes once and returns the same value every time.
 func (e *CallError) Payload() golem.TypedValue { return e.payload }
 
-// decodedPayload is a declared error's payload as the one Go type it
-// decoded as.
-type decodedPayload struct {
-	typ   reflect.Type
-	value any
-}
+// decodedPayloads is a declared error's payload as each Go type it decoded
+// as.
+type decodedPayloads struct{ byType map[reflect.Type]any }
 
 // decodePayload decodes the payload as P, and keeps a successful decode for
 // every later call for P. A failed decode leaves the payload as it was, so it
-// is not kept: a later call, for P or another type, decodes again.
+// is not kept: a later call decodes again. A decode as another type after a
+// successful one fails for a card the first one took.
 func decodePayload[P any](e *CallError) (P, error) {
 	typ := reflect.TypeFor[P]()
 	if e.decoded == nil {
-		e.decoded = &decodedPayload{}
+		e.decoded = &decodedPayloads{}
 	}
-	if d := e.decoded; d.typ == typ {
-		p, _ := d.value.(P)
+	if v, ok := e.decoded.byType[typ]; ok {
+		p, _ := v.(P)
 		return p, nil
 	}
 	p, err := golem.DecodeTypedValue[P](e.payload)
-	if err == nil && e.decoded.typ == nil {
-		*e.decoded = decodedPayload{typ: typ, value: p}
+	if err == nil {
+		if e.decoded.byType == nil {
+			e.decoded.byType = map[reflect.Type]any{}
+		}
+		e.decoded.byType[typ] = p
 	}
 	return p, err
 }
@@ -218,7 +220,7 @@ func toolCallErrorFromWit(tool string, path []string, e types.ToolRpcError) *Cal
 		case types.ToolErrorCustomError:
 			ce := te.CustomError()
 			out.Kind, out.ErrorName, out.payload = CallDeclaredError, ce.Name, typedValue(ce.Payload)
-			out.decoded = &decodedPayload{}
+			out.decoded = &decodedPayloads{}
 		default:
 			out.Kind = CallInvalidResult
 		}
@@ -382,6 +384,9 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 	}
 	out := reflect.New(ce.outType).Elem()
 	if ce.outType == reflect.TypeFor[golem.Unit]() {
+		if res.IsSome() {
+			engine.ReleaseCardsIn(res.Some().Value.ValueNodes, link.ReleaseCard)
+		}
 		return out, nil
 	}
 	if res.IsNone() {
@@ -393,6 +398,7 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 		dec.ReleaseCards(link.ReleaseCard)
 		return reflect.Value{}, ce.callError(target, CallInvalidResult, "%v", err)
 	}
+	dec.ReleaseRest(link.ReleaseCard)
 	return out, nil
 }
 

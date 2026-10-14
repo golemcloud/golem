@@ -596,7 +596,14 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
     let stale = executor
         .invoke_and_await_agent(&component, &issuer, "use-stale-scope", data_value!())
         .await?
-        .into_typed::<String>()?;
-    assert_eq!(stale, "remote-denied");
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(
+        stale,
+        [
+            "attach=remote-denied",
+            "derive-from=not-permitted",
+            "released=true"
+        ]
+    );
     Ok(())
 }

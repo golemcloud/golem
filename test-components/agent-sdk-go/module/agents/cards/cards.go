@@ -29,8 +29,9 @@ var (
 	// UseStaleScope.
 	Scenario = Issuer.Method[ScenarioIn, []string]("scenario", golem.Description("Run the permission-card scenario"))
 	// UseStaleScope attaches the scope card Scenario kept to a call in this
-	// later invocation: "ok", or the kind of the failure.
-	UseStaleScope = Issuer.Method[golem.Unit, string]("use-stale-scope", golem.Description("Attach a scope card from an earlier invocation"))
+	// later invocation, derives a scope card from it, and releases it: one
+	// key=value observation per step.
+	UseStaleScope = Issuer.Method[golem.Unit, []string]("use-stale-scope", golem.Description("Use a scope card from an earlier invocation"))
 
 	// Observe inspects every wallet card: "ok" when an inspection succeeds,
 	// otherwise the error kind of the last refusal.

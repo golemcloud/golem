@@ -1031,12 +1031,15 @@ func (d *definitions) buildCommandBody(g *engine.GraphBuilder, ce *commandEntry,
 }
 
 // decode fills an argument struct from a canonical input record. A failed
-// decode gives every permission card in the record back to the host.
+// decode gives every permission card in the record back to the host, and a
+// successful one the cards it did not reach.
 func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) (err error) {
 	dec := engine.Decoder{Nodes: tree.ValueNodes}
 	defer func() {
 		if err != nil {
 			dec.ReleaseCards(link.ReleaseCard)
+		} else {
+			dec.ReleaseRest(link.ReleaseCard)
 		}
 	}()
 	if len(dec.Nodes) == 0 {
@@ -1169,6 +1172,12 @@ func (ce *commandEntry) decodeArgs(
 		e := toolDefinitionError(d)
 		return reflect.Value{}, &e
 	}
+	// Refuse a missing standard input before the decode takes any card out of
+	// the input.
+	if l.stdin != nil && !l.stdin.optional && !stdin.present() {
+		e := types.MakeToolErrorInvalidInput(fmt.Sprintf("command %s requires standard input", ce.label()))
+		return reflect.Value{}, &e
+	}
 	args := reflect.New(ce.argsType).Elem()
 	if err := l.decode(input.Value, args); err != nil {
 		e := types.MakeToolErrorInvalidInput(err.Error())
@@ -1177,14 +1186,8 @@ func (ce *commandEntry) decodeArgs(
 	if l.principal != nil && principal != nil {
 		args.FieldByIndex(l.principal).Set(reflect.ValueOf(&principal).Elem())
 	}
-	if l.stdin != nil {
-		switch {
-		case stdin.present():
-			args.FieldByIndex(l.stdin.path).Set(reflect.ValueOf(io.Reader(stdin)))
-		case !l.stdin.optional:
-			e := types.MakeToolErrorInvalidInput(fmt.Sprintf("command %s requires standard input", ce.label()))
-			return reflect.Value{}, &e
-		}
+	if l.stdin != nil && stdin.present() {
+		args.FieldByIndex(l.stdin.path).Set(reflect.ValueOf(io.Reader(stdin)))
 	}
 	return args, nil
 }
@@ -1209,7 +1212,7 @@ func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) toolComm
 
 // handlerError turns what a handler failed with into the wire error: a
 // declared case of the command, a failure of a tool it called passed through
-// unchanged, or an invalid result.
+// as [passThroughToolError] passes it, or an invalid result.
 func (d *definitions) handlerError(ce *commandEntry, err error) types.ToolError {
 	var raised *RaisedError
 	if errors.As(err, &raised) {
@@ -1223,7 +1226,9 @@ func (d *definitions) handlerError(ce *commandEntry, err error) types.ToolError 
 }
 
 // passThroughToolError turns what a handler failed with into the wire error.
-// A failure a called tool reported as its own error is kept unchanged; a
+// A failure a called tool reported as its own error is passed on as
+// [sendableToolError] allows: as it is, or as an invalid result when a Match
+// took its payload's cards; a
 // rejection built with [InvalidInput] or [ConstraintViolation] keeps its kind;
 // a failure of the call itself is mapped as the other SDKs map it — denial,
 // cancellation and exhaustion become constraint violations, protocol and
@@ -1258,17 +1263,30 @@ func passThroughToolError(err error) types.ToolError {
 // sendableToolError is a tool error received from the layer beneath, to be
 // passed on. A Match that decoded its payload took the payload's cards, so it
 // can no longer be passed on whole: it becomes an invalid result, and the
-// payload's remaining cards go back to the host.
+// payload's remaining cards go back to the host. A payload passed on moves its
+// cards with it, so the same error cannot be passed on twice.
 func sendableToolError(te types.ToolError) types.ToolError {
 	if te.Tag() != types.ToolErrorCustomError {
 		return te
 	}
-	payload := te.CustomError().Payload.Value
-	if err := engine.CheckCardsPresent(payload); err != nil {
-		engine.ReleaseCardsIn(payload.ValueNodes, link.ReleaseCard)
-		return types.MakeToolErrorInvalidResult(fmt.Sprintf("declared error %s: %v", te.CustomError().Name, err))
+	custom := te.CustomError()
+	if err := engine.CheckCardsPresent(custom.Payload.Value); err != nil {
+		engine.ReleaseCardsIn(custom.Payload.Value.ValueNodes, link.ReleaseCard)
+		return types.MakeToolErrorInvalidResult(fmt.Sprintf("declared error %s: %v", custom.Name, err))
 	}
-	return te
+	return types.MakeToolErrorCustomError(types.CustomToolError{Name: custom.Name, Payload: sendOnce(custom.Payload)})
+}
+
+// sendOnce returns v to be returned to the host, which lowers it after this
+// component's code has finished. The host lowers a copy of v's nodes, and the
+// cards in v itself are marked sent: a value returned twice — by a middleware
+// that caches results, say — fails the second time instead of naming handles
+// the host already owns.
+func sendOnce(v types.TypedSchemaValue) types.TypedSchemaValue {
+	sent := v
+	sent.Value.ValueNodes = slices.Clone(v.Value.ValueNodes)
+	engine.MarkCardsSent(v.Value.ValueNodes)
+	return sent
 }
 
 // runWithOutputs calls a handler, recovering a panic rather than letting it

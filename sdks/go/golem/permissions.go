@@ -164,6 +164,10 @@ type CardView struct {
 // the child retains and the negative lists the denials it adds. For
 // [DeriveFromWallet] and [DeriveScope] the four lists are the child's complete
 // lattice. The host rejects a lattice its parents do not cover.
+//
+// A grant may use slot variables such as ?agent or ?env, which the host
+// resolves for the calling agent: a grant [PolymorphicPermissionCard.Inspect]
+// returned for a template card can be requested unchanged.
 type Bounds struct {
 	LowerPositive []PatternGrant
 	LowerNegative []PatternGrant
@@ -747,8 +751,10 @@ func MustDeriveFromWallet(b Bounds, lifespan Option[Lifespan]) PermissionCard {
 // A scope card is valid only during the invocation that derived it. Attach it
 // to the awaited calls this invocation makes, with [MethodDef.WithScopeCard] or
 // [Client.WithScopeCard], to lend its grants to each callee for that call. Do
-// not keep it, or a client that carries it, for a later invocation: the host
-// denies an awaited call that carries a scope card from another invocation.
+// not keep it, or a client that carries it, for a later invocation: once its
+// invocation ends the host retires it, denies an awaited call that carries it,
+// and refuses it as a DeriveScope parent with [PermissionNotPermitted].
+// Releasing a retired scope card is safe.
 func DeriveScope(b Bounds, parents ...ScopeParent) (ScopeCard, error) {
 	hs := make([]*types.PermissionCard, len(parents))
 	for i, p := range parents {

@@ -24,8 +24,12 @@ import (
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
+	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -85,6 +89,11 @@ func TestMatchDecodesACardPayloadOnce(t *testing.T) {
 	}
 	if _, ok := other.Match(err); ok {
 		t.Error("a case with another payload type matched after the right one")
+	}
+	// A type of the same shape fails too: the right case took the card.
+	type sameShape struct{ Card golem.PermissionCard }
+	if _, derr := decodePayload[sameShape](err); !errors.Is(derr, golem.ErrPermissionCardTaken) {
+		t.Errorf("a type of the same shape decoded the payload again: %v", derr)
 	}
 	copied := *err
 	for name, e := range map[string]error{"the error": err, "a copy": &copied, "a wrapper": fmt.Errorf("wrapped: %w", err)} {
@@ -309,5 +318,115 @@ func TestAnInputOfTheWrongShapeReleasesItsCards(t *testing.T) {
 	}
 	if len(*released) != 1 || (*released)[0] != live {
 		t.Errorf("released %v, want the record's card", *released)
+	}
+}
+
+// liveCardValue is a typed value of one card, as the host hands it over.
+func liveCardValue(t *testing.T) (types.TypedSchemaValue, *types.PermissionCard) {
+	t.Helper()
+	v := witOf(hostValue(t, func(card func() golem.PermissionCard) KeysArgs { return KeysArgs{Card: card()} }))
+	for _, n := range v.Value.ValueNodes {
+		if n.Tag() == types.SchemaValueNodePermissionCardHandle {
+			return v, n.PermissionCardHandle()
+		}
+	}
+	t.Fatal("no card in the value")
+	return v, nil
+}
+
+// An invocation the component refuses before any decode gives the input's
+// cards back to the host.
+func TestARefusedInvocationReleasesItsInputCards(t *testing.T) {
+	released := recordReleases(t)
+	input, live := liveCardValue(t)
+	if res := toolExports.Exports.Invoke("no-such-tool", nil, input, toolExports.Stdin{}, toolExports.Stdout{}, toolExports.Stderr{}, common.MakePrincipalAnonymous()); res.IsOk() {
+		t.Fatal("an unknown tool ran")
+	}
+	middlewareInput, middlewareLive := liveCardValue(t)
+	if res := mwExports.Exports.InvokeToolMiddleware("no-such-middleware", "keys", toolCommon.Tool{}, witOf(golem.EncodeTypedValue(golem.Unit{})),
+		nil, middlewareInput, mwExports.Stdin{}, mwExports.Stdout{}, mwExports.Stderr{}, common.MakePrincipalAnonymous(), nil); res.IsOk() {
+		t.Fatal("an unknown middleware ran")
+	}
+	if len(*released) != 2 || (*released)[0] != live || (*released)[1] != middlewareLive {
+		t.Errorf("released %v, want both inputs' cards", *released)
+	}
+}
+
+type StdinKeysArgs struct {
+	Card  golem.PermissionCard
+	Input io.Reader
+}
+
+// A command refused for its missing standard input is refused before the
+// decode takes the input's cards, which stay in the input to be released.
+func TestAMissingStandardInputIsRefusedBeforeTheDecode(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	def := defineToolInto[Keys](r, d, "stdin-keys", Spec{Version: "1.0.0"}, false)
+	cmd := def.Body[StdinKeysArgs, golem.Unit](func(a *StdinKeysArgs, s *CommandSpec) {
+		s.Positional(&a.Card)
+		s.Stdin(&a.Input)
+	})
+	_ = cmd.Handle(func(*Context, StdinKeysArgs) (golem.Unit, error) { return golem.Unit{}, nil })
+	if _, ok := r.discover(d); !ok {
+		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
+	}
+	input := witOf(hostValue(t, func(card func() golem.PermissionCard) KeysArgs { return KeysArgs{Card: card()} }))
+	if _, terr := cmd.ce.decodeArgs(d, input, &byteReader{absent: absentStdin}, nil); terr == nil {
+		t.Fatal("a command without its standard input was decoded")
+	}
+	if engine.CheckCardsPresent(input.Value) != nil {
+		t.Error("the refusal took the input's card")
+	}
+}
+
+// A result decoded as Unit gives its cards back to the host.
+func TestAUnitResultReleasesItsCards(t *testing.T) {
+	released := recordReleases(t)
+	cmd, _, _ := declareKeys(t)
+	result, live := liveCardValue(t)
+	if _, err := cmd.ce.finish("keys", toolCall{wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.Some(result), nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*released) != 1 || (*released)[0] != live {
+		t.Errorf("released %v, want the result's card", *released)
+	}
+}
+
+// A value returned to the host is lowered from a copy, and the original is
+// marked sent: returning it again fails rather than name a handle the host
+// already owns.
+func TestAReturnedValueIsSentOnce(t *testing.T) {
+	v, r, d := newVcs(t)
+	result, live := liveCardValue(t)
+	cached := typedValue(result)
+	m := defineUniversalToolMiddlewareInto[golem.Unit](r, d, "cache", MiddlewareSpec{})
+	_ = m.Handle(func(*UniversalMiddlewareContext[golem.Unit]) (golem.Option[golem.TypedValue], error) {
+		return golem.Some(cached), nil
+	})
+	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m" })
+	run := middlewareRun{path: []string{"commit"}, input: input, params: mustTypedValue(t, golem.Unit{})}
+	first, _ := runMiddlewareFor(t, r, d, "cache", run)
+	if first.IsErr() || engine.CheckCardsPresent(first.Ok().Result.Some().Value) != nil {
+		t.Fatalf("the first return gave %+v", first)
+	}
+	for _, n := range first.Ok().Result.Some().Value.ValueNodes {
+		if n.Tag() == types.SchemaValueNodePermissionCardHandle && n.PermissionCardHandle() != live {
+			t.Error("the lowered copy lost the card")
+		}
+	}
+	if second, _ := runMiddlewareFor(t, r, d, "cache", run); second.IsOk() || second.Err().Tag() != types.ToolErrorInvalidResult {
+		t.Errorf("returning the value again gave %+v", second)
+	}
+
+	payload, _ := liveCardValue(t)
+	err := toolCallErrorFromWit("keys", nil, types.MakeToolRpcErrorRemoteToolError(
+		types.MakeToolErrorCustomError(types.CustomToolError{Name: "locked", Payload: payload})))
+	if got := passThroughToolError(err); got.Tag() != types.ToolErrorCustomError || engine.CheckCardsPresent(got.CustomError().Payload.Value) != nil {
+		t.Fatalf("the first pass-through gave %+v", got)
+	}
+	if got := passThroughToolError(err); got.Tag() != types.ToolErrorInvalidResult {
+		t.Errorf("passing the error on again gave %+v", got)
 	}
 }

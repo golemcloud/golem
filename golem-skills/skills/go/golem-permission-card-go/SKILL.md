@@ -47,6 +47,7 @@ n, err := card.Revoke() // n counts the revoked cards
 ```
 
 - `golem.Bounds` holds the four grant lists. For `card.Derive`, the positive lists name the parent's grants the child keeps and the negative lists the denials it adds. For `golem.DeriveFromWallet` and `golem.DeriveScope` the four lists are the child's complete lattice. The host rejects a lattice the parents do not cover.
+- Requested grants may use slot variables such as `?agent` or `?env`; `Derive`, `DeriveFromWallet` and `DeriveScope` resolve them for the calling agent. To request a grant a template wallet card holds, pass the grant `Inspect` returned unchanged rather than spelling out the agent's own owner path.
 - `golem.LifespanOf(d)` takes a positive `time.Duration`. `golem.ParseLifespan("P1DT12H")` takes ISO-8601 text of days, hours, minutes and seconds (`PnDTnHnMnS`). Years, months and weeks have no fixed length, and the host rejects them. A zero lifespan is refused.
 - `golem.Wallet()` returns the wallet's cards as `golem.PolymorphicPermissionCard` (a wallet card may be a template). Send one only where a `PolymorphicPermissionCard` is expected; to hand on a `golem.PermissionCard`, derive a concrete child with `Derive`. Each is a fresh handle: call `Release()` on the ones you do not keep, or `golem.ReleaseCards(cards...)`.
 - Deriving from a template card resolves it for the calling agent; the card must be in the agent's wallet.
@@ -71,7 +72,7 @@ scoped := client.WithScopeCard(scope)
 out, err = Lookup.Call(scoped, LookupIn{Key: "k"})
 ```
 
-- A scope card is valid only during the invocation that derived it. Do not keep it, or a client that carries it, in the agent's state for a later invocation: the host denies the awaited calls that carry it, with a `*golem.RemoteCallError` of kind `golem.RemoteDenied`.
+- A scope card is valid only during the invocation that derived it. Do not keep it, or a client that carries it, in the agent's state for a later invocation: when the invocation ends the host retires it, denies the awaited calls that carry it with a `*golem.RemoteCallError` of kind `golem.RemoteDenied`, and refuses it as a `DeriveScope` parent with `golem.PermissionNotPermitted`. `Release()` on a retired scope card is safe.
 - Only `Call`, `MustCall` and `CallAsync` carry a scope card; `Trigger` and `Schedule` never do. A card attached to the call takes precedence over the client's default.
 - Only a `golem.ScopeCard` attaches: passing a `PermissionCard` or a wallet card does not compile. A `ScopeCard` has `ID`, `Parents`, `ExpiresAt`, `Inspect` and `Release`. It cannot be sent, installed, revoked or derived from with `Derive`; a method or tool input that holds one is a definition error. It can be a parent of another `DeriveScope`.
 - Attaching a card lends it: the caller keeps it. A released scope card panics with `golem.ErrPermissionCardMoved` before the call encodes its input, so no input card moves.
@@ -79,7 +80,7 @@ out, err = Lookup.Call(scoped, LookupIn{Key: "k"})
 
 ## Moves
 
-A card is affine. Sending it as an argument or result, `Revoke` and `Install` move it — even when the call fails — and every later use panics with `golem.ErrPermissionCardMoved`. Do not keep, log or send the same card twice. A card cannot be built from data or serialized: `json.Marshal` of a card fails. `golem.DecodeTypedValue` takes a card out of the value it decodes, so decoding the same value again fails, and a universal tool middleware cannot hand on an input whose card it decoded: build the input it passes on from the decoded value. A tool error's `Match` decodes its payload once and returns the same card on every match.
+A card is affine. Sending it as an argument or result, `Revoke` and `Install` move it — even when the call fails — and every later use panics with `golem.ErrPermissionCardMoved`. Do not keep, log or send the same card twice. A card cannot be built from data or serialized: `json.Marshal` of a card fails. A `golem.TypedValue` that holds a card is sent once too. Decoding it with `golem.DecodeTypedValue` takes the card out, and so does sending or returning it: handing an input on with a universal tool middleware's `Next` or `Start`, sending it with a dynamic tool client, or returning it as a middleware result. After that, decoding or sending the same value fails with `golem.ErrPermissionCardTaken`, and a middleware result or passed-on tool error that holds such a value fails as an invalid result. Build the value you pass on from the decoded one instead. A tool error's `Match` decodes its payload once and returns the same card on every match.
 
 ### Related Skills
 
