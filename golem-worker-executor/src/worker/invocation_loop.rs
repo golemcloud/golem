@@ -3269,7 +3269,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             owner_failure = ?owner_failure,
             "Classifying failed invocation after tool owner arbitration"
         );
-        if let Some(error) = selected_infrastructure_recovery_error(
+        if let Some(error) = crate::durable_host::selected_recovery_error(
             owner_failure.as_ref(),
             self.parent.agent_mode(),
             &result,
@@ -3931,23 +3931,6 @@ fn failed_agent_invocation_outcome(
     }
 }
 
-fn selected_infrastructure_recovery_error<'a>(
-    owner_failure: Option<&OwnerFailureWinner>,
-    agent_mode: AgentMode,
-    result: &'a Result<InvokeResult, WorkerExecutorError>,
-) -> Option<&'a WorkerExecutorError> {
-    if owner_failure.is_some() || agent_mode != AgentMode::Durable {
-        return None;
-    }
-    match result {
-        Err(
-            error @ (WorkerExecutorError::RecoveryRequired { .. }
-            | WorkerExecutorError::OplogFailed { .. }),
-        ) => Some(error),
-        _ => None,
-    }
-}
-
 /// What the loop does after an infrastructure failure of an invocation. A lost shard stops the
 /// agent: its waiters are sent to the new owner. An oplog that failed for good stops the agent too,
 /// because a reconstruction would fail again, and the stop gives the waiters that error, with its
@@ -4297,9 +4280,9 @@ mod tests {
         failed_agent_invocation_outcome, finish_filesystem_limit_unload,
         infrastructure_failure_outcome, measured_capture, periodic_failure_outcome,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
-        selected_infrastructure_recovery_error, snapshot_action_at, snapshot_baseline_timestamp,
-        spawn_module_owned_unload, successful_agent_invocation_outcome,
-        unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
+        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
+        successful_agent_invocation_outcome, unload_resident_agent_ownership,
+        wait_for_resident_wakeup, with_end,
     };
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
@@ -5432,21 +5415,27 @@ mod tests {
             "payload backend unavailable",
         ));
         assert!(
-            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_some()
+            crate::durable_host::selected_recovery_error(None, AgentMode::Durable, &result)
+                .is_some()
         );
         assert!(
-            selected_infrastructure_recovery_error(None, AgentMode::Ephemeral, &result).is_none()
+            crate::durable_host::selected_recovery_error(None, AgentMode::Ephemeral, &result)
+                .is_none()
         );
 
         let shard_loss = OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost);
         assert!(
-            selected_infrastructure_recovery_error(Some(&shard_loss), AgentMode::Durable, &result)
-                .is_none()
+            crate::durable_host::selected_recovery_error(
+                Some(&shard_loss),
+                AgentMode::Durable,
+                &result
+            )
+            .is_none()
         );
         let quota_throttle =
             OwnerFailureWinner::Lifecycle(InterruptKind::Suspend(Timestamp::now_utc()));
         assert!(
-            selected_infrastructure_recovery_error(
+            crate::durable_host::selected_recovery_error(
                 Some(&quota_throttle),
                 AgentMode::Durable,
                 &result,
@@ -5459,7 +5448,8 @@ mod tests {
     fn infrastructure_recovery_branch_rejects_ordinary_infrastructure_error() {
         let result = Err(WorkerExecutorError::runtime("host task failed"));
         assert!(
-            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_none()
+            crate::durable_host::selected_recovery_error(None, AgentMode::Durable, &result)
+                .is_none()
         );
     }
 

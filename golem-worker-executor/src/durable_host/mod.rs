@@ -4557,7 +4557,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
         {
             Ok(oplog_entry) => oplog_entry,
-            Err(error) => return SnapshotRecoveryResult::Failed(error.into()),
+            Err(error) => return snapshot_entry_read_failure(error),
         };
 
         let (data_payload, mime_type) = match oplog_entry {
@@ -6458,13 +6458,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 continue;
                             }
                             _ => {
-                                if let Some(error) = selected_replay_recovery_error(
-                                    store
-                                        .as_context()
-                                        .data()
-                                        .durable_ctx()
-                                        .selected_tool_owner_failure()
-                                        .is_some(),
+                                let owner_failure = store
+                                    .as_context()
+                                    .data()
+                                    .durable_ctx()
+                                    .selected_tool_owner_failure();
+                                if let Some(error) = selected_recovery_error(
+                                    owner_failure.as_ref(),
                                     store.as_context().data().agent_mode(),
                                     &invoke_result,
                                 ) {
@@ -7694,22 +7694,44 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     })
 }
 
-/// The error that ends a replay outside the guest's failure handling: a reconstruction that is
-/// required, or an oplog that failed. Either ends the start with the error.
-fn selected_replay_recovery_error(
-    owner_failure_selected: bool,
+/// The infrastructure error that ends an invocation or a replay of a durable agent outside the
+/// guest's failure handling: a reconstruction that is required, or an oplog that failed.
+///
+/// The winner of the tool-owner arbitration comes first. An infrastructure winner is that error;
+/// a trap or a lifecycle winner keeps its own handling, so nothing is selected. Without a winner,
+/// the error is the one of the invocation.
+pub(crate) fn selected_recovery_error<'a>(
+    owner_failure: Option<&'a crate::durable_host::tool::operation::OwnerFailureWinner>,
     agent_mode: AgentMode,
-    result: &Result<InvokeResult, WorkerExecutorError>,
-) -> Option<&WorkerExecutorError> {
-    if owner_failure_selected || agent_mode != AgentMode::Durable {
+    result: &'a Result<InvokeResult, WorkerExecutorError>,
+) -> Option<&'a WorkerExecutorError> {
+    use crate::durable_host::tool::operation::OwnerFailureWinner;
+    if agent_mode != AgentMode::Durable {
         return None;
     }
-    match result {
-        Err(
-            error @ (WorkerExecutorError::RecoveryRequired { .. }
-            | WorkerExecutorError::OplogFailed { .. }),
-        ) => Some(error),
-        _ => None,
+    let error = match owner_failure {
+        Some(OwnerFailureWinner::Infrastructure(error)) => error,
+        Some(OwnerFailureWinner::Trap(_) | OwnerFailureWinner::Lifecycle(_)) => return None,
+        None => result.as_ref().err()?,
+    };
+    matches!(
+        error,
+        WorkerExecutorError::RecoveryRequired { .. } | WorkerExecutorError::OplogFailed { .. }
+    )
+    .then_some(error)
+}
+
+/// What a start gets when the snapshot record itself does not read. A storage that did not answer
+/// is `Unavailable` with `RecoveryRequired`, which the start retries without a decision on the
+/// record; any other read failure is `OplogFailed`, which fails the start in every column. Neither
+/// is a snapshot that failed to load, so the record is never rejected for it.
+fn snapshot_entry_read_failure(error: UnreadableOplog) -> SnapshotRecoveryResult {
+    let transient = error.is_transient();
+    let error = WorkerExecutorError::from(error);
+    if transient {
+        SnapshotRecoveryResult::Unavailable(error)
+    } else {
+        SnapshotRecoveryResult::Failed(error)
     }
 }
 
@@ -8110,9 +8132,76 @@ mod tests {
         let result = Err(WorkerExecutorError::recovery_required(
             "payload backend unavailable",
         ));
-        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_some());
-        assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
-        assert!(selected_replay_recovery_error(false, AgentMode::Ephemeral, &result).is_none());
+        assert!(selected_recovery_error(None, AgentMode::Durable, &result).is_some());
+        assert!(
+            selected_recovery_error(Some(&lifecycle_winner()), AgentMode::Durable, &result)
+                .is_none()
+        );
+        assert!(selected_recovery_error(None, AgentMode::Ephemeral, &result).is_none());
+    }
+
+    fn lifecycle_winner() -> crate::durable_host::tool::operation::OwnerFailureWinner {
+        crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(
+            InterruptKind::Interrupt(Timestamp::now_utc()),
+        )
+    }
+
+    /// A snapshot record whose storage did not answer is a recovery the start retries, not a
+    /// snapshot that failed to load; a snapshot record that does not read for good is the failed
+    /// oplog.
+    #[test]
+    fn a_snapshot_record_that_is_unavailable_is_a_recovery_not_a_failed_load() {
+        use crate::services::oplog::{OplogReadError, OplogReadSource};
+
+        let agent_id = recovered_agent().agent_id();
+        let unavailable = snapshot_entry_read_failure(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::source_unavailable(OplogReadSource::Archive(1), "outage"),
+        ));
+        assert!(matches!(
+            unavailable,
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        let corrupt = snapshot_entry_read_failure(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        ));
+        assert!(matches!(
+            corrupt,
+            SnapshotRecoveryResult::Failed(WorkerExecutorError::OplogFailed { .. })
+        ));
+    }
+
+    /// A tool failure that wins the owner arbitration as an infrastructure error keeps that
+    /// classification: a reconstruction that is required, or an oplog that failed, is selected
+    /// whatever the invocation itself returned. An ordinary infrastructure winner, a trap and a
+    /// lifecycle winner keep their own handling.
+    #[test]
+    fn a_winning_infrastructure_owner_failure_is_the_recovery_error() {
+        use crate::durable_host::tool::operation::OwnerFailureWinner;
+
+        let result = Err(WorkerExecutorError::runtime("guest trapped"));
+        let recovery = OwnerFailureWinner::Infrastructure(WorkerExecutorError::recovery_required(
+            "archive storage unavailable",
+        ));
+        assert_eq!(
+            selected_recovery_error(Some(&recovery), AgentMode::Durable, &result),
+            Some(&WorkerExecutorError::recovery_required(
+                "archive storage unavailable"
+            ))
+        );
+        let ordinary = OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime("host"));
+        assert!(selected_recovery_error(Some(&ordinary), AgentMode::Durable, &result).is_none());
+        assert!(selected_recovery_error(Some(&recovery), AgentMode::Ephemeral, &result).is_none());
+        let recovery_result = Err(WorkerExecutorError::recovery_required("payload"));
+        assert!(
+            selected_recovery_error(
+                Some(&lifecycle_winner()),
+                AgentMode::Durable,
+                &recovery_result
+            )
+            .is_none()
+        );
     }
 
     /// An oplog that does not read ends the replay with its error instead of failing the guest.
@@ -8126,10 +8215,13 @@ mod tests {
             "corrupt oplog data from archive layer 1",
         ));
         assert_eq!(
-            selected_replay_recovery_error(false, AgentMode::Durable, &result),
+            selected_recovery_error(None, AgentMode::Durable, &result),
             result.as_ref().err()
         );
-        assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
+        assert!(
+            selected_recovery_error(Some(&lifecycle_winner()), AgentMode::Durable, &result)
+                .is_none()
+        );
     }
 
     /// The terminal entry of an invocation that a failed archive write, or an oplog that does not
@@ -8170,7 +8262,7 @@ mod tests {
     #[test]
     fn replay_recovery_branch_rejects_ordinary_host_failure() {
         let result = Err(WorkerExecutorError::runtime("host task failed"));
-        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_none());
+        assert!(selected_recovery_error(None, AgentMode::Durable, &result).is_none());
     }
 
     #[test]
