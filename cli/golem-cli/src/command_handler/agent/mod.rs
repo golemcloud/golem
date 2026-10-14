@@ -3169,8 +3169,10 @@ fn parse_method_parameters_with_error_table(
         .find(|m| m.name == method_name)
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
-    let InputSchema::Parameters(element_schemas) = &method.input_schema;
-    let element_schemas = element_schemas
+    let InputSchema::Parameters(fields) = &method.input_schema;
+    // Auto-injected fields (the principal) are filled by the host and carry no
+    // value, so the caller supplies only the rest.
+    let element_schemas = fields
         .iter()
         .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .collect::<Vec<_>>();
@@ -3748,6 +3750,34 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
+    }
+
+    /// The host fills an auto-injected principal, so the CLI neither asks for
+    /// it nor sends a value for it.
+    #[test]
+    fn method_arguments_skip_the_auto_injected_principal() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
+            golem_common::schema::agent::NamedField::auto_injected(
+                "principal",
+                golem_common::schema::agent::AutoInjectedKind::Principal,
+                SchemaType::record(vec![]),
+            ),
+        ]);
+        let parsed = parse_method_parameters_with_error_table(
+            &agent_type,
+            "run",
+            vec!["5".into()],
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::S64(5)]
+            }
+        );
     }
 
     #[test]

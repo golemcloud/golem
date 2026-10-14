@@ -90,6 +90,7 @@ use wasmtime::component::Component;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod gol40_k1_audit_acceptance;
+mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
 mod matrix_conformance;
 mod middleware_acceptance;
@@ -173,6 +174,14 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_effect_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_caller")]
     PrecompiledComponent
 );
 inherit_test_dep!(

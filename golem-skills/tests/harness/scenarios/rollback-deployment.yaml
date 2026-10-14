@@ -17,6 +17,7 @@ steps:
         ts: *counter-agent-c1
         scala: *counter-agent-c1
         moonbit: *counter-agent-c1
+        go: *counter-agent-c1
       method: "increment"
     expect:
       result_json:
@@ -36,6 +37,7 @@ steps:
       ts: *change-increment-prompt
       scala: *change-increment-prompt
       moonbit: *change-increment-prompt
+      go: *change-increment-prompt
     verify:
       deploy: true
 
@@ -48,6 +50,7 @@ steps:
         ts: *counter-agent-c2
         scala: *counter-agent-c2
         moonbit: *counter-agent-c2
+        go: *counter-agent-c2
       method: "increment"
     expect:
       result_json:
@@ -71,6 +74,7 @@ steps:
         ts: *counter-agent-c3
         scala: *counter-agent-c3
         moonbit: *counter-agent-c3
+        go: *counter-agent-c3
       method: "increment"
     expect:
       result_json:

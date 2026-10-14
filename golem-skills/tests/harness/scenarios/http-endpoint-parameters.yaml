@@ -101,6 +101,7 @@ steps:
         existing manifest entries, and make sure the project builds and deploys successfully.
       scala: *non-effect-add-catalog-agent-prompt
       moonbit: *non-effect-add-catalog-agent-prompt
+      go: *non-effect-add-catalog-agent-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
@@ -113,6 +114,8 @@ steps:
         - "golem-add-http-endpoint-scala"
       moonbit:
         - "golem-add-http-endpoint-moonbit"
+      go:
+        - "golem-add-http-endpoint-go"
     verify:
       build: true
       deploy: true
@@ -131,6 +134,7 @@ steps:
         effect: '{"name":"Laptop","price":999.99,"inStock":true}'
         scala: '{"name":"Laptop","price":999.99,"inStock":true}'
         moonbit: '{"name":"Laptop","price":999.99,"in_stock":true}'
+        go: '{"name":"Laptop","price":999.99,"inStock":true}'
     expect:
       rust:
         status: 200
@@ -177,6 +181,15 @@ steps:
             equals: 999.99
           - path: "$.in_stock"
             equals: true
+      go:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Laptop"
+          - path: "$.price"
+            equals: 999.99
+          - path: "$.inStock"
+            equals: true
 
   - id: "create-product-2"
     http:
@@ -190,6 +203,7 @@ steps:
         effect: '{"name":"Mouse","price":25.50,"inStock":true}'
         scala: '{"name":"Mouse","price":25.50,"inStock":true}'
         moonbit: '{"name":"Mouse","price":25.50,"in_stock":true}'
+        go: '{"name":"Mouse","price":25.50,"inStock":true}'
     expect:
       status: 200
       body_json:
@@ -208,6 +222,7 @@ steps:
         effect: '{"name":"Keyboard","price":75.00,"inStock":false}'
         scala: '{"name":"Keyboard","price":75.00,"inStock":false}'
         moonbit: '{"name":"Keyboard","price":75.00,"in_stock":false}'
+        go: '{"name":"Keyboard","price":75.00,"inStock":false}'
     expect:
       rust:
         status: 200
@@ -243,6 +258,13 @@ steps:
           - path: "$.name"
             equals: "Keyboard"
           - path: "$.in_stock"
+            equals: false
+      go:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Keyboard"
+          - path: "$.inStock"
             equals: false
 
   # --- Path variable mapping on GET ---
@@ -338,6 +360,7 @@ steps:
         effect: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         scala: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         moonbit: '{"name":"Gaming Mouse","price":49.99,"in_stock":true}'
+        go: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
     expect:
       status: 200
       body_json:
@@ -371,6 +394,7 @@ steps:
         effect: '{"name":"Ghost","price":0,"inStock":false}'
         scala: '{"name":"Ghost","price":0,"inStock":false}'
         moonbit: '{"name":"Ghost","price":0,"in_stock":false}'
+        go: '{"name":"Ghost","price":0,"inStock":false}'
     expect:
       status: 404
 
@@ -402,6 +426,7 @@ steps:
         effect: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         scala: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         moonbit: '{"products":[{"name":"Monitor","price":299.99,"in_stock":true},{"name":"Webcam","price":59.99,"in_stock":false}]}'
+        go: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
     expect:
       status: 200
       body_contains: "Monitor"

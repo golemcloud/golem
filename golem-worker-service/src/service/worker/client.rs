@@ -3233,7 +3233,7 @@ mod rejection_mapping_tests {
     use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
     use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
     use golem_service_base::clients::shard_manager::{
-        BatchRenewalEntry, QuotaError, ShardLease, ShardLeaseError, ShardManager,
+        BatchRenewalEntry, ExecutorEndpoint, QuotaError, ShardLease, ShardLeaseError, ShardManager,
         ShardManagerError, ShardRegistration,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -3354,7 +3354,7 @@ mod rejection_mapping_tests {
 
         async fn register(
             &self,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _pod_name: Option<String>,
             _executor_id: uuid::Uuid,
         ) -> Result<ShardRegistration, ShardManagerError> {
@@ -3381,7 +3381,7 @@ mod rejection_mapping_tests {
             &self,
             _environment_id: EnvironmentId,
             _resource_name: ResourceName,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
         ) -> Result<QuotaLease, QuotaError> {
             unreachable!()
         }
@@ -3389,7 +3389,7 @@ mod rejection_mapping_tests {
         async fn renew_quota_lease(
             &self,
             _resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _epoch: u64,
             _unused: u64,
             _pending_reservations: Vec<PendingReservation>,
@@ -3399,7 +3399,7 @@ mod rejection_mapping_tests {
 
         async fn batch_renew_quota_leases(
             &self,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _renewals: Vec<BatchRenewalEntry>,
         ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
             unreachable!()
@@ -3408,7 +3408,7 @@ mod rejection_mapping_tests {
         async fn release_quota_lease(
             &self,
             _resource_definition_id: ResourceDefinitionId,
-            _port: u16,
+            _endpoint: ExecutorEndpoint,
             _epoch: u64,
             _unused: u64,
         ) -> Result<(), QuotaError> {

@@ -342,6 +342,7 @@ pub fn preferred_source_language_for_setup(
         Some(GuestLanguage::TypeScript | GuestLanguage::Effect) => SourceLanguage::TypeScript,
         Some(GuestLanguage::Scala) => SourceLanguage::Scala,
         Some(GuestLanguage::MoonBit) => SourceLanguage::MoonBit,
+        Some(GuestLanguage::Go) => SourceLanguage::Go,
         None => SourceLanguage::Other(String::new()),
     }
 }

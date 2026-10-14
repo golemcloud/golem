@@ -314,8 +314,10 @@ const isFilter = (v: unknown): v is Filter => v instanceof Filter
 
 /**
  * Read the running agent's full metadata through a durable host call
- * on each execution. `SelfAgentId.SelfAgentId` reads only its identity
- * through the same host API.
+ * on each execution. Requires view permission on the running agent.
+ * `SelfAgentId.SelfAgentId` extracts its identity through the same host
+ * API and requires the same permission. Metadata includes stored env
+ * and config fields; view permission is not an identity-only grant.
  *
  * @since 1.5.0
  * @category operations

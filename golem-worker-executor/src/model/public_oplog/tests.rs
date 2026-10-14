@@ -669,6 +669,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             &reveal_response_payload,
             DurableFunctionType::ReadRemote,
             Some(tool_start),
+            None,
         )
         .await
         .unwrap();
@@ -1369,6 +1370,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 &response,
                 DurableFunctionType::WriteRemote,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1408,6 +1410,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             &entity_response,
             DurableFunctionType::WriteLocal,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1444,6 +1447,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             &request,
             &response,
             DurableFunctionType::WriteRemote,
+            None,
             None,
         )
         .await

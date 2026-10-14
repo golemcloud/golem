@@ -90,7 +90,7 @@ impl From<ExecutorAddr> for Pod {
 
 impl Display for ExecutorAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.ip, self.port)
+        write!(f, "{}", std::net::SocketAddr::new(self.ip, self.port))
     }
 }
 

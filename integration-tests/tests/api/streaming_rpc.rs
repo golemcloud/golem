@@ -986,7 +986,7 @@ fn schema_string_list(values: impl IntoIterator<Item = impl Into<String>>) -> Sc
     }
 }
 
-fn assert_moonbit_streaming_report(value: SchemaValue, target_name: &str) {
+fn assert_sdk_streaming_report(value: SchemaValue, scalar_label: &str, target_name: &str) {
     assert_eq!(
         value,
         SchemaValue::Record {
@@ -994,7 +994,7 @@ fn assert_moonbit_streaming_report(value: SchemaValue, target_name: &str) {
                 schema_u32_list([1, 2, 3]),
                 schema_u32_list([3, 5, 8]),
                 schema_u32_list([104, 105, 106]),
-                SchemaValue::String("moonbit".to_string()),
+                SchemaValue::String(scalar_label.to_string()),
                 schema_u32_list([13, 21, 34]),
                 schema_string_list(["alpha", "beta", "gamma"]),
                 schema_u32_list([7, 8, 9]),
@@ -1330,7 +1330,7 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
     let report = invoke_agent_session(deps, &component, &caller_agent_id, "run", data_value!())
         .await?
         .map_err(|failure| anyhow::Error::msg(failure.message))?;
-    assert_moonbit_streaming_report(report, &target_name);
+    assert_sdk_streaming_report(report, "moonbit", &target_name);
 
     let after_reader_drop = invoke_agent_session(
         deps,
@@ -1424,6 +1424,159 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-server-cancellation-cross",
+    )?;
+    let server_cancellation = invoke_agent_session(
+        deps,
+        &component,
+        &server_cancellation_caller,
+        "call_server_cancellation",
+        data_value!(),
+    )
+    .await?
+    .map_err(|failure| anyhow::Error::msg(failure.message))?;
+    assert_eq!(
+        server_cancellation,
+        SchemaValue::Tuple {
+            elements: vec![
+                SchemaValue::U32(50),
+                SchemaValue::Bool(true),
+                SchemaValue::String(format!("pong:{server_cancellation_name}")),
+            ],
+        }
+    );
+    let generated_after_server_cancellation = invoke_agent_session(
+        deps,
+        &component,
+        &server_cancellation_caller,
+        "call_scalar",
+        data_value!(),
+    )
+    .await?
+    .map_err(|failure| anyhow::Error::msg(failure.message))?;
+    assert_eq!(generated_after_server_cancellation, SchemaValue::U64(1));
+
+    Ok(())
+}
+
+#[test]
+#[timeout("8 minutes")]
+#[tracing::instrument]
+async fn generated_go_client_streaming_rpc_cross_executor(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_go")
+        .name("golem-it:agent-rpc-go")
+        .unique()
+        .store()
+        .await?;
+    let routing_table = deps.shard_manager().get_routing_table().await?;
+    let (target_name, caller_agent_id) = cross_executor_caller(
+        component.id,
+        &routing_table,
+        "GoStreamingRpcCaller",
+        "GoStreamingRpcCrossTarget",
+        "generated-go-streaming-rpc-cross",
+    )?;
+
+    let report = invoke_agent_session(deps, &component, &caller_agent_id, "run", data_value!())
+        .await?
+        .map_err(|failure| anyhow::Error::msg(failure.message))?;
+    assert_sdk_streaming_report(report, "go", &target_name);
+
+    let after_reader_drop = invoke_agent_session(
+        deps,
+        &component,
+        &caller_agent_id,
+        "call_scalar",
+        data_value!(),
+    )
+    .await?
+    .map_err(|failure| anyhow::Error::msg(failure.message))?;
+    assert_eq!(after_reader_drop, SchemaValue::U64(2));
+
+    let (_, failure_caller) = cross_executor_caller(
+        component.id,
+        &routing_table,
+        "GoStreamingRpcCaller",
+        "GoStreamingRpcCrossTarget",
+        "generated-go-producer-failure-cross",
+    )?;
+    let failure = invoke_agent_session(
+        deps,
+        &component,
+        &failure_caller,
+        "call_producer_failure",
+        data_value!(),
+    )
+    .await?
+    .expect_err("remote Go producer failure must fail the caller invocation");
+    assert_eq!(failure.kind(), InvocationFailureKind::Execution);
+    assert!(
+        !failure.message.is_empty(),
+        "remote producer failure must retain an execution diagnostic"
+    );
+
+    let (_, control_caller) = cross_executor_caller(
+        component.id,
+        &routing_table,
+        "GoStreamingRpcCaller",
+        "GoStreamingRpcCrossTarget",
+        "generated-go-after-failure-cross",
+    )?;
+    for expected in [1, 2] {
+        let value = invoke_agent_session(
+            deps,
+            &component,
+            &control_caller,
+            "call_scalar",
+            data_value!(),
+        )
+        .await?
+        .map_err(|failure| anyhow::Error::msg(failure.message))?;
+        assert_eq!(value, SchemaValue::U64(expected));
+    }
+
+    let (cancellation_name, cancellation_caller) = cross_executor_caller(
+        component.id,
+        &routing_table,
+        "GoStreamingRpcCaller",
+        "GoStreamingRpcCrossTarget",
+        "generated-go-cancellation-cross",
+    )?;
+    let cancellation_target = agent_id!("GoStreamingRpcCrossTarget", cancellation_name.clone());
+    let producer_cancellation = invoke_agent_session(
+        deps,
+        &component,
+        &cancellation_caller,
+        "call_producer_cancellation",
+        data_value!(),
+    )
+    .await?
+    .map_err(|failure| anyhow::Error::msg(failure.message))?;
+    assert_eq!(
+        producer_cancellation,
+        SchemaValue::Tuple {
+            elements: vec![
+                SchemaValue::U32(43),
+                SchemaValue::String(format!("pong:{cancellation_name}")),
+            ],
+        }
+    );
+    let target_after_cancellation = user
+        .invoke_and_await_agent(&component, &cancellation_target, "increment", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(target_after_cancellation, 1);
+
+    let (server_cancellation_name, server_cancellation_caller) = cross_executor_caller(
+        component.id,
+        &routing_table,
+        "GoStreamingRpcCaller",
+        "GoStreamingRpcCrossTarget",
+        "generated-go-server-cancellation-cross",
     )?;
     let server_cancellation = invoke_agent_session(
         deps,

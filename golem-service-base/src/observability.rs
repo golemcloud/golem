@@ -18,14 +18,14 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use http::Response;
 use prometheus::{Encoder, Registry, TextEncoder};
+use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
 pub async fn start_health_and_metrics_server(
-    addr: impl ToSocketAddrs,
+    addr: SocketAddr,
     registry: Registry,
     body_message: &'static str,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
@@ -37,7 +37,7 @@ pub async fn start_health_and_metrics_server(
             get(move || async move { prometheus_metrics(registry.clone()) }),
         );
 
-    let listener = TcpListener::bind(addr).await?;
+    let listener = crate::net::bind_tcp_listener(addr)?;
     let local_addr = listener.local_addr()?;
 
     join_set.spawn(

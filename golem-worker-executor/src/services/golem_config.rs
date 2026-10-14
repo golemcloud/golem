@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Context;
 use figment::Figment;
 use figment::providers::{Format, Toml};
 use golem_common::config::{
@@ -27,7 +26,7 @@ use golem_common::model::{
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
-use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
+use golem_service_base::clients::shard_manager::{GrpcShardManagerConfig, canonical_advertised_ip};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -36,7 +35,7 @@ use http::Uri;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::Write;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -109,7 +108,9 @@ pub struct GolemConfig {
     pub http_client: HttpClientConfig,
     pub mcp_transport: golem_mcp_import::transport::Limits,
     pub max_websocket_connections: usize,
-    pub http_address: String,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub http_port: u16,
     /// How often runtime/allocator metrics are sampled and refreshed into the
     /// gauges exposed on `/metrics`. Prometheus scrapes the rendered values
@@ -364,7 +365,7 @@ impl SafeDisplay for GolemConfig {
             "max websocket connections: {}",
             self.max_websocket_connections
         );
-        let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
 
         result
@@ -425,7 +426,7 @@ impl Default for GolemConfig {
             http_client: HttpClientConfig::default(),
             mcp_transport: golem_mcp_import::transport::Limits::default(),
             max_websocket_connections: 100,
-            http_address: "0.0.0.0".to_string(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8082,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
@@ -438,6 +439,21 @@ impl GolemConfig {
         self.mcp_transport.validate().map_err(anyhow::Error::msg)?;
         self.durable_stream.validate()?;
         self.invocation_results.validate()?;
+        if let Some(advertised_ip) = self.grpc.advertised_ip {
+            let advertised_ip = canonical_advertised_ip(advertised_ip)
+                .map_err(|error| anyhow::anyhow!("grpc.advertised_ip: {error}"))?;
+            let bind_address = self.bind_address.to_canonical();
+            anyhow::ensure!(
+                !(advertised_ip.is_ipv6() && bind_address.is_ipv4()),
+                "grpc.advertised_ip {advertised_ip} is an IPv6 address, but bind_address {bind_address} accepts IPv4 only; set bind_address to \"::\""
+            );
+            anyhow::ensure!(
+                !(advertised_ip.is_ipv4()
+                    && bind_address.is_ipv6()
+                    && !bind_address.is_unspecified()),
+                "grpc.advertised_ip {advertised_ip} is an IPv4 address, but bind_address {bind_address} accepts IPv6 only"
+            );
+        }
         Ok(())
     }
 }
@@ -634,6 +650,11 @@ impl SafeDisplay for DurableStreamConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GrpcApiConfig {
     pub port: u16,
+    /// The IP address the shard manager and the worker services use to reach this executor. When
+    /// not set, the shard manager uses the source IP of the executor's requests, which is wrong
+    /// where the network translates source addresses.
+    #[serde(default)]
+    pub advertised_ip: Option<IpAddr>,
     pub tls: GrpcServerTlsConfig,
     #[serde(default = "default_grpc_max_message_size")]
     pub max_message_size: usize,
@@ -648,6 +669,9 @@ impl SafeDisplay for GrpcApiConfig {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "port: {}", self.port);
+        if let Some(advertised_ip) = &self.advertised_ip {
+            let _ = writeln!(&mut result, "advertised IP: {advertised_ip}");
+        }
         let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
 
         let _ = writeln!(&mut result, "tls:");
@@ -661,6 +685,7 @@ impl Default for GrpcApiConfig {
     fn default() -> Self {
         Self {
             port: 9093,
+            advertised_ip: None,
             tls: GrpcServerTlsConfig::disabled(),
             max_message_size: default_grpc_max_message_size(),
         }
@@ -713,13 +738,12 @@ impl GolemConfig {
             .expect("Failed to parse config")
     }
 
-    pub fn http_addr(&self) -> anyhow::Result<SocketAddrV4> {
-        Ok(SocketAddrV4::new(
-            self.http_address
-                .parse::<Ipv4Addr>()
-                .context("http_address configuration")?,
-            self.http_port,
-        ))
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
     }
 
     pub fn add_port_to_tracing_file_name_if_enabled(&mut self) {
@@ -1380,6 +1404,17 @@ impl SafeDisplay for IndexedStoragePostgresConfig {
     }
 }
 
+impl IndexedStoragePostgresConfig {
+    pub fn new(postgres: DbPostgresConfig) -> Self {
+        Self {
+            postgres,
+            drop_prefix_delete_batch_size:
+                default_indexed_storage_postgres_drop_prefix_delete_batch_size(),
+            max_concurrent_ops: None,
+        }
+    }
+}
+
 fn default_indexed_storage_postgres_drop_prefix_delete_batch_size() -> u64 {
     1024
 }
@@ -1922,6 +1957,17 @@ impl HasConfigExamples<GolemConfig> for GolemConfig {
                     ),
                     indexed_storage: IndexedStorageConfig::Redis(RedisConfig::default()),
                     blob_storage: BlobStorageConfig::default_s3(),
+                    ..Self::default()
+                },
+            ),
+            (
+                "with dual-stack listeners and an advertised executor address",
+                Self {
+                    bind_address: IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                    grpc: GrpcApiConfig {
+                        advertised_ip: Some(IpAddr::V6(Ipv6Addr::new(0xfdaa, 0, 0, 0, 0, 0, 0, 2))),
+                        ..GrpcApiConfig::default()
+                    },
                     ..Self::default()
                 },
             ),
@@ -3339,6 +3385,99 @@ mod tests {
                 "APFS for local development at /var/lib/golem/agents",
             ]
         );
+    }
+
+    #[test]
+    fn default_listeners_bind_ipv4_and_registration_uses_the_source_ip() {
+        let config = GolemConfig::default();
+
+        assert_eq!(config.http_addr().to_string(), "0.0.0.0:8082");
+        assert_eq!(config.grpc_addr().to_string(), "0.0.0.0:9093");
+        assert_eq!(config.grpc.advertised_ip, None);
+    }
+
+    #[test]
+    fn bind_address_and_advertised_ip_are_read_from_toml() {
+        use figment::Figment;
+        use figment::providers::{Format, Serialized, Toml};
+
+        let config: GolemConfig = Figment::new()
+            .merge(Serialized::defaults(GolemConfig::default()))
+            .merge(Toml::string(
+                r#"
+                bind_address = "::"
+
+                [grpc]
+                advertised_ip = "fdaa:0:1:a7b::2"
+                "#,
+            ))
+            .extract()
+            .unwrap();
+
+        assert_eq!(config.grpc_addr().to_string(), "[::]:9093");
+        assert_eq!(
+            config.grpc.advertised_ip,
+            Some("fdaa:0:1:a7b::2".parse().unwrap())
+        );
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn config_rejects_an_advertised_ip_that_cannot_be_dialed() {
+        for advertised_ip in [
+            "0.0.0.0",
+            "::",
+            "::ffff:0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "ff02::1",
+            "fe80::1",
+        ] {
+            let mut config = GolemConfig {
+                bind_address: "::".parse().unwrap(),
+                ..Default::default()
+            };
+            config.grpc.advertised_ip = Some(advertised_ip.parse().unwrap());
+
+            assert!(
+                config.validate().is_err(),
+                "{advertised_ip} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn config_rejects_an_ipv6_advertised_ip_on_an_ipv4_listener() {
+        let mut config = GolemConfig::default();
+        config.grpc.advertised_ip = Some("fdaa:0:1:a7b::2".parse().unwrap());
+        assert!(config.validate().is_err());
+
+        config.bind_address = "::".parse().unwrap();
+        config.validate().unwrap();
+
+        let mut config = GolemConfig::default();
+        config.grpc.advertised_ip = Some("::ffff:10.0.0.5".parse().unwrap());
+        config.validate().unwrap();
+
+        let mut config = GolemConfig {
+            bind_address: "::ffff:0.0.0.0".parse().unwrap(),
+            ..Default::default()
+        };
+        config.grpc.advertised_ip = Some("fdaa:0:1:a7b::2".parse().unwrap());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn config_rejects_an_ipv4_advertised_ip_on_a_specific_ipv6_listener() {
+        let mut config = GolemConfig {
+            bind_address: "fdaa:0:1:a7b::2".parse().unwrap(),
+            ..Default::default()
+        };
+        config.grpc.advertised_ip = Some("10.0.0.5".parse().unwrap());
+        assert!(config.validate().is_err());
+
+        config.bind_address = "::".parse().unwrap();
+        config.validate().unwrap();
     }
 
     #[test]

@@ -41,6 +41,7 @@ steps:
         ts: 'CounterAgent("test")'
         scala: 'CounterAgent("test")'
         moonbit: 'CounterAgent("test")'
+        go: 'CounterAgent("test")'
       method: "increment"
     expect:
       result_json:

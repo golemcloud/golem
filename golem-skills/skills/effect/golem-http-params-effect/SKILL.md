@@ -242,8 +242,9 @@ A declared `error: E` wraps any success in `result<_, E>`: `Schema.NullOr(T)` or
 mapping).
 
 Use `Schema.NullOr(T)` for ordinary not-found behavior. Use a declared error schema and
-`Effect.fail(...)` for expected typed failures. Defects such as `Effect.die(...)` are unexpected
-invocation failures and may be retried; do not use them to select an HTTP status.
+`Effect.fail(...)` for expected typed failures. Unhandled defects such as `Effect.die(...)` fail
+the agent without retry outside an atomic region. Inside `Durability.atomically`, failures retry
+the region according to the applicable retry policy. Do not use defects to select an HTTP status.
 
 The SDK does not expose a raw response builder or per-error status mapping. Do not return an
 Effect Platform `HttpServerResponse` or invent response-header/status helpers.

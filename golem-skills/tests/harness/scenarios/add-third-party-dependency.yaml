@@ -14,6 +14,7 @@ steps:
       effect: "Add the 'change-case' npm package to the Effect-based test-app project. Make sure it builds and deploys successfully."
       scala: "Add the 'com.lihaoyi::upickle::4.1.0' library to the test-app project. Make sure it builds and deploys successfully."
       moonbit: "Add the 'moonbitlang/x' package to the test-app project. Make sure it builds and deploys successfully."
+      go: "Add the 'github.com/iancoleman/strcase' Go module (version v0.3.0) to the test-app project. Make sure it builds and deploys successfully."
     expectedSkills:
       rust:
         - "golem-add-rust-crate"
@@ -25,6 +26,7 @@ steps:
         - "golem-add-scala-dependency"
       moonbit:
         - "golem-add-moonbit-package"
+      go: ["golem-add-go-module"]
     verify:
       build: true
       deploy: true
@@ -59,6 +61,12 @@ steps:
         Modify the CounterAgent in test-app so the 'increment' method converts the current counter
         value to a string and returns that string instead of the counter value. Change the method's
         return type to string. Use the 'moonbitlang/x' package for the string conversion.
+        Make sure it builds and deploys successfully.
+      go: >
+        Modify the CounterAgent in test-app so the 'increment' method converts the string
+        "hello world" to lower camel case using the 'strcase' module (strcase.ToLowerCamel) and
+        returns the result as a string instead of the counter value. Change the method's return
+        type to string.
         Make sure it builds and deploys successfully.
     verify:
       build: true
@@ -118,3 +126,14 @@ steps:
       result_json:
         - path: "$"
           equals: "1"
+
+  - id: "verify-result-go"
+    only_if:
+      language: "go"
+    invoke_json:
+      agent: 'CounterAgent("dep-test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "helloWorld"
