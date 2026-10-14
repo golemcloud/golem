@@ -13,7 +13,7 @@ pub(super) struct SleepRecord {
     pub invocation: OplogIndex,
     pub clock: OplogIndex,
     pub clock_end: OplogIndex,
-    pub clock_delivery: OplogIndex,
+    pub clock_delivery: Option<OplogIndex>,
     pub wait: OplogIndex,
     pub now: u64,
     pub deadline: u64,
@@ -111,12 +111,20 @@ pub(super) fn sleep_record(
     );
     let clock = clocks[0].oplog_index;
     let wait = waits[0].oplog_index;
-    ensure!(invocation < clock && clock < wait);
+    match abi {
+        Abi::P2 => ensure!(invocation < clock && clock < wait),
+        Abi::P3 => ensure!(invocation < wait && wait < clock),
+    }
     for entry in [clocks[0], waits[0]] {
         let PublicOplogEntry::Start(start) = &entry.entry else {
             unreachable!()
         };
-        ensure!(start.parent_start_index.is_none() && start.observational_owner.is_none());
+        let parent = if abi == Abi::P3 && entry.oplog_index == clock {
+            Some(wait)
+        } else {
+            None
+        };
+        ensure!(start.parent_start_index == parent && start.observational_owner.is_none());
         ensure!(matches!(
             start.durable_function_type,
             PublicDurableFunctionType::ReadLocal(_)
@@ -171,9 +179,22 @@ pub(super) fn sleep_record(
         .map_err(anyhow::Error::msg)?
         .nanos;
     let clock_deliveries = deliveries(entries, clock);
-    ensure!(clock_deliveries.len() == 1);
-    let clock_delivery = clock_deliveries[0];
-    ensure!(clock < clock_end && clock_end < clock_delivery && clock_delivery < wait);
+    ensure!(clock < clock_end);
+    let clock_delivery = match abi {
+        Abi::P2 => {
+            ensure!(clock_deliveries.len() == 1);
+            let delivery = clock_deliveries[0];
+            ensure!(clock_end < delivery && delivery < wait);
+            Some(delivery)
+        }
+        Abi::P3 => {
+            ensure!(
+                clock_deliveries.is_empty(),
+                "host-internal clock reads have no guest delivery"
+            );
+            None
+        }
+    };
     ensure!(!entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDiscarded(d) if d.start_index == clock || d.start_index == wait)));
     ensure!(
         !entries.iter().any(|entry| matches!(
@@ -221,6 +242,9 @@ pub(super) fn sleep_record(
             })
             .context("method Finished")?;
         ensure!(wait < end_index && observation < finish.oplog_index);
+        if abi == Abi::P3 {
+            ensure!(clock_end < end_index);
+        }
     } else {
         ensure!(
             terminals(entries, wait) == 0 && deliveries(entries, wait).is_empty(),

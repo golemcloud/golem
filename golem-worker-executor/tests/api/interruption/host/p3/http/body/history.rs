@@ -191,7 +191,7 @@ fn inspect_pending(
         .unwrap();
     ensure!(
         matches!(&scope_entry.entry, PublicOplogEntry::Start(start)
-        if start.function_name == format!("<scope:batched-write:consume-body:{send}>") && start.request.is_none()
+        if start.function_name == "<scope:batched-write:consume-body>" && start.request.is_none()
         && matches!(&start.durable_function_type, PublicDurableFunctionType::WriteRemoteBatched(p) if p.index.is_none())),
         "wrong consume-body scope: {scope_entry:?}"
     );

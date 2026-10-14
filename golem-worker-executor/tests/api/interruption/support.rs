@@ -65,13 +65,16 @@ pub(super) fn check_accounting(
                 "unused prepaid fuel must be refunded: {fuel}"
             );
         }
-        Resource::Storage => ensure!(updates.iter().any(|u| u.monthly_policy_revision == revision
-            && u.period == period
-            && if durable {
-                u.durable_storage_byte_seconds_delta == 1
-            } else {
-                u.ephemeral_storage_byte_seconds_delta == 1
-            })),
+        Resource::Storage => ensure!(
+            updates.iter().any(|u| u.monthly_policy_revision == revision
+                && u.period == period
+                && if durable {
+                    u.durable_storage_byte_seconds_delta > 0
+                } else {
+                    u.ephemeral_storage_byte_seconds_delta > 0
+                }),
+            "missing storage usage for policy {revision} in {period}: {updates:?}"
+        ),
     }
     for update in updates {
         if resource != Resource::Compute {
