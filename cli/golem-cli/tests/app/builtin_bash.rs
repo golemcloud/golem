@@ -9,6 +9,7 @@ use axum::{
     routing::get,
 };
 use golem_cli::{fs, versions};
+use golem_common::model::tool::BUILTIN_BASH_TOOL_VERSION;
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_schema::render::json_value::to_json_value;
 use indoc::{formatdoc, indoc};
@@ -37,14 +38,14 @@ pub(super) async fn context() -> TestContext {
     write_component(&ctx);
     write_manifest(
         &ctx,
-        indoc! {r#"
+        &formatdoc! {r#"
             tools:
               bash:
                 release:
                   account: builtin-tool-owner@golem.cloud
                   name: bash
-                  version: "0.2.1"
-              fixture: {}
+                  version: "{bash_version}"
+              fixture: {{}}
               git:
                 release:
                   account: builtin-tool-owner@golem.cloud
@@ -73,7 +74,7 @@ pub(super) async fn context() -> TestContext {
               local:
                 server: local
                 componentPresets: release
-        "#},
+        "#, bash_version = BUILTIN_BASH_TOOL_VERSION},
     );
     ctx.start_server().await;
     deploy(&ctx).await;

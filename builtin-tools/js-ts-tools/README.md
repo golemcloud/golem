@@ -11,8 +11,8 @@ The runner normalizes finite integer statuses modulo 256. For example, `-1` beco
 and `256` becomes `0`. Fractional and non-finite statuses produce status 1 and a stderr diagnostic. Streams, arguments,
 working directories, and process state restoration retain their existing behavior.
 
-The tool coordinates are `node@0.1.7`, `npm@10.9.9+golem.7`,
-`npx@10.9.9+golem.7`, and `tsc@5.9.2+golem.7`. The catalog selects these releases,
+The tool coordinates are `node@0.1.8`, `npm@10.9.9+golem.8`,
+`npx@10.9.9+golem.8`, and `tsc@5.9.2+golem.8`. The catalog selects these releases,
 and the artifact lock pins their immutable component releases. Source builds do not
 publish them.
 
