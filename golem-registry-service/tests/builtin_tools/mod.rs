@@ -11,8 +11,9 @@ use golem_common::model::tool_middleware_release::ToolMiddlewareRelease;
 use golem_common::model::tool_release::ToolRelease;
 use golem_registry_service::bootstrap::Services;
 use golem_registry_service::config::{
-    ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
+    BuiltinArtifactsConfig, ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
 };
+use golem_registry_service::services::builtin_artifact::BuiltinArtifactResolver;
 use golem_registry_service::services::builtin_tool_provisioner::{
     BuiltinExportDescriptor, BuiltinExportKind, provision_descriptors,
 };
@@ -89,6 +90,126 @@ async fn filesystem_artifact_exports_five_closed_world_tools_requiring_filesyste
         .find(|middleware| middleware.name == "path-policy")
         .expect("missing path-policy middleware");
     assert_eq!(middleware.version, "0.1.1");
+}
+
+#[test]
+#[timeout("120s")]
+async fn metadata_cache_reuses_content_across_resolvers_and_recovers_invalid_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = BuiltinArtifactsConfig {
+        cache_dir: Some(directory.path().to_path_buf()),
+        ..Default::default()
+    };
+    let resolver = BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
+    let other = BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
+    let filesystem = Arc::new(
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../builtin-tools/filesystem-tools.wasm"
+        ))
+        .unwrap(),
+    );
+    let web = Arc::new(
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../builtin-tools/web-fetch.wasm"
+        ))
+        .unwrap(),
+    );
+    let (first, same, distinct) = tokio::join!(
+        resolver.extract_metadata(filesystem.clone()),
+        other.extract_metadata(filesystem.clone()),
+        resolver.extract_metadata(web),
+    );
+    let first = first.unwrap();
+    assert_eq!(first.tools.len(), 5);
+    assert_eq!(first.tool_middlewares[0].name, "path-policy");
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(same.unwrap()).unwrap()
+    );
+    assert_eq!(distinct.unwrap().tools[0].name(), Some("web-fetch"));
+    let files = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(files.len(), 2);
+    let filesystem_cache = files
+        .iter()
+        .find(|path| {
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            value["toolMiddlewares"][0]["name"] == "path-policy"
+        })
+        .unwrap();
+    let old_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+    std::fs::File::options()
+        .write(true)
+        .open(filesystem_cache)
+        .unwrap()
+        .set_modified(old_time)
+        .unwrap();
+    drop(resolver);
+    drop(other);
+    let resolver = BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
+    let cached = resolver.extract_metadata(filesystem.clone()).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&cached).unwrap(),
+        serde_json::to_value(&first).unwrap()
+    );
+    assert_eq!(
+        std::fs::metadata(filesystem_cache)
+            .unwrap()
+            .modified()
+            .unwrap(),
+        old_time
+    );
+    for invalid in ["{", r#"{"agentTypes": []}"#] {
+        std::fs::write(filesystem_cache, invalid).unwrap();
+        let recovered = resolver.extract_metadata(filesystem.clone()).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&recovered).unwrap(),
+            serde_json::to_value(&first).unwrap()
+        );
+    }
+    let mut changed = filesystem.as_ref().clone();
+    replace_unique_version_marker(
+        &mut changed,
+        b"path-policy0.1.1",
+        b"path-policy".len(),
+        b"9.9.9",
+    );
+    let changed = resolver.extract_metadata(Arc::new(changed)).await.unwrap();
+    assert_eq!(changed.tool_middlewares[0].version, "9.9.9");
+    assert_eq!(
+        resolver
+            .extract_metadata(filesystem)
+            .await
+            .unwrap()
+            .tool_middlewares[0]
+            .version,
+        "0.1.1"
+    );
+    assert!(
+        resolver
+            .extract_metadata(Arc::new(b"not a component".to_vec()))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path
+                .extension()
+                .is_some_and(|extension| extension == "json"))
+            .count(),
+        3
+    );
 }
 
 #[test]
@@ -198,9 +319,18 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         component_name: "different-builtin-tool-streaming-test",
         ..descriptor
     };
+    let artifact_resolver = BuiltinArtifactResolver::new(
+        &BuiltinArtifactsConfig {
+            cache_dir: Some(temp_dir.path().join("builtin-artifacts")),
+            ..Default::default()
+        },
+        StartupProgress::default(),
+    )
+    .unwrap();
     let error = provision_descriptors(
         std::slice::from_ref(&mismatch),
         &artifacts,
+        &artifact_resolver,
         &StartupProgress::default(),
         owner,
         &services.auth_service,
@@ -511,16 +641,226 @@ async fn same_artifact_adds_missing_middleware_with_complete_metadata_and_is_ret
     );
 }
 
+#[test]
+#[timeout("120s")]
+async fn shared_and_distinct_artifacts_preserve_export_validation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let artifact_resolver = BuiltinArtifactResolver::new(
+        &BuiltinArtifactsConfig {
+            cache_dir: Some(temp_dir.path().join("builtin-artifacts")),
+            ..Default::default()
+        },
+        StartupProgress::default(),
+    )
+    .unwrap();
+    let config = RegistryServiceConfig {
+        db: DbConfig::Sqlite(DbSqliteConfig {
+            database: temp_dir
+                .path()
+                .join("registry.db")
+                .to_string_lossy()
+                .into_owned(),
+            max_connections: 4,
+            foreign_keys: true,
+        }),
+        login: LoginConfig::Disabled(Empty {}),
+        blob_storage: BlobStorageConfig::default_in_memory(),
+        component_compilation: ComponentCompilationConfig::Disabled(Empty {}),
+        ..Default::default()
+    };
+    let owner = config.initial_accounts["builtin_tool_owner"].id;
+    let mut join_set = JoinSet::new();
+    let services = Services::new_without_component_builtins(&config, &mut join_set)
+        .await
+        .unwrap();
+    let artifacts = BTreeMap::from([
+        (
+            "filesystem",
+            Arc::new(
+                std::fs::read(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../builtin-tools/filesystem-tools.wasm"
+                ))
+                .unwrap(),
+            ),
+        ),
+        (
+            "web",
+            Arc::new(
+                std::fs::read(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../builtin-tools/web-fetch.wasm"
+                ))
+                .unwrap(),
+            ),
+        ),
+    ]);
+    let read = BuiltinExportDescriptor {
+        component_name: "filesystem-tools",
+        artifact_id: "filesystem",
+        export_name: "read-file",
+        release_version: "0.4.1",
+        kind: BuiltinExportKind::Tool,
+    };
+    let write = BuiltinExportDescriptor {
+        export_name: "write-file",
+        ..read
+    };
+    let middleware = BuiltinExportDescriptor {
+        export_name: "path-policy",
+        release_version: "0.1.1",
+        kind: BuiltinExportKind::Middleware,
+        ..read
+    };
+    let web = BuiltinExportDescriptor {
+        component_name: "web-fetch",
+        artifact_id: "web",
+        export_name: "web-fetch",
+        release_version: "0.1.1",
+        kind: BuiltinExportKind::Tool,
+    };
+    let initial_tools = services
+        .tool_release_service
+        .list_in_account(owner, &AuthCtx::system())
+        .await
+        .unwrap();
+    let invalid = [
+        (
+            BuiltinExportDescriptor {
+                export_name: "missing",
+                ..write
+            },
+            "does not export tool 'missing'",
+        ),
+        (
+            BuiltinExportDescriptor {
+                export_name: "missing",
+                ..middleware
+            },
+            "does not export tool middleware 'missing'",
+        ),
+        (
+            BuiltinExportDescriptor {
+                release_version: "9.9.9",
+                ..write
+            },
+            "metadata does not match release coordinate",
+        ),
+        (
+            BuiltinExportDescriptor {
+                release_version: "9.9.9",
+                ..middleware
+            },
+            "metadata does not match release coordinate",
+        ),
+        (read, "duplicate built-in export release coordinate"),
+        (
+            BuiltinExportDescriptor {
+                component_name: read.component_name,
+                ..web
+            },
+            "has conflicting artifacts",
+        ),
+    ];
+    for (invalid_descriptor, expected) in invalid {
+        let error = provision_descriptors(
+            &[read, invalid_descriptor],
+            &artifacts,
+            &artifact_resolver,
+            &StartupProgress::default(),
+            owner,
+            &services.auth_service,
+            &services.application_service,
+            &services.environment_service,
+            &services.component_service,
+            &services.component_write_service,
+            &services.deployment_service,
+            &services.deployment_write_service,
+            &services.tool_release_service,
+            &services.tool_middleware_release_service,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error:#}");
+        assert_eq!(
+            services
+                .tool_release_service
+                .list_in_account(owner, &AuthCtx::system())
+                .await
+                .unwrap()
+                .len(),
+            initial_tools.len()
+        );
+        assert!(
+            services
+                .tool_middleware_release_service
+                .list_in_account(owner, &AuthCtx::system())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    let descriptors = [read, write, middleware, web];
+    for _ in 0..2 {
+        provision_descriptors(
+            &descriptors,
+            &artifacts,
+            &artifact_resolver,
+            &StartupProgress::default(),
+            owner,
+            &services.auth_service,
+            &services.application_service,
+            &services.environment_service,
+            &services.component_service,
+            &services.component_write_service,
+            &services.deployment_service,
+            &services.deployment_write_service,
+            &services.tool_release_service,
+            &services.tool_middleware_release_service,
+        )
+        .await
+        .unwrap();
+    }
+    for descriptor in [read, write, web] {
+        let release = release_coordinate(
+            &services,
+            owner,
+            descriptor.export_name,
+            descriptor.release_version,
+        )
+        .await;
+        assert_eq!(release.definition.version, descriptor.release_version);
+    }
+    let release = middleware_release_coordinate(
+        &services,
+        owner,
+        middleware.export_name,
+        middleware.release_version,
+    )
+    .await;
+    assert_eq!(release.definition.version, middleware.release_version);
+}
+
 async fn provision(
     services: &Services,
     owner: AccountId,
     descriptors: &[BuiltinExportDescriptor],
     artifacts: &BTreeMap<&str, Arc<Vec<u8>>>,
 ) {
+    let directory = tempfile::tempdir().unwrap();
+    let artifact_resolver = BuiltinArtifactResolver::new(
+        &BuiltinArtifactsConfig {
+            cache_dir: Some(directory.path().to_path_buf()),
+            ..Default::default()
+        },
+        StartupProgress::default(),
+    )
+    .unwrap();
     let startup_progress = StartupProgress::default();
     provision_descriptors(
         descriptors,
         artifacts,
+        &artifact_resolver,
         &startup_progress,
         owner,
         &services.auth_service,

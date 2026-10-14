@@ -3224,7 +3224,37 @@ impl AppCommandHandler {
             }
         }
 
+        // A domain may hold an HTTP API deployment or an MCP deployment, not both. Deletions of
+        // both kinds are staged first, so a domain can move from one kind to the other.
         for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
+            if !matches!(http_api_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
+            approve(staging_operation(http_api_deployment_diff), domain)?;
+            http_api_deployment_handler
+                .delete_staged_http_api_deployment(
+                    deploy_diff.staged_http_api_deployment_identity(&Domain(domain.to_string())),
+                )
+                .await?;
+        }
+
+        for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
+            if !matches!(mcp_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
+            approve(staging_operation(mcp_deployment_diff), domain)?;
+            self.ctx
+                .api_deployment_handler()
+                .delete_staged_mcp_deployment(
+                    deploy_diff.staged_mcp_deployment_identity(&Domain(domain.to_string())),
+                )
+                .await?;
+        }
+
+        for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
+            if matches!(http_api_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
             approve(staging_operation(http_api_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
@@ -3239,13 +3269,7 @@ impl AppCommandHandler {
                         )
                         .await?
                 }
-                diff::BTreeMapDiffValue::Delete => {
-                    http_api_deployment_handler
-                        .delete_staged_http_api_deployment(
-                            deploy_diff.staged_http_api_deployment_identity(&domain),
-                        )
-                        .await?
-                }
+                diff::BTreeMapDiffValue::Delete => {}
                 diff::BTreeMapDiffValue::Update(http_api_definition_diff) => {
                     http_api_deployment_handler
                         .update_staged_http_api_deployment(
@@ -3259,6 +3283,9 @@ impl AppCommandHandler {
         }
 
         for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
+            if matches!(mcp_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
             approve(staging_operation(mcp_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
@@ -3274,14 +3301,7 @@ impl AppCommandHandler {
                         )
                         .await?
                 }
-                diff::BTreeMapDiffValue::Delete => {
-                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
-                    mcp_deployment_handler
-                        .delete_staged_mcp_deployment(
-                            deploy_diff.staged_mcp_deployment_identity(&domain),
-                        )
-                        .await?
-                }
+                diff::BTreeMapDiffValue::Delete => {}
                 diff::BTreeMapDiffValue::Update(mcp_deployment_diff) => {
                     let mcp_deployment_handler = self.ctx.api_deployment_handler();
                     let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);

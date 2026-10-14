@@ -209,6 +209,7 @@ impl McpClient {
 pub struct McpTestContext {
     pub domain: Domain,
     pub mcp_port: u16,
+    pub custom_request_port: u16,
 }
 
 impl Debug for McpTestContext {
@@ -219,7 +220,11 @@ impl Debug for McpTestContext {
 
 impl McpTestContext {
     async fn connect_mcp_client(&self) -> anyhow::Result<McpClient> {
-        let url = format!("http://{}:{}/mcp", self.mcp_host(), self.mcp_port);
+        self.connect_mcp_client_on(self.mcp_port).await
+    }
+
+    async fn connect_mcp_client_on(&self, port: u16) -> anyhow::Result<McpClient> {
+        let url = format!("http://{}:{}/mcp", self.mcp_host(), port);
         McpClient::new(url, &self.domain.0).await
     }
 
@@ -291,6 +296,7 @@ async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     McpTestContext {
         domain,
         mcp_port: deps.worker_service().mcp_port(),
+        custom_request_port: deps.worker_service().custom_request_port(),
     }
 }
 
@@ -360,6 +366,64 @@ async fn list_tools(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()>
     // so they are exposed as resources, not tools.
     assert!(!tool_names.iter().any(|n| n.starts_with("StaticResource")));
     assert!(!tool_names.iter().any(|n| n.starts_with("DynamicResource")));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn mcp_deployment_is_served_on_the_custom_request_port(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
+    let tool_names = |tools: Vec<Value>| -> Vec<String> {
+        let mut names: Vec<String> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(String::from))
+            .collect();
+        names.sort();
+        names
+    };
+
+    let on_mcp_port = tool_names(ctx.connect_mcp_client().await?.list_tools().await?);
+    let on_custom_request_port = tool_names(
+        ctx.connect_mcp_client_on(ctx.custom_request_port)
+            .await?
+            .list_tools()
+            .await?,
+    );
+    assert!(!on_mcp_port.is_empty());
+    assert_eq!(on_custom_request_port, on_mcp_port);
+
+    let http = reqwest::Client::new();
+
+    // An MCP domain serves only the MCP routes, even on the shared port.
+    let response = http
+        .get(format!(
+            "http://{}:{}/some/http/route",
+            ctx.mcp_host(),
+            ctx.custom_request_port
+        ))
+        .header("Host", &ctx.domain.0)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // A client that is not a trusted ingress cannot reach the MCP domain with forwarded headers.
+    let response = http
+        .post(format!(
+            "http://{}:{}/mcp",
+            ctx.mcp_host(),
+            ctx.custom_request_port
+        ))
+        .header("Host", "unknown.golem.test")
+        .header("X-Forwarded-Host", &ctx.domain.0)
+        .header("X-Forwarded-Proto", "https")
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body("{}")
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 
     Ok(())
 }

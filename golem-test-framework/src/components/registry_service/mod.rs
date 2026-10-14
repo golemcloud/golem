@@ -33,6 +33,9 @@ use std::time::Duration;
 use tracing::Level;
 use url::Url;
 
+/// A domain that spawned test registry services reserve, so no environment may register it.
+pub const RESERVED_DOMAIN: &str = "reserved.golem.test";
+
 #[async_trait]
 pub trait RegistryService: Send + Sync {
     fn http_host(&self) -> String;
@@ -110,7 +113,11 @@ async fn env_vars(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
             "/tmp/ittest-local-object-store/golem",
         )
-        .with("GOLEM__LOGIN__TYPE", "Disabled".to_string());
+        .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
+        .with(
+            "GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS",
+            format!("[\"{RESERVED_DOMAIN}\"]"),
+        );
 
     // component compilation
     let builder = match component_compilation_service {

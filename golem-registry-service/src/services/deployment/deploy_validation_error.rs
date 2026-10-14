@@ -79,6 +79,10 @@ pub enum DeployValidationError {
         mcp_deployment_domain: Domain,
         security_scheme: SecuritySchemeName,
     },
+    #[error(
+        "Domain {domain} has both an HTTP API deployment and an MCP deployment. A domain may hold an HTTP API deployment or an MCP deployment, not both"
+    )]
+    DomainHasHttpApiAndMcpDeployments { domain: Domain },
     #[error("MCP deployment {mcp_deployment_domain} is empty")]
     McpDeploymentEmpty { mcp_deployment_domain: Domain },
     #[error("MCP deployment {mcp_deployment_domain} tool {tool_name}: {error}")]

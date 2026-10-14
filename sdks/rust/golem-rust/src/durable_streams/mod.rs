@@ -89,9 +89,9 @@ pub struct RetryOptions {
 impl Default for RetryOptions {
     fn default() -> Self {
         Self {
-            max_retries: 3,
+            max_retries: 8,
             initial_delay_ms: 100,
-            max_delay_ms: 10_000,
+            max_delay_ms: 30_000,
         }
     }
 }
