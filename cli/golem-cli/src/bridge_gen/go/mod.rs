@@ -527,6 +527,45 @@ impl GoBridgeGenerator {
         )
     }
 
+    /// The structure a named alias stands for: `body` rendered without its
+    /// own name. An alias cannot refer to itself, so a definition that reaches
+    /// itself only through tuples, lists, options and the like is refused.
+    fn render_alias_body(
+        &self,
+        name: &str,
+        body: &SchemaType,
+        writer: &mut GoWriter,
+    ) -> anyhow::Result<String> {
+        let streams = match self.mode {
+            GoBridgeMode::GuestWasmRpc => type_ref::Streams::Guest,
+            GoBridgeMode::ExternalRest => type_ref::Streams::External,
+        };
+        let recursive = std::cell::Cell::new(false);
+        let rendered = type_ref::render(
+            body,
+            &|t| {
+                if std::ptr::eq(t, body) {
+                    return None;
+                }
+                let found = self.named(t);
+                if found.as_deref() == Some(name) {
+                    recursive.set(true);
+                }
+                found
+            },
+            &|t| self.resolve(t),
+            streams,
+            writer,
+        )?;
+        if recursive.get() {
+            bail!(
+                "the Go bridge cannot spell {name}: it contains itself without a record, \
+                 variant or union in between, and a Go alias cannot refer to itself"
+            );
+        }
+        Ok(rendered)
+    }
+
     // --- go.mod ---------------------------------------------------------
 
     fn go_mod(&self) -> anyhow::Result<String> {
@@ -567,6 +606,14 @@ impl GoBridgeGenerator {
                 continue;
             }
             let body = self.resolve(typ);
+            if !decl::declares(body) {
+                // A quantity is spelled by its unit marker, never by this name.
+                if self.named(typ).as_deref() == Some(name.as_str()) {
+                    let rendered = self.render_alias_body(&name, body, &mut writer)?;
+                    decl::write_alias(&name, &rendered, body.metadata(), &mut writer);
+                }
+                continue;
+            }
             let cases = self.case_idents(&name);
             decl::write(&name, body, &cases, &render, &tag, &mut writer)?;
         }

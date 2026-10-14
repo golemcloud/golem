@@ -121,7 +121,13 @@ pub fn render<'a>(
 
         // An explicit Option rather than *T. Both lower to option<T>, but a
         // pointer is ambiguous when it nests — Option[Option[T]] is clear where
-        // **T is not — and generated code has to be uniform.
+        // **T is not — and generated code has to be uniform. The exception is
+        // an option whose value can hold the option again: Option stores its
+        // value inline, so Go would reject the type as infinitely large, and
+        // the pointer is what breaks the cycle.
+        SchemaType::Option { inner, .. } if on_inline_cycle(inner, resolve) => {
+            format!("*{}", render(inner, named, resolve, streams, writer)?)
+        }
         SchemaType::Option { inner, .. } => format!(
             "{}.Option[{}]",
             values(writer),
@@ -162,12 +168,9 @@ pub fn render<'a>(
                 rendered.push(render(element, named, resolve, streams, writer)?);
             }
             match rendered.len() {
-                // A 1-tuple has no TupleN; it is its element, which is what the
-                // wire carries anyway.
-                1 => rendered.pop().expect("one element"),
-                n @ 2..=8 => format!("{}.Tuple{n}[{}]", values(writer), rendered.join(", ")),
+                n @ 1..=8 => format!("{}.Tuple{n}[{}]", values(writer), rendered.join(", ")),
                 n => anyhow::bail!(
-                    "a {n}-element tuple has no Go spelling: the SDK provides Tuple2 through Tuple8"
+                    "a {n}-element tuple has no Go spelling: the SDK provides Tuple1 through Tuple8"
                 ),
             }
         }
@@ -240,6 +243,47 @@ pub fn render<'a>(
             anyhow::bail!("the Go bridge does not yet spell this schema type: {resolved:?}")
         }
     })
+}
+
+/// True when a value of `typ` can contain a value of `typ` again through Go
+/// types that hold their parts inline: the structs of records, tuples, options
+/// and results, and arrays. A list, a map, a stream and the interface of a
+/// variant or union hold theirs indirectly, so they end the walk.
+pub fn on_inline_cycle<'a>(
+    typ: &'a SchemaType,
+    resolve: &impl Fn(&'a SchemaType) -> &'a SchemaType,
+) -> bool {
+    let target = resolve(typ);
+    let mut seen: Vec<*const SchemaType> = Vec::new();
+    let mut pending = inline_parts(target);
+    while let Some(part) = pending.pop() {
+        let part = resolve(part);
+        if std::ptr::eq(part, target) || part == target {
+            return true;
+        }
+        if seen.contains(&(part as *const SchemaType)) {
+            continue;
+        }
+        seen.push(part);
+        pending.extend(inline_parts(part));
+    }
+    false
+}
+
+fn inline_parts(typ: &SchemaType) -> Vec<&SchemaType> {
+    match typ {
+        SchemaType::Record { fields, .. } => fields.iter().map(|f| &f.body).collect(),
+        SchemaType::Option { inner, .. } => vec![inner],
+        SchemaType::Tuple { elements, .. } => elements.iter().collect(),
+        SchemaType::FixedList { element, .. } => vec![element],
+        SchemaType::Result { spec, .. } => spec
+            .ok
+            .as_deref()
+            .into_iter()
+            .chain(spec.err.as_deref())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -418,14 +462,14 @@ mod tests {
             }),
             "values.Tuple2[string, bool]"
         );
-        // A 1-tuple is its element: there is no Tuple1, and the wire carries
-        // exactly the element.
+        // A 1-tuple keeps its tuple: the wire carries a tuple of one element,
+        // not the element.
         assert_eq!(
             go_type(&SchemaType::Tuple {
                 elements: vec![SchemaType::Bool { metadata: meta() }],
                 metadata: meta()
             }),
-            "bool"
+            "values.Tuple1[bool]"
         );
     }
 
@@ -447,8 +491,91 @@ mod tests {
         )
         .expect_err("a 9-tuple has no Go spelling");
         assert!(
-            err.to_string().contains("Tuple2 through Tuple8"),
+            err.to_string().contains("Tuple1 through Tuple8"),
             "the error should say what is available: {err}"
+        );
+    }
+
+    /// Resolves every reference to `body`.
+    fn refs_to<'a>(body: &'a SchemaType) -> impl Fn(&'a SchemaType) -> &'a SchemaType {
+        move |t| match t {
+            SchemaType::Ref { .. } => body,
+            other => other,
+        }
+    }
+
+    #[test]
+    fn an_option_that_can_hold_itself_again_is_a_pointer() {
+        use golem_common::schema::metadata::TypeId;
+        use golem_common::schema::schema_type::NamedFieldType;
+
+        let node_ref = SchemaType::Ref {
+            id: TypeId::new("fixture.Node"),
+            metadata: meta(),
+        };
+        let node = SchemaType::Record {
+            fields: vec![NamedFieldType {
+                name: "next".to_string(),
+                body: SchemaType::Option {
+                    inner: Box::new(node_ref.clone()),
+                    metadata: meta(),
+                },
+                metadata: meta(),
+            }],
+            metadata: meta(),
+        };
+        let resolve = refs_to(&node);
+        let named = |t: &SchemaType| match t {
+            SchemaType::Ref { .. } | SchemaType::Record { .. } => Some("Node".to_string()),
+            _ => None,
+        };
+        let SchemaType::Record { fields, .. } = &node else {
+            unreachable!()
+        };
+        let mut writer = GoWriter::new();
+        let field = render(
+            &fields[0].body,
+            &named,
+            &resolve,
+            Streams::Guest,
+            &mut writer,
+        )
+        .unwrap();
+        assert_eq!(field, "*Node");
+
+        // Through a list the record holds itself indirectly, so an option of
+        // it keeps its usual spelling.
+        let optional = SchemaType::Option {
+            inner: Box::new(node_ref.clone()),
+            metadata: meta(),
+        };
+        let tree = SchemaType::Record {
+            fields: vec![NamedFieldType {
+                name: "children".to_string(),
+                body: SchemaType::List {
+                    element: Box::new(node_ref),
+                    metadata: meta(),
+                },
+                metadata: meta(),
+            }],
+            metadata: meta(),
+        };
+        let resolve_tree = refs_to(&tree);
+        let named_tree = |t: &SchemaType| match t {
+            SchemaType::Ref { .. } | SchemaType::Record { .. } => Some("Tree".to_string()),
+            _ => None,
+        };
+        let mut writer = GoWriter::new();
+        assert_eq!(
+            render(
+                &optional,
+                &named_tree,
+                &resolve_tree,
+                Streams::Guest,
+                &mut writer
+            )
+            .unwrap(),
+            "values.Option[Tree]"
         );
     }
 
