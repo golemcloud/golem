@@ -599,6 +599,26 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         "every awaited call, and only awaited calls, must go through the scope-card helper:\n{lib_rs}"
     );
     assert!(!lib_rs.contains("wasm_rpc.async_invoke_and_await"));
+    // Every awaited implementation resolves the scope card before it encodes
+    // the input, so a dropped default fails before any argument card moves.
+    let impls = lib_rs
+        .split("async fn __golem_bridge_invoke_")
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(impls.len(), 6, "{lib_rs}");
+    for body in impls {
+        let body = body.split("pub async fn").next().unwrap();
+        let resolve = body
+            .find("resolve(__golem_bridge_scope_card)")
+            .unwrap_or_else(|| panic!("missing scope-card resolution:\n{body}"));
+        let encode = body
+            .find("let method_parameters")
+            .unwrap_or_else(|| panic!("missing input encoding:\n{body}"));
+        assert!(
+            resolve < encode,
+            "scope card resolved after encoding:\n{body}"
+        );
+    }
     assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub struct CapabilityEnvelope"));
     assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub enum Multimodal0"));
 

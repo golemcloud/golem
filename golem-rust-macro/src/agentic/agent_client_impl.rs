@@ -342,11 +342,14 @@ fn expand(
         let scheduled_time_ident = fresh_param_ident(&params, "at");
         let scope_card_ident = fresh_param_ident(&params, "__golem_scope_card");
         let scoped_method_ident = format_ident!("__golem_{}_with_scope_card", method_ident);
+        let scoped_pending_ident =
+            format_ident!("__golem_pending_{}_with_scope_card", method_ident);
         for generated in [
             &trigger_ident,
             &pending_ident,
             &schedule_ident,
             &scoped_method_ident,
+            &scoped_pending_ident,
         ] {
             if method_names.contains(&generated.to_string()) {
                 return Err(syn::Error::new_spanned(
@@ -384,6 +387,12 @@ fn expand(
             {
                 self.client.#scoped_method_ident(#(#param_idents,)* Some(self.scope_card)).await
             }
+
+            pub fn #pending_ident(&self, #(#params),*)
+                -> Result<#golem_rust::TypedPendingInvocation<#output_type>, #golem_rust::GolemReflectError>
+            {
+                self.client.#scoped_pending_ident(#(#param_idents,)* Some(self.scope_card))
+            }
         });
         client_methods.push(quote! {
             pub async fn #method_ident(&self, #(#params),*)
@@ -418,8 +427,21 @@ fn expand(
             pub fn #pending_ident(&self, #(#params),*)
                 -> Result<#golem_rust::TypedPendingInvocation<#output_type>, #golem_rust::GolemReflectError>
             {
+                self.#scoped_pending_ident(#(#param_idents,)* None)
+            }
+
+            #[doc(hidden)]
+            pub fn #scoped_pending_ident(
+                &self,
+                #(#params,)*
+                #scope_card_ident: Option<&#golem_rust::permissions::ScopeCard>,
+            ) -> Result<#golem_rust::TypedPendingInvocation<#output_type>, #golem_rust::GolemReflectError>
+            {
+                let #scope_card_ident = self.__golem_default_scope_card.resolve(#scope_card_ident);
                 let input = #input;
-                self.inner.method::<#input_ident, #output_type>(#method_name)?.pending(&input)
+                self.inner
+                    .method::<#input_ident, #output_type>(#method_name)?
+                    .pending_scoped(&input, #scope_card_ident.as_ref())
             }
 
             pub fn #schedule_ident(&self, #scheduled_time_ident: #golem_rust::ScheduledTime, #(#params),*)
@@ -479,8 +501,8 @@ fn expand(
             /// Returns a view of this client whose awaited method calls lend
             /// `scope_card` to the callee for the duration of each invocation.
             ///
-            /// The card is borrowed, never consumed. Trigger, pending and
-            /// scheduled invocations do not accept a scope card.
+            /// The card is borrowed, never consumed. Trigger and scheduled
+            /// invocations do not accept a scope card.
             pub fn with_scope_card<'a>(
                 &'a self,
                 scope_card: &'a #golem_rust::permissions::ScopeCard,
@@ -494,6 +516,9 @@ fn expand(
             /// A scope card is valid only during the invocation that derived it.
             /// Clear the default, or drop the client, before that invocation ends;
             /// a later awaited call with the retired default fails with `denied`.
+            ///
+            /// The default is a weak borrow: it does not keep the scope card alive, and an
+            /// awaited call panics once the scope card is dropped.
             pub fn set_default_scope_card(&mut self, scope_card: &#golem_rust::permissions::ScopeCard) {
                 self.__golem_default_scope_card.set(scope_card);
             }

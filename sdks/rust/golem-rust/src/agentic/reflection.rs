@@ -938,7 +938,12 @@ impl TestReflectedTransport {
         Ok(self.completion())
     }
 
-    fn pending(&self, _method: &str, _input: SchemaValue) -> ReflectedTransportPending {
+    fn pending(
+        &self,
+        _method: &str,
+        _input: SchemaValue,
+        _scope_card: Option<&ScopeCard>,
+    ) -> ReflectedTransportPending {
         let completion = self.completion();
         ReflectedTransportPending {
             metadata: completion.metadata.clone(),
@@ -966,10 +971,11 @@ impl ReflectedTransport {
         &self,
         method: &str,
         input: SchemaValue,
+        scope_card: Option<&ScopeCard>,
     ) -> Result<ReflectedTransportPending, GolemReflectError> {
         match self {
             Self::Host(transport) => {
-                let pending = transport.pending(method, input)?;
+                let pending = transport.pending(method, input, scope_card)?;
                 let metadata = pending.metadata.clone();
                 let cancellation = Rc::clone(&pending.raw);
                 Ok(ReflectedTransportPending {
@@ -979,7 +985,7 @@ impl ReflectedTransport {
                 })
             }
             #[cfg(test)]
-            Self::Test(transport) => Ok(transport.pending(method, input)),
+            Self::Test(transport) => Ok(transport.pending(method, input, scope_card)),
         }
     }
 
@@ -1121,6 +1127,24 @@ impl ReflectedAgentMethod {
         &self,
         input: SchemaValue,
     ) -> Result<ReflectedPendingInvocation, GolemReflectError> {
+        self.pending_value_scoped(input, None)
+    }
+
+    /// Like [`pending_value`](Self::pending_value), and lends `scope_card` to
+    /// the callee for the duration of the invocation.
+    pub fn pending_value_with_scope_card(
+        &self,
+        input: SchemaValue,
+        scope_card: &ScopeCard,
+    ) -> Result<ReflectedPendingInvocation, GolemReflectError> {
+        self.pending_value_scoped(input, Some(scope_card))
+    }
+
+    fn pending_value_scoped(
+        &self,
+        input: SchemaValue,
+        scope_card: Option<&ScopeCard>,
+    ) -> Result<ReflectedPendingInvocation, GolemReflectError> {
         if self.definition.input.contains_stream() {
             return Err(GolemReflectError::InvalidType(format!(
                 "method `{}` has streaming input; use invoke_value or invoke_json",
@@ -1130,7 +1154,9 @@ impl ReflectedAgentMethod {
         self.definition.input.validate_value(&input)?;
         Ok(ReflectedPendingInvocation {
             checked: CheckedReflectedOutput {
-                inner: self.transport.pending(&self.definition.raw.name, input)?,
+                inner: self
+                    .transport
+                    .pending(&self.definition.raw.name, input, scope_card)?,
                 output: self.definition.output.clone(),
                 method: self.definition.raw.name.clone(),
             },
@@ -1241,7 +1267,17 @@ impl DynamicAgentMethod {
         &self,
         input: SchemaValue,
     ) -> Result<PendingInvocation, GolemReflectError> {
-        self.transport.pending(&self.name, input)
+        self.transport.pending(&self.name, input, None)
+    }
+
+    /// Like [`pending_value`](Self::pending_value), and lends `scope_card` to
+    /// the callee for the duration of the invocation.
+    pub fn pending_value_with_scope_card(
+        &self,
+        input: SchemaValue,
+        scope_card: &ScopeCard,
+    ) -> Result<PendingInvocation, GolemReflectError> {
+        self.transport.pending(&self.name, input, Some(scope_card))
     }
 
     pub fn schedule_value(
@@ -1459,11 +1495,12 @@ pub fn start_caller_pending<T: 'static>(
     rpc: &crate::golem_agentic::golem::agent::host::WasmRpc,
     method: &str,
     input: SchemaValue,
+    scope_card: Option<&ScopeCard>,
     decode: impl Fn(Option<SchemaValue>) -> Result<T, GolemReflectError> + 'static,
 ) -> Result<CallerPendingInvocation<T>, GolemReflectError> {
     let input = crate::encode_schema_value(&input)
         .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-    let invocation = rpc.async_invoke_and_await(method, input, None);
+    let invocation = crate::permissions::__async_invoke_and_await(rpc, method, input, scope_card);
     Ok(CallerPendingInvocation {
         metadata: InvocationMetadata {
             agent_id: ParsedAgentId::new(invocation.metadata.agent_id),
@@ -1559,10 +1596,13 @@ impl RpcTransport {
         &self,
         method: &str,
         input: SchemaValue,
+        scope_card: Option<&ScopeCard>,
     ) -> Result<PendingInvocation, GolemReflectError> {
         let input = crate::encode_schema_value(&input)
             .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-        let pending = self.raw.async_invoke_and_await(method, input, None);
+        let pending =
+            self.raw
+                .async_invoke_and_await(method, input, scope_card.map(ScopeCard::raw));
         let metadata = self.metadata(pending.metadata);
         Ok(PendingInvocation {
             metadata,
@@ -3003,6 +3043,25 @@ where
     }
 
     pub fn pending(&self, input: &I) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
+        self.pending_scoped(input, None)
+    }
+
+    /// Like [`pending`](Self::pending), and lends `scope_card` to the callee
+    /// for the duration of the invocation.
+    pub fn pending_with_scope_card(
+        &self,
+        input: &I,
+        scope_card: &ScopeCard,
+    ) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
+        self.pending_scoped(input, Some(scope_card))
+    }
+
+    #[doc(hidden)]
+    pub fn pending_scoped(
+        &self,
+        input: &I,
+        scope_card: Option<&ScopeCard>,
+    ) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
         if self.definition.input.contains_stream() {
             return Err(GolemReflectError::InvalidType(format!(
                 "method `{}` has streaming input; use invoke",
@@ -3012,7 +3071,9 @@ where
         let input = input.to_value();
         self.definition.input.validate_value(&input)?;
         Ok(TypedPendingInvocation {
-            inner: self.transport.pending(&self.definition.name, input)?,
+            inner: self
+                .transport
+                .pending(&self.definition.name, input, scope_card)?,
             output: self.definition.output.clone(),
             marker: PhantomData,
         })

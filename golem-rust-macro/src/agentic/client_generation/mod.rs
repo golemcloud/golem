@@ -494,6 +494,9 @@ pub fn get_remote_client_for_type(
             /// A scope card is valid only during the invocation that derived it.
             /// Clear the default, or drop the client, before that invocation ends;
             /// a later awaited call with the retired default fails with `denied`.
+            ///
+            /// The default is a weak borrow: it does not keep the scope card alive, and an
+            /// awaited call panics once the scope card is dropped.
             pub fn #set_default_scope_card_ident(
                 &mut self,
                 scope_card: &golem_rust::permissions::ScopeCard,
@@ -682,6 +685,8 @@ fn get_remote_agent_methods_info(
                 method_name,
                 impl_name: agent_method_names
                     .fresh_ident(format!("__golem_{method_name}_with_scope_card")),
+                pending_impl_name: agent_method_names
+                    .fresh_ident(format!("__golem_pending_{method_name}_with_scope_card")),
                 input_defs: &input_defs,
                 input_idents: &input_idents,
                 scope_card_param: fresh_param_ident(&input_idents, "__golem_scope_card"),
@@ -869,6 +874,25 @@ fn generate_method_code(
                 .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
         };
         let invoke = awaited.invoke(&remote_token);
+        let scope_card_param = &awaited.scope_card_param;
+        let GeneratedMethod {
+            client: pending_client,
+            scoped: pending_scoped,
+        } = awaited.generate_pending(
+            pending_name,
+            quote! { Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError> },
+            quote! {
+                #reject_non_awaited_stream_invocation
+                let input_value = #input_record;
+                golem_rust::agentic::reflection::start_caller_pending(
+                    &self.wasm_rpc,
+                    #remote_token,
+                    input_value,
+                    #scope_card_param.as_ref(),
+                    #pending_decode,
+                )
+            },
+        );
         if agent_is_durable {
             return awaited.generate(
                 quote! { Result<#return_type, golem_rust::GolemReflectError> },
@@ -891,18 +915,7 @@ fn generate_method_code(
                         .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
                 }
 
-                pub fn #pending_name(#(#input_defs),*)
-                    -> Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError>
-                {
-                    #reject_non_awaited_stream_invocation
-                    let input_value = #input_record;
-                    golem_rust::agentic::reflection::start_caller_pending(
-                        &self.wasm_rpc,
-                        #remote_token,
-                        input_value,
-                        #pending_decode,
-                    )
-                }
+                #pending_client
 
                 pub fn #schedule_name(
                     #(#input_defs,)*
@@ -936,7 +949,8 @@ fn generate_method_code(
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
                 }
                 },
-            );
+            )
+            .with_scoped(pending_scoped);
         }
 
         return awaited.generate(
@@ -962,18 +976,7 @@ fn generate_method_code(
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
             }
 
-            pub fn #pending_name(#(#input_defs),*)
-                -> Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError>
-            {
-                #reject_non_awaited_stream_invocation
-                let input_value = #input_record;
-                golem_rust::agentic::reflection::start_caller_pending(
-                    &self.wasm_rpc,
-                    #remote_token,
-                    input_value,
-                    #pending_decode,
-                )
-            }
+            #pending_client
 
             pub fn #schedule_name(
                 #(#input_defs,)*
@@ -996,7 +999,8 @@ fn generate_method_code(
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
             }
             },
-        );
+        )
+        .with_scoped(pending_scoped);
     }
     let invoke = awaited.invoke(&remote_token);
     if agent_is_durable {
@@ -1280,6 +1284,11 @@ impl GeneratedMethod {
             scoped: quote! {},
         }
     }
+
+    fn with_scoped(mut self, scoped: proc_macro2::TokenStream) -> Self {
+        self.scoped.extend(scoped);
+        self
+    }
 }
 
 /// The awaited invocation of an agent method. It is the only invocation that
@@ -1288,12 +1297,57 @@ impl GeneratedMethod {
 struct AwaitedMethod<'a> {
     method_name: &'a syn::Ident,
     impl_name: syn::Ident,
+    pending_impl_name: syn::Ident,
     input_defs: &'a [&'a syn::FnArg],
     input_idents: &'a [syn::Ident],
     scope_card_param: syn::Ident,
 }
 
 impl AwaitedMethod<'_> {
+    /// The `pending_*` form of the awaited invocation, which also accepts a
+    /// scope card.
+    fn generate_pending(
+        &self,
+        pending_name: &syn::Ident,
+        return_type: proc_macro2::TokenStream,
+        body: proc_macro2::TokenStream,
+    ) -> GeneratedMethod {
+        let Self {
+            pending_impl_name,
+            input_defs,
+            input_idents,
+            scope_card_param,
+            ..
+        } = self;
+        let typed_input_defs = input_defs
+            .iter()
+            .filter(|arg| matches!(arg, syn::FnArg::Typed(_)))
+            .collect::<Vec<_>>();
+        GeneratedMethod {
+            client: quote! {
+                fn #pending_impl_name(
+                    &self,
+                    #(#typed_input_defs,)*
+                    #scope_card_param: Option<&golem_rust::permissions::ScopeCard>,
+                ) -> #return_type {
+                    // Resolved before the input is encoded, so that a dropped
+                    // default scope card fails before any argument card moves.
+                    let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
+                    #body
+                }
+
+                pub fn #pending_name(#(#input_defs),*) -> #return_type {
+                    self.#pending_impl_name(#(#input_idents,)* None)
+                }
+            },
+            scoped: quote! {
+                pub fn #pending_name(&self, #(#typed_input_defs),*) -> #return_type {
+                    self.client.#pending_impl_name(#(#input_idents,)* Some(self.scope_card))
+                }
+            },
+        }
+    }
+
     fn invoke(&self, remote_token: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         let scope_card_param = &self.scope_card_param;
         quote! {
@@ -1315,6 +1369,7 @@ impl AwaitedMethod<'_> {
         let Self {
             method_name,
             impl_name,
+            pending_impl_name: _,
             input_defs,
             input_idents,
             scope_card_param,

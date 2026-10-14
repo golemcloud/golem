@@ -353,7 +353,7 @@ async fn typed_permission_card_api_runs_the_shared_scenario(
         .collect::<Vec<_>>();
     assert_eq!(
         stale_checks.len(),
-        7,
+        9,
         "unexpected stale scope-card checks: {stale_checks:?}"
     );
     assert!(

@@ -590,6 +590,29 @@ fn scope_cards_are_attached_only_to_awaited_calls() {
         assert!(!rendered.contains("invoke (\"run\" , input , Some"));
         assert!(!rendered.contains("invoke (scheduled_time , \"run\" , input , Some"));
 
+        // Every awaited implementation resolves the scope card before it encodes
+        // the input, so a dropped default fails before any argument card moves.
+        let impls = client
+            .split("async fn __golem_")
+            .skip(1)
+            .collect::<Vec<_>>();
+        assert_eq!(impls.len(), 4, "{rendered}");
+        for body in impls {
+            let body = body.split("pub async fn").next().unwrap();
+            let resolve = body
+                .find("self . __golem_default_scope_card . resolve (__golem_scope_card)")
+                .unwrap_or_else(|| panic!("missing scope-card resolution:\n{body}"));
+            let encode = ["WirePreflight", "WireWriter", "encode_schema_value"]
+                .iter()
+                .filter_map(|marker| body.find(marker))
+                .min()
+                .unwrap_or_else(|| panic!("missing input encoding:\n{body}"));
+            assert!(
+                resolve < encode,
+                "scope card resolved after encoding:\n{body}"
+            );
+        }
+
         // User methods win over the generated scope-card members, which are renamed.
         for name in [
             "with_scope_card",
@@ -619,6 +642,28 @@ fn scope_cards_are_attached_only_to_awaited_calls() {
         assert_eq!(view.matches("pub async fn").count(), 4, "{view}");
         assert!(!view.contains("trigger_"));
         assert!(!view.contains("schedule_"));
-        assert!(!view.contains("pending_"));
+        if fallible {
+            // `pending_*` is an awaited invocation too, so the view lends its
+            // card there as well, after resolving it before the input.
+            assert!(
+                view.contains("pub fn pending_run (& self , value : u32)"),
+                "{view}"
+            );
+            assert!(view.contains(
+                "self . client . __golem_pending_run_with_scope_card (value , Some (self . scope_card))"
+            ));
+            let pending = client
+                .split("fn __golem_pending_run_with_scope_card")
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing pending implementation:\n{rendered}"));
+            let resolve = pending
+                .find("self . __golem_default_scope_card . resolve (__golem_scope_card)")
+                .unwrap();
+            let start = pending.find("start_caller_pending").unwrap();
+            assert!(resolve < start, "{pending}");
+            assert!(pending.contains("input_value , __golem_scope_card . as_ref ()"));
+        } else {
+            assert!(!view.contains("pending_"));
+        }
     }
 }

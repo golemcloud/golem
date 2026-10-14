@@ -270,9 +270,19 @@ pub trait ScopeCardInspector {
     fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool);
 }
 
+/// A scope card kept across invocations, with the client whose default it is
+/// and its accessor values at the time it was derived.
+struct KeptScopeCard {
+    scope_card: ScopeCard,
+    client: ScopeCardInspectorClient,
+    id: permissions::CardId,
+    parents: Vec<permissions::CardId>,
+    expires_at: Option<permissions::Timestamp>,
+}
+
 pub struct ScopeCardAgentImpl {
     _name: String,
-    kept_scope_card: RefCell<Option<(ScopeCard, ScopeCardInspectorClient)>>,
+    kept_scope_card: RefCell<Option<KeptScopeCard>>,
 }
 
 #[agent_implementation]
@@ -714,20 +724,40 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             .inspect_scope(reveal(scope_card.id()), root_card_id)
             .await
             .map(|invocation| invocation.value);
-        *self.kept_scope_card.borrow_mut() = Some((scope_card, client));
+        *self.kept_scope_card.borrow_mut() = Some(KeptScopeCard {
+            id: scope_card.id(),
+            parents: scope_card.parents(),
+            expires_at: scope_card.expires_at(),
+            scope_card,
+            client,
+        });
         matches!(observed, Ok((true, true, true)))
     }
 
     async fn stale_scope_card_observations(&self, target: String) -> Vec<(String, bool)> {
-        let (scope_card, client) = self
+        let KeptScopeCard {
+            scope_card,
+            client,
+            id,
+            parents,
+            expires_at,
+        } = self
             .kept_scope_card
             .borrow_mut()
             .take()
             .expect("no scope card was kept");
         let mut checks = Vec::new();
+        checks.push(("id is unchanged".to_string(), scope_card.id() == id));
+        checks.push((
+            "parents are unchanged".to_string(),
+            scope_card.parents() == parents,
+        ));
+        checks.push((
+            "expiry is unchanged".to_string(),
+            scope_card.expires_at() == expires_at,
+        ));
         let scope_card_id = reveal(scope_card.id());
         let root_card_id = scope_root_id(&scope_card);
-        checks.push(("id and parents still resolve".to_string(), true));
         checks.push((
             "inspect still works".to_string(),
             scope_card.inspect().is_ok(),

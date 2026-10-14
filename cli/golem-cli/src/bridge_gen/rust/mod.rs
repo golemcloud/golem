@@ -1095,6 +1095,9 @@ impl RustBridgeGenerator {
                 /// A scope card is valid only during the invocation that derived it.
                 /// Clear the default, or drop the client, before that invocation ends;
                 /// a later awaited call with the retired default fails with `denied`.
+                ///
+                /// The default is a weak borrow: it does not keep the scope card alive, and an
+                /// awaited call panics once the scope card is dropped.
                 pub fn #set_default_scope_card_method_name(
                     &mut self,
                     scope_card: &golem_rust::permissions::ScopeCard,
