@@ -111,6 +111,15 @@ run_quotad() {
         --root /tmp --listen /run/golem-quota/xfs-quotad.sock 2>&1 || true
 }
 
+# The startup checks below show the file capability only when the engine does not give an added
+# capability to a process of uid 65534 directly, for example in its ambient set. A binary without a
+# file capability must then run with no effective capability.
+echo "== $quotad: no effective capability without the file capability"
+effective=$("$engine" run --rm --cap-drop ALL --cap-add SYS_ADMIN --entrypoint /usr/bin/grep "$quotad" \
+    '^CapEff:' /proc/self/status)
+[ "$effective" = "$(printf 'CapEff:\t0000000000000000')" ] ||
+    fail "$engine gives an added capability to uid 65534 directly ($effective), so the startup checks cannot show the file capability"
+
 echo "== $quotad: startup without SYS_ADMIN"
 output=$(run_quotad)
 grep -q "Operation not permitted" <<<"$output" || fail "without SYS_ADMIN: $output"
