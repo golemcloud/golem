@@ -118,6 +118,7 @@ without_time = false
 # custom_data_bucket = "custom-data"
 # filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"

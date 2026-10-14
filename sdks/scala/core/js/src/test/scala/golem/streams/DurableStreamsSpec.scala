@@ -171,10 +171,9 @@ object DurableStreamsSpec extends ZIOSpecDefault {
         )
       }
     },
-    test("host retry errors preserve typed metadata and use durable clock and timer units") {
+    test("host retry errors preserve typed metadata and use durable timer units") {
       ZIO.fromFuture { _ =>
         var reads = 0
-        var now   = BigInt(9000000000L)
         var waits = Vector.empty[String]
         install(
           js.Dynamic.literal(
@@ -188,10 +187,8 @@ object DurableStreamsSpec extends ZIOSpecDefault {
                 else js.Promise.resolve(batch(if (reads == 2) "[29]" else "[31]", closed = reads == 3))
               }
             ): js.Function2[js.Dynamic, js.Any, js.Promise[js.Dynamic]],
-            now = (() => js.BigInt(now.toString)): js.Function0[js.BigInt],
             waitFor = ((duration: js.BigInt) => {
               waits :+= duration.toString
-              now += BigInt(duration.toString)
               js.Promise.resolve(())
             }): js.Function1[js.BigInt, js.Promise[Unit]]
           )
@@ -365,7 +362,6 @@ object DurableStreamsSpec extends ZIOSpecDefault {
         var calls = 0
         install(
           js.Dynamic.literal(
-            now = (() => js.BigInt("0")): js.Function0[js.BigInt],
             appendStream = (
               (request: js.Dynamic, resource: js.Dynamic) => {
                 calls += 1
@@ -383,7 +379,7 @@ object DurableStreamsSpec extends ZIOSpecDefault {
           url,
           DurableStreamProducer("fixed", 8, 13),
           timeoutMs = 2468,
-          retry = DurableStreamRetry(budgetMs = 0)
+          retry = DurableStreamRetry(maxRetries = 0)
         )
         val constructedBeforeAppend = resources("writers").length == 1 && calls == 0
         val values                  = scala.collection.mutable.ArrayBuffer(9007199254740993L, 17L)

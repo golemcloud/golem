@@ -54,6 +54,8 @@ mod scala_tool_sources;
 mod secrets;
 mod self_identity;
 mod server_config;
+#[cfg(unix)]
+mod server_restart;
 mod ssh;
 mod tool_metadata_conformance;
 mod tool_middleware;
@@ -1170,6 +1172,11 @@ impl TestContext {
     }
 
     async fn start_server(&mut self) {
+        self.spawn_server();
+        self.wait_for_server_startup().await;
+    }
+
+    fn spawn_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
         install_builtin_artifact_cache(self.data_dir.path());
 
@@ -1219,7 +1226,9 @@ impl TestContext {
         }
 
         self.server_process = Some(command.spawn().unwrap());
+    }
 
+    async fn wait_for_server_startup(&mut self) {
         {
             let start = Instant::now();
             let timeout = Duration::from_secs(60);
@@ -1451,10 +1460,15 @@ fn extracted_component_metadata_relative_path(
 ) -> PathBuf {
     let temp_dir = ctx.cwd_path_join("golem-temp");
     let component_name = ComponentName(component_name.to_string());
-    extracted_component_metadata_path(&temp_dir, &component_name, source_wasm_path)
-        .strip_prefix(ctx.cwd_path())
-        .unwrap()
-        .to_path_buf()
+    extracted_component_metadata_path(
+        &temp_dir,
+        &component_name,
+        source_wasm_path,
+        golem_cli::version(),
+    )
+    .strip_prefix(ctx.cwd_path())
+    .unwrap()
+    .to_path_buf()
 }
 
 fn extracted_component_metadata_path_hash(

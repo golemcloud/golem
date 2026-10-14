@@ -55,10 +55,10 @@ An active HTTP attempt may remain resident until completion or timeout.
 
 Typed timeout, transport, rate-limit and unavailable errors use bounded
 exponential backoff and the host's retry-after hint. `DurableStreamRetry` defaults
-to a 60-second reconnect budget, 100-ms initial delay and 5-second maximum
-backoff; retry-after can exceed that maximum but never the remaining budget.
-Successful responses reset the failure budget. Durable clocks, timers and
-recorded results reconstruct the same budget and buffered position on replay.
+to 8 retries after the first attempt, with a 100-ms initial delay that doubles up
+to a 30-second maximum; a longer retry-after wins. `maxRetries = 0` disables
+retries. Successful responses reset the failure count. Durable timers and
+recorded results reconstruct the same count and buffered position on replay.
 Do not put these waits inside custom durable or atomic scopes.
 
 The host limits complete batch size. `PayloadTooLarge` does not advance the

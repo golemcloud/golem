@@ -456,6 +456,7 @@ impl Services {
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(
             repos.http_api_deployment_repo.clone(),
+            repos.mcp_deployment_repo.clone(),
             environment_service.clone(),
             deployment_service.clone(),
             domain_registration_service.clone(),
@@ -463,6 +464,7 @@ impl Services {
 
         let mcp_deployment_service = Arc::new(McpDeploymentService::new(
             repos.mcp_deployment_repo.clone(),
+            repos.http_api_deployment_repo.clone(),
             environment_service.clone(),
             deployment_service.clone(),
             domain_registration_service.clone(),

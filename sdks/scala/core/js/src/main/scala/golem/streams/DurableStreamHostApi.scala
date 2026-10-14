@@ -31,9 +31,8 @@ private[streams] abstract class DurableStreamHostApi(resource: js.Dynamic) exten
     if (closing && active == 0 && !released.isCompleted)
       released.complete(scala.util.Try(drop(resource)))
 
-  override def nowMs(): BigInt               = integer(Clock.now()) / 1000000
   override def sleep(ms: Long): Future[Unit] =
-    FutureInterop.fromPromise(Clock.waitFor(js.BigInt((BigInt(ms) * 1000000).toString)))
+    FutureInterop.fromPromise(Clock.waitFor(js.BigInt((BigInt(ms) * 1000000).min(MaxDurationNs).toString)))
 
   protected def call(operation: => js.Dynamic): Future[js.Dynamic] = {
     active += 1
@@ -67,6 +66,8 @@ private[streams] abstract class DurableStreamHostApi(resource: js.Dynamic) exten
 }
 
 private[streams] object DurableStreamHostApi {
+  private val MaxDurationNs = BigInt("18446744073709551615")
+
   def reader(url: String, json: Boolean, timeoutMs: Long, auth: Option[Secret[String]]): DurableStreamReadHost = {
     val resource = construct(
       Host.DurableStreamReader,
@@ -193,7 +194,6 @@ private[streams] object DurableStreamHostApi {
   @js.native
   @JSImport("wasi:clocks/monotonic-clock@0.3.0", JSImport.Namespace)
   private object Clock extends js.Object {
-    def now(): js.BigInt                              = js.native
     def waitFor(howLong: js.BigInt): js.Promise[Unit] = js.native
   }
 }
