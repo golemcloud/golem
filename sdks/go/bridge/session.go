@@ -279,6 +279,18 @@ type sessionConn struct {
 	// cannot succeed while it is parked.
 	parked bool
 	parks  uint64
+	// writing is set while the write loop writes a frame, and writes counts
+	// the frames it started. A ping waits for the write in progress.
+	writing bool
+	writes  uint64
+}
+
+// activity is what the read and write loops were doing at one moment.
+type activity struct {
+	parked  bool
+	parks   uint64
+	writing bool
+	writes  uint64
 }
 
 // park marks the read loop as waiting for queue space.
@@ -295,12 +307,35 @@ func (c *sessionConn) unpark() {
 	c.mu.Unlock()
 }
 
-// parkState reports whether the read loop is parked, and how many times it
-// parked so far.
-func (c *sessionConn) parkState() (bool, uint64) {
+// beginWrite and endWrite mark a frame the write loop writes.
+func (c *sessionConn) beginWrite() {
+	c.mu.Lock()
+	c.writing = true
+	c.writes++
+	c.mu.Unlock()
+}
+
+func (c *sessionConn) endWrite() {
+	c.mu.Lock()
+	c.writing = false
+	c.mu.Unlock()
+}
+
+func (c *sessionConn) activity() activity {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.parked, c.parks
+	return activity{parked: c.parked, parks: c.parks, writing: c.writing, writes: c.writes}
+}
+
+// pongMissedWhileParked reports whether the parked read loop explains a ping
+// that timed out between before and after. A frame write that lasted the
+// whole ping held the frame-write lock, so the ping frame may never have been
+// written: the connection stalls, whatever the read loop does.
+func pongMissedWhileParked(before, after activity) bool {
+	if before.writing && after.writing && before.writes == after.writes {
+		return false
+	}
+	return before.parked || after.parked || before.parks != after.parks
 }
 
 func (c *sessionConn) enqueue(f outFrame) {
@@ -429,7 +464,10 @@ func (s *session) write(c *sessionConn) {
 			if f.binary {
 				kind = websocket.MessageBinary
 			}
-			if err := c.ws.Write(s.life, kind, f.data); err != nil {
+			c.beginWrite()
+			err := c.ws.Write(s.life, kind, f.data)
+			c.endWrite()
+			if err != nil {
 				s.lost(c)
 				return
 			}
@@ -473,7 +511,7 @@ func (s *session) ping(c *sessionConn) {
 			return
 		case <-ticker.C:
 		}
-		parked, parks := c.parkState()
+		before := c.activity()
 		ctx, cancel := context.WithTimeout(s.life, s.pingWait)
 		err := c.ws.Ping(ctx)
 		cancel()
@@ -482,10 +520,9 @@ func (s *session) ping(c *sessionConn) {
 			// reader, a missing pong does not mean the connection is lost;
 			// the parked read keeps the server from sending more. A ping
 			// that cannot be written still means it is.
-			if errors.Is(err, context.DeadlineExceeded) && s.life.Err() == nil {
-				if parkedNow, parksNow := c.parkState(); parked || parkedNow || parksNow != parks {
-					continue
-				}
+			if errors.Is(err, context.DeadlineExceeded) && s.life.Err() == nil &&
+				pongMissedWhileParked(before, c.activity()) {
+				continue
 			}
 			s.lost(c)
 			return

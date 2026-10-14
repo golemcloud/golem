@@ -18,11 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,8 +78,13 @@ func newFakeServer(t *testing.T, scripts ...func(*fakeConn)) *fakeServer {
 }
 
 func (f *fakeServer) agent(t *testing.T) *Agent {
+	return f.agentWith(t, nil)
+}
+
+// agentWith is an agent of the server that sends its requests with client.
+func (f *fakeServer) agentWith(t *testing.T, client *http.Client) *Agent {
 	a, err := NewAgent("Target", schema.RecordValue{Fields: []schema.SchemaValue{schema.StringValue{Value: "t1"}}},
-		WithConfiguration(Configuration{Server: Custom(f.srv.URL, "token"), AppName: "app", EnvName: "env"}))
+		WithConfiguration(Configuration{Server: Custom(f.srv.URL, "token"), AppName: "app", EnvName: "env", HTTPClient: client}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1597,6 +1604,91 @@ func TestASlowReaderKeepsItsConnection(t *testing.T) {
 	values, err := out.Collect(ctx)
 	if err != nil || len(values) != items {
 		t.Fatalf("collected %d values, %v", len(values), err)
+	}
+}
+
+// stallingConn is a client connection that blocks every write of at least
+// stallBytes while stall is set, until the connection closes. Ping frames are
+// smaller, so they still go through.
+type stallingConn struct {
+	net.Conn
+	stall  *atomic.Bool
+	closed chan struct{}
+	once   sync.Once
+}
+
+const stallBytes = 4096
+
+func (c *stallingConn) Write(b []byte) (int, error) {
+	if len(b) >= stallBytes && c.stall.Load() {
+		<-c.closed
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *stallingConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func stallingClient(stall *atomic.Bool) *http.Client {
+	var dialer net.Dialer
+	return &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &stallingConn{Conn: conn, stall: stall, closed: make(chan struct{})}, nil
+		},
+	}}
+}
+
+// A frame write that never finishes holds the frame-write lock, so no ping
+// is written either. The connection is lost although the read loop is
+// parked on a full queue.
+func TestAStalledWriteIsALostConnectionWhileTheReaderIsParked(t *testing.T) {
+	fastPing(t)
+	var stall atomic.Bool
+	filled := make(chan struct{})
+	reconnected := make(chan struct{})
+	server := newFakeServer(t,
+		func(c *fakeConn) {
+			start := c.expect("invocationStart")
+			refs := provisionalRefs(t, start)
+			accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+			streamResult(c, 2, "out", u32StreamGraph)
+			for i := range maxQueuedItems + 4 {
+				outputItem(c, 2, uint64(i), "c"+itoa(uint64(i)), uint32(i))
+			}
+			close(filled)
+			<-c.answerPings().Done()
+		},
+		func(c *fakeConn) {
+			c.expect("resumeAttach")
+			close(reconnected)
+			c.waitClose()
+		},
+	)
+	ctx := ctxT(t)
+	w, in := NewAgentStream[string]()
+	out, err := CallStreaming(ctx, server.agentWith(t, stallingClient(&stall)), "transform",
+		streamParams(EncodeStream(EncodeString)(in)), DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = out.Close() }()
+	<-filled
+	time.Sleep(2 * pingTimeout)
+	stall.Store(true)
+	if err := w.Write(strings.Repeat("x", 4*stallBytes)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reconnected:
+	case <-time.After(10 * pingTimeout):
+		t.Fatalf("the session kept a connection whose write stalled; %d connections", server.connections())
 	}
 }
 
