@@ -2071,9 +2071,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     recovery_failure = Some(error);
                     break;
                 }
-                CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
+                CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision, failure) => {
                     final_decision = Some(decision);
                     cleanup_ephemeral_worker = true;
+                    recovery_failure = failure;
                     break;
                 }
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
@@ -3157,6 +3158,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         return failed_agent_invocation_outcome(
                             self.parent.agent_mode(),
                             RetryDecision::Immediate,
+                            None,
                         );
                     }
                 }
@@ -3193,7 +3195,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .changed()
                         .notify_waiters();
                 }
-                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision, None)
             }
             // Intercepted before the arm below, which would flatten it into an
             // `AgentError::InternalError` and append an `Error` entry to the very oplog that
@@ -3235,7 +3237,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .changed()
                         .notify_waiters();
                 }
-                failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
+                failed_agent_invocation_outcome(
+                    self.parent.agent_mode(),
+                    RetryDecision::None,
+                    Some(&error),
+                )
             }
         }
     }
@@ -3252,6 +3258,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .durable_ctx()
             .begin_stream_runtime_teardown();
         let details = format!("{result:?}");
+        let oplog_failure = result.as_ref().err().cloned();
         let owner_failure = self
             .store
             .data()
@@ -3334,7 +3341,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .notify_waiters();
         }
 
-        failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+        failed_agent_invocation_outcome(self.parent.agent_mode(), decision, oplog_failure.as_ref())
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
@@ -3875,8 +3882,10 @@ enum CommandOutcome {
         decision: RetryDecision,
         error: WorkerExecutorError,
     },
-    /// Break from the inner loop and archive the stopped ephemeral worker's oplog.
-    BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision),
+    /// Break from the inner loop and archive the stopped ephemeral worker's oplog. The error, when
+    /// there is one, is the failure that stopped the agent, which its waiters get instead of the
+    /// ordinary end of an ephemeral agent.
+    BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision, Option<WorkerExecutorError>),
     /// Continue processing in the inner loop
     Continue,
     /// Stop draining for now and wait for the next command or idle timer wakeup
@@ -3898,18 +3907,27 @@ fn successful_agent_invocation_outcome(
     kind: AgentInvocationKind,
 ) -> CommandOutcome {
     if should_cleanup_terminal_ephemeral_invocation(agent_mode, is_agent_component, kind) {
-        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
     } else {
         CommandOutcome::Continue
     }
 }
 
+/// What the loop does after an invocation that did not succeed. A terminal ephemeral failure
+/// archives the oplog; when the oplog of the agent failed (`oplog_failure`), the waiters get that
+/// error with its cause.
 fn failed_agent_invocation_outcome(
     agent_mode: AgentMode,
     decision: RetryDecision,
+    oplog_failure: Option<&WorkerExecutorError>,
 ) -> CommandOutcome {
     if agent_mode == AgentMode::Ephemeral && decision == RetryDecision::None {
-        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision)
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(
+            decision,
+            oplog_failure
+                .filter(|error| matches!(error, WorkerExecutorError::OplogFailed { .. }))
+                .cloned(),
+        )
     } else {
         CommandOutcome::BreakInnerLoop(decision)
     }
@@ -5496,7 +5514,7 @@ mod tests {
                 true,
                 AgentInvocationKind::AgentMethod
             ),
-            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
         );
     }
 
@@ -5527,15 +5545,56 @@ mod tests {
     #[test]
     fn terminal_ephemeral_failure_requests_archive_drain() {
         assert_eq!(
-            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::None),
-            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::None, None),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
+        );
+    }
+
+    /// A terminal ephemeral failure caused by the oplog of the agent gives its waiters that
+    /// error, with the archive layer and the storage cause, instead of the ordinary end of an
+    /// ephemeral agent. Any other failure keeps the ordinary end.
+    #[test]
+    fn a_terminal_ephemeral_oplog_failure_reaches_the_waiters() {
+        let oplog_failure = WorkerExecutorError::oplog_failed(
+            golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "ephemeral".to_string(),
+            },
+            "failed to write oplog data to archive layer 0: injected",
+        );
+        assert_eq!(
+            failed_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                RetryDecision::None,
+                Some(&oplog_failure)
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(
+                RetryDecision::None,
+                Some(oplog_failure.clone())
+            )
+        );
+        assert_eq!(
+            failed_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                RetryDecision::None,
+                Some(&WorkerExecutorError::runtime("guest failure"))
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
+        );
+        assert_eq!(
+            failed_agent_invocation_outcome(
+                AgentMode::Durable,
+                RetryDecision::None,
+                Some(&oplog_failure)
+            ),
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
         );
     }
 
     #[test]
     fn retryable_ephemeral_failure_does_not_request_archive_drain() {
         assert_eq!(
-            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::Immediate),
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::Immediate, None),
             CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
         );
     }
@@ -5543,7 +5602,7 @@ mod tests {
     #[test]
     fn terminal_durable_failure_does_not_request_archive_drain() {
         assert_eq!(
-            failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
+            failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None, None),
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
         );
     }
@@ -5568,7 +5627,7 @@ mod tests {
                 true,
                 AgentInvocationKind::AgentMethod
             ),
-            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
         );
     }
 }

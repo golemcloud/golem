@@ -106,6 +106,17 @@ pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Outp
     ENTITY_CANCELLATION_MASKED.scope((), future).await
 }
 
+/// Whether a failed write of the terminal entry of an invocation stops the agent for good, so the
+/// invocation fails without its entry: a failed archive write, or an oplog that does not read. A
+/// fence is not one: the invocation moves to the new owner of the shard.
+fn stops_the_agent_for_good(error: &crate::services::oplog::OplogError) -> bool {
+    matches!(
+        error,
+        crate::services::oplog::OplogError::ArchiveWrite { .. }
+            | crate::services::oplog::OplogError::Unreadable(_)
+    )
+}
+
 /// Appends one `Jump` per `deleted_region` while a durable context recovers from an incomplete
 /// recorded attempt (batched-write scope, remote transaction or atomic region) by re-executing it
 /// live, and makes the Jumps effective in the shared replay cursor before the caller finishes the
@@ -5759,16 +5770,26 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )),
         };
 
-        // Refused, the shard is lost: no failure is published for its invocation, which
-        // the shard's new owner runs.
         if let Some(entry) = oplog_entry
-            && self
-                .public_state
-                .worker()
-                .add_and_commit_oplog(entry)
-                .await
-                .is_err()
+            && let Err(error) = self.public_state.worker().add_and_commit_oplog(entry).await
         {
+            // Refused by a fence, the shard is lost: no failure is published for its invocation,
+            // which the shard's new owner runs. A failed archive write or an oplog that does not
+            // read stops this agent for good, so its invocation fails here with the trap, which
+            // carries the cause.
+            if stops_the_agent_for_good(&error)
+                && let Some(idempotency_key) = self.state.get_current_idempotency_key()
+            {
+                self.public_state
+                    .worker()
+                    .store_invocation_failure(&idempotency_key, trap_type)
+                    .await;
+                self.public_state.event_service().emit_invocation_finished(
+                    full_function_name,
+                    &idempotency_key,
+                    self.is_live(),
+                );
+            }
             return RetryDecision::None;
         };
 
@@ -8107,6 +8128,41 @@ mod tests {
             result.as_ref().err()
         );
         assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
+    }
+
+    /// The terminal entry of an invocation that a failed archive write, or an oplog that does not
+    /// read, keeps out of the oplog fails the invocation with its cause; a fence does not, because
+    /// the new owner of the shard runs the invocation.
+    #[test]
+    fn only_a_failure_that_stops_the_agent_fails_an_invocation_without_its_entry() {
+        use crate::services::oplog::{OplogError, OplogFence, OplogReadError, UnreadableOplog};
+
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "terminal-entry".to_string(),
+        };
+        assert!(stops_the_agent_for_good(&OplogError::ArchiveWrite {
+            agent_id: agent_id.clone(),
+            level: 0,
+            details: "injected archive failure".to_string(),
+        }));
+        assert!(stops_the_agent_for_good(&OplogError::Unreadable(
+            UnreadableOplog {
+                agent_id: agent_id.clone(),
+                error: OplogReadError::Gap {
+                    start: OplogIndex::INITIAL,
+                    end: OplogIndex::from_u64(2),
+                },
+            }
+        )));
+        assert!(!stops_the_agent_for_good(&OplogError::Fenced(OplogFence {
+            agent_id,
+            expected_epoch: golem_common::model::ShardEpoch(1),
+            actual_epoch: Some(golem_common::model::ShardEpoch(2)),
+        })));
+        assert!(!stops_the_agent_for_good(&OplogError::Payload(
+            "payload".to_string()
+        )));
     }
 
     #[test]
