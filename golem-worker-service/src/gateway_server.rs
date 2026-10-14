@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
-pub(super) async fn run<A, E>(mut acceptor: A, endpoint: E) -> std::io::Result<()>
+pub async fn run<A, E>(mut acceptor: A, endpoint: E) -> std::io::Result<()>
 where
     A: Acceptor,
     E: Endpoint<Output = Response> + 'static,

@@ -1287,6 +1287,69 @@ pub fn agent_path_segment(agent_id: &AgentId) -> String {
     format!("{sanitized_prefix}-{digest}")
 }
 
+/// Gives the segments of the location of a namespace in a backend that keeps all namespaces in
+/// one tree: the name of the kind of the namespace, then the segments that tell one namespace of
+/// that kind from another.
+///
+/// The first segment is different for each kind, and all namespaces of one kind have the same
+/// number of segments. No segment is empty, holds a `/` or a `\`, or is `.` or `..`: each is a
+/// fixed name, an id, an agent path segment ([`agent_path_segment`]) or a number. So the
+/// location of one namespace is never below the location of another, and a backend that lists or
+/// deletes below the location of a namespace touches no blob of another namespace.
+pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String> {
+    match namespace {
+        BlobStorageNamespace::CompilationCache { environment_id } => {
+            vec!["compilation_cache".to_string(), environment_id.to_string()]
+        }
+        BlobStorageNamespace::CustomStorage { environment_id } => {
+            vec!["custom_data".to_string(), environment_id.to_string()]
+        }
+        BlobStorageNamespace::OplogPayload {
+            environment_id,
+            agent_id,
+            agent_mode,
+        } => vec![
+            "oplog_payload".to_string(),
+            agent_mode_prefix(*agent_mode).to_string(),
+            environment_id.to_string(),
+            // A bounded segment of the agent, because an agent id can be longer than a file
+            // name, and it can hold `/`, `\` and `.` segments.
+            agent_path_segment(agent_id),
+        ],
+        BlobStorageNamespace::CompressedOplog {
+            environment_id,
+            component_id,
+            agent_mode,
+            level,
+        } => vec![
+            "compressed_oplog".to_string(),
+            agent_mode_prefix(*agent_mode).to_string(),
+            environment_id.to_string(),
+            component_id.to_string(),
+            level.to_string(),
+        ],
+        BlobStorageNamespace::InitialAgentFiles { environment_id } => {
+            vec![
+                "initial_agent_files".to_string(),
+                environment_id.to_string(),
+            ]
+        }
+        BlobStorageNamespace::Components { environment_id } => {
+            vec!["component_store".to_string(), environment_id.to_string()]
+        }
+        BlobStorageNamespace::FilesystemSnapshots {
+            environment_id,
+            agent_id,
+            fingerprint,
+        } => vec![
+            "filesystem_snapshots".to_string(),
+            environment_id.to_string(),
+            agent_path_segment(agent_id),
+            fingerprint.0.to_string(),
+        ],
+    }
+}
+
 /// Returns the symmetric per-mode prefix used by all blob-storage backends for oplog data.
 pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
     match mode {

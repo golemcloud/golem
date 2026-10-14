@@ -902,6 +902,29 @@ mod tests {
     }
 
     #[test]
+    fn config_accepts_one_s3_bucket_for_every_namespace_with_namespace_prefixes() {
+        let bucket = "golem".to_string();
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    namespace_prefixes: true,
+                    compilation_cache_bucket: bucket.clone(),
+                    custom_data_bucket: bucket.clone(),
+                    oplog_payload_bucket: bucket.clone(),
+                    compressed_oplog_buckets: vec![bucket.clone()],
+                    initial_agent_files_bucket: bucket.clone(),
+                    components_bucket: bucket.clone(),
+                    filesystem_snapshots_bucket: bucket,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
     fn config_rejects_shared_s3_snapshot_bucket() {
         let config = RegistryServiceConfig {
             blob_storage: golem_service_base::config::BlobStorageConfig::S3(

@@ -161,7 +161,8 @@ export function discoverCapabilities(parsedConfig) {
         );
         if (fromSdk) {
           const name = symbol.getName();
-          if (name === 'defineAgent' || name === 'AgentTypeRegistry') capabilities.agents = true;
+          if (name === 'defineAgent' || name === 'defineHttpRouter' || name === 'AgentTypeRegistry')
+            capabilities.agents = true;
           if (name === 'durable' || name === 'forSchema') capabilities.schemas = true;
           if (name === 'universalToolMiddleware' || name === 'middleware')
             capabilities.middleware = true;
@@ -188,13 +189,22 @@ export function discoverCapabilities(parsedConfig) {
   return capabilities;
 }
 
-export function componentEntry(main, capabilities) {
+export function componentEntry(main, capabilities, nodeHttpRouters) {
   const full = path.join(runtime, 'index.mjs');
   const empty = path.join(runtime, 'emptyGuest.mjs');
   return `
 import { guest, saveSnapshot, loadSnapshot } from ${JSON.stringify(capabilities.agents ? full : empty)};
 import { tool } from ${JSON.stringify(capabilities.tools ? full : empty)};
 import { toolMiddlewareGuest } from ${JSON.stringify(capabilities.middleware ? full : empty)};
+${
+  nodeHttpRouters === undefined
+    ? ''
+    : `
+import { configureNodeHttpRegistration, closeNodeHttpRegistration } from ${JSON.stringify(path.join(runtime, 'internal/http/nodeHttpRegistration.mjs'))};
+export const __golemNodeHttpLifecycle = { close: closeNodeHttpRegistration };
+configureNodeHttpRegistration(${JSON.stringify(nodeHttpRouters)});
+`
+}
 export default (async () => {
   await import(${JSON.stringify(main)});
   return { guest, tool, toolMiddlewareGuest, saveSnapshot, loadSnapshot };
@@ -202,8 +212,14 @@ export default (async () => {
 `;
 }
 
-export function componentPlugin(parsedConfig, main) {
+export function componentPlugin(parsedConfig, main, { nodeHttpRouters = {} } = {}) {
   const capabilities = discoverCapabilities(parsedConfig);
+  const automatic =
+    !nodeHttpRouters ||
+    typeof nodeHttpRouters !== 'object' ||
+    Array.isArray(nodeHttpRouters) ||
+    Object.keys(nodeHttpRouters).length > 0;
+  if (automatic) capabilities.agents = true;
   const entry = '\0golem:component-entry';
   let started = false;
   const validateBuild = (options, watchMode = false) => {
@@ -216,6 +232,18 @@ export function componentPlugin(parsedConfig, main) {
     name: 'golem-component',
     options(options) {
       validateBuild(options);
+      const external = options.external;
+      return {
+        ...options,
+        external(id, importer, resolved) {
+          // HTTP imports must reach resolveId before the caller's node:* predicate.
+          if (id === 'http' || id === 'node:http') return false;
+          if (typeof external === 'function') return external(id, importer, resolved);
+          return (Array.isArray(external) ? external : external ? [external] : []).some((entry) =>
+            typeof entry === 'string' ? entry === id : entry.test(id),
+          );
+        },
+      };
     },
     buildStart(options) {
       validateBuild(options, this.meta.watchMode);
@@ -223,6 +251,11 @@ export function componentPlugin(parsedConfig, main) {
     },
     resolveId(id, importer) {
       if (id === 'virtual:agent-main') return entry;
+      if (id === 'http' || id === 'node:http') {
+        const facade = path.join(runtime, 'nodeHttp.mjs');
+        // Only the facade may bypass itself to the untouched runtime builtin.
+        return importer === facade ? { id: 'node:http', external: true } : facade;
+      }
       const componentEntry = componentEntries.get(id);
       if (componentEntry) return componentEntry;
       if (id === sdk || id.startsWith(`${sdk}/`))
@@ -241,9 +274,57 @@ export function componentPlugin(parsedConfig, main) {
       }
     },
     load(id) {
-      if (id === entry) return componentEntry(main, capabilities);
+      if (id === entry)
+        return componentEntry(main, capabilities, automatic ? nodeHttpRouters : undefined);
     },
     async renderChunk(code, _chunk, options) {
+      if (automatic) {
+        if (options.format !== 'es' || !options.inlineDynamicImports)
+          this.error(
+            'Node HTTP auto-registration requires a single ES module with inlineDynamicImports',
+          );
+        const statements = this.parse(code).body;
+        const exports = statements.filter((node) => node.type === 'ExportNamedDeclaration');
+        const specifiers = exports.flatMap((node) => node.specifiers);
+        const result = specifiers.find((node) => node.exported.name === 'default')?.local.name;
+        const lifecycle = specifiers.find(
+          (node) => node.exported.name === '__golemNodeHttpLifecycle',
+        )?.local.name;
+        const declaration = statements.find(
+          (node) =>
+            node.type === 'VariableDeclaration' &&
+            node.declarations.some((item) => item.id.name === lifecycle),
+        );
+        if (
+          !result ||
+          !lifecycle ||
+          specifiers.length !== 2 ||
+          !declaration ||
+          declaration.declarations.length !== 1 ||
+          statements.some((node) => node.type === 'ExportDefaultDeclaration')
+        )
+          this.error('Unexpected Node HTTP component initialization export shape');
+        const imports = statements
+          .filter((node) => node.type === 'ImportDeclaration')
+          .map((node) => code.slice(node.start, node.end))
+          .join('\n');
+        const body = statements
+          .filter(
+            (node) => node.type !== 'ImportDeclaration' && node.type !== 'ExportNamedDeclaration',
+          )
+          .map((node) =>
+            node === declaration
+              ? `var${code.slice(node.start + node.kind.length, node.end)}`
+              : code.slice(node.start, node.end),
+          )
+          .join('\n');
+        // Inline imports only await a namespace promise. This factory brackets actual evaluation,
+        // including application/dependency top-level await and synchronous module failures.
+        code = `${imports}\nexport default (async () => {
+try { ${body}\nreturn await ${result}; }
+finally { ${lifecycle}?.close(); }
+})();`;
+      }
       const result = await minify(code, {
         module: options.format === 'es',
         keep_fnames: true,
