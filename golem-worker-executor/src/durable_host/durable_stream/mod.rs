@@ -54,8 +54,8 @@ use crate::durable_host::stream_bus::{
 };
 use crate::services::activity::{ActivityGate, spawn_with_activity};
 use crate::services::oplog::{
-    CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
-    OplogServiceOps, UnreadableOplog,
+    CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogRefusal,
+    OplogService, OplogServiceOps, UnreadableOplog,
 };
 use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
@@ -789,7 +789,7 @@ pub struct IndexedExternalProducer {
 /// refused, ahead of whatever the commit does after that.
 pub(crate) type DurableStreamCommit = Arc<
     dyn Fn(
-            Option<oneshot::Sender<Result<(), OplogFence>>>,
+            Option<oneshot::Sender<Result<(), OplogRefusal>>>,
         ) -> Pin<Box<dyn Future<Output = ()> + Send>>
         + Send
         + Sync,
@@ -891,8 +891,10 @@ impl DurableStreamStore {
             Box::pin(async move {
                 let result = match oplog.commit(CommitLevel::Always).await {
                     Ok(_) => Ok(()),
-                    Err(OplogError::Fenced(fence)) => Err(fence),
-                    Err(error) => panic!("oplog write: {error}"),
+                    Err(error) => match error.into_refusal() {
+                        Ok(refusal) => Err(refusal),
+                        Err(error) => panic!("oplog write: {error}"),
+                    },
                 };
                 if let Some(committed) = committed {
                     let _ = committed.send(result);

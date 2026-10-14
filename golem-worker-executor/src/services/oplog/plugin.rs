@@ -18,8 +18,8 @@ use crate::services::activity::{ActivityGate, ActivityGuard};
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogLifecycleGuard,
+    OplogRefusal, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
     ReservedRawStartBuilder, StagePublication, UnreadableOplog,
 };
 use crate::services::shard::ShardService;
@@ -2270,10 +2270,11 @@ impl ForwardingOplogState {
 
     /// Write an OplogProcessorCheckpoint entry, commit it, and update index tracking.
     ///
-    /// `Err` means the agent's oplog was fenced: its shard has a new owner, so nothing more may be
-    /// written and forwarding stops. Giving the agent up is deliberately not this layer's call - a
-    /// storage decorator has no business stopping agents - and it does not need to be: the fence
-    /// latches on the oplog, so the worker's own commit path is refused too and gives it up.
+    /// `Err` means the agent's oplog refused the write: its shard has a new owner, or an archive
+    /// layer did not store its entries. Nothing more may be written and forwarding stops. Giving
+    /// the agent up is deliberately not this layer's call - a storage decorator has no business
+    /// stopping agents - and it does not need to be: the refusal latches on the oplog, so the
+    /// worker's own commit path is refused too and gives it up.
     ///
     /// Any other storage failure keeps the fail-stop behaviour it has always had.
     async fn write_checkpoint(
@@ -2283,12 +2284,12 @@ impl ForwardingOplogState {
         confirmed_up_to: OplogIndex,
         sending_up_to: OplogIndex,
         last_batch_start: OplogIndex,
-    ) -> Result<(), OplogFence> {
+    ) -> Result<(), OplogRefusal> {
         // Checked here as well as when the flush starts: the worker's own write can latch the
         // fence while the flush awaits a send or a lookup, and a checkpoint added after that
         // would still take an index for an entry that is never committed.
         if let Some(fence) = self.inner.fence() {
-            return Err(fence);
+            return Err(OplogRefusal::Fenced(fence));
         }
         if self.pending_checkpoint_activity.is_none() {
             self.pending_checkpoint_activity = Some(
@@ -2309,8 +2310,10 @@ impl ForwardingOplogState {
         let cached_checkpoint = cache_entries.then(|| checkpoint.clone());
         let idx = match self.inner.add(checkpoint).await {
             Ok(idx) => idx,
-            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
-            Err(error) => panic!("oplog write: {error}"),
+            Err(error) => match error.into_refusal() {
+                Ok(refusal) => return Err(self.stop_forwarding(refusal)),
+                Err(error) => panic!("oplog write: {error}"),
+            },
         };
         if let Some(checkpoint) = cached_checkpoint {
             self.record_cached([(idx, checkpoint)]);
@@ -2319,8 +2322,10 @@ impl ForwardingOplogState {
         }
         let committed = match self.inner.commit(CommitLevel::Always).await {
             Ok(committed) => committed,
-            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
-            Err(error) => panic!("oplog write: {error}"),
+            Err(error) => match error.into_refusal() {
+                Ok(refusal) => return Err(self.stop_forwarding(refusal)),
+                Err(error) => panic!("oplog write: {error}"),
+            },
         };
         if let Some(max_idx) = committed.keys().max().copied() {
             self.last_committed_idx = self.last_committed_idx.max(max_idx);
@@ -2334,13 +2339,13 @@ impl ForwardingOplogState {
     /// Logs the checkpoint that found the fence and hands the fence back to the caller, which
     /// stops forwarding for this agent. Every flush after it sees the latched fence and returns
     /// before writing anything.
-    fn stop_forwarding(&self, fence: OplogFence) -> OplogFence {
+    fn stop_forwarding(&self, refusal: OplogRefusal) -> OplogRefusal {
         tracing::info!(
             source_agent = %self.initial_worker_metadata.agent_id,
-            expected_epoch = fence.expected_epoch.0,
-            "Oplog processor: checkpoint fenced, the shard has a new owner - forwarding stopped"
+            refusal = %refusal,
+            "Oplog processor: checkpoint refused - forwarding stopped"
         );
-        fence
+        refusal
     }
 
     /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
@@ -2629,7 +2634,7 @@ fn oplog_processor_idempotency_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::oplog::DurableStreamOplogRecord;
+    use crate::services::oplog::{DurableStreamOplogRecord, OplogFence};
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;

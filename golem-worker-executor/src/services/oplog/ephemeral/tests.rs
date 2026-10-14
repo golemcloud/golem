@@ -78,6 +78,11 @@ impl GatedArchive {
     pub fn release(&self, count: usize) {
         self.append_permits.add_permits(count);
     }
+
+    /// Fails every append from now on, as a storage that does not take the writes.
+    pub fn fail_appends(&self) {
+        self.append_permits.close();
+    }
 }
 
 #[async_trait]

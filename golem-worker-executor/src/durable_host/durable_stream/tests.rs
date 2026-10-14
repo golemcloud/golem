@@ -7794,7 +7794,8 @@ async fn producer_answering_fenced_commits(
         Box::pin(async move {
             if let Some(fence) = oplog.fence() {
                 if let Some(committed) = committed {
-                    let _ = committed.send(Err(fence));
+                    let _ =
+                        committed.send(Err(crate::services::oplog::OplogRefusal::Fenced(fence)));
                 }
                 return;
             }

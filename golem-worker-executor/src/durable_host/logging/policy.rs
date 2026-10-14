@@ -139,16 +139,15 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                     if is_live && !replay_state.seen_log(*level, context, message).await {
                         // Same contract as `Worker::add_to_oplog_or_retire`, spelled out
                         // because this writes through the oplog handle passed in rather than the
-                        // worker's own: a fence retires the agent, anything else is fail-stop.
-                        match oplog.add(entry).await {
-                            Ok(_) => {}
-                            Err(crate::services::oplog::OplogError::Fenced(fence)) => {
-                                public_state.worker().record_retirement(
-                                    golem_service_base::error::worker_executor::InterruptKind::ShardLost,
-                                    crate::worker::RetirementReason::Fenced(Some(fence)),
-                                );
+                        // worker's own: a fence retires the agent, a failed archive write is left
+                        // to the next write that can report it, and anything else is fail-stop.
+                        if let Err(error) = oplog.add(entry).await {
+                            match error.into_refusal() {
+                                Ok(refusal) => {
+                                    public_state.worker().refused_by(refusal);
+                                }
+                                Err(error) => panic!("oplog write: {error}"),
                             }
-                            Err(error) => panic!("oplog write: {error}"),
                         }
                     }
                 }

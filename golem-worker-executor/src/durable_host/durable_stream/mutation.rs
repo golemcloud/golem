@@ -735,9 +735,15 @@ impl DurableStreamStore {
         receipt
             .await
             .expect("durable stream commit failed before durability receipt")
-            .map_err(|fence| {
-                self.poison_refused(&fence);
-                StreamStoreError::Fenced(fence)
+            .map_err(|refusal| match refusal {
+                OplogRefusal::Fenced(fence) => {
+                    self.poison_refused(&fence);
+                    StreamStoreError::Fenced(fence)
+                }
+                refusal => {
+                    self.poison();
+                    StreamStoreError::from(OplogError::from(refusal))
+                }
             })
     }
 

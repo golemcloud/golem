@@ -21,7 +21,7 @@ use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOper
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog, OplogFence};
+use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
@@ -347,7 +347,7 @@ impl OwnerExecution {
         Ok(())
     }
 
-    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogFence> {
+    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogRefusal> {
         self.commit
             .commit_and_update_state(level)
             .await

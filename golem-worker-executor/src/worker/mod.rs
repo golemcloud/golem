@@ -86,7 +86,7 @@ use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_E
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{
     ArchiveWait, CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogOps, UnreadableOplog, downcast_oplog,
+    OplogLifecycleGuard, OplogOps, OplogRefusal, UnreadableOplog, downcast_oplog,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
@@ -1140,7 +1140,7 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
         self.state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
-            .map_err(SessionError::Fenced)?;
+            .map_err(|refusal| SessionError::from(OplogError::from(refusal)))?;
         Ok(())
     }
 
@@ -7202,7 +7202,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ),
                 )
                 .await
-                .map_err(|fence| self.retired_by(fence))?;
+                .map_err(|refusal| self.refused_by(refusal))?;
         }
         if !retained_acceptance && let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -8858,19 +8858,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// holds. The fence latches on the oplog, so the invocation's next write is refused too and
     /// unwinds the loop, which is where the stop belongs.
     ///
+    /// A failed archive write is latched on the oplog in the same way, so it also gives
+    /// `OplogIndex::NONE`, and the next write that can report it stops the agent with the cause.
     /// Every other storage failure keeps the fail-stop behaviour it has always had.
     pub async fn add_to_oplog_or_retire(&self, entry: OplogEntry) -> OplogIndex {
         match self.add_to_oplog(entry).await {
             Ok(index) => index,
-            Err(OplogError::Fenced(_)) => OplogIndex::NONE,
-            Err(error) => panic!("oplog write: {error}"),
+            Err(error) => match error.into_refusal() {
+                Ok(_) => OplogIndex::NONE,
+                Err(error) => panic!("oplog write: {error}"),
+            },
         }
     }
 
     /// Commits the buffered entries and folds them into the published status.
     ///
-    /// A commit the storage refused is returned as `OplogError::Fenced`, and the agent is marked
-    /// retired for a lost shard. It has to be reported rather than folded into "nothing changed": below the
+    /// A commit the oplog refused is returned as the refusal: `OplogError::Fenced`, for which the
+    /// agent is marked retired for a lost shard, or `OplogError::ArchiveWrite`. It has to be reported rather than folded into "nothing changed": below the
     /// commit threshold an add only buffers, so this commit is where a takeover is found, and a
     /// caller about to run a side effect, publish a result or acknowledge a request must not do
     /// it for entries that never reached the storage. The status actor has already started the
@@ -8881,15 +8885,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<OplogIndex, OplogError> {
         match self.state_actor.commit_and_update_state(commit_level).await {
             Ok((index, _)) => Ok(index),
-            Err(fence) => Err(self.retired_by(fence)),
+            Err(refusal) => Err(self.refused_by(refusal)),
         }
     }
 
     /// Enqueues an actor-owned commit + fold and waits only until the commit is acknowledged.
     /// Later ordered status reads remain behind the fold on the same FIFO queue.
     ///
-    /// A refused commit is acknowledged with the fence, reported as `OplogError::Fenced` (see
-    /// [`Self::commit_oplog_and_update_state`]). No acknowledgement at all means the actor
+    /// A refused commit is acknowledged with the refusal, reported as in
+    /// [`Self::commit_oplog_and_update_state`]. No acknowledgement at all means the actor
     /// stopped, which stays fatal.
     pub async fn commit_oplog_before_status_update(
         &self,
@@ -8901,7 +8905,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
         {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(fence)) => Err(self.retired_by(fence)),
+            Ok(Err(refusal)) => Err(self.refused_by(refusal)),
             Err(_) => panic!(
                 "Worker state actor for {} stopped before acknowledging commit",
                 self.owned_agent_id
@@ -8909,8 +8913,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// Adds an entry and commits it, reporting a refusal of either as `OplogError::Fenced` (see
-    /// [`Self::commit_oplog_and_update_state`]).
+    /// Adds an entry and commits it, reporting a refusal of either as in
+    /// [`Self::commit_oplog_and_update_state`].
     ///
     /// Every other storage failure keeps the fail-stop behaviour of
     /// [`Self::add_to_oplog_or_retire`].
@@ -8929,6 +8933,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             RetirementReason::Fenced(Some(fence.clone())),
         );
         OplogError::Fenced(fence)
+    }
+
+    /// Returns a refusal of the oplog for the caller to propagate, and records the lost shard
+    /// first when the refusal is a fence.
+    pub(crate) fn refused_by(&self, refusal: OplogRefusal) -> OplogError {
+        match refusal {
+            OplogRefusal::Fenced(fence) => self.retired_by(fence),
+            refusal => refusal.into(),
+        }
     }
 
     pub async fn queue_card_revocation(
@@ -9082,7 +9095,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
-            .map_err(|fence| self.retired_by(fence))?;
+            .map_err(|refusal| self.refused_by(refusal))?;
 
         if changed
             && let Some(wakeup) = wakeup

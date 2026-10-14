@@ -1497,7 +1497,7 @@ async fn persist_http_response<Ctx: WorkerCtx>(
             )
             .await
             .map_err(|err| match err {
-                OplogError::Fenced(_) => err,
+                OplogError::Fenced(_) | OplogError::ArchiveWrite { .. } => err,
                 err => panic!("failed to serialize http response: {err}"),
             })?;
         ctx.public_state

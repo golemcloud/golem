@@ -974,6 +974,78 @@ impl Display for OplogError {
 
 impl std::error::Error for OplogError {}
 
+/// A write the oplog refuses, together with every later write: the shard has a new owner
+/// (`Fenced`), or an archive layer of an ephemeral oplog did not store its entries after its
+/// retries (`ArchiveWrite`). Both are latched on the oplog, so a path that cannot report the
+/// refusal leaves it to the next write that can. Every other `OplogError` stays fail-stop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OplogRefusal {
+    Fenced(OplogFence),
+    ArchiveWrite {
+        agent_id: AgentId,
+        level: usize,
+        details: String,
+    },
+}
+
+impl OplogRefusal {
+    /// The fence, when the refusal means that the shard has a new owner.
+    pub fn fence(&self) -> Option<&OplogFence> {
+        match self {
+            Self::Fenced(fence) => Some(fence),
+            Self::ArchiveWrite { .. } => None,
+        }
+    }
+}
+
+impl OplogError {
+    /// Splits the refusal off a write error; every other error is returned as it is.
+    pub fn into_refusal(self) -> Result<OplogRefusal, OplogError> {
+        match self {
+            Self::Fenced(fence) => Ok(OplogRefusal::Fenced(fence)),
+            Self::ArchiveWrite {
+                agent_id,
+                level,
+                details,
+            } => Ok(OplogRefusal::ArchiveWrite {
+                agent_id,
+                level,
+                details,
+            }),
+            error @ (Self::Payload(_) | Self::Maintenance(_)) => Err(error),
+        }
+    }
+}
+
+impl From<OplogRefusal> for OplogError {
+    fn from(refusal: OplogRefusal) -> Self {
+        match refusal {
+            OplogRefusal::Fenced(fence) => Self::Fenced(fence),
+            OplogRefusal::ArchiveWrite {
+                agent_id,
+                level,
+                details,
+            } => Self::ArchiveWrite {
+                agent_id,
+                level,
+                details,
+            },
+        }
+    }
+}
+
+impl From<OplogRefusal> for WorkerExecutorError {
+    fn from(refusal: OplogRefusal) -> Self {
+        OplogError::from(refusal).into()
+    }
+}
+
+impl Display for OplogRefusal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", OplogError::from(self.clone()))
+    }
+}
+
 /// A single oplog append that has already been synchronously enqueued in the oplog's ordering
 /// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
 /// index after the append finishes.

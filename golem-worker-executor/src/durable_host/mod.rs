@@ -5580,9 +5580,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
-                .map_err(|err| match err {
-                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
-                    err => panic!(
+                .map_err(|err| match err.into_refusal() {
+                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
+                    Err(err) => panic!(
                         "could not encode agent invocation on {}: {err}",
                         self.agent_id()
                     ),
@@ -5701,21 +5701,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     }),
                 )
                 .await;
-            match denial_persisted {
-                Ok(_) => {}
-                Err(crate::services::oplog::OplogError::Fenced(fence)) => {
-                    // The shard moved while this failure was being recorded. Retire the agent
-                    // exactly as the `ShardLost` arm above does: nothing further may be written
-                    // to an oplog that belongs to another executor now.
-                    self.public_state.worker().record_retirement(
-                        InterruptKind::ShardLost,
-                        crate::worker::RetirementReason::Fenced(Some(fence)),
-                    );
-                    return RetryDecision::None;
+            if let Err(error) = denial_persisted {
+                match error.into_refusal() {
+                    // The shard moved while this failure was being recorded, or an archive layer
+                    // did not store the oplog. A fence retires the agent exactly as the
+                    // `ShardLost` arm above does: nothing further may be written to an oplog that
+                    // belongs to another executor now. Neither refusal is retried.
+                    Ok(refusal) => {
+                        self.public_state.worker().refused_by(refusal);
+                        return RetryDecision::None;
+                    }
+                    Err(error) => panic!("oplog write: {error}"),
                 }
-                Err(error) => panic!("oplog write: {error}"),
             }
-            // Refused, like the add above: the shard is lost.
+            // Refused, like the add above.
             if self
                 .public_state
                 .worker()
@@ -5953,9 +5952,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     component_revision,
                 )
                 .await
-                .map_err(|err| match err {
-                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
-                    err => {
+                .map_err(|err| match err.into_refusal() {
+                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
+                    Err(err) => {
                         panic!("could not encode function result for {full_function_name}: {err}")
                     }
                 })?;
