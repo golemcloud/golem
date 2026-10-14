@@ -291,14 +291,20 @@ async fn run_worker_executor(
     config: WorkerExecutorConfig,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_worker_executor::RunDetails, anyhow::Error> {
-    // ManagedXfs storage sends its quota calls to a helper process, the only process that holds
-    // CAP_SYS_ADMIN. The executor cannot change project quotas without it, so it stops with it.
-    if let Some(quota_helper) =
+    // ManagedXfs storage sends its quota calls to a helper process. `main` removed CAP_SYS_ADMIN
+    // from this process before it started threads; the helper gets it again when it runs this
+    // binary. The executor cannot change project quotas without the helper, so it stops with it.
+    // The task owns the helper, so dropping the task at shutdown stops the helper too.
+    if let Some(mut quota_helper) =
         golem_worker_executor::xfs_quota_helper::start_for_storage(&config.filesystem_storage.mode)?
     {
         join_set.spawn(async move {
-            let ended = tokio::task::spawn_blocking(move || quota_helper.wait()).await?;
-            Err(anyhow::anyhow!(ended))
+            loop {
+                if let Some(ended) = quota_helper.try_wait() {
+                    return Err(anyhow::anyhow!(ended));
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
         });
     }
 

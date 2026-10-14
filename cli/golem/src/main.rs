@@ -49,6 +49,13 @@ fn main() -> ExitCode {
     let command_parse_result = GolemCliCommand::try_parse_from_lenient(std::env::args_os(), true);
 
     if requires_executor_runtime(&command_parse_result) {
+        // Linux keeps capabilities per thread, so this runs before the runtime starts threads. An
+        // XFS quota helper, the only process that needs CAP_SYS_ADMIN, gets it again when it
+        // runs this binary.
+        if let Err(err) = golem_worker_executor::process_capabilities::drop_sys_admin() {
+            eprintln!("{err:#}");
+            return ExitCode::FAILURE;
+        }
         golem_worker_executor::bootstrap::create_runtime()
             .expect("Failed to build tokio runtime")
             .block_on(CommandHandler::handle(

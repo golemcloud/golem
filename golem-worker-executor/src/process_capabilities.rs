@@ -19,10 +19,11 @@
 //! `SYS_ADMIN` and `no_new_privs` is off. Only the XFS quota helper, which runs no guest code,
 //! uses it: [`retain_only_sys_admin`] keeps it there and removes every other capability. The
 //! executor removes it with [`restrict_executor`] once it started the helper, and sets
-//! `no_new_privs`, so that no later `exec` gains a privilege.
+//! `no_new_privs`, so that no later `exec` gains a privilege. The unified `golem` binary removes
+//! it with [`drop_sys_admin`] before it starts threads, and starts the helper later.
 //!
 //! Linux keeps capabilities per thread, and a new thread copies them from the thread that starts
-//! it. Both functions must therefore run while the process has one thread, and refuse to run
+//! it. These functions must therefore run while the process has one thread, and refuse to run
 //! otherwise.
 
 /// The documentation of the container settings that `ManagedXfs` needs.
@@ -45,6 +46,14 @@ pub fn restrict_executor() -> anyhow::Result<SysAdminCapability> {
     imp::restrict_executor()
 }
 
+/// Removes `CAP_SYS_ADMIN` from every capability set of the process, without `no_new_privs`. For
+/// a process that starts the XFS quota helper only after it starts threads: the helper then gets
+/// the capability again when it runs the binary, from its file capability or as root, which
+/// `no_new_privs` would prevent.
+pub fn drop_sys_admin() -> anyhow::Result<SysAdminCapability> {
+    imp::drop_sys_admin()
+}
+
 /// Keeps `CAP_SYS_ADMIN` as the only capability of the XFS quota helper, permitted and effective,
 /// and sets `no_new_privs`. Fails, naming the settings to add, when the capability is not
 /// permitted.
@@ -60,12 +69,17 @@ mod imp {
     use rustix::thread::{CapabilitySet, CapabilitySets, capabilities, set_capabilities};
 
     pub(super) fn restrict_executor() -> anyhow::Result<SysAdminCapability> {
+        let outcome = drop_sys_admin()?;
+        rustix::thread::set_no_new_privs(true)
+            .context("failed to set no_new_privs for the executor")?;
+        Ok(outcome)
+    }
+
+    pub(super) fn drop_sys_admin() -> anyhow::Result<SysAdminCapability> {
         require_one_thread()?;
         let current = read()?;
         let (target, outcome) = executor_sets(current);
         write(current, target)?;
-        rustix::thread::set_no_new_privs(true)
-            .context("failed to set no_new_privs for the executor")?;
         Ok(outcome)
     }
 
@@ -237,6 +251,10 @@ mod imp {
     use super::SysAdminCapability;
 
     pub(super) fn restrict_executor() -> anyhow::Result<SysAdminCapability> {
+        Ok(SysAdminCapability::Absent)
+    }
+
+    pub(super) fn drop_sys_admin() -> anyhow::Result<SysAdminCapability> {
         Ok(SysAdminCapability::Absent)
     }
 }
