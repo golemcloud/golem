@@ -49,7 +49,7 @@ def main():
     )
 
     asset = staging / "python-source.tar.gz"
-    with tarfile.open(asset, "w:gz", dereference=True) as archive:
+    with tarfile.open(asset, "w:gz") as archive:
         archive.add(source, arcname="python-source")
     with asset.open("rb") as data:
         digest = hashlib.file_digest(data, "sha256").hexdigest()
