@@ -533,13 +533,39 @@ func TestDecodingACardTakesItOutOfTheValue(t *testing.T) {
 	}
 }
 
-// A scope card cannot be sent: a type that holds one is a definition error.
-func TestAScopeCardHasNoSchema(t *testing.T) {
-	type holdsScope struct{ Scope ScopeCard }
+// A scope card, a card id, a holder and a lifespan cannot be sent: a type
+// that holds one is a definition error, and encoding one through a type
+// nobody validated fails.
+func TestCardManagementValuesHaveNoSchema(t *testing.T) {
+	type holds struct {
+		Scope    ScopeCard
+		ID       CardID
+		Holder   Holder
+		Lifespan Lifespan
+	}
 	g := engine.GraphBuilder{E: defs.Engine}
-	g.Node(defs.Compile(reflect.TypeFor[holdsScope]()))
-	if why := g.Invalids[reflect.TypeFor[ScopeCard]()]; !strings.Contains(why, "cannot be sent") {
-		t.Errorf("a field of type ScopeCard compiled: %q", why)
+	g.Node(defs.Compile(reflect.TypeFor[holds]()))
+	for typ, name := range map[reflect.Type]string{
+		reflect.TypeFor[ScopeCard](): "golem.ScopeCard", reflect.TypeFor[CardID](): "golem.CardID",
+		reflect.TypeFor[Holder](): "golem.Holder", reflect.TypeFor[Lifespan](): "golem.Lifespan",
+	} {
+		if why := g.Invalids[typ]; !strings.HasPrefix(why, name+" cannot be sent") {
+			t.Errorf("a field of type %s compiled: %q", name, why)
+		}
+	}
+	for name, v := range map[string]any{
+		"CardID":   struct{ ID CardID }{},
+		"Holder":   struct{ H Holder }{AgentHolder(AgentID{AgentID: "a"})},
+		"Lifespan": struct{ L Lifespan }{LifespanOf(time.Hour)},
+	} {
+		func() {
+			defer func() {
+				if r := recover(); !strings.Contains(fmt.Sprint(r), "cannot be sent") {
+					t.Errorf("encoding a %s gave %v", name, r)
+				}
+			}()
+			engine.EncodeWith(defs.Compile(reflect.TypeOf(v)), reflect.ValueOf(v))
+		}()
 	}
 }
 

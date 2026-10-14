@@ -42,6 +42,15 @@ var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 			compilePermissionCard(c, true)
 		case ScopeCard:
 			markScopeCardInvalid(c)
+		// Card identifiers, holders and lifespans are host-side request
+		// values with unexported fields: as a record they would travel as
+		// record {} and arrive as a zero value.
+		case CardID:
+			markNotSendable(c, errCardIDNotSendable)
+		case Holder:
+			markNotSendable(c, errHolderNotSendable)
+		case Lifespan:
+			markNotSendable(c, errLifespanNotSendable)
 		default:
 			return false
 		}

@@ -91,13 +91,23 @@ func (c ScopeCard) cardState() *permissionCardState                 { return c.s
 // [ScopeCard] where a value is sent.
 const errScopeCardNotSendable = "golem.ScopeCard cannot be sent: it is valid only in the invocation that derived it; attach it to an awaited call with WithScopeCard"
 
-// markScopeCardInvalid makes ScopeCard a definition error. A value encoded
-// through a type that was never validated still fails loudly, so the encode
-// gives back the cards it already moved.
-func markScopeCardInvalid(c *engine.Codec) {
-	engine.MarkInvalid(c, "%s", errScopeCardNotSendable)
+// Definition errors of the card-management types that have no schema.
+const (
+	errCardIDNotSendable   = "golem.CardID cannot be sent: it is an opaque identifier with no wire form; compare it within the component that read it"
+	errHolderNotSendable   = "golem.Holder cannot be sent: it has no wire form; send the AgentID, account or application id and build the Holder where it is used"
+	errLifespanNotSendable = "golem.Lifespan cannot be sent: it has no wire form; send a time.Duration or the ISO-8601 text and build the Lifespan where it is used"
+)
+
+// markScopeCardInvalid makes ScopeCard a definition error.
+func markScopeCardInvalid(c *engine.Codec) { markNotSendable(c, errScopeCardNotSendable) }
+
+// markNotSendable makes a type with no schema a definition error. A value
+// encoded through a type that was never validated still fails loudly, so the
+// encode gives back the cards it already moved.
+func markNotSendable(c *engine.Codec, why string) {
+	engine.MarkInvalid(c, "%s", why)
 	c.Encode = func(*engine.ValBuilder, reflect.Value) int32 {
-		panic(&engine.EncodeError{Msg: errScopeCardNotSendable})
+		panic(&engine.EncodeError{Msg: why})
 	}
 }
 
