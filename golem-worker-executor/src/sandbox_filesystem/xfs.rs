@@ -827,6 +827,12 @@ fn clear_root_project_assignment(
     let mut attributes = get_fsxattr(root_fd).map_err(|error| {
         FilesystemStorageError::io("inspect managed XFS root project attributes", root, error)
     })?;
+    // Linux lets only the owner of the root change its attributes, and the root of a new volume
+    // belongs to root. A root without a project needs no change, so the executor needs no
+    // ownership of it.
+    if !has_project_identity(&attributes) {
+        return Ok(());
+    }
     attributes.fsx_projid = 0;
     attributes.fsx_xflags &= !linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
     attributes.fsx_pad = [0; 8];
