@@ -40,9 +40,9 @@ incremental = false
 strip = "debuginfo"
 
 [patch.crates-io]
-brush-core = { git = "https://github.com/golemcloud/brush", rev = "9549479d688721d6ae10a0b5fdc413d617fe5f03" }
-brush-builtins = { git = "https://github.com/golemcloud/brush", rev = "9549479d688721d6ae10a0b5fdc413d617fe5f03" }
-brush-parser = { git = "https://github.com/golemcloud/brush", rev = "9549479d688721d6ae10a0b5fdc413d617fe5f03" }
+brush-core = { git = "https://github.com/golemcloud/brush", rev = "518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a" }
+brush-builtins = { git = "https://github.com/golemcloud/brush", rev = "518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a" }
+brush-parser = { git = "https://github.com/golemcloud/brush", rev = "518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a" }
 uucore = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
 uu_cat = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
 uu_ls = { git = "https://github.com/golemcloud/coreutils", rev = "3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620" }
