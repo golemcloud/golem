@@ -1030,9 +1030,15 @@ func (d *definitions) buildCommandBody(g *engine.GraphBuilder, ce *commandEntry,
 	return body
 }
 
-// decode fills an argument struct from a canonical input record.
-func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) error {
+// decode fills an argument struct from a canonical input record. A failed
+// decode gives every permission card in the record back to the host.
+func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) (err error) {
 	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	defer func() {
+		if err != nil {
+			dec.ReleaseCards(link.ReleaseCard)
+		}
+	}()
 	if len(dec.Nodes) == 0 {
 		if len(l.fields) == 0 {
 			return nil
@@ -1052,7 +1058,6 @@ func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) er
 	}
 	for i, a := range l.fields {
 		if err := a.field.Decode(&dec, dst.FieldByIndex(a.path), idxs[i]); err != nil {
-			dec.ReleaseCards(link.ReleaseCard)
 			return fmt.Errorf("argument %q: %w", a.b.name, err)
 		}
 	}
@@ -1229,7 +1234,7 @@ func passThroughToolError(err error) types.ToolError {
 		return types.MakeToolErrorInvalidResult(err.Error())
 	}
 	if call.wire != nil {
-		return *call.wire
+		return sendableToolError(*call.wire)
 	}
 	switch call.Kind {
 	case CallInvalidInput:
@@ -1248,6 +1253,22 @@ func passThroughToolError(err error) types.ToolError {
 		return types.MakeToolErrorInvalidCommandPath(slices.Clone(call.CommandPath))
 	}
 	return types.MakeToolErrorInvalidResult(err.Error())
+}
+
+// sendableToolError is a tool error received from the layer beneath, to be
+// passed on. A Match that decoded its payload took the payload's cards, so it
+// can no longer be passed on whole: it becomes an invalid result, and the
+// payload's remaining cards go back to the host.
+func sendableToolError(te types.ToolError) types.ToolError {
+	if te.Tag() != types.ToolErrorCustomError {
+		return te
+	}
+	payload := te.CustomError().Payload.Value
+	if err := engine.CheckCardsPresent(payload); err != nil {
+		engine.ReleaseCardsIn(payload.ValueNodes, link.ReleaseCard)
+		return types.MakeToolErrorInvalidResult(fmt.Sprintf("declared error %s: %v", te.CustomError().Name, err))
+	}
+	return te
 }
 
 // runWithOutputs calls a handler, recovering a panic rather than letting it

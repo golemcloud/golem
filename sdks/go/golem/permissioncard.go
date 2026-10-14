@@ -129,7 +129,7 @@ func compilePermissionCard(c *engine.Codec, polymorphic bool) {
 		}
 		h := n.PermissionCardHandle()
 		if h == nil {
-			return errPermissionCardTaken
+			return ErrPermissionCardTaken
 		}
 		d.Take(idx, types.MakeSchemaValueNodePermissionCardHandle(nil))
 		st := &permissionCardState{h: h}
@@ -147,6 +147,7 @@ func compilePermissionCard(c *engine.Codec, polymorphic bool) {
 // them.
 func releaseCard(h *types.PermissionCard) { permissionsHostOps.release(h) }
 
-// errPermissionCardTaken reports a second decode of a card out of the same
-// value: the first one already holds it.
-var errPermissionCardTaken = engine.ErrPermissionCardTaken
+// ErrPermissionCardTaken reports a value whose permission card already moved
+// out of it, by a decode or a send: the value can no longer be decoded or
+// sent whole.
+var ErrPermissionCardTaken = engine.ErrPermissionCardTaken

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
@@ -67,9 +68,23 @@ func TestMatchDecodesACardPayloadOnce(t *testing.T) {
 		types.MakeToolErrorCustomError(types.CustomToolError{Name: "locked", Payload: witOf(payload)})))
 	locked := &ErrorCase[CardPayload, struct{}]{info: &toolErrorInfo{tool: "keys", name: "locked", payload: reflect.TypeFor[CardPayload]()}}
 
+	// A case of the same name with another payload type fails to match, and
+	// leaves the payload for the right one.
+	type otherPayload struct {
+		Card   golem.PermissionCard
+		Number uint32
+	}
+	other := &ErrorCase[otherPayload, struct{}]{info: &toolErrorInfo{tool: "keys", name: "locked", payload: reflect.TypeFor[otherPayload]()}}
+	if _, ok := other.Match(err); ok {
+		t.Fatal("a case with another payload type matched")
+	}
+
 	first, ok := locked.Match(err)
 	if !ok {
 		t.Fatal("the first Match failed")
+	}
+	if _, ok := other.Match(err); ok {
+		t.Error("a case with another payload type matched after the right one")
 	}
 	copied := *err
 	for name, e := range map[string]error{"the error": err, "a copy": &copied, "a wrapper": fmt.Errorf("wrapped: %w", err)} {
@@ -142,7 +157,7 @@ func TestAnInputWhoseCardWasDecodedIsNotHandedOn(t *testing.T) {
 	if _, err := golem.DecodeTypedValue[KeysArgs](ctx.Input()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ctx.Next(ctx.Input()); !errors.Is(err, engine.ErrPermissionCardTaken) || started {
+	if _, err := ctx.Next(ctx.Input()); !errors.Is(err, golem.ErrPermissionCardTaken) || started {
 		t.Errorf("handing on the input gave %v, started %v", err, started)
 	}
 }
@@ -181,5 +196,118 @@ func TestAToolResultThatDoesNotDecodeReleasesItsCards(t *testing.T) {
 	}
 	if len(released) != 1 || released[0] != handle {
 		t.Errorf("released %v, want the result's card", released)
+	}
+}
+
+type TwoCards struct{ A, B golem.PermissionCard }
+
+// partlyTaken is a TwoCards value whose first card a decode took and whose
+// second card is still a live host handle.
+func partlyTaken(t *testing.T) (golem.TypedValue, *types.PermissionCard) {
+	t.Helper()
+	g := engine.GraphBuilder{E: link.Engine}
+	root := g.Node(link.Engine.Compile(reflect.TypeFor[TwoCards]()))
+	graph := g.Build()
+	graph.Root = root
+	live := &types.PermissionCard{}
+	return link.TypedValue(types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{
+		ValueNodes: []types.SchemaValueNode{
+			types.MakeSchemaValueNodePermissionCardHandle(nil),
+			types.MakeSchemaValueNodePermissionCardHandle(live),
+			types.MakeSchemaValueNodeRecordValue([]int32{0, 1}),
+		},
+		Root: 2,
+	}}).(golem.TypedValue), live
+}
+
+func recordReleases(t *testing.T) *[]*types.PermissionCard {
+	t.Helper()
+	var released []*types.PermissionCard
+	prev := link.ReleaseCard
+	t.Cleanup(func() { link.ReleaseCard = prev })
+	link.ReleaseCard = func(h *types.PermissionCard) { released = append(released, h) }
+	return &released
+}
+
+// A declared error whose payload card a Match took cannot pass on whole: it
+// becomes an invalid result, and the payload's other cards go back.
+func TestADeclaredErrorWhosePayloadWasMatchedIsNotPassedOn(t *testing.T) {
+	released := recordReleases(t)
+	payload, live := partlyTaken(t)
+	err := toolCallErrorFromWit("keys", []string{"get"}, types.MakeToolRpcErrorRemoteToolError(
+		types.MakeToolErrorCustomError(types.CustomToolError{Name: "locked", Payload: witOf(payload)})))
+	got := passThroughToolError(fmt.Errorf("handler: %w", err))
+	if got.Tag() != types.ToolErrorInvalidResult || !strings.Contains(got.InvalidResult(), "locked") {
+		t.Errorf("the matched error passed on as %+v", got)
+	}
+	if len(*released) != 1 || (*released)[0] != live {
+		t.Errorf("released %v, want the payload's live card", *released)
+	}
+
+	whole := hostValue(t, func(card func() golem.PermissionCard) CardPayload { return CardPayload{Card: card()} })
+	intact := toolCallErrorFromWit("keys", nil, types.MakeToolRpcErrorRemoteToolError(
+		types.MakeToolErrorCustomError(types.CustomToolError{Name: "locked", Payload: witOf(whole)})))
+	if got := passThroughToolError(intact); got.Tag() != types.ToolErrorCustomError {
+		t.Errorf("an unmatched error passed on as %+v", got)
+	}
+}
+
+// A value handed on once moved its cards to the layer beneath: handing it on
+// again fails rather than name handles the host already owns.
+func TestAnInputIsHandedOnOnce(t *testing.T) {
+	input := hostValue(t, func(card func() golem.PermissionCard) KeysArgs { return KeysArgs{Card: card()} })
+	starts := 0
+	inv := &middlewareInvocation{toolName: "keys", input: witOf(input), under: underlyingLayer{start: func([]string, types.TypedSchemaValue, io.Reader) (toolCall, error) {
+		starts++
+		return toolCall{wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+			return witTypes.None[types.TypedSchemaValue](), nil
+		}, cancel: func() {}}, nil
+	}}}
+	ctx := &UniversalMiddlewareContext[golem.Unit]{inv: inv}
+	if _, err := ctx.Next(ctx.Input()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctx.Next(ctx.Input()); !errors.Is(err, golem.ErrPermissionCardTaken) || starts != 1 {
+		t.Errorf("handing the input on again gave %v after %d starts", err, starts)
+	}
+}
+
+// A universal middleware's result that cannot be sent fails the invocation
+// and gives its remaining cards back.
+func TestARejectedMiddlewareResultReleasesItsCards(t *testing.T) {
+	released := recordReleases(t)
+	v, r, d := newVcs(t)
+	result, live := partlyTaken(t)
+	m := defineUniversalToolMiddlewareInto[golem.Unit](r, d, "keeper", MiddlewareSpec{})
+	_ = m.Handle(func(*UniversalMiddlewareContext[golem.Unit]) (golem.Option[golem.TypedValue], error) {
+		return golem.Some(result), nil
+	})
+	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m" })
+	res, _ := runMiddlewareFor(t, r, d, "keeper", middlewareRun{path: []string{"commit"}, input: input, params: mustTypedValue(t, golem.Unit{})})
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidResult {
+		t.Errorf("the result passed as %+v", res)
+	}
+	if len(*released) != 1 || (*released)[0] != live {
+		t.Errorf("released %v, want the result's live card", *released)
+	}
+}
+
+// An input record of the wrong shape gives its cards back, though the decode
+// never reached them.
+func TestAnInputOfTheWrongShapeReleasesItsCards(t *testing.T) {
+	released := recordReleases(t)
+	cmd, _, _ := declareKeys(t)
+	l, _ := cmd.ce.resolve()
+	live := &types.PermissionCard{}
+	tree := types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{
+		types.MakeSchemaValueNodePermissionCardHandle(live),
+		types.MakeSchemaValueNodeStringValue("extra"),
+		types.MakeSchemaValueNodeRecordValue([]int32{0, 1}),
+	}, Root: 2}
+	if err := l.decode(tree, reflect.New(cmd.ce.argsType).Elem()); err == nil {
+		t.Fatal("a record of two fields decoded as one")
+	}
+	if len(*released) != 1 || (*released)[0] != live {
+		t.Errorf("released %v, want the record's card", *released)
 	}
 }

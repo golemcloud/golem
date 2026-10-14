@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	"io"
 	"reflect"
 	"slices"
@@ -388,10 +389,10 @@ func (c *UniversalMiddlewareContext[P]) CommandPath() []string {
 
 // Input returns the call's arguments, the command's canonical input record.
 //
-// A permission card in it moves out when [golem.DecodeTypedValue] decodes it.
-// After that the input can no longer be handed on whole: Start and Next
-// refuse it, as the handler now holds the card; build the input to hand on
-// from the decoded value instead.
+// A permission card in it moves out when [golem.DecodeTypedValue] decodes it,
+// or when Start or Next hands the input on. After that the input can no longer
+// be handed on whole: Start and Next refuse it with an error, as the card is
+// held elsewhere; build the input to hand on from the decoded value instead.
 func (c *UniversalMiddlewareContext[P]) Input() golem.TypedValue {
 	return typedValue(c.inv.input)
 }
@@ -454,6 +455,9 @@ func (inv *middlewareInvocation) startRaw(input types.TypedSchemaValue) (*Invoca
 	if err != nil {
 		return nil, err
 	}
+	// The layer beneath took the input's cards: the same value cannot be
+	// handed on again.
+	engine.MarkCardsSent(input.Value.ValueNodes)
 	tool, path := inv.toolName, inv.commandPath
 	started := newInvocation(call, func(call toolCall) (golem.Option[golem.TypedValue], error) {
 		res, rpcErr := call.wait()
@@ -596,6 +600,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 		result := witTypes.None[types.TypedSchemaValue]()
 		if v, has := out.Interface().(golem.Option[golem.TypedValue]).Get(); has {
 			if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+				engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
 				return fail(passThroughToolError(err))
 			}
 			result = witTypes.Some(witOf(v))
@@ -648,6 +653,7 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 	wire := witTypes.None[types.TypedSchemaValue]()
 	if v, has := result.Get(); has {
 		if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+			engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
 			return fail(passThroughToolError(err))
 		}
 		wire = witTypes.Some(witOf(v))

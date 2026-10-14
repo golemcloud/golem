@@ -523,7 +523,7 @@ func TestDecodingACardTakesItOutOfTheValue(t *testing.T) {
 	if err != nil || got.Card.st.h != h {
 		t.Fatalf("decoding after a failed decode gave %v, %v", got, err)
 	}
-	if again, err := DecodeTypedValue[cardThenText](copied); !errors.Is(err, errPermissionCardTaken) || again.Card.st != nil {
+	if again, err := DecodeTypedValue[cardThenText](copied); !errors.Is(err, ErrPermissionCardTaken) || again.Card.st != nil {
 		t.Errorf("a second decode gave %v, %v", again.Card, err)
 	}
 	if _, err := DecodeTypedValue[PolymorphicPermissionCard](EncodeTypedValue(PolymorphicPermissionCard{pst: &permissionCardState{h: h}})); err != nil {
@@ -770,5 +770,44 @@ func TestAFailedDecodeOfAReceivedValueReleasesItsCards(t *testing.T) {
 	}
 	if len(f.released) != 2 || f.released[0] != h1 && f.released[1] != h1 || f.released[0] != h2 && f.released[1] != h2 {
 		t.Errorf("released %v, want both cards", f.released)
+	}
+}
+
+// A received parameter list gives back the cards a decode does not keep:
+// all of them when the list is malformed, and those in values past the
+// parameters when it decodes.
+func TestDecodingParametersReleasesTheCardsItDoesNotKeep(t *testing.T) {
+	type oneParam struct{ Card PermissionCard }
+	fields := defs.StructFields(reflect.TypeFor[oneParam]())
+	for name, tc := range map[string]struct {
+		nodes   func(first, extra *types.PermissionCard) []types.SchemaValueNode
+		root    int32
+		decodes bool
+		want    int
+	}{
+		"a root that is not a record": {func(first, extra *types.PermissionCard) []types.SchemaValueNode {
+			return []types.SchemaValueNode{types.MakeSchemaValueNodePermissionCardHandle(first)}
+		}, 0, false, 1},
+		"a record with too few values": {func(first, extra *types.PermissionCard) []types.SchemaValueNode {
+			return []types.SchemaValueNode{types.MakeSchemaValueNodePermissionCardHandle(first), types.MakeSchemaValueNodeRecordValue(nil)}
+		}, 1, false, 1},
+		"a value past the parameters": {func(first, extra *types.PermissionCard) []types.SchemaValueNode {
+			return []types.SchemaValueNode{
+				types.MakeSchemaValueNodePermissionCardHandle(first), types.MakeSchemaValueNodePermissionCardHandle(extra),
+				types.MakeSchemaValueNodeRecordValue([]int32{0, 1}),
+			}
+		}, 2, true, 1},
+	} {
+		f := newFakeCards(t)
+		first, extra := &types.PermissionCard{}, &types.PermissionCard{}
+		dst := reflect.New(reflect.TypeFor[oneParam]()).Elem()
+		err := decodeParams(types.SchemaValueTree{ValueNodes: tc.nodes(first, extra), Root: tc.root}, fields, dst, nil)
+		if (err == nil) != tc.decodes || len(f.released) != tc.want {
+			t.Errorf("%s: %v, released %v", name, err, f.released)
+			continue
+		}
+		if tc.decodes && (f.released[0] != extra || dst.Interface().(oneParam).Card.st.h != first) {
+			t.Errorf("%s: released %v and kept %v", name, f.released, dst.Interface())
+		}
 	}
 }

@@ -339,10 +339,11 @@ func defaultStreamCodec[T any]() streamCodec[T] {
 		},
 		decode: func(tree types.SchemaValueTree) (T, error) {
 			var out T
+			d := engine.Decoder{Nodes: tree.ValueNodes}
 			if c.Invalid != "" {
+				d.ReleaseCards(releaseCard)
 				return out, errors.New(c.Invalid)
 			}
-			d := engine.Decoder{Nodes: tree.ValueNodes}
 			slot := reflect.ValueOf(&out).Elem()
 			if err := c.Decode(&d, slot, tree.Root); err != nil {
 				d.ReleaseCards(releaseCard)

@@ -43,14 +43,25 @@ func encodeParams(fields []engine.Field, v reflect.Value) types.SchemaValueTree 
 // fields. An empty parameter list is permitted to arrive as an empty record.
 // Principal fields have no value in the tree: they are set to principal, which
 // may be nil where there is no invocation (parsing an agent id).
-func decodeParams(tree types.SchemaValueTree, fields []engine.Field, dst reflect.Value, principal Principal) error {
+//
+// The tree is received: a failed decode gives every permission card in it back
+// to the host, and a successful one gives back the cards in values past the
+// parameters it read.
+func decodeParams(tree types.SchemaValueTree, fields []engine.Field, dst reflect.Value, principal Principal) (err error) {
+	d := engine.Decoder{Nodes: tree.ValueNodes}
+	defer func() {
+		if err != nil {
+			d.ReleaseCards(releaseCard)
+		} else {
+			d.ReleaseRest(releaseCard)
+		}
+	}()
 	if principal != nil {
 		for _, f := range principalFields(fields) {
 			dst.Field(f.Index).Set(reflect.ValueOf(&principal).Elem())
 		}
 	}
 	fields = userFields(fields)
-	d := engine.Decoder{Nodes: tree.ValueNodes}
 	if len(d.Nodes) == 0 {
 		if len(fields) == 0 {
 			return nil
@@ -73,7 +84,6 @@ func decodeParams(tree types.SchemaValueTree, fields []engine.Field, dst reflect
 	}
 	for i, f := range fields {
 		if err := f.Codec.Decode(&d, dst.Field(f.Index), idxs[i]); err != nil {
-			d.ReleaseCards(releaseCard)
 			return fmt.Errorf("parameter %q: %w", f.Name, err)
 		}
 	}

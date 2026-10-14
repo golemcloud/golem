@@ -47,6 +47,9 @@ func (c *DynamicToolClient) Call(path []string, input golem.TypedValue) (golem.O
 // Start starts a command with an already-packed input and the given standard
 // input, which may be nil, requesting the outputs streams selects. The host
 // refuses a request that does not match what the command declares.
+//
+// A permission card in input moves to the host when the call starts: sending
+// the same value again fails with [golem.ErrPermissionCardTaken].
 func (c *DynamicToolClient) Start(path []string, input golem.TypedValue, stdin io.Reader, streams tool.Streams) (*tool.Invocation[golem.Option[golem.TypedValue]], error) {
 	wire := link.TypedValueWit(input)
 	if err := engine.CheckCardsPresent(wire.Value); err != nil {
@@ -63,6 +66,8 @@ func (c *DynamicToolClient) Start(path []string, input golem.TypedValue, stdin i
 	if err != nil {
 		return nil, err
 	}
+	// The host took the input's cards: the same value cannot be sent again.
+	engine.MarkCardsSent(wire.Value.ValueNodes)
 	return inv.(*tool.Invocation[golem.Option[golem.TypedValue]]), nil
 }
 

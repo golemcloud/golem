@@ -142,10 +142,34 @@ func (d *Decoder) Restore() {
 // decode of a received tree that failed and whose result is discarded.
 func (d *Decoder) ReleaseCards(release func(*types.PermissionCard)) {
 	d.Restore()
-	for i, n := range d.Nodes {
+	ReleaseCardsIn(d.Nodes, release)
+}
+
+// ReleaseRest gives back the permission cards a successful decode of a
+// received tree did not reach, such as those in values past the ones it read.
+// The cards it adopted stay with the result.
+func (d *Decoder) ReleaseRest(release func(*types.PermissionCard)) {
+	ReleaseCardsIn(d.Nodes, release)
+}
+
+// ReleaseCardsIn gives every permission card still in nodes back to the host
+// with release, and marks its node taken.
+func ReleaseCardsIn(nodes []types.SchemaValueNode, release func(*types.PermissionCard)) {
+	for i, n := range nodes {
 		if n.Tag() == types.SchemaValueNodePermissionCardHandle && n.PermissionCardHandle() != nil {
 			release(n.PermissionCardHandle())
-			d.Nodes[i] = types.MakeSchemaValueNodePermissionCardHandle(nil)
+			nodes[i] = types.MakeSchemaValueNodePermissionCardHandle(nil)
+		}
+	}
+}
+
+// MarkCardsSent marks every permission-card node in nodes taken once the host
+// has taken the tree, so a second send of the same value fails with
+// [ErrPermissionCardTaken] instead of naming handles the host already owns.
+func MarkCardsSent(nodes []types.SchemaValueNode) {
+	for i, n := range nodes {
+		if n.Tag() == types.SchemaValueNodePermissionCardHandle {
+			nodes[i] = types.MakeSchemaValueNodePermissionCardHandle(nil)
 		}
 	}
 }

@@ -73,8 +73,8 @@ func (v TypedValue) WithJSON(value any) (TypedValue, error) {
 // match.
 //
 // A permission card moves out of the value into the result: decoding the same
-// value, or a copy of it, again fails for the card. A failed decode leaves the
-// value as it was.
+// value, or a copy of it, again fails for the card with
+// [ErrPermissionCardTaken]. A failed decode leaves the value as it was.
 func DecodeTypedValue[T any](v TypedValue) (T, error) {
 	var out T
 	c := defs.Compile(reflect.TypeFor[T]())

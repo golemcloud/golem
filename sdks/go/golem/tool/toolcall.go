@@ -115,9 +115,9 @@ type CallError struct {
 	// ErrorName is the declared error case, for [CallDeclaredError].
 	ErrorName string
 	payload   golem.TypedValue
-	// decoded holds the payload as the first Match decoded it. Decoding moves
-	// a permission card out of the payload, so every later Match, and every
-	// copy of the error, reads it from here.
+	// decoded holds the payload as the first successful Match decoded it.
+	// Decoding moves a permission card out of the payload, so every later
+	// Match, and every copy of the error, reads it from here.
 	decoded *decodedPayload
 	// wire is the tool's own error, kept so a middleware passing the failure
 	// on returns it unchanged.
@@ -132,15 +132,16 @@ type CallError struct {
 // fails for it. Match decodes once and returns the same value every time.
 func (e *CallError) Payload() golem.TypedValue { return e.payload }
 
-// decodedPayload is a declared error's payload as one Go type.
+// decodedPayload is a declared error's payload as the one Go type it
+// decoded as.
 type decodedPayload struct {
 	typ   reflect.Type
 	value any
-	err   error
 }
 
-// decodePayload decodes the payload as P once, and returns that result to
-// every later call for P.
+// decodePayload decodes the payload as P, and keeps a successful decode for
+// every later call for P. A failed decode leaves the payload as it was, so it
+// is not kept: a later call, for P or another type, decodes again.
 func decodePayload[P any](e *CallError) (P, error) {
 	typ := reflect.TypeFor[P]()
 	if e.decoded == nil {
@@ -148,11 +149,11 @@ func decodePayload[P any](e *CallError) (P, error) {
 	}
 	if d := e.decoded; d.typ == typ {
 		p, _ := d.value.(P)
-		return p, d.err
+		return p, nil
 	}
 	p, err := golem.DecodeTypedValue[P](e.payload)
-	if e.decoded.typ == nil {
-		*e.decoded = decodedPayload{typ: typ, value: p, err: err}
+	if err == nil && e.decoded.typ == nil {
+		*e.decoded = decodedPayload{typ: typ, value: p}
 	}
 	return p, err
 }
