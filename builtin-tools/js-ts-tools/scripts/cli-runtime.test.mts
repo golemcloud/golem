@@ -19,7 +19,13 @@ function capture() {
 
 async function isolatesProcessStateAndForwardsOutput() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'golem-cli-runtime-')));
-  const stdout = capture();
+  let stdoutText = '';
+  const stdout = new WritableStream<Uint8Array>({
+    async write(chunk) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      stdoutText += Buffer.from(chunk).toString('utf8');
+    },
+  });
   const stderr = capture();
   const before = {
     argv: process.argv,
@@ -36,21 +42,21 @@ async function isolatesProcessStateAndForwardsOutput() {
         cwd: directory,
         environment: { GOLEM_CLI_RUNTIME_TEST: 'isolated' },
       },
-      { stdout: stdout.stream, stderr: stderr.stream },
+      { stdout, stderr: stderr.stream },
       (processFacade) => {
         assert.deepEqual(processFacade.argv, ['node', '--version']);
         assert.equal(processFacade.cwd(), directory);
         assert.equal(processFacade.env.GOLEM_CLI_RUNTIME_TEST, 'isolated');
         processFacade.stdout.write('out', () => {
           callbackCalled = true;
+          processFacade.exitCode = 7;
         });
         processFacade.stderr.write(Uint8Array.from(Buffer.from('err')));
-        processFacade.exitCode = 7;
       },
     );
 
     assert.equal(exitCode, 7, stderr.text());
-    assert.equal(stdout.text(), 'out');
+    assert.equal(stdoutText, 'out');
     assert.equal(stderr.text(), 'err');
     assert.equal(callbackCalled, true);
     assert.equal(process.argv, before.argv);
