@@ -191,6 +191,38 @@ async fn a_run_that_fails_frees_its_slot_its_pool_and_its_index_and_a_new_run_gi
 
 #[test]
 #[timeout("60s")]
+async fn a_call_that_the_storage_refuses_answers_failed_after_one_try_of_one_run() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    save_each(&store_over(&inner), &scope, &["p-1"]).await;
+    let storage = ScriptedBlobStorage::new(inner, |op_label, path| {
+        if op_label == "list" && path.starts_with("snapshots") {
+            Script::Deny
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 3));
+    let slots = SharedSlots::new(1);
+
+    let listed = store.list(&scope, &slots).await;
+
+    assert!(matches!(listed, Err(CallError::Failed(_))), "{listed:?}");
+    assert_eq!(
+        (
+            slots.counts().0,
+            storage
+                .calls()
+                .iter()
+                .filter(|(op_label, path)| *op_label == "list" && path.starts_with("snapshots"))
+                .count()
+        ),
+        (1, 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_failed_call_answers_failed_after_its_runs_and_each_run_tells_the_limiter_before_its_wait()
  {
     let inner = Arc::new(InMemoryBlobStorage::new());
@@ -712,62 +744,15 @@ async fn marked_dedup() -> (
         )
         .await
         .unwrap();
-    let before = blobs(&*inner, &scope.0, "snapshots/").await;
-    saving
-        .delete(
-            &scope,
-            &[name("p-1")],
-            &crate::filesystem_snapshot::Unlimited,
-        )
-        .await
-        .unwrap();
-    let hidden = blobs(&*inner, &scope.0, "snapshots/").await;
-    let hidden_path = hidden.first().cloned().unwrap();
-    let hidden_bytes = inner
-        .get_raw("test", "test", (*scope.0).clone(), Path::new(&hidden_path))
-        .await
-        .unwrap()
-        .unwrap();
-    inner
-        .delete("test", "test", (*scope.0).clone(), Path::new(&hidden_path))
-        .await
-        .unwrap();
-    let marking = backend_of(inner.clone(), &scope, LONG_DEADLINE);
-    let report = super::super::super::run_blocking(move || {
-        super::super::super::prune(
-            marking,
-            &key(),
-            &PruneSettings {
-                fast_repack: true,
-                keep_delete: Duration::from_secs(3600),
-            },
-        )
-    })
-    .await
-    .unwrap();
-    inner
-        .put_raw(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            Path::new(&hidden_path),
-            &hidden_bytes,
-        )
-        .await
-        .unwrap();
+    let (before, unused) =
+        mark_the_packs_of_a_hidden_snapshot(inner.clone(), &scope, Duration::from_secs(3600)).await;
 
-    (
-        inner,
-        scope,
-        tree,
-        before,
-        report.is_some_and(|report| report.packs_unused > 0),
-    )
+    (inner, scope, tree, before, unused)
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_restore_of_a_name_whose_deduped_pack_a_prune_marked_gives_failed_and_after_the_next_prune_the_whole_tree()
+async fn a_restore_of_a_name_whose_deduped_pack_a_prune_marked_gives_the_whole_tree_in_its_first_run_and_after_the_next_prune()
  {
     let (inner, scope, tree, before, unused) = marked_dedup().await;
     let saving = store(
@@ -795,30 +780,59 @@ async fn a_restore_of_a_name_whose_deduped_pack_a_prune_marked_gives_failed_and_
     let after_the_next_prune = restored_listing(&saving, &scope, &name("p-2")).await;
 
     assert_eq!((before.len(), unused), (2, true));
-    assert!(
-        matches!(
-            &first,
-            Err(RestoreFailure::Failed(failed))
-                if failed.cause().to_string().contains("marked for deletion")
-        ),
-        "{first:?}"
-    );
+    assert!(first.is_ok(), "{first:?}");
     assert_eq!(after_the_next_prune.ok(), Some(listing(tree.path())));
-    // The first restore answered in its first run, with no race run, and wrote nothing.
+    // The first restore answered in its first run, with no race run.
     assert_eq!(
         (first_slots.counts().0, listing(first_into.path())),
-        (1, Vec::new())
+        (1, listing(tree.path()))
     );
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_marked_pack_after_a_load_that_missed_an_index_file_gives_failed_in_the_first_run() {
-    // The first listing of the restore holds an index file that is gone at its read, and the
-    // later listings do not hold it. The load after it finds the name, and the check misses a
-    // pack that a prune marked. The read of the marked packs reads only the index files that the
-    // run did not find gone. It reads in the order of the paths, and the gone file comes first.
+async fn a_restore_whose_marked_pack_is_gone_while_an_index_file_marks_it_gives_corrupt_in_the_first_run()
+ {
+    // The packs of `p-2` are gone, and an index file still marks them. A load of the index again
+    // lists each pack that was gone, as a marked pack, so the run did not race a prune, and the
+    // answer is `Corrupt`.
     let (inner, scope, _tree, _, unused) = marked_dedup().await;
+    let packs = blobs(&*inner, &scope.0, "data/").await;
+    futures::future::join_all(
+        packs
+            .iter()
+            .map(|path| inner.delete("test", "test", (*scope.0).clone(), Path::new(path))),
+    )
+    .await
+    .into_iter()
+    .collect::<anyhow::Result<Vec<()>>>()
+    .unwrap();
+    let store = store(
+        inner.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::from_secs(3600)),
+    );
+    let slots = SharedSlots::new(1);
+    let into = Scratch::new();
+
+    let restored = store
+        .restore(&scope, &name("p-2"), into.path(), &slots)
+        .await;
+
+    assert!(
+        matches!(restored, Err(RestoreFailure::Corrupt(_))),
+        "{restored:?}"
+    );
+    assert_eq!((unused, slots.counts().0), (true, 1));
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_marked_pack_after_a_load_that_missed_an_index_file_gives_the_whole_tree_in_the_first_run()
+ {
+    // The first listing of the restore holds an index file that is gone at its read, and the
+    // later listings do not hold it. The load after it finds the name, and its index holds the
+    // pack that a prune marked.
+    let (inner, scope, tree, _, unused) = marked_dedup().await;
     let gone = Path::new("index").join("00".repeat(32));
     inner
         .put_raw("test", "test", (*scope.0).clone(), &gone, b"gone")
@@ -852,17 +866,11 @@ async fn a_marked_pack_after_a_load_that_missed_an_index_file_gives_failed_in_th
         .restore(&scope, &name("p-2"), into.path(), &slots)
         .await;
 
-    assert!(
-        matches!(
-            &restored,
-            Err(RestoreFailure::Failed(failed))
-                if failed.cause().to_string().contains("marked for deletion")
-        ),
-        "{restored:?}"
-    );
+    assert!(restored.is_ok(), "{restored:?}");
     assert_eq!(
         (
             unused,
+            listing(into.path()),
             slots.counts().0,
             storage
                 .calls()
@@ -870,7 +878,7 @@ async fn a_marked_pack_after_a_load_that_missed_an_index_file_gives_failed_in_th
                 .filter(|(op_label, path)| *op_label == "read" && Path::new(path) == gone)
                 .count()
         ),
-        (true, 1, 1)
+        (true, listing(tree.path()), 1, 1)
     );
 }
 
@@ -1473,43 +1481,21 @@ async fn delete_everything(inner: &InMemoryBlobStorage, scope: &AgentSnapshots) 
     .unwrap();
 }
 
-/// The call of the third open of the repository that a test holds: its first look at the config,
-/// which then finds no config, or its read of the config, which then finds the config gone.
-#[derive(Clone, Copy)]
-enum Held {
-    Stat,
-    Read,
-}
+/// The number of the first look at the config in the third open of the repository: an open looks
+/// at the config twice and reads it once.
+const THIRD_OPEN_STAT: usize = 5;
 
-impl Held {
-    fn label(self) -> &'static str {
-        match self {
-            Held::Stat => "stat",
-            Held::Read => "read",
-        }
-    }
-
-    /// The number of the held call: an open looks at the config twice and reads it once.
-    fn number(self) -> usize {
-        match self {
-            Held::Stat => 5,
-            Held::Read => 3,
-        }
-    }
-}
-
-/// A storage over `inner` that holds the call `held` of the third open of the repository at its
-/// gate, and that gives no blob to the reads that `vanishing` picks.
+/// A storage over `inner` that holds the first look at the config of the third open of the
+/// repository at its gate, and that gives no blob to the reads that `vanishing` picks.
 fn holding_the_third_open(
     inner: Arc<InMemoryBlobStorage>,
-    held: Held,
     vanishing: impl Fn(&str, &Path) -> bool + Send + Sync + 'static,
 ) -> Arc<ScriptedBlobStorage> {
     ScriptedBlobStorage::with_state(inner, 0usize, move |config_calls, op_label, path| {
-        if op_label == held.label() && path == Path::new("config") {
+        if op_label == "stat" && path == Path::new("config") {
             let number = config_calls + 1;
             (
-                if number == held.number() {
+                if number == THIRD_OPEN_STAT {
                     Script::WaitForGate
                 } else {
                     Script::Pass
@@ -1524,13 +1510,12 @@ fn holding_the_third_open(
     })
 }
 
-/// Restores `p-1` while the storage holds the call `held` of the third open, deletes every blob
-/// of the scope while it is held, and then opens the gate.
+/// Restores `p-1` while the storage holds the first look at the config of the third open, deletes
+/// every blob of the scope while it is held, and then opens the gate.
 async fn restore_through_a_delete_of_all(
     storage: &Arc<ScriptedBlobStorage>,
     inner: &InMemoryBlobStorage,
     scope: &AgentSnapshots,
-    held: Held,
 ) -> Result<SnapshotInfo, RestoreFailure> {
     let store = store(
         storage.clone(),
@@ -1551,9 +1536,9 @@ async fn restore_through_a_delete_of_all(
             storage
                 .calls()
                 .iter()
-                .filter(|(op_label, path)| *op_label == held.label() && path == "config")
+                .filter(|(op_label, path)| *op_label == "stat" && path == "config")
                 .count()
-                == held.number()
+                == THIRD_OPEN_STAT
         }) => reached,
         restored = &mut restoring => panic!("the restore ended before its third open: {restored:?}"),
     };
@@ -1561,40 +1546,6 @@ async fn restore_through_a_delete_of_all(
     delete_everything(inner, scope).await;
     storage.open_gate();
     tokio::time::timeout(LIMIT, restoring).await.unwrap()
-}
-
-/// Restores a name whose index files are gone, so the check fails, the second listing of the
-/// index files gives no new name, and the snapshots read again hold the name. A delete of all
-/// snapshots removes the repository at the call `held` of the open of the read of the marked packs.
-async fn a_marked_read_through_a_delete_of_all(held: Held) -> Result<SnapshotInfo, RestoreFailure> {
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let scope = new_scope();
-    save_each(&store_over(&inner), &scope, &["p-1"]).await;
-    let index_files = blobs(&*inner, &scope.0, "index/").await;
-    futures::future::join_all(
-        index_files
-            .iter()
-            .map(|path| inner.delete("test", "test", (*scope.0).clone(), Path::new(path))),
-    )
-    .await;
-    let storage = holding_the_third_open(inner.clone(), held, |_, _| false);
-    restore_through_a_delete_of_all(&storage, &inner, &scope, held).await
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_delete_of_all_snapshots_before_the_read_of_the_marked_packs_gives_not_found() {
-    // The open finds no config, or finds the config and then its read finds it gone.
-    let no_config = a_marked_read_through_a_delete_of_all(Held::Stat).await;
-    let config_gone = a_marked_read_through_a_delete_of_all(Held::Read).await;
-
-    assert!(
-        matches!(
-            (&no_config, &config_gone),
-            (Err(RestoreFailure::NotFound), Err(RestoreFailure::NotFound))
-        ),
-        "{no_config:?} {config_gone:?}"
-    );
 }
 
 #[test]
@@ -1606,11 +1557,11 @@ async fn a_delete_of_all_snapshots_before_the_index_is_loaded_again_gives_not_fo
     let scope = new_scope();
     save_each(&store_over(&inner), &scope, &["p-1"]).await;
     let vanished = AtomicBool::new(false);
-    let storage = holding_the_third_open(inner.clone(), Held::Stat, move |op_label, path| {
+    let storage = holding_the_third_open(inner.clone(), move |op_label, path| {
         op_label == "read" && path.starts_with("data") && !vanished.swap(true, Ordering::SeqCst)
     });
 
-    let restored = restore_through_a_delete_of_all(&storage, &inner, &scope, Held::Stat).await;
+    let restored = restore_through_a_delete_of_all(&storage, &inner, &scope).await;
 
     assert!(
         matches!(restored, Err(RestoreFailure::NotFound)),
@@ -2064,135 +2015,6 @@ async fn a_local_io_error_of_a_restore_gives_destination_with_its_kind() {
 }
 
 #[test]
-#[timeout("60s")]
-async fn a_prune_that_rewrites_the_index_before_the_read_of_the_marked_packs_gives_the_whole_tree()
-{
-    // As in the test of the deduped pack, `p-2` uses packs that a prune marked, so the check of
-    // its restore fails, the second listing of the index files gives no new name, and the
-    // snapshots read again hold the name. The storage holds the first read of an index file after
-    // that listing, the read of the marked packs. Meanwhile the next prune takes the packs back
-    // into its new index file and deletes the old ones. The read then finds its index file gone,
-    // and the run loads again and gives the whole tree.
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let saving = store(
-        inner.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::from_secs(3600)),
-    );
-    let scope = new_scope();
-    let tree = fixture_tree();
-    save_each(&saving, &scope, &["p-1"]).await;
-    saving
-        .save(
-            &scope,
-            &name("p-2"),
-            tree.path(),
-            None,
-            crate::filesystem_snapshot::never_cancelled(),
-            &crate::filesystem_snapshot::Unlimited,
-        )
-        .await
-        .unwrap();
-    saving
-        .delete(
-            &scope,
-            &[name("p-1")],
-            &crate::filesystem_snapshot::Unlimited,
-        )
-        .await
-        .unwrap();
-    let hidden = blobs(&*inner, &scope.0, "snapshots/").await;
-    let hidden_path = hidden.first().cloned().unwrap();
-    let hidden_bytes = inner
-        .get_raw("test", "test", (*scope.0).clone(), Path::new(&hidden_path))
-        .await
-        .unwrap()
-        .unwrap();
-    inner
-        .delete("test", "test", (*scope.0).clone(), Path::new(&hidden_path))
-        .await
-        .unwrap();
-    let marking = backend_of(inner.clone(), &scope, LONG_DEADLINE);
-    super::super::super::run_blocking(move || {
-        super::super::super::prune(
-            marking,
-            &key(),
-            &PruneSettings {
-                fast_repack: true,
-                keep_delete: Duration::from_secs(3600),
-            },
-        )
-    })
-    .await
-    .unwrap();
-    inner
-        .put_raw(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            Path::new(&hidden_path),
-            &hidden_bytes,
-        )
-        .await
-        .unwrap();
-    let index_listings = Arc::new(AtomicUsize::new(0));
-    let held = Arc::new(AtomicBool::new(false));
-    let storage = ScriptedBlobStorage::new(inner.clone(), {
-        let (index_listings, held) = (index_listings.clone(), held.clone());
-        move |op_label, path| {
-            if op_label == "list" && path == Path::new("index") {
-                index_listings.fetch_add(1, Ordering::SeqCst);
-                Script::Pass
-            } else if op_label == "read"
-                && path.starts_with("index")
-                && index_listings.load(Ordering::SeqCst) == 2
-                && !held.swap(true, Ordering::SeqCst)
-            {
-                Script::WaitForGate
-            } else {
-                Script::Pass
-            }
-        }
-    });
-    let restoring_store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::from_secs(3600)),
-    );
-    let into = Scratch::new();
-    let restored_name = name("p-2");
-    let restoring = restoring_store.restore(
-        &scope,
-        &restored_name,
-        into.path(),
-        &crate::filesystem_snapshot::Unlimited,
-    );
-    tokio::pin!(restoring);
-    let reached = tokio::select! {
-        biased;
-        reached = eventually(|| held.load(Ordering::SeqCst)) => reached,
-        restored = &mut restoring => panic!("the restore ended before the read of the marked packs: {restored:?}"),
-    };
-    let pruning = store(
-        inner.clone(),
-        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
-    );
-    save_each(&pruning, &scope, &["p-3"]).await;
-    pruning
-        .delete(
-            &scope,
-            &[name("p-3")],
-            &crate::filesystem_snapshot::Unlimited,
-        )
-        .await
-        .unwrap();
-    storage.open_gate();
-    let restored = tokio::time::timeout(LIMIT, restoring).await.unwrap();
-
-    assert!(reached);
-    assert!(restored.is_ok(), "{restored:?}");
-    assert_eq!(listing(into.path()), listing(tree.path()));
-}
-
-#[test]
 #[timeout("240s")]
 async fn a_save_whose_pack_write_is_held_past_the_end_of_its_backup_answers_failed_while_the_write_is_held()
  {
@@ -2520,6 +2342,62 @@ fn scripted_first_pack(
             false => (other(op_label, path), *packs),
         }
     })
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_save_whose_first_pack_write_fails_while_the_backup_goes_on_runs_again_and_saves() {
+    // The tree fills two data packs. The storage refuses the write of the first pack, while the
+    // archiver still chunks the rest of the tree. The backup gives the error of the storage, so
+    // the run ends as a failed storage call, and the next run saves the tree.
+    let tree = Scratch::new();
+    let mut content = vec![0u8; 40 << 20];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut content);
+    write_tree(
+        tree.path(),
+        &[(
+            "a.bin",
+            Spec::File {
+                content: content.into_boxed_slice(),
+                mode: 0o644,
+            },
+        )],
+    );
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = scripted_first_pack(inner, Script::Refuse, |_, _| Script::Pass);
+    let store = store(storage.clone(), runs_policy(SHORT_WRITE_DEADLINE, 1));
+    let scope = new_scope();
+    let slots = SharedSlots::new(1);
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-packs"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots,
+        )
+        .await;
+    // The second run starts with a look at the config after the refused write. It writes each
+    // pack of the tree: two data packs and a tree pack. So the first pack went out while the
+    // archiver still read the tree.
+    let calls = storage.calls();
+    let is_pack_write =
+        |(op_label, path): &&(&str, String)| *op_label == "write" && path.starts_with("data");
+    let refused = calls.iter().position(|call| is_pack_write(&call)).unwrap();
+    let second_run = refused
+        + calls[refused..]
+            .iter()
+            .position(|(op_label, path)| *op_label == "stat" && path == "config")
+            .unwrap();
+    let packs_of_the_second_run = calls[second_run..].iter().filter(is_pack_write).count();
+    let restored = restored_listing(&store, &scope, &name("p-packs")).await;
+
+    assert!(saved.is_ok(), "{saved:?}");
+    assert_eq!(slots.counts().0, 2);
+    assert_eq!(restored.ok(), Some(listing(tree.path())));
+    assert_eq!(packs_of_the_second_run, 3, "{calls:?}");
 }
 
 /// Whether the storage saw a write of a pack.
