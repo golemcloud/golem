@@ -416,7 +416,8 @@ object PermissionsApi {
    * one card object ever.
    *
    * [[wallet]] can also return the scope card of the running invocation as a
-   * `PermissionCard`; the host rejects persistent operations on it.
+   * `PermissionCard` when the agent holds `card:inspect`; the host rejects
+   * persistent operations on it.
    */
   final class PermissionCard private[golem] (handle0: GuestPermissionCardHandle) extends Card {
     private[golem] val handle: GuestPermissionCardHandle = claimed(this, handle0)

@@ -7,6 +7,11 @@ interface wallet {
     use types.{permission-error, wallet-version-token, holder};
 
     /// All permission cards currently installed in the caller's wallet.
+    ///
+    /// During an invocation that received a scope card, the list also
+    /// contains that scope card if the caller holds `card:inspect`. Without
+    /// `card:inspect` the scope card is sealed: it still authorizes the
+    /// invocation but is not listed.
     self-wallet: func() -> list<permission-card>;
 
     /// Version token for the caller's wallet, changed whenever the set of

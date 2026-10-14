@@ -698,7 +698,7 @@ func (c PolymorphicPermissionCard) Install(target Holder) error { return c.pst.i
 func (c PolymorphicPermissionCard) Release() { c.pst.release() }
 
 // Wallet returns the cards installed in the agent's wallet, and the
-// invocation's scope card when it has one. A wallet card may be a template, so
+// invocation's scope card when it has one and the agent holds card:inspect. A wallet card may be a template, so
 // each is a [PolymorphicPermissionCard]; send one only where a
 // PolymorphicPermissionCard is expected. To hand on a [PermissionCard], derive
 // a concrete child with [PolymorphicPermissionCard.Derive]. The host refuses

@@ -530,8 +530,9 @@ pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
 /// The cards installed in the caller's wallet, as new owned handles. Release
 /// the cards you do not keep with `PermissionCard::drop` or `drop_all`.
 ///
-/// In a callee, the result also contains the scope card that the caller lent
-/// to the current invocation, typed as a `PermissionCard`. The host rejects
+/// In a callee that holds `card:inspect`, the result also contains the scope
+/// card that the caller lent to the current invocation, typed as a
+/// `PermissionCard`. The host rejects
 /// `revoke`, `install` and `derive_child` on it; a rejected `revoke` or
 /// `install` still consumes the handle. Sending it as an agent or tool value
 /// fails, and the host retires it at the end of the invocation.

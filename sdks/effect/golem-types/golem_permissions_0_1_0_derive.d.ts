@@ -5,6 +5,10 @@
  * parent's lattice. The caller specifies which lower-positive and
  * upper-positive grants to retain and which lower-negative and
  * upper-negative grants to add, plus an optional lifespan.
+ * The owner of a requested grant may contain slot variables (`?agent`,
+ * `?env`, ...), as `inspect-card` shows them for a template card. They are
+ * resolved for the calling agent, not for a later holder of the derived card.
+ * Recipient slots are not supported.
  */
 declare module 'golem:permissions/derive@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';

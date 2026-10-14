@@ -2918,7 +2918,19 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)?;
 
-        if let Some(scope_card) = self.state.invocation_scope_card.clone() {
+        // A scope card lent to this invocation is listed only to a holder that may inspect cards;
+        // for any other holder it stays sealed: it still authorizes, but is not enumerated.
+        let lent_scope_card = match self.state.invocation_scope_card.clone() {
+            Some(scope_card) => self
+                .with_agent_authority_at_boundary(|ctx| {
+                    ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
+                })
+                .await?
+                .is_ok()
+                .then_some(scope_card),
+            None => None,
+        };
+        if let Some(scope_card) = lent_scope_card {
             let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("an admitted scope card requires an active invocation")
             })?;

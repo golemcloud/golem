@@ -708,7 +708,7 @@ export const release = (
  * kept with {@link release}, or use {@link walletScoped}.
  *
  * While an invocation runs with a scope card lent by its caller, the list also contains that
- * scope card, typed as a `PermissionCard`. The host refuses to derive from, revoke, install, or
+ * scope card, typed as a `PermissionCard`, if the agent holds `card:inspect`. The host refuses to derive from, revoke, install, or
  * send it, and it is retired when the invocation ends.
  *
  * @since 1.6.0

@@ -92,8 +92,8 @@ pub fn MyAgent::delegate(self : Self, target : @types.AgentId) -> Result[UInt, S
 - Using a moved card aborts the invocation.
 - `wallet()` returns new owned handles. Release the ones you do not keep with `card.drop()` or
   `@permissions.drop_all(cards)`. Dropping releases the handle; it does not revoke the card.
-- In a callee, `wallet()` also returns the scope card that the caller lent to the current
-  invocation, typed as a `PermissionCard`. The host rejects `revoke`, `install` and
+- In a callee that holds `card:inspect`, `wallet()` also returns the scope card that the caller
+  lent to the current invocation, typed as a `PermissionCard`. The host rejects `revoke`, `install` and
   `derive_child` on it, and a rejected `revoke` or `install` still consumes the handle. Sending it
   as an agent or tool value fails, and the host retires it when the invocation ends.
 

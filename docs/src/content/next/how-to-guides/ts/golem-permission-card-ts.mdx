@@ -156,6 +156,7 @@ const delegate = toolDefinition('delegate').body((body) =>
 - Never import `golem:permissions/*` directly; use the `permissions` namespace.
 - A card has no public constructor and cannot be serialized: `JSON.stringify(card)` throws.
   Nothing turns a `CardId`, a grant or other data into a card.
-- During an invocation that received a scope card, the host also lists it in `wallet()`. It comes
-  back as a `PermissionCard`, and the host refuses to revoke, install or persist it.
+- During an invocation that received a scope card, the host also lists it in `wallet()` if the
+  agent holds `card:inspect`. It comes back as a `PermissionCard`, and the host refuses to revoke,
+  install or persist it.
 - Do not keep a card after `revoke`, `install`, `release`, or after sending it to another agent.

@@ -71,8 +71,8 @@ card.release()                                  // any Card: drop a handle that 
 - `revoke` and `install` move the card before they call the host, also when the host returns an
   error, because the host drops the handle in both cases.
 - `wallet()` returns owned handles. Call `release()` on the cards that you do not keep. During an
-  invocation that received a scope card, `wallet()` also returns it as a `PermissionCard`; the host
-  rejects persistent operations on it.
+  invocation that received a scope card, `wallet()` also returns it as a `PermissionCard` if the
+  agent holds `card:inspect`; the host rejects persistent operations on it.
 
 ## Scope cards on RPC calls
 

@@ -17,7 +17,10 @@ Every operation is checked by the host against the agent's own cards: deriving n
 
 ## The wallet
 
-The wallet holds the cards installed for the agent, including its initial card.
+The wallet holds the cards installed for the agent, including its initial card. During an
+invocation that received a scope card, `wallet()` also returns that scope card, typed as a
+`PermissionCard`, if the agent holds `card:inspect`; the host refuses to revoke, install or persist
+it.
 
 ```rust
 let cards: Vec<PermissionCard> = permissions::wallet();

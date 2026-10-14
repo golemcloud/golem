@@ -70,7 +70,9 @@ const delegate = Effect.gen(function* () {
 - `CardId` is opaque. Compare IDs with `Equal.equals`. Printing and logging show
   `CardId(<redacted>)`.
 - `wallet` returns owned cards. Use `walletScoped` to release the cards that are still held when
-  the scope closes.
+  the scope closes. During an invocation that received a scope card, the list also contains that
+  scope card, typed as a `PermissionCard`, if the agent holds `card:inspect`; the host refuses to
+  derive from, revoke, install or send it.
 - Build an install target with `Permissions.agentHolder(identity)` (for example from
   `defineAgentClient(...).agentId(...)`) or `Permissions.Holder.agent(agentId)`. The host rejects
   account and app holders with `not-permitted`.

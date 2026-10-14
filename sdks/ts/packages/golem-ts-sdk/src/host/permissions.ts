@@ -710,8 +710,8 @@ function requirePermissionCardInternal(key: PermissionCardInternal): void {
  * cards; {@link PermissionCard.release} the ones it does not keep.
  *
  * During an invocation that received a scope card, the host also lists that
- * scope card here. It comes back as a `PermissionCard`, and the host refuses
- * to revoke, install or persist it.
+ * scope card here if the agent holds `card:inspect`. It comes back as a
+ * `PermissionCard`, and the host refuses to revoke, install or persist it.
  */
 export function wallet(): PermissionCard[] {
   return selfWallet().map(adopt);

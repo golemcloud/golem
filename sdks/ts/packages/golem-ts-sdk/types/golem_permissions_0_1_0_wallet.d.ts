@@ -7,6 +7,10 @@ declare module 'golem:permissions/wallet@0.1.0' {
   import * as golemPermissions010Types from 'golem:permissions/types@0.1.0';
   /**
    * All permission cards currently installed in the caller's wallet.
+   * During an invocation that received a scope card, the list also
+   * contains that scope card if the caller holds `card:inspect`. Without
+   * `card:inspect` the scope card is sealed: it still authorizes the
+   * invocation but is not listed.
    */
   export function selfWallet(): PermissionCard[];
   /**

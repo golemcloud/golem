@@ -239,6 +239,10 @@ impl std::fmt::Debug for PermissionCard {
 ///
 /// Each returned card is an owned handle. Drop the cards that you do not keep
 /// to release their handles; dropping a card does not change the wallet.
+///
+/// During an invocation that received a scope card, the result also contains
+/// that scope card, typed as a `PermissionCard`, if the agent holds
+/// `card:inspect`. The host refuses to revoke, install or persist it.
 pub fn wallet() -> Vec<PermissionCard> {
     raw_wallet::self_wallet()
         .into_iter()
