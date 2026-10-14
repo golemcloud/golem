@@ -7711,29 +7711,98 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
             metadata.tools,
         )),
     );
-    for (cancel_read, cancel_ready) in [(false, false), (true, false), (false, true)] {
+    let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
+    for (cancel_read, cancel_ready, cancel_positive) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
         for crash_before_read in [false, true] {
             let agent = agent_id!(
                 "ToolStreamingCaller",
-                format!("retained-output-{cancel_read}-{cancel_ready}-{crash_before_read}")
+                format!(
+                    "retained-output-{cancel_read}-{cancel_ready}-{cancel_positive}-{crash_before_read}"
+                )
             );
             let worker = executor
-                .start_agent(&caller_component.id, agent.clone())
-                .await?;
-            executor
-                .invoke_and_await_agent(
-                    &caller_component,
-                    &agent,
-                    "retain_tool_output",
-                    data_value!(cancel_read, cancel_ready),
+                .start_agent_with(
+                    &caller_component.id,
+                    agent.clone(),
+                    HashMap::from([(
+                        "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                        port.to_string(),
+                    )]),
+                    Vec::new(),
                 )
                 .await?;
+            let invocation = executor.invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "retain_tool_output",
+                data_value!(cancel_read, cancel_ready, cancel_positive),
+            );
+            let synchronize = async {
+                if cancel_positive {
+                    let checkpoint = next_promise_checkpoint(
+                        &mut checkpoints,
+                        "retained-output-before-positive-cancel",
+                    )
+                    .await?;
+                    wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+                    tokio::time::timeout(Duration::from_secs(30), async {
+                        loop {
+                            executor.commit_oplog(&worker).await?;
+                            let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                            let reads = primary_reads(&entries);
+                            if reads.len() == 2 {
+                                assert_eq!(reads[1].1, Some(vec![0, 255, 19]));
+                                break Ok::<_, anyhow::Error>(());
+                            }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await??;
+                    let loads = executor.instance_load_count(&worker);
+                    if crash_before_read {
+                        executor.simulated_crash(&worker).await?;
+                    }
+                    executor
+                        .complete_promise(
+                            &PromiseId {
+                                agent_id: worker.clone(),
+                                oplog_idx: checkpoint.oplog_idx,
+                            },
+                            Vec::new(),
+                        )
+                        .await?;
+                    if crash_before_read {
+                        tokio::time::timeout(Duration::from_secs(30), async {
+                            while executor.instance_load_count(&worker) == loads {
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                            }
+                        })
+                        .await?;
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            let (result, ()) = tokio::try_join!(invocation, synchronize)?;
+            let consumed: Vec<u8> = result.into_typed()?;
+            assert_eq!(
+                consumed,
+                if cancel_positive {
+                    vec![0, 255, 19]
+                } else {
+                    vec![]
+                }
+            );
             let retained = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
             let reads = primary_reads(&retained);
             assert_eq!(
                 reads.len(),
-                1,
-                "only the consumed marker owns a read record"
+                if cancel_positive { 2 } else { 1 },
+                "only consumed chunks own read records"
             );
             assert_eq!(reads[0].1.as_deref(), Some(b"marker:".as_slice()));
             if crash_before_read {
@@ -7752,7 +7821,11 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
                 .into_typed()?;
             assert_eq!(
                 bytes,
-                [vec![0, 255, 19], b"retained-tail".to_vec()].concat()
+                if cancel_positive {
+                    b"retained-tail".to_vec()
+                } else {
+                    [vec![0, 255, 19], b"retained-tail".to_vec()].concat()
+                }
             );
             if crash_before_read {
                 assert!(executor.instance_load_count(&worker) > 0);
@@ -7840,6 +7913,11 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
         ));
         executor.delete_worker(&worker).await?;
     }
+    assert!(
+        checkpoints.try_recv().is_err(),
+        "replay must not repeat checkpoint HTTP effects"
+    );
+    server.abort();
     Ok(())
 }
 

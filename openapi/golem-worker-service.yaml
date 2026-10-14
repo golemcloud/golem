@@ -6389,6 +6389,8 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentReadParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
@@ -6449,6 +6451,8 @@ components:
           CardRevokedCascade: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
           CardTransferConfirmed: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
           HostStreamFrame: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+          ToolAttachmentRead: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentReadParams'
+          ToolAttachmentControl: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
           StreamRegistered: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
           StreamItems: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
           StreamEnd: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
@@ -7190,6 +7194,30 @@ components:
             - Suspend
             example: Suspend
       - $ref: '#/components/schemas/r#SuspendParams'
+    PublicOplogEntry_r#ToolAttachmentControlParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ToolAttachmentControl
+            example: ToolAttachmentControl
+      - $ref: '#/components/schemas/r#ToolAttachmentControlParams'
+    PublicOplogEntry_r#ToolAttachmentReadParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ToolAttachmentRead
+            example: ToolAttachmentRead
+      - $ref: '#/components/schemas/r#ToolAttachmentReadParams'
     PublicQueuedCardEvent:
       type: object
       oneOf:
@@ -10910,6 +10938,38 @@ components:
         timestamp:
           type: string
           format: date-time
+    r#ToolAttachmentControlParams:
+      type: object
+      title: r#ToolAttachmentControlParams
+      required:
+      - timestamp
+      - attachment
+      - transition
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        attachment:
+          $ref: '#/components/schemas/TypedSchemaValue'
+        transition:
+          $ref: '#/components/schemas/TypedSchemaValue'
+    r#ToolAttachmentReadParams:
+      type: object
+      title: r#ToolAttachmentReadParams
+      required:
+      - timestamp
+      - observation
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        observation:
+          $ref: '#/components/schemas/TypedSchemaValue'
+        payload:
+          type: array
+          items:
+            type: integer
+            format: uint8
   securitySchemes:
     Cookie:
       type: apiKey

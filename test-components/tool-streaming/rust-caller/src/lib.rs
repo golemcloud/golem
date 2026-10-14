@@ -712,7 +712,12 @@ pub trait ToolStreamingCaller {
     async fn direct_stdin_write_order(&self) -> Vec<String>;
     async fn identical_stdin_write_order(&self) -> Vec<String>;
     async fn identical_stdin_wait_order(&self) -> Vec<String>;
-    async fn retain_tool_output(&self, cancel_read: bool, cancel_ready: bool);
+    async fn retain_tool_output(
+        &self,
+        cancel_read: bool,
+        cancel_ready: bool,
+        cancel_positive: bool,
+    ) -> Vec<u8>;
     async fn retain_failed_tool_output(&self);
     async fn consume_retained_tool_output(&self) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
@@ -3691,7 +3696,12 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         output
     }
 
-    async fn retain_tool_output(&self, cancel_read: bool, cancel_ready: bool) {
+    async fn retain_tool_output(
+        &self,
+        cancel_read: bool,
+        cancel_ready: bool,
+        cancel_positive: bool,
+    ) -> Vec<u8> {
         use std::future::{Future, poll_fn};
         use std::task::Poll;
 
@@ -3731,19 +3741,31 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         raw_result(&invocation)
             .await
             .expect("complete producer before retaining its output");
-        if cancel_ready {
+        let mut consumed = Vec::new();
+        if cancel_ready || cancel_positive {
             let mut pending = Box::pin(stdout.read(Vec::with_capacity(1)));
             poll_fn(|cx| {
                 assert!(pending.as_mut().poll(cx).is_pending());
                 Poll::Ready(())
             })
             .await;
+            if cancel_positive {
+                wait_at_promise_checkpoint("retained-output-before-positive-cancel").await;
+            }
             let (status, bytes) = pending.as_mut().cancel();
-            assert_eq!(format!("{status:?}"), "Cancelled");
-            assert!(bytes.is_empty());
+            if cancel_positive {
+                assert_eq!(format!("{status:?}"), "Complete(1)");
+                assert_eq!(bytes.len(), 1);
+                consumed = bytes.into_iter().next().unwrap().expect("data chunk");
+                assert_eq!(consumed, [0, 255, 19]);
+            } else {
+                assert_eq!(format!("{status:?}"), "Cancelled");
+                assert!(bytes.is_empty());
+            }
             drop(pending);
         }
         *self.retained_output.borrow_mut() = Some(stdout);
+        consumed
     }
 
     async fn retain_failed_tool_output(&self) {
