@@ -903,8 +903,9 @@ fn queue_status_notification<Ctx: WorkerCtx>(
 }
 
 /// The status a commit of the status task rebuilt from the oplog. The commit landed, but an oplog
-/// that does not read cannot give its status: that is returned as the refusal, so the agent stops
-/// with the cause, and every later commit fails the same way. Any other failure is fail-stop.
+/// that does not read cannot give its status: that is returned as the refusal, and the caller that
+/// receives it fails the agent with the cause. Nothing is latched, so a later commit can succeed.
+/// Any other failure is fail-stop.
 pub(super) fn reconstructed_status(
     status: Result<Option<AgentStatusRecord>, StatusError>,
 ) -> Result<AgentStatusRecord, OplogRefusal> {

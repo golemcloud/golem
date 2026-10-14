@@ -15,11 +15,11 @@
 use crate::services::oplog::fenced_stream::{
     FencedIndexedStream, StreamLabels, scan_component_streams,
 };
-use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveResult};
+use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveError, OplogArchiveResult};
 use crate::services::oplog::reader::{OplogReadError, OplogReadSource, verify_persisted_entries};
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService, OplogError, OplogFence};
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace,
 };
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
@@ -146,9 +146,12 @@ impl OplogArchiveService for BlobOplogArchiveService {
             .await
             .map(|_| ())
             .map_err(|error| {
-                format!(
-                    "failed to drop compressed oplog for worker {} in blob storage: {error}",
-                    owned_agent_id.agent_id
+                OplogArchiveError::of_blob(
+                    &error,
+                    format!(
+                        "failed to drop compressed oplog for worker {} in blob storage: {error}",
+                        owned_agent_id.agent_id
+                    ),
                 )
             })
     }
@@ -164,7 +167,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
             .open(owned_agent_id, agent_mode, None)
             .await
             .map_err(|error| {
-                OplogReadError::source_failure(OplogReadSource::Archive(self.level), error)
+                OplogReadError::of_archive(OplogReadSource::Archive(self.level), error)
             })?;
         archive.read_source(idx, n).await
     }
@@ -268,8 +271,11 @@ impl BlobOplogArchive {
         )
         .await
         .map_err(|error| {
-            format!(
-                "failed to record the owning epoch of the blob oplog manifest of {owned_agent_id} at level {level}: {error}"
+            OplogArchiveError::of_indexed(
+                &error,
+                format!(
+                    "failed to record the owning epoch of the blob oplog manifest of {owned_agent_id} at level {level}: {error}"
+                ),
             )
         })?;
         Ok(BlobOplogArchive {
@@ -350,7 +356,7 @@ impl BlobOplogArchive {
     async fn listed(
         &self,
         last_idx: OplogIndex,
-    ) -> Result<Option<BlobChunkRef>, IndexedStorageError> {
+    ) -> Result<Option<BlobChunkRef>, OplogArchiveError> {
         Ok(self
             .manifest
             .closest::<BlobChunkRef>(last_idx)
@@ -372,11 +378,14 @@ impl BlobOplogArchive {
             .get::<CompressedOplogChunk>(self.namespace(), Path::new(&chunk_ref.object))
             .await
             .map_err(|error| {
-                OplogReadError::source_failure(
+                OplogReadError::of_archive(
                     source,
-                    format!(
-                        "failed to read compressed oplog for worker {} in blob storage: {error}",
-                        self.owned_agent_id
+                    OplogArchiveError::of_blob(
+                        &error,
+                        format!(
+                            "failed to read compressed oplog for worker {} in blob storage: {error}",
+                            self.owned_agent_id
+                        ),
                     ),
                 )
             })?
@@ -404,13 +413,15 @@ impl BlobOplogArchive {
         end_of_range: OplogIndex,
     ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, OplogReadError> {
         let source = OplogReadSource::Archive(self.level);
-        let manifest_failure = |error| {
-            OplogReadError::source_failure(
+        let manifest_failure = |error: OplogArchiveError| {
+            OplogReadError::of_archive(
                 source,
-                format!(
-                    "failed to read the blob oplog manifest for worker {} in indexed storage: {error}",
-                    self.owned_agent_id
-                ),
+                error.map_details(|error| {
+                    format!(
+                        "failed to read the blob oplog manifest for worker {} in indexed storage: {error}",
+                        self.owned_agent_id
+                    )
+                }),
             )
         };
         let Some((last_idx, chunk_ref)) = self
@@ -680,9 +691,9 @@ impl OplogArchive for BlobOplogArchive {
         let actual = uncached
             .read_source(*start, entries.len() as u64)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(OplogArchiveError::from)?;
         verify_persisted_entries(OplogReadSource::Archive(self.level), entries, actual)
-            .map_err(|error| error.to_string())
+            .map_err(OplogArchiveError::from)
     }
 
     async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
@@ -698,7 +709,7 @@ impl OplogArchive for BlobOplogArchive {
             .manifest
             .read::<BlobChunkRef>(OplogIndex::NONE, last_dropped_id)
             .await
-            .map_err(OplogError::Maintenance)?;
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?;
         self.manifest.drop_prefix(last_dropped_id).await?;
         *self.cache.lock().unwrap() = EvictingCacheMap::new();
         let drop_count = dropped.len() as u64;

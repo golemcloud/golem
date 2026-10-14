@@ -7378,9 +7378,11 @@ fn replace_wallet_cards(
 /// already have - a bounded storage retry, then a fatal failure - at a lower cost, since a failed
 /// assignment is one RPC rather than a process exit.
 ///
-/// An oplog that does not read (`StatusError::Unreadable`) is not that kind of failure: no retry of
-/// the assignment reads it, so failing the assignment would stop every other agent forever. That
-/// one agent is skipped and logged, and its oplog is left as it is.
+/// An oplog that does not read (`StatusError::Unreadable`) for good, because its data is corrupt or
+/// missing, is not that kind of failure: no retry of the assignment reads it, so failing the
+/// assignment would stop every other agent forever. That one agent is skipped and logged, and its
+/// oplog is left as it is. An oplog whose storage did not answer
+/// ([`UnreadableOplog::is_transient`]) is that kind of failure: a retry can read it.
 fn recovered_status(
     owned_agent_id: &OwnedAgentId,
     computed: Result<Option<AgentStatusRecord>, StatusError>,
@@ -7393,7 +7395,7 @@ fn recovered_status(
         }
         // No retry reads the oplog, so failing the assignment would keep every other agent from
         // being resumed. The agent is left as it is, with its oplog, for an operator to inspect.
-        Err(StatusError::Unreadable(error)) => {
+        Err(StatusError::Unreadable(error)) if !error.is_transient() => {
             error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
             Ok(None)
         }
@@ -9873,6 +9875,28 @@ mod tests {
             recovered_status(&recovered_agent(), Err(StatusError::Unreadable(unreadable))),
             Ok(None)
         ));
+    }
+
+    /// An oplog whose storage did not answer can be read by a retry, so it fails the assignment,
+    /// which is retried, instead of leaving the agent out of the recovery for good.
+    #[test]
+    fn shard_assignment_recovery_fails_on_an_oplog_that_is_unavailable() {
+        let unavailable = crate::services::oplog::UnreadableOplog {
+            agent_id: recovered_agent().agent_id(),
+            error: crate::services::oplog::OplogReadError::source_unavailable(
+                crate::services::oplog::OplogReadSource::Archive(1),
+                "injected archive outage",
+            ),
+        };
+        let error = recovered_status(
+            &recovered_agent(),
+            Err(StatusError::Unreadable(unavailable)),
+        )
+        .expect_err("an unavailable oplog was skipped rather than failing the assignment");
+        assert!(
+            error.to_string().contains("injected archive outage"),
+            "{error}"
+        );
     }
 
     /// An agent whose restart finds its oplog unreadable, for example while rebuilding its stream

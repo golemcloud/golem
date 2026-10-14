@@ -1071,12 +1071,12 @@ mod tests {
     use super::*;
     use crate::model::ExecutionStatus;
 
+    use crate::services::oplog::OplogArchiveResult;
     use crate::services::oplog::{
         BlobOplogArchiveService, CommitLevel, CompressedOplogArchiveService, EphemeralOplog,
         MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogError, OplogReadError,
         OplogService, PrimaryOplogService,
     };
-    type OplogArchiveResult<T> = Result<T, String>;
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
@@ -3742,7 +3742,7 @@ mod tests {
             &self,
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
-        ) -> Result<(), String> {
+        ) -> OplogArchiveResult<()> {
             self.inner.delete(owned_agent_id, agent_mode).await
         }
 
@@ -3823,7 +3823,7 @@ mod tests {
         async fn verify_persisted(
             &self,
             entries: &[(OplogIndex, OplogEntry)],
-        ) -> Result<(), String> {
+        ) -> OplogArchiveResult<()> {
             if self.keeps_entries {
                 self.inner.verify_persisted(entries).await
             } else {
@@ -3831,7 +3831,7 @@ mod tests {
             }
         }
 
-        async fn current_oplog_index(&self) -> Result<OplogIndex, String> {
+        async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
             self.inner.current_oplog_index().await
         }
 
@@ -3843,11 +3843,11 @@ mod tests {
             }
         }
 
-        async fn length(&self) -> Result<u64, String> {
+        async fn length(&self) -> OplogArchiveResult<u64> {
             self.inner.length().await
         }
 
-        async fn get_last_index(&self) -> Result<OplogIndex, String> {
+        async fn get_last_index(&self) -> OplogArchiveResult<OplogIndex> {
             self.inner.get_last_index().await
         }
     }

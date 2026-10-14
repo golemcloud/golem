@@ -235,21 +235,24 @@ impl OplogArchive for RecordingArchive {
         self.calls.append.fetch_add(1, Ordering::Relaxed);
         self.inner.append(chunk).await
     }
-    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String> {
+    async fn verify_persisted(
+        &self,
+        entries: &[(OplogIndex, OplogEntry)],
+    ) -> OplogArchiveResult<()> {
         self.inner.verify_persisted(entries).await
     }
-    async fn current_oplog_index(&self) -> Result<OplogIndex, String> {
+    async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
         self.calls.current_index.fetch_add(1, Ordering::Relaxed);
         self.inner.current_oplog_index().await
     }
     async fn drop_prefix(&self, idx: OplogIndex) -> Result<u64, OplogError> {
         self.inner.drop_prefix(idx).await
     }
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> OplogArchiveResult<u64> {
         self.calls.length.fetch_add(1, Ordering::Relaxed);
         self.inner.length().await
     }
-    async fn get_last_index(&self) -> Result<OplogIndex, String> {
+    async fn get_last_index(&self) -> OplogArchiveResult<OplogIndex> {
         self.calls
             .archive_last_index
             .fetch_add(1, Ordering::Relaxed);
@@ -465,12 +468,15 @@ impl OplogArchive for BlockingArchive {
         result
     }
 
-    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String> {
+    async fn verify_persisted(
+        &self,
+        entries: &[(OplogIndex, OplogEntry)],
+    ) -> OplogArchiveResult<()> {
         self.hold(PausePoint::Verify).await;
         self.inner.verify_persisted(entries).await
     }
 
-    async fn current_oplog_index(&self) -> Result<OplogIndex, String> {
+    async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
         self.inner.current_oplog_index().await
     }
 
@@ -478,11 +484,11 @@ impl OplogArchive for BlockingArchive {
         self.inner.drop_prefix(last_dropped_id).await
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> OplogArchiveResult<u64> {
         self.inner.length().await
     }
 
-    async fn get_last_index(&self) -> Result<OplogIndex, String> {
+    async fn get_last_index(&self) -> OplogArchiveResult<OplogIndex> {
         self.inner.get_last_index().await
     }
 
@@ -554,10 +560,15 @@ impl OplogArchive for TransferTestArchive {
         Ok(chunk.len() as u64)
     }
 
-    async fn verify_persisted(&self, expected: &[(OplogIndex, OplogEntry)]) -> Result<(), String> {
+    async fn verify_persisted(
+        &self,
+        expected: &[(OplogIndex, OplogEntry)],
+    ) -> OplogArchiveResult<()> {
         self.record("verify");
         if self.fail_verification {
-            return Err("injected persisted verification failure".to_string());
+            return Err(OplogArchiveError::Failed(
+                "injected persisted verification failure".to_string(),
+            ));
         }
         let entries = self.entries.lock().unwrap();
         assert!(
@@ -569,7 +580,7 @@ impl OplogArchive for TransferTestArchive {
         Ok(())
     }
 
-    async fn current_oplog_index(&self) -> Result<OplogIndex, String> {
+    async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
         Ok(self
             .entries
             .lock()
@@ -588,11 +599,11 @@ impl OplogArchive for TransferTestArchive {
         Ok(dropped)
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> OplogArchiveResult<u64> {
         Ok(self.entries.lock().unwrap().len() as u64)
     }
 
-    async fn get_last_index(&self) -> Result<OplogIndex, String> {
+    async fn get_last_index(&self) -> OplogArchiveResult<OplogIndex> {
         self.current_oplog_index().await
     }
 }
@@ -7104,6 +7115,7 @@ async fn background_archive_failure_isolated_from_other_open_agent_oplogs(_traci
         MultiLayerOplog::try_archive_blocking(&failed)
             .await
             .unwrap_err()
+            .to_string()
             .contains("injected permanent failure")
     );
     let failed_index = failed.add(OplogEntry::no_op(None)).await.unwrap();
@@ -8047,6 +8059,7 @@ async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Traci
             .delete(&owned_agent_id, AgentMode::Durable)
             .await
             .unwrap_err()
+            .to_string()
             .contains("injected indexed delete failure")
     );
     compressed
@@ -8065,6 +8078,7 @@ async fn archive_service_delete_failures_are_returned_for_retry(_tracing: &Traci
         blob.delete(&owned_agent_id, AgentMode::Durable)
             .await
             .unwrap_err()
+            .to_string()
             .contains("injected blob directory delete failure")
     );
     blob.delete(&owned_agent_id, AgentMode::Durable)
@@ -8511,6 +8525,72 @@ fn archive_open_agent(name: &str) -> (AgentId, OwnedAgentId, AgentMetadata) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let metadata = make_agent_metadata(agent_id.clone(), account_id, environment_id);
     (agent_id, owned_agent_id, metadata)
+}
+
+/// An archive level whose storage does not answer at open, after the retries, does not fail the
+/// agent for good: the open gives `RecoveryRequired`, which the start retries with backoff.
+#[test]
+async fn an_archive_last_index_that_is_unavailable_requires_a_recovery(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage {
+        archive_last_id_error: Some(IndexedStorageError::Transient(
+            "injected archive index outage".to_string(),
+        )),
+        ..ReadCountingIndexedStorage::default()
+    });
+    let service = archive_open_service(storage).await;
+    let (_, owned_agent_id, metadata) = archive_open_agent("archive-index-outage-at-open");
+
+    let error = failed_open(
+        &service,
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        metadata,
+        None,
+    )
+    .await;
+    assert!(
+        matches!(&error, WorkerExecutorError::RecoveryRequired { details, .. }
+            if details.contains(&owned_agent_id.agent_id.to_string())
+                && details.contains("archive layer 0")
+                && details.contains("injected archive index outage")),
+        "{error:?}"
+    );
+}
+
+/// Only a storage that did not answer is a transient archive failure. An error of the data or of
+/// the request fails the same way on every call.
+#[test]
+fn an_archive_error_is_transient_only_when_the_storage_did_not_answer() {
+    use golem_service_base::storage::blob::BlobMissingError;
+
+    for (error, transient) in [
+        (IndexedStorageError::Transient("outage".to_string()), true),
+        (
+            IndexedStorageError::Indeterminate("lost reply".to_string()),
+            true,
+        ),
+        (IndexedStorageError::Other("bad value".to_string()), false),
+        (IndexedStorageError::Conflict("held".to_string()), false),
+    ] {
+        assert_eq!(
+            OplogArchiveError::of_indexed(&error, error.to_string()).is_transient(),
+            transient,
+            "{error:?}"
+        );
+    }
+    assert!(
+        OplogArchiveError::of_blob(&anyhow::anyhow!("connection reset"), "read").is_transient()
+    );
+    assert!(
+        !OplogArchiveError::of_blob(
+            &anyhow::Error::from(BlobMissingError {
+                path: std::path::PathBuf::from("chunk"),
+            }),
+            "read",
+        )
+        .is_transient()
+    );
 }
 
 #[test]

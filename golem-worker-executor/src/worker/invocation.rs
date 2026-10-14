@@ -521,7 +521,8 @@ fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
 }
 
 /// The oplog that a host call could not read, in the chain of `error`: either already a
-/// `WorkerExecutorError`, or the read failure itself. It fails the agent, not the guest call.
+/// `WorkerExecutorError`, or the read failure itself. It is a failure of the agent, not of the
+/// guest call: `OplogFailed` for good, or `RecoveryRequired` when a later read can pass.
 fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<WorkerExecutorError> {
     error
         .chain()

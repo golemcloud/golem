@@ -15,7 +15,9 @@
 use crate::services::oplog::fenced_stream::{
     FencedIndexedStream, StreamLabels, scan_component_streams,
 };
-use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveResult, OplogArchiveService};
+use crate::services::oplog::multilayer::{
+    OplogArchive, OplogArchiveError, OplogArchiveResult, OplogArchiveService,
+};
 use crate::services::oplog::reader::{OplogReadError, OplogReadSource, verify_persisted_entries};
 use crate::services::oplog::{OplogError, OplogFence};
 use crate::storage::indexed::{
@@ -128,7 +130,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             .open(owned_agent_id, agent_mode, None)
             .await
             .map_err(|error| {
-                OplogReadError::source_failure(OplogReadSource::Archive(self.level), error)
+                OplogReadError::of_archive(OplogReadSource::Archive(self.level), error)
             })?;
         archive.read_source(idx, n).await
     }
@@ -254,8 +256,11 @@ impl CompressedOplogArchive {
         )
         .await
         .map_err(|error| {
-            format!(
-                "failed to record the owning epoch of the compressed oplog of {agent_id} at level {level}: {error}"
+            OplogArchiveError::of_indexed(
+                &error,
+                format!(
+                    "failed to record the owning epoch of the compressed oplog of {agent_id} at level {level}: {error}"
+                ),
             )
         })?;
         Ok(Self::with_stream(
@@ -313,12 +318,14 @@ impl CompressedOplogArchive {
             .closest::<CompressedOplogChunk>(end_of_range)
             .await
             .map_err(|error| {
-                OplogReadError::source_failure(
+                OplogReadError::of_archive(
                     source,
-                    format!(
-                        "failed to read compressed oplog for worker {} in indexed storage: {error}",
-                        self.agent_id
-                    ),
+                    error.map_details(|error| {
+                        format!(
+                            "failed to read compressed oplog for worker {} in indexed storage: {error}",
+                            self.agent_id
+                        )
+                    }),
                 )
             })?
         else {
@@ -481,9 +488,9 @@ impl OplogArchive for CompressedOplogArchive {
         let actual = uncached
             .read_source(*start, entries.len() as u64)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(OplogArchiveError::from)?;
         verify_persisted_entries(OplogReadSource::Archive(self.level), entries, actual)
-            .map_err(|error| error.to_string())
+            .map_err(OplogArchiveError::from)
     }
 
     async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
@@ -492,7 +499,10 @@ impl OplogArchive for CompressedOplogArchive {
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
         self.stream.refuse_if_fenced()?;
-        let before = self.length().await.map_err(OplogError::Maintenance)?;
+        let before = self
+            .length()
+            .await
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?;
         let remaining = self.stream.drop_prefix(last_dropped_id).await?;
         // Ephemeral writers may append newer chunks while this maintenance operation is in flight.
         Ok(before.saturating_sub(remaining))

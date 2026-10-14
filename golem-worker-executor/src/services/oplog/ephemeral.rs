@@ -15,8 +15,7 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     ArchiveSource, BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService,
-    OplogArchive, OplogArchiveResult, TransferFiber, WrappedOplogArchive, layers_fence,
-    transfer_between_lower_layers,
+    OplogArchive, TransferFiber, WrappedOplogArchive, layers_fence, transfer_between_lower_layers,
 };
 use crate::services::oplog::reader::{
     OplogRead, OplogReadError, OplogReadSource, UnreadableOplog, checked_range_end,
@@ -650,28 +649,28 @@ impl EphemeralOplog {
         }
     }
 
-    pub async fn try_archive(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+    pub async fn try_archive(this: &Arc<dyn Oplog>) -> Result<Option<bool>, String> {
         let Some(this) = downcast_oplog::<EphemeralOplog>(this) else {
             return Ok(None);
         };
         this.archive(false, false).await.map(Some)
     }
 
-    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Result<Option<bool>, String> {
         let Some(this) = downcast_oplog::<EphemeralOplog>(this) else {
             return Ok(None);
         };
         this.archive(true, false).await.map(Some)
     }
 
-    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> Result<Option<bool>, String> {
         let Some(this) = downcast_oplog::<EphemeralOplog>(this) else {
             return Ok(None);
         };
         this.archive(false, true).await.map(Some)
     }
 
-    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> OplogArchiveResult<bool> {
+    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> Result<bool, String> {
         self.run_job(|done| EphemeralJob::Drain { done }).await;
 
         // A newer owner holds the oplog: its own archiving decides what moves, and nothing here

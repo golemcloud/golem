@@ -29,7 +29,7 @@ use crate::services::oplog::{
     ReservedRawStartBuilder, StagePublication, decode_scan_cursor, downcast_oplog,
     first_scan_cursor,
 };
-use crate::storage::indexed::IndexedStorageMetaNamespace;
+use crate::storage::indexed::{IndexedStorageError, IndexedStorageMetaNamespace};
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::ShardEpoch;
@@ -48,7 +48,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -62,14 +62,91 @@ pub(crate) type TransferFiber = Arc<Mutex<TransferFiberState>>;
 fn unreadable_archive(
     owned_agent_id: &OwnedAgentId,
     level: usize,
-    error: String,
+    error: OplogArchiveError,
 ) -> UnreadableOplog {
     UnreadableOplog::new(
         &owned_agent_id.agent_id,
-        OplogReadError::source_failure(OplogReadSource::Archive(level), error),
+        OplogReadError::of_archive(OplogReadSource::Archive(level), error),
     )
 }
-pub type OplogArchiveResult<T> = Result<T, String>;
+
+/// A failed call to an archive layer, and whether a later call can pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OplogArchiveError {
+    /// The storage did not answer, after its retries. A later call can pass.
+    Unavailable(String),
+    /// Any other failure. A later call gives the same answer.
+    Failed(String),
+}
+
+impl OplogArchiveError {
+    /// The failure of an indexed storage call, described by `details`. A transient or
+    /// indeterminate error is `Unavailable`; every other error is `Failed`.
+    pub fn of_indexed(error: &IndexedStorageError, details: impl Into<String>) -> Self {
+        match error {
+            IndexedStorageError::Transient(_) | IndexedStorageError::Indeterminate(_) => {
+                Self::Unavailable(details.into())
+            }
+            IndexedStorageError::Conflict(_)
+            | IndexedStorageError::InvalidResume(_)
+            | IndexedStorageError::Other(_)
+            | IndexedStorageError::Fenced { .. } => Self::Failed(details.into()),
+        }
+    }
+
+    /// The failure of a blob storage call, described by `details`, as
+    /// [`golem_service_base::storage::blob::BlobFailure`] classifies it. A transient error, and a
+    /// storage that refuses the call until an operator fixes it, is `Unavailable`: the oplog data
+    /// itself is not at fault, so a later call can pass. A permanent error is `Failed`.
+    pub fn of_blob(error: &anyhow::Error, details: impl Into<String>) -> Self {
+        use golem_service_base::storage::blob::BlobFailure;
+        match BlobFailure::of(error) {
+            BlobFailure::Transient | BlobFailure::Refused(_) => Self::Unavailable(details.into()),
+            BlobFailure::Permanent => Self::Failed(details.into()),
+        }
+    }
+
+    /// The same failure, with its description given by `describe`.
+    pub fn map_details(self, describe: impl FnOnce(String) -> String) -> Self {
+        match self {
+            Self::Unavailable(details) => Self::Unavailable(describe(details)),
+            Self::Failed(details) => Self::Failed(describe(details)),
+        }
+    }
+
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Unavailable(_))
+    }
+}
+
+impl Display for OplogArchiveError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(details) | Self::Failed(details) => f.write_str(details),
+        }
+    }
+}
+
+impl std::error::Error for OplogArchiveError {}
+
+/// A read that did not give its entries, keeping whether a later read can pass.
+impl From<OplogReadError> for OplogArchiveError {
+    fn from(error: OplogReadError) -> Self {
+        if error.is_transient() {
+            Self::Unavailable(error.to_string())
+        } else {
+            Self::Failed(error.to_string())
+        }
+    }
+}
+
+impl From<OplogArchiveError> for String {
+    fn from(error: OplogArchiveError) -> Self {
+        error.to_string()
+    }
+}
+
+pub type OplogArchiveResult<T> = Result<T, OplogArchiveError>;
 type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
 type ArchiveFailures = Arc<Mutex<HashMap<(OwnedAgentId, ArchiveSource), ArchiveFailureState>>>;
 
@@ -1028,7 +1105,7 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<OplogIndex> {
+    ) -> Result<OplogIndex, String> {
         let mut result = self
             .primary
             .try_get_last_index(owned_agent_id, agent_mode)
@@ -1078,7 +1155,7 @@ impl OplogService for MultiLayerOplogService {
             if let Err(error) = layer.delete(owned_agent_id, agent_mode).await {
                 crate::metrics::oplog::record_archive_maintenance_failure("delete");
                 warn!(agent_id = %owned_agent_id, level, error = %error, "Failed to delete archived oplog storage; deletion remains fenced for retry");
-                return Err(OplogError::Maintenance(error));
+                return Err(OplogError::Maintenance(error.to_string()));
             }
         }
         self.archive_failures
@@ -1178,7 +1255,7 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<bool> {
+    ) -> Result<bool, String> {
         if self.primary.try_exists(owned_agent_id, agent_mode).await? {
             return Ok(true);
         }
@@ -1557,21 +1634,21 @@ impl MultiLayerOplog {
         }
     }
 
-    pub async fn try_archive(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+    pub async fn try_archive(this: &Arc<dyn Oplog>) -> Result<Option<bool>, String> {
         let Some(this) = downcast_oplog::<MultiLayerOplog>(this) else {
             return Ok(None);
         };
         Self::archive(this, false).await.map(Some)
     }
 
-    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Result<Option<bool>, String> {
         let Some(this) = downcast_oplog::<MultiLayerOplog>(this) else {
             return Ok(None);
         };
         Self::archive(this, true).await.map(Some)
     }
 
-    async fn archive(this: Arc<Self>, blocking: bool) -> OplogArchiveResult<bool> {
+    async fn archive(this: Arc<Self>, blocking: bool) -> Result<bool, String> {
         // A newer owner holds the oplog: its own archiving decides what moves, and nothing here
         // could be written anyway.
         if this.fence().is_some() {
@@ -1883,7 +1960,7 @@ impl Oplog for MultiLayerOplog {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
         self.primary.try_read_source(idx, n).await
     }
 
@@ -1988,9 +2065,9 @@ pub enum BackgroundTransferMessage {
 
 #[async_trait]
 trait BackgroundTransfer {
-    async fn read_source(&self) -> OplogArchiveResult<Vec<(OplogIndex, OplogEntry)>>;
+    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String>;
     async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), OplogError>;
-    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<()>;
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String>;
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError>;
 
     /// Copies, verifies, then trims, keeping the source until the copy is verified. A failed step
@@ -2136,7 +2213,7 @@ impl OplogArchive for WrappedOplogArchive {
             .archive
             .length()
             .await
-            .map_err(OplogError::Maintenance)?;
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?;
         let old_entry_count = self.entry_count.load(Ordering::Acquire);
         let new_entry_count = min(new_length, old_entry_count);
         self.entry_count.store(new_entry_count, Ordering::Release);
@@ -2178,7 +2255,7 @@ impl BackgroundTransferFromPrimary {
 
 #[async_trait]
 impl BackgroundTransfer for BackgroundTransferFromPrimary {
-    async fn read_source(&self) -> OplogArchiveResult<Vec<(OplogIndex, OplogEntry)>> {
+    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let entries = self
             .primary
             .try_read_source(OplogIndex::INITIAL, self.last_transferred_idx.as_u64())
@@ -2191,8 +2268,12 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
         self.lower.first().append(entries).await.map(|_| ())
     }
 
-    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<()> {
-        self.lower.first().verify_persisted(entries).await
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String> {
+        self.lower
+            .first()
+            .verify_persisted(entries)
+            .await
+            .map_err(String::from)
     }
 
     /// The primary latches a refused trim itself and reports it typed on the next write through
@@ -2241,7 +2322,7 @@ pub(crate) async fn transfer_between_lower_layers(
 
 #[async_trait]
 impl BackgroundTransfer for BackgroundTransferBetweenLowers {
-    async fn read_source(&self) -> OplogArchiveResult<Vec<(OplogIndex, OplogEntry)>> {
+    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let entries = self
             .source_layer
             .read_source(OplogIndex::INITIAL, self.last_transferred_idx.as_u64())
@@ -2259,8 +2340,11 @@ impl BackgroundTransfer for BackgroundTransferBetweenLowers {
         self.target_layer.append(entries).await.map(|_| ())
     }
 
-    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<()> {
-        self.target_layer.verify_persisted(entries).await
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String> {
+        self.target_layer
+            .verify_persisted(entries)
+            .await
+            .map_err(String::from)
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError> {

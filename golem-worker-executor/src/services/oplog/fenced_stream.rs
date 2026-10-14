@@ -14,9 +14,9 @@
 
 use crate::metrics::oplog::record_oplog_storage_retry;
 use crate::services::oplog::{
-    OplogError, OplogFence, PrimaryOplogService, decode_scan_cursor, epoch_record_service,
-    epoch_record_verdict, next_scan_cursor, record_epoch_verdict, refuse_if_fenced,
-    retry_scan_storage_op,
+    OplogArchiveError, OplogError, OplogFence, PrimaryOplogService, decode_scan_cursor,
+    epoch_record_service, epoch_record_verdict, next_scan_cursor, record_epoch_verdict,
+    refuse_if_fenced, retry_scan_storage_op,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -240,13 +240,26 @@ impl FencedIndexedStream {
     pub async fn closest<V: BinaryDeserializer>(
         &self,
         id: OplogIndex,
-    ) -> Result<Option<(OplogIndex, V)>, IndexedStorageError> {
-        Ok(self
-            .indexed_storage
-            .with_entity(self.labels.svc, "read", self.labels.entity)
-            .closest::<V>(self.namespace.clone(), &self.key, id.into())
-            .await?
-            .map(|(id, value)| (OplogIndex::from_u64(id), value)))
+    ) -> Result<Option<(OplogIndex, V)>, OplogArchiveError> {
+        let labels = self.labels;
+        retry_storage_op(
+            &self.retry_config,
+            &format!("{}_closest", labels.op),
+            &self.key,
+            || {
+                let is = self.indexed_storage.clone();
+                let ns = self.namespace.clone();
+                let key = self.key.clone();
+                async move {
+                    is.with_entity(labels.svc, "read", labels.entity)
+                        .closest::<V>(ns, &key, id.into())
+                        .await
+                }
+            },
+        )
+        .await
+        .map(|found| found.map(|(id, value)| (OplogIndex::from_u64(id), value)))
+        .map_err(|error| self.read_error("read", error))
     }
 
     /// Every entry whose id lies in `from..=to`.
@@ -254,7 +267,7 @@ impl FencedIndexedStream {
         &self,
         from: OplogIndex,
         to: OplogIndex,
-    ) -> Result<Vec<(OplogIndex, V)>, String> {
+    ) -> Result<Vec<(OplogIndex, V)>, OplogArchiveError> {
         let labels = self.labels;
         retry_storage_op(
             &self.retry_config,
@@ -281,7 +294,7 @@ impl FencedIndexedStream {
         .map_err(|error| self.read_error("read", error))
     }
 
-    pub async fn length(&self) -> Result<u64, String> {
+    pub async fn length(&self) -> Result<u64, OplogArchiveError> {
         let labels = self.labels;
         retry_storage_op(
             &self.retry_config,
@@ -299,7 +312,7 @@ impl FencedIndexedStream {
     }
 
     /// The id of the last entry, or `OplogIndex::NONE` when there is none.
-    pub async fn last_id(&self) -> Result<OplogIndex, String> {
+    pub async fn last_id(&self) -> Result<OplogIndex, OplogArchiveError> {
         let labels = self.labels;
         retry_storage_op(
             &self.retry_config,
@@ -321,7 +334,7 @@ impl FencedIndexedStream {
         .map_err(|error| self.read_error("read the last index of", error))
     }
 
-    pub async fn exists(&self) -> Result<bool, String> {
+    pub async fn exists(&self) -> Result<bool, OplogArchiveError> {
         let labels = self.labels;
         retry_storage_op(
             &self.retry_config,
@@ -368,7 +381,10 @@ impl FencedIndexedStream {
         if let Err(error) = trimmed {
             return Err(self.write_error("drop the prefix of", error));
         }
-        let remaining = self.length().await.map_err(OplogError::Maintenance)?;
+        let remaining = self
+            .length()
+            .await
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?;
         if remaining == 0 {
             let deleted = retry_storage_op(
                 &self.retry_config,
@@ -405,7 +421,7 @@ impl FencedIndexedStream {
 
     /// Deletes the key and its recorded generation, whatever epoch recorded it. For deleting the
     /// agent, which runs after the fenced delete of its primary oplog.
-    pub async fn delete(&self) -> Result<(), String> {
+    pub async fn delete(&self) -> Result<(), OplogArchiveError> {
         let labels = self.labels;
         retry_storage_op(
             &self.retry_config,
@@ -426,10 +442,14 @@ impl FencedIndexedStream {
         .map_err(|error| self.read_error("delete", error))
     }
 
-    fn read_error(&self, action: &str, error: IndexedStorageError) -> String {
-        format!(
-            "failed to {action} {} for {}: {error}",
-            self.labels.what, self.agent_id
+    /// Describes a failed read, keeping whether a later read can pass.
+    fn read_error(&self, action: &str, error: IndexedStorageError) -> OplogArchiveError {
+        OplogArchiveError::of_indexed(
+            &error,
+            format!(
+                "failed to {action} {} for {}: {error}",
+                self.labels.what, self.agent_id
+            ),
         )
     }
 
@@ -438,7 +458,7 @@ impl FencedIndexedStream {
     fn write_error(&self, action: &str, error: IndexedStorageError) -> OplogError {
         match error {
             IndexedStorageError::Fenced { .. } => self.latch(error),
-            other => OplogError::Maintenance(self.read_error(action, other)),
+            other => OplogError::Maintenance(self.read_error(action, other).to_string()),
         }
     }
 

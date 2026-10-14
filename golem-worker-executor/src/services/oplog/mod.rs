@@ -54,7 +54,10 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use serde::{Deserialize, Serialize};
 
 pub use ephemeral::EphemeralOplog;
-pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogArchiveService};
+pub use multilayer::{
+    MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogArchiveError, OplogArchiveResult,
+    OplogArchiveService,
+};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
