@@ -13,7 +13,7 @@ These requirements apply to production. For local development and tests on macOS
 - The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink: `ManagedXfs` (with project quotas) or `ReflinkXfs` (without project quotas). Each executor has its own XFS filesystem. See [Prepare XFS storage](#prepare-xfs-storage).
 - With `ManagedXfs`, the executor process must be able to change XFS project quotas. `ReflinkXfs` needs no capability.
 - All executors that can run the same agents enable filesystem snapshots, and use the same blob storage and the same `repository_key`.
-- With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
+- With S3 blob storage, `filesystem_snapshots_bucket` is set and the bucket exists. Without `namespace_prefixes`, it names a bucket other than `custom_data_bucket`. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
 
 Choose the backend with `[filesystem_storage.mode]`:
@@ -245,10 +245,12 @@ filesystem_snapshots_bucket = "filesystem-snapshots"
 The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`.
 
 <Callout type="warning">
-  Use a separate bucket for filesystem snapshots. The executor and the registry service refuse to start if `filesystem_snapshots_bucket` equals `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A shared bucket would cause these problems:
+  Without `namespace_prefixes`, use a separate bucket for filesystem snapshots. The services refuse to start if `filesystem_snapshots_bucket` names the bucket of another bucket setting, such as `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A bucket shared with the custom data would cause these problems:
 
   - An agent can delete or overwrite the filesystem snapshots of other agents in its environment. The keys of both are below `<object_prefix>/<environment id>/`, so a `wasi:blobstore` container can have the same key prefix as the filesystem snapshots of an agent.
   - The blob storage quota of the account counts the filesystem snapshots.
+
+  With `namespace_prefixes = true`, the keys of the snapshots and of the `wasi:blobstore` data have different prefixes, so both settings can name the same bucket. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
 </Callout>
 
 The executor makes these S3 calls on the bucket. Give its credentials the permissions in the table:
@@ -380,7 +382,7 @@ The executor keeps the snapshots of each agent incarnation in their own location
 
 | Blob storage | Location of the snapshots of one incarnation |
 | --- | --- |
-| S3 | Bucket `filesystem_snapshots_bucket`, key prefix `<object_prefix>/<environment id>/<agent>/<incarnation id>/`. Without `object_prefix`, the prefix starts at `<environment id>`. |
+| S3 | Bucket `filesystem_snapshots_bucket`, key prefix `<object_prefix>/<environment id>/<agent>/<incarnation id>/`. With `namespace_prefixes = true`, the key prefix is `<object_prefix>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/`. Without `object_prefix`, the prefix starts at the segment after it. |
 | File system | `<root>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
 | SQLite (`Sqlite` and `KVStoreSqlite`) | The namespace `filesystem_snapshots-<environment id>-<agent>-<incarnation id>` in the `blob_storage` table |
 | In memory | The memory of the executor. The snapshots are lost when the executor stops. Use it only for tests. |

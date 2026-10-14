@@ -7,6 +7,7 @@ The types used in the component's code are mapped to JSON when used in the invoc
 <Callout type="info">
 The examples below show the JSON **value** part used by the REST invocation API.
 When calling the raw invoke endpoints, each argument and result is wrapped as a typed value object as described in the [Invoke via HTTP](/next/invoke/http) page.
+These JSON examples are not CLI input syntax. The [CLI invocation page](/next/invoke/cli#encoding-parameters) describes positional arguments and native language literals.
 </Callout>
 
 ## Language types to JSON
@@ -344,11 +345,11 @@ Unstructured text is an arbitrary string, optionally annotated with a language c
     </Tabs.Tab>
 
     <Tabs.Tab>
-    The current Scala SDK does not expose the removed `TextSegment` or unstructured-text API. Use supported structured `String` values for text, without language restrictions or inline-or-URL semantics.
+    Use `golem.schema.UnstructuredText[L]` for inline text with an optional language code or a URL reference. Use `String` as the type argument for unrestricted language codes, or a string-literal union such as `"en" | "de"` to restrict them. Construct values with `UnstructuredText.fromInline(...)` or `UnstructuredText.fromUrl(...)`. See the [Scala HTTP parameter guide](/next/how-to-guides/scala/golem-http-params-scala) for raw-body mapping.
     </Tabs.Tab>
 
     <Tabs.Tab>
-    The current MoonBit SDK does not yet provide a user-facing unstructured-text wrapper. Use `String` for structured text. The removed `@types.UnstructuredText` wrapper and `#derive.text_languages` annotation are not supported.
+    Use `@schema.UnstructuredText[L]` from `golemcloud/golem_sdk/schema` for inline text with an optional language code or a URL reference. The type argument implements `AllowedLanguages`; use `AnyLanguage` for unrestricted language codes. Construct values with `UnstructuredText::inline(...)` or `UnstructuredText::url(...)`. See the [MoonBit HTTP parameter guide](/next/how-to-guides/moonbit/golem-http-params-moonbit) for raw-body mapping.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -495,10 +496,10 @@ Unstructured binary data is similar to unstructured text, but it is annotated (a
       ```
     </Tabs.Tab>
     <Tabs.Tab>
-    The current Scala SDK does not expose the removed `BinarySegment` or unstructured-binary API. Use a supported structured byte-array type, without MIME restrictions or inline-or-URL semantics.
+    Use `golem.schema.UnstructuredBinary[M]` for inline bytes with an optional MIME type or a URL reference. Use `String` as the type argument for unrestricted MIME types, or a string-literal union such as `"image/png" | "image/jpeg"` to restrict them. Construct values with `UnstructuredBinary.fromInline(...)` or `UnstructuredBinary.fromUrl(...)`. See the [Scala HTTP parameter guide](/next/how-to-guides/scala/golem-http-params-scala) for raw-body mapping.
     </Tabs.Tab>
     <Tabs.Tab>
-    The current MoonBit SDK does not yet provide a user-facing unstructured-binary wrapper. Use `Bytes` for structured binary data. The removed `@types.UnstructuredBinary` wrapper and `#derive.mime_types` annotation are not supported.
+    Use `@schema.UnstructuredBinary[M]` from `golemcloud/golem_sdk/schema` for inline bytes with an optional MIME type or a URL reference. The type argument implements `AllowedMimeTypes`; use `AnyMimeType` for unrestricted MIME types. Construct values with `UnstructuredBinary::inline(...)` or `UnstructuredBinary::url(...)`. A bare `Bytes` parameter also accepts a raw binary HTTP body when it is the only body parameter. See the [MoonBit HTTP parameter guide](/next/how-to-guides/moonbit/golem-http-params-moonbit) for raw-body mapping.
     </Tabs.Tab>
     <Tabs.Tab>
     ```go
