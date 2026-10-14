@@ -437,10 +437,14 @@ async fn before_deadline<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+    #[cfg(target_os = "linux")]
     use crate::services::golem_config::FilesystemStorageMode;
     use std::collections::{HashMap, VecDeque};
+    #[cfg(target_os = "linux")]
     use std::io::Write;
+    #[cfg(target_os = "linux")]
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1119,12 +1123,14 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     struct RealVolumeRecovery {
         volume: FilesystemVolume,
         filler: Mutex<Option<PathBuf>>,
     }
 
     #[async_trait]
+    #[cfg(target_os = "linux")]
     impl CapacityRecoverySource for RealVolumeRecovery {
         type Candidate = ();
 
@@ -1149,6 +1155,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "requires GOLEM_MANAGED_XFS_TEST_ROOT on a privileged XFS project-quota mount"]
     async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
