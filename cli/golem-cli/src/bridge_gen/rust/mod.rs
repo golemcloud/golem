@@ -88,6 +88,7 @@ struct GuestMethodNames {
     schedule_cancelable_name: Ident,
     internal_name: Ident,
     scheduled_time_param: Ident,
+    scope_card_param: Ident,
     param_names: Vec<String>,
 }
 
@@ -330,6 +331,10 @@ impl RustBridgeGenerator {
                     RustTypeName::Derived("__golem_bridge_runtime".to_string()),
                     RustTypeName::Derived(Self::guest_client_struct_name_string(
                         &agent_type.type_name.0,
+                    )),
+                    RustTypeName::Derived(format!(
+                        "{}WithScopeCard",
+                        Self::guest_client_struct_name_string(&agent_type.type_name.0)
                     )),
                     RustTypeName::Derived("languages".to_string()),
                     RustTypeName::Derived("mimetypes".to_string()),
@@ -846,8 +851,19 @@ impl RustBridgeGenerator {
         let new_phantom_with_config_method_name = (!local_configs.is_empty())
             .then(|| Self::ident_from_name(impl_names.fresh("new_phantom_with_config")));
         let create_method_name = Self::ident_from_name(impl_names.fresh("__create"));
+        let with_scope_card_method_name =
+            Self::ident_from_name(impl_names.fresh("with_scope_card"));
+        let set_default_scope_card_method_name =
+            Self::ident_from_name(impl_names.fresh("set_default_scope_card"));
+        let clear_default_scope_card_method_name =
+            Self::ident_from_name(impl_names.fresh("clear_default_scope_card"));
+        let scoped_client_struct_name = Ident::new(
+            &format!("{client_struct_name}WithScopeCard"),
+            Span::call_site(),
+        );
 
         let mut methods = Vec::new();
+        let mut scoped_methods = Vec::new();
         for (method, names) in self
             .agent_type
             .methods
@@ -856,6 +872,12 @@ impl RustBridgeGenerator {
             .zip(guest_method_names.iter())
         {
             methods.extend(self.guest_methods(method, names)?);
+            scoped_methods.push(self.guest_await_method_via(
+                method,
+                names,
+                quote! { self.client },
+                quote! { Some(self.scope_card) },
+            )?);
         }
 
         let mut create_signature_names = ParameterNaming::new();
@@ -1018,6 +1040,7 @@ impl RustBridgeGenerator {
             #[derive(Debug)]
             pub struct #client_struct_name {
                 wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
+                __golem_default_scope_card: golem_rust::permissions::__DefaultScopeCard,
             }
 
             impl #client_struct_name {
@@ -1045,10 +1068,57 @@ impl RustBridgeGenerator {
                         #agent_config_param,
                     );
 
-                    Ok(Self { wasm_rpc })
+                    Ok(Self {
+                        wasm_rpc,
+                        __golem_default_scope_card: ::core::default::Default::default(),
+                    })
+                }
+
+                /// Returns a view of this client whose awaited method calls lend
+                /// `scope_card` to the callee for the duration of each invocation.
+                ///
+                /// The card is borrowed, never consumed. Trigger and scheduled
+                /// invocations do not accept a scope card.
+                pub fn #with_scope_card_method_name<'a>(
+                    &'a self,
+                    scope_card: &'a golem_rust::permissions::ScopeCard,
+                ) -> #scoped_client_struct_name<'a> {
+                    #scoped_client_struct_name {
+                        client: self,
+                        scope_card,
+                    }
+                }
+
+                /// Lends `scope_card` to the callee of every awaited method call
+                /// of this client that does not use its own scope card.
+                ///
+                /// A scope card is valid only during the invocation that derived it.
+                /// Clear the default, or drop the client, before that invocation ends;
+                /// a later awaited call with the retired default fails with `denied`.
+                pub fn #set_default_scope_card_method_name(
+                    &mut self,
+                    scope_card: &golem_rust::permissions::ScopeCard,
+                ) {
+                    self.__golem_default_scope_card.set(scope_card);
+                }
+
+                /// Stops lending the client's default scope card.
+                pub fn #clear_default_scope_card_method_name(&mut self) {
+                    self.__golem_default_scope_card.clear();
                 }
 
                 #(#methods)*
+            }
+
+            /// A view of an agent client whose awaited method calls lend a
+            /// scope card to the callee.
+            pub struct #scoped_client_struct_name<'a> {
+                client: &'a #client_struct_name,
+                scope_card: &'a golem_rust::permissions::ScopeCard,
+            }
+
+            impl<'a> #scoped_client_struct_name<'a> {
+                #(#scoped_methods)*
             }
 
             #stream_factories
@@ -1676,6 +1746,9 @@ impl RustBridgeGenerator {
                 let scheduled_time_param = Self::ident_from_name(
                     signature_names.fresh(self.to_rust_ident("__golem_bridge_scheduled_time")),
                 );
+                let scope_card_param = Self::ident_from_name(
+                    signature_names.fresh(self.to_rust_ident("__golem_bridge_scope_card")),
+                );
                 Ok(GuestMethodNames {
                     await_name,
                     trigger_name,
@@ -1683,6 +1756,7 @@ impl RustBridgeGenerator {
                     schedule_cancelable_name,
                     internal_name,
                     scheduled_time_param,
+                    scope_card_param,
                     param_names,
                 })
             })
@@ -1714,6 +1788,18 @@ impl RustBridgeGenerator {
         method: &AgentMethodSchema,
         names: &GuestMethodNames,
     ) -> anyhow::Result<TokenStream> {
+        self.guest_await_method_via(method, names, quote! { self }, quote! { None })
+    }
+
+    /// Generates the awaited method, which calls the internal method on
+    /// `client` and lends it `scope_card`.
+    fn guest_await_method_via(
+        &mut self,
+        method: &AgentMethodSchema,
+        names: &GuestMethodNames,
+        client: TokenStream,
+        scope_card: TokenStream,
+    ) -> anyhow::Result<TokenStream> {
         let name = &names.await_name;
         let internal_name = &names.internal_name;
         let return_type = self.output_return_type(&method.output_schema)?;
@@ -1726,26 +1812,26 @@ impl RustBridgeGenerator {
         match return_type {
             Some(return_type) if ephemeral => Ok(quote! {
                 pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<#return_type>, crate::__golem_bridge_runtime::ClientError> {
-                    let (metadata, result) = self.#internal_name(#(#param_refs),*).await?;
+                    let (metadata, result) = #client.#internal_name(#(#param_refs,)* #scope_card).await?;
                     let value = result.ok_or_else(|| crate::__golem_bridge_runtime::ClientError::MissingResult { method: #name_lit.to_string() })?;
                     Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { metadata, value })
                 }
             }),
             Some(return_type) => Ok(quote! {
                 pub async fn #name(&self, #(#param_defs),*) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
-                    let result = self.#internal_name(#(#param_refs),*).await?;
+                    let result = #client.#internal_name(#(#param_refs,)* #scope_card).await?;
                     result.ok_or_else(|| crate::__golem_bridge_runtime::ClientError::MissingResult { method: #name_lit.to_string() })
                 }
             }),
             None if ephemeral => Ok(quote! {
                 pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<()>, crate::__golem_bridge_runtime::ClientError> {
-                    let (metadata, _) = self.#internal_name(#(#param_refs),*).await?;
+                    let (metadata, _) = #client.#internal_name(#(#param_refs,)* #scope_card).await?;
                     Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { metadata, value: () })
                 }
             }),
             None => Ok(quote! {
                 pub async fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
-                    let _result = self.#internal_name(#(#param_refs),*).await?;
+                    let _result = #client.#internal_name(#(#param_refs,)* #scope_card).await?;
                     Ok(())
                 }
             }),
@@ -1855,6 +1941,7 @@ impl RustBridgeGenerator {
     ) -> anyhow::Result<TokenStream> {
         let name_lit = method.name.as_str();
         let name = &names.internal_name;
+        let scope_card_param = &names.scope_card_param;
         let param_defs =
             self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
         let return_type = self.output_return_type(&method.output_schema)?;
@@ -1865,9 +1952,10 @@ impl RustBridgeGenerator {
             Some(return_type) if ephemeral => {
                 let decode_body = self.guest_output_wire(&method.output_schema)?;
                 Ok(quote! {
-                    async fn #name(&self, #(#param_defs),*) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
+                    async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
+                        let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
                         let method_parameters = #params_wire;
-                        let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None);
+                        let invocation = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref());
                         let metadata = invocation.metadata;
                         let response = invocation.future.get().await
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
@@ -1886,9 +1974,10 @@ impl RustBridgeGenerator {
             Some(return_type) => {
                 let decode_body = self.guest_output_wire(&method.output_schema)?;
                 Ok(quote! {
-                    async fn #name(&self, #(#param_defs),*) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
+                    async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
+                        let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
                         let method_parameters = #params_wire;
-                        let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None).future;
+                        let rpc_result_future = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).future;
                         let response = rpc_result_future.get().await
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
                         match response {
@@ -1904,9 +1993,10 @@ impl RustBridgeGenerator {
                 })
             }
             None if ephemeral => Ok(quote! {
-                async fn #name(&self, #(#param_defs),*) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<()>), crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters = #params_wire;
-                    let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None);
+                async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<()>), crate::__golem_bridge_runtime::ClientError> {
+                    let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
+                        let method_parameters = #params_wire;
+                    let invocation = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref());
                     let metadata = invocation.metadata;
                     let _response = invocation.future.get().await
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
@@ -1914,9 +2004,10 @@ impl RustBridgeGenerator {
                 }
             }),
             None => Ok(quote! {
-                async fn #name(&self, #(#param_defs),*) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters = #params_wire;
-                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None).future;
+                async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
+                    let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
+                        let method_parameters = #params_wire;
+                    let rpc_result_future = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).future;
                     let _response = rpc_result_future.get().await
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
                     Ok(Some(()))
@@ -3608,7 +3699,7 @@ impl RustBridgeGenerator {
                 quote! { Ok(<golem_rust::quota::QuotaToken as golem_rust::IntoSchema>::to_value(&#val)) }
             }
             SchemaType::PermissionCard { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
-                quote! { Ok(<golem_rust::schema::wit::GuestPermissionCardHandle as golem_rust::IntoSchema>::to_value(&#val)) }
+                quote! { Ok(<golem_rust::permissions::PermissionCard as golem_rust::IntoSchema>::to_value(&#val)) }
             }
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -3935,7 +4026,7 @@ impl RustBridgeGenerator {
             },
             SchemaType::PermissionCard { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 quote! {
-                    <golem_rust::schema::wit::GuestPermissionCardHandle as golem_rust::FromSchema>::from_value(&#val)
+                    <golem_rust::permissions::PermissionCard as golem_rust::FromSchema>::from_value(&#val)
                         .map_err(|__error| __error.to_string())
                 }
             }
@@ -4115,7 +4206,7 @@ impl RustBridgeGenerator {
                 Ok(quote! { golem_rust::quota::QuotaToken })
             }
             SchemaType::PermissionCard { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
-                Ok(quote! { golem_rust::schema::wit::GuestPermissionCardHandle })
+                Ok(quote! { golem_rust::permissions::PermissionCard })
             }
             SchemaType::Ref { .. }
             | SchemaType::Variant { .. }

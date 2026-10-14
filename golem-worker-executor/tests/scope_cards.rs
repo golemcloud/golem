@@ -1678,7 +1678,7 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "invoke_and_await_repeated_scope_inspection",
+                "repeated_scope_inspection_through_default_scope_card",
                 data_value!(target_name, 0u32),
             )
             .await?
@@ -1693,7 +1693,7 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "invoke_and_await_repeated_scope_inspection",
+                "repeated_scope_inspection_through_default_scope_card",
                 data_value!(target_name, 5u32),
             )
             .await?

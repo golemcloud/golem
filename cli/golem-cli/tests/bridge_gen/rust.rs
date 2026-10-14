@@ -533,8 +533,22 @@ fn guest_generation_compiles_host_managed_capability_methods() {
                 vec![field("capabilities", capability_modalities.clone())],
                 Some(capability_modalities),
             ),
+            method("with_scope_card", vec![], None),
+            method("set_default_scope_card", vec![], None),
+            method("clear_default_scope_card", vec![], None),
+            method(
+                "describe",
+                vec![],
+                Some(ref_to("CapabilityAgentWithScopeCard")),
+            ),
         ],
-        vec![def("CapabilityEnvelope", envelope)],
+        vec![
+            def("CapabilityEnvelope", envelope),
+            def(
+                "CapabilityAgentWithScopeCard",
+                SchemaType::record(vec![named_field("name", SchemaType::string())]),
+            ),
+        ],
         AgentMode::Durable,
     );
     let config =
@@ -553,13 +567,38 @@ fn guest_generation_compiles_host_managed_capability_methods() {
     for capability_type in [
         "golem_rust::secrets::GuestSecretHandle",
         "golem_rust::quota::QuotaToken",
-        "golem_rust::schema::wit::GuestPermissionCardHandle",
+        "golem_rust::permissions::PermissionCard",
     ] {
         assert!(
             lib_rs.contains(capability_type),
             "missing capability type {capability_type}:\n{lib_rs}"
         );
     }
+    // User method and type names win over the generated scope-card members,
+    // which are renamed.
+    for scope_card_item in [
+        "pub async fn with_scope_card(",
+        "pub async fn set_default_scope_card(",
+        "pub async fn clear_default_scope_card(",
+        "pub fn with_scope_card1<'a>(",
+        "pub fn set_default_scope_card1(",
+        "pub fn clear_default_scope_card1(",
+        "pub struct CapabilityAgentWithScopeCard<'a>",
+        "scope_card: &'a golem_rust::permissions::ScopeCard",
+    ] {
+        assert!(
+            lib_rs.contains(scope_card_item),
+            "missing scope-card item {scope_card_item}:\n{lib_rs}"
+        );
+    }
+    assert_eq!(
+        lib_rs
+            .matches("golem_rust::permissions::__async_invoke_and_await")
+            .count(),
+        6,
+        "every awaited call, and only awaited calls, must go through the scope-card helper:\n{lib_rs}"
+    );
+    assert!(!lib_rs.contains("wasm_rpc.async_invoke_and_await"));
     assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub struct CapabilityEnvelope"));
     assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub enum Multimodal0"));
 

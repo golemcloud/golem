@@ -1,18 +1,42 @@
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
-use golem_rust::bindings::golem::permissions::{derive, inspect, revoke, types, wallet};
-use golem_rust::schema::wit::wire::{AgentId as WireAgentId, PermissionCard};
-use golem_rust::{
-    CardId, ComponentId, FromSchema, IntoSchema, PromiseId, SchemaValue, agent_definition,
-    agent_implementation, await_promise, create_promise, decode_schema_value, encode_schema_value,
+use golem_rust::golem_schema::CardId;
+use golem_rust::permissions::{
+    self, Bounds, Holder, Lifespan, PatternGrant, PermissionCard, PermissionError, ScopeCard,
 };
+use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::schema::wit::wire::PermissionCard as RawPermissionCard;
+use golem_rust::{
+    AgentId, ComponentId, FromSchema, GolemReflectError, IntoSchema, ParsedAgentId, PromiseId,
+    SchemaValue, agent_client, agent_definition, agent_implementation, await_promise,
+    create_promise, decode_schema_value, encode_schema_value,
+};
+use std::cell::RefCell;
+use std::time::Duration;
 
 fn encode_parameters(values: Vec<SchemaValue>) -> golem_rust::schema::wit::wire::SchemaValueTree {
     encode_schema_value(&SchemaValue::Record { fields: values })
         .expect("failed to encode RPC parameters")
 }
 
+/// Lends the host handle of `card` to a raw `WasmRpc` call. The typed agent
+/// client attaches scope cards only to awaited calls, so the raw handle is
+/// needed to show that the host also accepts the synchronous await variant and
+/// rejects the other invocation variants.
+fn with_raw_card<R>(card: &PermissionCard, f: impl FnOnce(&RawPermissionCard) -> R) -> R {
+    GuestPermissionCardHandle::from_value(&card.to_value())
+        .expect("permission card lowers to a card handle")
+        .with_handle(f)
+        .expect("permission card has already been moved")
+}
+
+/// Lends the host handle of a scope card to a raw `WasmRpc` call, for the
+/// same reason as [`with_raw_card`].
+fn with_raw_scope<R>(scope_card: &ScopeCard, f: impl FnOnce(&RawPermissionCard) -> R) -> R {
+    f(scope_card.__raw_handle_for_host_api_tests())
+}
+
 fn is_template_card(card: &PermissionCard) -> bool {
-    let view = inspect::inspect_card(card).expect("failed to inspect wallet card");
+    let view = card.inspect().expect("failed to inspect wallet card");
     view.lower_positive
         .iter()
         .chain(&view.lower_negative)
@@ -21,19 +45,19 @@ fn is_template_card(card: &PermissionCard) -> bool {
         .any(|grant| grant.owner.contains('?'))
 }
 
-fn parent_card() -> golem_rust::schema::wit::wire::PermissionCard {
-    wallet::self_wallet()
+fn parent_card() -> PermissionCard {
+    permissions::wallet()
         .into_iter()
         .find(is_template_card)
         .expect("scope-card test parent is not installed")
 }
 
-fn is_inspect_grant(grant: &types::PatternGrant) -> bool {
+fn is_inspect_grant(grant: &PatternGrant) -> bool {
     grant.class == "card" && grant.verb == "inspect" && grant.resource_id == "*"
 }
 
-fn retained_inspect_grant(card: &PermissionCard) -> types::PatternGrant {
-    inspect::inspect_card(card)
+fn retained_inspect_grant(card: &PermissionCard) -> PatternGrant {
+    card.inspect()
         .expect("failed to inspect parent card")
         .lower_positive
         .into_iter()
@@ -41,52 +65,71 @@ fn retained_inspect_grant(card: &PermissionCard) -> types::PatternGrant {
         .expect("parent card does not grant card inspection")
 }
 
-fn derive_scope_card() -> golem_rust::schema::wit::wire::PermissionCard {
+fn lower_positive(grant: PatternGrant) -> Bounds {
+    Bounds {
+        lower_positive: vec![grant],
+        ..Bounds::default()
+    }
+}
+
+fn derive_scope_card() -> ScopeCard {
     let parent = parent_card();
     let grant = retained_inspect_grant(&parent);
-    derive::derive_scope(&[&parent], &[grant], &[], &[], &[]).expect("scope-card derivation failed")
+    permissions::derive_scope(&[(&parent).into()], &lower_positive(grant))
+        .expect("scope-card derivation failed")
 }
 
 fn derive_persistent_card(parent: &PermissionCard) -> PermissionCard {
     let grant = retained_inspect_grant(parent);
-    derive::derive(parent, &[grant], &[], &[], &[], None)
+    parent
+        .derive(&lower_positive(grant), None)
         .expect("persistent card derivation failed")
 }
 
 fn derive_persistent_card_from_wallet() -> PermissionCard {
     let parent = parent_card();
     let grant = retained_inspect_grant(&parent);
-    derive::derive_from_wallet(&[grant], &[], &[], &[], None)
+    permissions::derive_from_wallet(&lower_positive(grant), None)
         .expect("wallet card derivation failed")
 }
 
-fn card_id(card: &PermissionCard) -> CardId {
-    types::id(card).into()
+fn wallet_card(card_id: &CardId) -> Option<PermissionCard> {
+    permissions::wallet()
+        .into_iter()
+        .find(|card| &reveal(card.id()) == card_id)
 }
 
-fn card_has_id(card: &PermissionCard, card_id: &CardId) -> bool {
-    &CardId::from(types::id(card)) == card_id
+fn agent_holder(component_id: ComponentId, agent_id: String) -> Holder {
+    Holder::Agent(AgentId::new(component_id, agent_id))
 }
 
-fn agent_holder(component_id: ComponentId, agent_id: String) -> types::Holder {
-    types::Holder::Agent(WireAgentId {
-        component_id: component_id.into(),
-        agent_id,
-    })
+/// Card ids cross agent calls in their schema form; `permissions::CardId`
+/// itself has no codec.
+fn reveal(id: permissions::CardId) -> CardId {
+    id.__reveal_for_tests()
+}
+
+fn scope_root_id(scope_card: &ScopeCard) -> CardId {
+    reveal(
+        scope_card
+            .parents()
+            .into_iter()
+            .next()
+            .expect("scope card has no root"),
+    )
 }
 
 fn scope_card_observation(scope_card_id: &CardId, root_card_id: &CardId) -> (bool, bool, bool) {
-    let card = wallet::self_wallet()
-        .into_iter()
-        .find(|card| card_has_id(card, scope_card_id));
-    let Some(card) = card else {
+    let Some(card) = wallet_card(scope_card_id) else {
         return (false, false, false);
     };
 
-    let parent_matches = types::parents(&card)
-        .iter()
-        .any(|parent| &CardId::from(parent) == root_card_id);
-    let inspect_matches = inspect::inspect_card(&card)
+    let parent_matches = card
+        .parents()
+        .into_iter()
+        .any(|parent| &reveal(parent) == root_card_id);
+    let inspect_matches = card
+        .inspect()
         .map(|view| {
             view.lower_positive.len() == 1
                 && is_inspect_grant(&view.lower_positive[0])
@@ -128,7 +171,7 @@ pub trait ScopeCardAgent {
         release: PromiseId,
     ) -> (bool, bool, CardId);
 
-    async fn invoke_and_await_repeated_scope_inspection(
+    async fn repeated_scope_inspection_through_default_scope_card(
         &self,
         target: String,
         repetitions: u32,
@@ -196,34 +239,63 @@ pub trait ScopeCardAgent {
     ) -> bool;
 
     fn has_card(&self, card_id: CardId) -> bool;
+
+    /// Runs the shared permission-card scenario through the typed API and
+    /// returns each named check with its outcome.
+    async fn typed_card_scenario(
+        &self,
+        component_id: ComponentId,
+        caller_agent_id: String,
+        target_agent_id: String,
+        target_name: String,
+        mismatched_recipient: String,
+    ) -> Vec<(String, bool)>;
+
+    /// Uses a card after it was moved out by decoding; must trap.
+    fn use_moved_card(&self) -> String;
+
+    /// Derives a scope card, keeps it in agent state together with a client
+    /// whose default scope card it is, and returns whether a call through
+    /// that client observed it.
+    async fn keep_scope_card(&self, target: String) -> bool;
+
+    /// Uses the scope card kept by `keep_scope_card` in a later invocation.
+    async fn stale_scope_card_observations(&self, target: String) -> Vec<(String, bool)>;
+}
+
+/// A method-only client of `ScopeCardAgent`, whose awaited calls return RPC
+/// errors instead of trapping.
+#[agent_client]
+pub trait ScopeCardInspector {
+    fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool);
 }
 
 pub struct ScopeCardAgentImpl {
     _name: String,
+    kept_scope_card: RefCell<Option<(ScopeCard, ScopeCardInspectorClient)>>,
 }
 
 #[agent_implementation]
 impl ScopeCardAgent for ScopeCardAgentImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            kept_scope_card: RefCell::new(None),
+        }
     }
 
     async fn invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId) {
         let scope_card = derive_scope_card();
-        let scope_card_id = card_id(&scope_card);
-        let root_card_id = CardId::from(
-            types::parents(&scope_card)
-                .into_iter()
-                .next()
-                .expect("scope card has no root"),
-        );
-        let invocation = scope_card_rpc(target)
-            .invoke_and_await(
+        let scope_card_id = reveal(scope_card.id());
+        let root_card_id = scope_root_id(&scope_card);
+        let invocation = with_raw_scope(&scope_card, |raw| {
+            scope_card_rpc(target).invoke_and_await(
                 "inspect_scope",
                 encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
-                Some(&scope_card),
+                Some(raw),
             )
-            .expect("scope-card invoke-and-await failed");
+        })
+        .expect("scope-card invoke-and-await failed");
         let (present, parent_matches, inspect_matches) = decode_scope_observation(
             invocation
                 .result
@@ -234,30 +306,12 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     async fn async_invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId) {
         let scope_card = derive_scope_card();
-        let scope_card_id = card_id(&scope_card);
-        let root_card_id = CardId::from(
-            types::parents(&scope_card)
-                .into_iter()
-                .next()
-                .expect("scope card has no root"),
-        );
-        let invocation = scope_card_rpc(target).async_invoke_and_await(
-            "inspect_scope",
-            encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
-            Some(&scope_card),
-        );
-        let value = decode_schema_value(
-            invocation
-                .future
-                .get()
-                .await
-                .expect("scope-card async invocation failed")
-                .expect("scope-card async observation result is missing"),
-        )
-        .expect("failed to decode async scope-card observation");
-        let (present, parent_matches, inspect_matches) =
-            <(bool, bool, bool) as FromSchema>::from_value(&value)
-                .expect("invalid async scope-card observation");
+        let scope_card_id = reveal(scope_card.id());
+        let root_card_id = scope_root_id(&scope_card);
+        let (present, parent_matches, inspect_matches) = ScopeCardAgentClient::get(target)
+            .with_scope_card(&scope_card)
+            .inspect_scope(scope_card_id.clone(), root_card_id)
+            .await;
         (present, parent_matches, inspect_matches, scope_card_id)
     }
 
@@ -267,24 +321,20 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         release: PromiseId,
     ) -> (bool, bool, CardId) {
         let scope_card = derive_scope_card();
-        let scope_card_id = card_id(&scope_card);
-        let root_card_id = CardId::from(
-            types::parents(&scope_card)
-                .into_iter()
-                .next()
-                .expect("scope card has no root"),
-        );
-        let invocation = scope_card_rpc(target)
-            .invoke_and_await(
+        let scope_card_id = reveal(scope_card.id());
+        let root_card_id = scope_root_id(&scope_card);
+        let invocation = with_raw_scope(&scope_card, |raw| {
+            scope_card_rpc(target).invoke_and_await(
                 "inspect_scope_after_promise",
                 encode_parameters(vec![
                     scope_card_id.to_value(),
                     root_card_id.to_value(),
                     release.to_value(),
                 ]),
-                Some(&scope_card),
+                Some(raw),
             )
-            .expect("replay scope-card invocation failed");
+        })
+        .expect("replay scope-card invocation failed");
         let value = decode_schema_value(
             invocation
                 .result
@@ -296,90 +346,87 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         (before, after, scope_card_id)
     }
 
-    async fn invoke_and_await_repeated_scope_inspection(
+    async fn repeated_scope_inspection_through_default_scope_card(
         &self,
         target: String,
         repetitions: u32,
     ) -> bool {
         let scope_card = derive_scope_card();
-        let invocation = scope_card_rpc(target)
-            .invoke_and_await(
-                "inspect_repeatedly",
-                encode_parameters(vec![repetitions.to_value()]),
-                Some(&scope_card),
-            )
-            .expect("repeated scope-card inspection failed");
-        let value = decode_schema_value(
-            invocation
-                .result
-                .expect("repeated scope-card inspection result is missing"),
-        )
-        .expect("failed to decode repeated scope-card inspection");
-        bool::from_value(&value).expect("invalid repeated scope-card inspection result")
+        let mut client = ScopeCardAgentClient::get(target);
+        client.set_default_scope_card(&scope_card);
+        client.inspect_repeatedly(repetitions).await
     }
 
     fn invoke_scope_is_denied(&self, target: String) -> bool {
         let scope_card = derive_scope_card();
-        matches!(
-            scope_card_rpc(target).invoke(
-                "inspect_scope",
-                encode_parameters(vec![]),
-                Some(&scope_card),
-            ),
-            Err(RpcError::Denied(_))
-        )
+        with_raw_scope(&scope_card, |raw| {
+            matches!(
+                scope_card_rpc(target).invoke(
+                    "inspect_scope",
+                    encode_parameters(vec![]),
+                    Some(raw)
+                ),
+                Err(RpcError::Denied(_))
+            )
+        })
     }
 
     fn persistent_scope_is_denied(&self, target: String) -> bool {
         let parent = parent_card();
-        matches!(
-            scope_card_rpc(target).invoke_and_await(
-                "inspect_scope",
-                encode_parameters(vec![]),
-                Some(&parent),
-            ),
-            Err(RpcError::Denied(_))
-        )
+        with_raw_card(&parent, |raw| {
+            matches!(
+                scope_card_rpc(target).invoke_and_await(
+                    "inspect_scope",
+                    encode_parameters(vec![]),
+                    Some(raw),
+                ),
+                Err(RpcError::Denied(_))
+            )
+        })
     }
 
     async fn persistent_async_scope_is_denied(&self, target: String) -> bool {
         let parent = parent_card();
-        let invocation = scope_card_rpc(target).async_invoke_and_await(
-            "inspect_scope",
-            encode_parameters(vec![]),
-            Some(&parent),
-        );
+        let invocation = with_raw_card(&parent, |raw| {
+            scope_card_rpc(target).async_invoke_and_await(
+                "inspect_scope",
+                encode_parameters(vec![]),
+                Some(raw),
+            )
+        });
         matches!(invocation.future.get().await, Err(RpcError::Denied(_)))
     }
 
     fn schedule_scope(&self, target: String) {
         let scope_card = derive_scope_card();
-        scope_card_rpc(target)
-            .schedule_invocation(
+        with_raw_scope(&scope_card, |raw| {
+            scope_card_rpc(target).schedule_invocation(
                 Datetime {
                     seconds: 0,
                     nanoseconds: 0,
                 },
                 "inspect_scope",
                 encode_parameters(vec![]),
-                Some(&scope_card),
+                Some(raw),
             )
-            .unwrap();
+        })
+        .unwrap();
     }
 
     fn schedule_cancelable_scope(&self, target: String) {
         let scope_card = derive_scope_card();
-        scope_card_rpc(target)
-            .schedule_cancelable_invocation(
+        with_raw_scope(&scope_card, |raw| {
+            scope_card_rpc(target).schedule_cancelable_invocation(
                 Datetime {
                     seconds: 0,
                     nanoseconds: 0,
                 },
                 "inspect_scope",
                 encode_parameters(vec![]),
-                Some(&scope_card),
+                Some(raw),
             )
-            .unwrap();
+        })
+        .unwrap();
     }
 
     fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool) {
@@ -415,11 +462,13 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
     ) -> (CardId, CardId) {
         let parent = derive_persistent_card_from_wallet();
         let child = derive_persistent_card(&parent);
-        let parent_id = card_id(&parent);
-        let child_id = card_id(&child);
-        wallet::install_card(child, &agent_holder(component_id.clone(), target_agent_id))
+        let parent_id = reveal(parent.id());
+        let child_id = reveal(child.id());
+        child
+            .install(&agent_holder(component_id.clone(), target_agent_id))
             .expect("failed to install derived card");
-        wallet::install_card(parent, &agent_holder(component_id, caller_agent_id))
+        parent
+            .install(&agent_holder(component_id, caller_agent_id))
             .expect("failed to install parent card");
         (parent_id, child_id)
     }
@@ -431,16 +480,16 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         release: PromiseId,
     ) -> CardId {
         let card = derive_persistent_card_from_wallet();
-        let id = card_id(&card);
+        let id = reveal(card.id());
         await_promise(&release).await;
-        wallet::install_card(card, &agent_holder(component_id, target_agent_id))
+        card.install(&agent_holder(component_id, target_agent_id))
             .expect("failed to install replayed card");
         id
     }
 
     async fn derive_before_promise(&self, release: PromiseId) -> CardId {
         let card = derive_persistent_card_from_wallet();
-        let id = card_id(&card);
+        let id = reveal(card.id());
         await_promise(&release).await;
         id
     }
@@ -450,34 +499,26 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         owner: String,
         release: PromiseId,
     ) -> Vec<String> {
-        let grant = |resource: &str| types::PatternGrant {
-            class: "tool".into(),
-            owner: owner.clone(),
-            recipient: "*".into(),
-            verb: "invoke".into(),
-            resource_id: resource.into(),
-        };
+        let grant =
+            |resource: &str| PatternGrant::new("tool", owner.clone(), "*", "invoke", resource);
         let parent = parent_card();
-        let positive = [grant(". -p=**")];
-        let negative = [grant(". -p=/private/**")];
+        let bounds = Bounds {
+            lower_positive: vec![grant(". -p=**")],
+            lower_negative: vec![grant(". -p=/private/**")],
+            upper_positive: vec![grant(". -p=**")],
+            upper_negative: vec![grant(". -p=/private/**")],
+        };
         let concrete_parent =
-            derive::derive_from_wallet(&[grant("*")], &[], &[], &[], None).unwrap();
-        let explicit = derive::derive(
-            &concrete_parent,
-            &positive,
-            &negative,
-            &positive,
-            &negative,
-            None,
-        )
-        .unwrap();
-        let wallet =
-            derive::derive_from_wallet(&positive, &negative, &positive, &negative, None).unwrap();
-        let scope =
-            derive::derive_scope(&[&parent], &positive, &negative, &positive, &negative).unwrap();
+            permissions::derive_from_wallet(&lower_positive(grant("*")), None).unwrap();
+        let explicit = concrete_parent.derive(&bounds, None).unwrap();
+        let wallet = permissions::derive_from_wallet(&bounds, None).unwrap();
+        let scope = permissions::derive_scope(&[(&parent).into()], &bounds).unwrap();
         let mut resources = Vec::new();
-        for card in [&explicit, &wallet, &scope] {
-            let view = inspect::inspect_card(card).unwrap();
+        for view in [
+            explicit.inspect().unwrap(),
+            wallet.inspect().unwrap(),
+            scope.inspect().unwrap(),
+        ] {
             for grants in [
                 view.lower_positive,
                 view.lower_negative,
@@ -492,43 +533,35 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
     }
 
     fn derive_from_wallet_denial(&self) -> Option<String> {
-        let grant = types::PatternGrant {
-            class: "card".to_string(),
-            owner: "*".to_string(),
-            recipient: "*".to_string(),
-            verb: "inspect".to_string(),
-            resource_id: "*".to_string(),
-        };
-        derive::derive_from_wallet(&[grant], &[], &[], &[], None)
+        let grant = PatternGrant::new("card", "*", "*", "inspect", "*");
+        permissions::derive_from_wallet(&lower_positive(grant), None)
             .err()
             .map(|error| format!("{error:?}"))
     }
 
     fn wallet_card_count(&self) -> u32 {
-        wallet::self_wallet().len() as u32
+        permissions::wallet().len() as u32
     }
 
     fn authorize_repeatedly(&self, repetitions: u32) -> bool {
         let parent = parent_card();
         let grant = retained_inspect_grant(&parent);
         (0..repetitions).all(|_| {
-            inspect::inspect_card(&parent).is_ok()
-                && derive::derive_from_wallet(std::slice::from_ref(&grant), &[], &[], &[], None)
-                    .is_ok()
+            parent.inspect().is_ok()
+                && permissions::derive_from_wallet(&lower_positive(grant.clone()), None).is_ok()
         })
     }
 
     fn inspect_repeatedly(&self, repetitions: u32) -> bool {
         let parent = parent_card();
-        (0..repetitions).all(|_| inspect::inspect_card(&parent).is_ok())
+        (0..repetitions).all(|_| parent.inspect().is_ok())
     }
 
     fn revoke_card_by_id(&self, card_id: CardId) -> u32 {
-        let card = wallet::self_wallet()
-            .into_iter()
-            .find(|card| card_has_id(card, &card_id))
-            .expect("card to revoke is not installed");
-        revoke::revoke_card(card).expect("card revocation failed")
+        wallet_card(&card_id)
+            .expect("card to revoke is not installed")
+            .revoke()
+            .expect("card revocation failed")
     }
 
     async fn revoke_card_after_promise_is_denied(
@@ -536,18 +569,222 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         card_id: CardId,
         release: PromiseId,
     ) -> bool {
-        let card = wallet::self_wallet()
-            .into_iter()
-            .find(|card| card_has_id(card, &card_id))
-            .expect("card to revoke is not installed");
+        let card = wallet_card(&card_id).expect("card to revoke is not installed");
         await_promise(&release).await;
-        revoke::revoke_card(card).is_err()
+        card.revoke().is_err()
     }
 
     fn has_card(&self, card_id: CardId) -> bool {
-        wallet::self_wallet()
-            .into_iter()
-            .any(|card| card_has_id(&card, &card_id))
+        wallet_card(&card_id).is_some()
+    }
+
+    async fn typed_card_scenario(
+        &self,
+        component_id: ComponentId,
+        caller_agent_id: String,
+        target_agent_id: String,
+        target_name: String,
+        mismatched_recipient: String,
+    ) -> Vec<(String, bool)> {
+        let mut checks = Vec::new();
+        let mut check = |name: &str, passed: bool| checks.push((name.to_string(), passed));
+        let template = parent_card();
+        let grant = retained_inspect_grant(&template);
+        let target = ScopeCardAgentClient::get(target_name);
+
+        let card = permissions::derive_from_wallet(&lower_positive(grant.clone()), None)
+            .expect("wallet derivation failed");
+        let card_id = card.id();
+        let view = card.inspect().expect("inspection failed");
+        check(
+            "inspect returns the requested grants",
+            view.lower_positive == vec![grant.clone()]
+                && view.lower_negative.is_empty()
+                && view.upper_positive.is_empty()
+                && view.upper_negative.is_empty(),
+        );
+        check(
+            "a card without lifespan has no expiry",
+            card.expires_at().is_none(),
+        );
+        check(
+            "a wallet-derived card names its wallet parent",
+            card.parents() == vec![template.id()],
+        );
+
+        let lifespan = Lifespan::try_from(Duration::from_secs(3600)).unwrap();
+        let child = card
+            .derive(&lower_positive(grant.clone()), Some(&lifespan))
+            .expect("child derivation failed");
+        let child_id = reveal(child.id());
+        check(
+            "a child with lifespan has an expiry",
+            child.expires_at().is_some(),
+        );
+        check(
+            "a child names its parent",
+            child.parents() == vec![card_id.clone()],
+        );
+        let template_child = template.derive(&lower_positive(grant.clone()), None);
+        check(
+            "the wallet's template card derives a resolved child",
+            template_child.as_ref().is_ok_and(|child| {
+                child.parents() == vec![template.id()]
+                    && child
+                        .inspect()
+                        .is_ok_and(|view| view.lower_positive == vec![grant.clone()])
+            }),
+        );
+
+        let scope =
+            permissions::derive_scope(&[(&template).into()], &lower_positive(grant.clone()))
+                .expect("scope derivation failed");
+        let scope_id = reveal(scope.id());
+        check(
+            "the callee observes the per-call scope card",
+            target
+                .with_scope_card(&scope)
+                .inspect_scope(scope_id.clone(), reveal(template.id()))
+                .await
+                == (true, true, true),
+        );
+        check(
+            "the scope card ends with the invocation",
+            !target.has_card(scope_id.clone()).await,
+        );
+
+        child
+            .install(&agent_holder(component_id.clone(), target_agent_id.clone()))
+            .expect("install failed");
+        check(
+            "the target holds the installed card",
+            target.has_card(child_id.clone()).await,
+        );
+        card.install(&agent_holder(component_id.clone(), caller_agent_id))
+            .expect("self install failed");
+        let revoked = wallet_card(&reveal(card_id.clone()))
+            .expect("installed card is missing from the wallet")
+            .revoke();
+        check("revoke cuts the card and its child", revoked == Ok(2));
+        check(
+            "the target loses the revoked child",
+            !target.has_card(child_id).await,
+        );
+        check(
+            "the caller loses the revoked card",
+            wallet_card(&reveal(card_id.clone())).is_none(),
+        );
+
+        let broader = PatternGrant {
+            verb: "install".to_string(),
+            ..grant.clone()
+        };
+        check(
+            "a lower bound beyond the wallet is too broad",
+            matches!(
+                permissions::derive_from_wallet(&lower_positive(broader), None),
+                Err(PermissionError::LowerBoundTooBroad(_))
+            ),
+        );
+        let mismatched = permissions::derive_from_wallet(
+            &lower_positive(PatternGrant {
+                recipient: mismatched_recipient,
+                ..grant
+            }),
+            None,
+        )
+        .expect("mismatched-recipient derivation failed");
+        let mismatch = mismatched.install(&agent_holder(component_id, target_agent_id));
+        check(
+            "installing on a non-recipient agent is a recipient mismatch",
+            matches!(mismatch, Err(PermissionError::InstallRecipientMismatch(_))),
+        );
+
+        checks
+    }
+
+    async fn keep_scope_card(&self, target: String) -> bool {
+        let scope_card = derive_scope_card();
+        let root_card_id = scope_root_id(&scope_card);
+        let target_id = ScopeCardAgentClient::get(target).get_agent_id();
+        let mut client = ScopeCardInspectorClient::bind(&ParsedAgentId::new(target_id))
+            .expect("failed to bind the scope-card inspector");
+        client.set_default_scope_card(&scope_card);
+        let observed = client
+            .inspect_scope(reveal(scope_card.id()), root_card_id)
+            .await
+            .map(|invocation| invocation.value);
+        *self.kept_scope_card.borrow_mut() = Some((scope_card, client));
+        matches!(observed, Ok((true, true, true)))
+    }
+
+    async fn stale_scope_card_observations(&self, target: String) -> Vec<(String, bool)> {
+        let (scope_card, client) = self
+            .kept_scope_card
+            .borrow_mut()
+            .take()
+            .expect("no scope card was kept");
+        let mut checks = Vec::new();
+        let scope_card_id = reveal(scope_card.id());
+        let root_card_id = scope_root_id(&scope_card);
+        checks.push(("id and parents still resolve".to_string(), true));
+        checks.push((
+            "inspect still works".to_string(),
+            scope_card.inspect().is_ok(),
+        ));
+        checks.push((
+            "the stale default scope card is denied".to_string(),
+            matches!(
+                client
+                    .inspect_scope(scope_card_id.clone(), root_card_id.clone())
+                    .await,
+                Err(GolemReflectError::Denied(_))
+            ),
+        ));
+        checks.push((
+            "a stale per-call scope card is denied".to_string(),
+            matches!(
+                client
+                    .with_scope_card(&scope_card)
+                    .inspect_scope(scope_card_id.clone(), root_card_id.clone())
+                    .await,
+                Err(GolemReflectError::Denied(_))
+            ),
+        ));
+        checks.push((
+            "a stale scope card on a raw synchronous call is denied".to_string(),
+            with_raw_scope(&scope_card, |raw| {
+                matches!(
+                    scope_card_rpc(target).invoke_and_await(
+                        "inspect_scope",
+                        encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
+                        Some(raw),
+                    ),
+                    Err(RpcError::Denied(_))
+                )
+            }),
+        ));
+        checks.push((
+            "a stale scope card is not permitted as a scope parent".to_string(),
+            matches!(
+                permissions::derive_scope(&[(&scope_card).into()], &Bounds::default()),
+                Err(PermissionError::NotPermitted(_))
+            ),
+        ));
+        drop(client);
+        drop(scope_card);
+        checks.push((
+            "dropping the stale scope card does not trap".to_string(),
+            true,
+        ));
+        checks
+    }
+
+    fn use_moved_card(&self) -> String {
+        let card = derive_persistent_card_from_wallet();
+        // Decoding takes the handle out of `card`, as sending it to another agent does.
+        let _decoded = PermissionCard::from_value(&card.to_value()).expect("card decodes");
+        format!("{:?}", card.id())
     }
 }
 
@@ -569,10 +806,9 @@ impl EphemeralScopeCardAgent for EphemeralScopeCardAgentImpl {
     }
 
     fn revoke_card_by_id(&self, card_id: CardId) -> u32 {
-        let card = wallet::self_wallet()
-            .into_iter()
-            .find(|card| card_has_id(card, &card_id))
-            .expect("card to revoke is not installed");
-        revoke::revoke_card(card).expect("card revocation failed")
+        wallet_card(&card_id)
+            .expect("card to revoke is not installed")
+            .revoke()
+            .expect("card revocation failed")
     }
 }

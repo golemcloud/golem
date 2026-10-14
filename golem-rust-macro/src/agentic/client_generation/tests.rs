@@ -17,6 +17,14 @@ use quote::{ToTokens, format_ident, quote};
 use syn::parse_quote;
 use test_r::test;
 
+/// The rendered client struct and its inherent impl, without the scope-card view.
+fn client_part(rendered: &str) -> &str {
+    rendered
+        .split("pub struct ExampleAgentClientWithScopeCard")
+        .next()
+        .unwrap()
+}
+
 fn render_client(agent_is_durable: bool) -> String {
     let item_trait = parse_quote! {
         trait ExampleAgent {
@@ -138,7 +146,7 @@ fn ephemeral_clients_use_shared_non_colliding_result_type() {
     let second = get_remote_client(&second_trait, &[], &[], &[], &[], &[], false).to_string();
     let rendered = format!("{first} {second}");
 
-    assert_eq!(rendered.matches("EphemeralInvocationResult").count(), 4);
+    assert_eq!(rendered.matches("EphemeralInvocationResult").count(), 8);
     assert!(!rendered.contains("struct ExampleAgentInvocationResult"));
     assert!(!rendered.contains("struct OtherAgentInvocationResult"));
     assert!(!rendered.contains("struct Invocation <"));
@@ -156,6 +164,7 @@ fn cancelable_schedule_wrapper_does_not_duplicate_user_method_name() {
     };
 
     let rendered = get_remote_client(&item_trait, &[], &[], &[], &[], &[], true).to_string();
+    let rendered = client_part(&rendered);
 
     assert_eq!(
         rendered.matches("fn schedule_cancelable_run (").count(),
@@ -178,6 +187,7 @@ fn constructor_helper_does_not_duplicate_user_method_name() {
     };
 
     let rendered = get_remote_client(&item_trait, &[], &[], &[], &[], &[], true).to_string();
+    let rendered = client_part(&rendered);
 
     assert!(
         rendered.contains("pub async fn new_phantom ("),
@@ -227,6 +237,7 @@ fn accessor_helpers_do_not_duplicate_user_method_names() {
     };
 
     let rendered = get_remote_client(&item_trait, &[], &[], &[], &[], &[], true).to_string();
+    let rendered = client_part(&rendered);
 
     assert!(
         rendered.contains("pub async fn get_agent_id ("),
@@ -535,4 +546,79 @@ fn client_does_not_store_affine_constructor_tree() {
     assert!(rendered.contains("agent_id"));
     // Quota tokens are rejected in constructor parameters before any encode.
     assert!(rendered.contains("reject_quota_tokens"));
+}
+
+#[test]
+fn scope_cards_are_attached_only_to_awaited_calls() {
+    let item_trait = parse_quote! {
+        trait ExampleAgent {
+            fn new() -> Self;
+            fn run(&self, value: u32) -> u32;
+            fn with_scope_card(&self);
+            fn set_default_scope_card(&self);
+            fn clear_default_scope_card(&self);
+        }
+    };
+
+    for (durable, fallible) in [(true, false), (false, false), (true, true), (false, true)] {
+        let rendered = super::get_remote_client_for_type(
+            &item_trait,
+            "ExampleAgent",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            durable,
+            fallible,
+        )
+        .to_string();
+        let (client, view) = rendered
+            .split_once("pub struct ExampleAgentClientWithScopeCard")
+            .unwrap();
+
+        // Every awaited call goes through the scope-card helper; no other
+        // invocation passes a scope card.
+        assert!(!rendered.contains("wasm_rpc . async_invoke_and_await"));
+        assert_eq!(
+            client
+                .matches("golem_rust :: permissions :: __async_invoke_and_await")
+                .count(),
+            4,
+            "{rendered}"
+        );
+        assert!(!rendered.contains("invoke (\"run\" , input , Some"));
+        assert!(!rendered.contains("invoke (scheduled_time , \"run\" , input , Some"));
+
+        // User methods win over the generated scope-card members, which are renamed.
+        for name in [
+            "with_scope_card",
+            "set_default_scope_card",
+            "clear_default_scope_card",
+        ] {
+            assert!(
+                client.contains(&format!("pub async fn {name} (& self)")),
+                "{rendered}"
+            );
+        }
+        assert!(
+            client.contains("pub fn with_scope_card1 < 'a >"),
+            "{rendered}"
+        );
+        assert!(client.contains("pub fn set_default_scope_card1 (& mut self"));
+        assert!(client.contains("pub fn clear_default_scope_card1 (& mut self)"));
+        assert!(client.contains("scope_card : & golem_rust :: permissions :: ScopeCard"));
+        assert!(!rendered.contains("permissions :: PermissionCard"));
+        assert!(client.contains("pub async fn run (& self , value : u32)"));
+        assert!(client.contains("self . __golem_run_with_scope_card (value , None) . await"));
+
+        // The view exposes only the awaited methods and lends its card.
+        assert!(view.contains(
+            "self . client . __golem_run_with_scope_card (value , Some (self . scope_card)) . await"
+        ));
+        assert_eq!(view.matches("pub async fn").count(), 4, "{view}");
+        assert!(!view.contains("trigger_"));
+        assert!(!view.contains("schedule_"));
+        assert!(!view.contains("pending_"));
+    }
 }

@@ -1,0 +1,13 @@
+error[E0277]: the trait bound `golem_rust::permissions::PermissionCard: From<GuestPermissionCardHandle>` is not satisfied
+ --> tests/ui/fail/permission_card_not_constructible.rs:5:12
+  |
+5 |     handle.into()
+  |            ^^^^ the trait `From<GuestPermissionCardHandle>` is not implemented for `golem_rust::permissions::PermissionCard`
+  |
+  = note: required for `GuestPermissionCardHandle` to implement `Into<golem_rust::permissions::PermissionCard>`
+
+error[E0599]: no associated function or constant named `new` found for struct `golem_rust::permissions::PermissionCard` in the current scope
+  --> tests/ui/fail/permission_card_not_constructible.rs:10:29
+   |
+10 |     let _ = PermissionCard::new();
+   |                             ^^^ associated function or constant not found in `golem_rust::permissions::PermissionCard`

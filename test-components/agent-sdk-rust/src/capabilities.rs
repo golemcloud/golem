@@ -15,10 +15,10 @@
 //! Agents exercising host-managed capability schema types end-to-end.
 
 use golem_rust::agentic::{Config, Secret};
-use golem_rust::bindings::golem::permissions::{derive, types};
 use golem_rust::bindings::golem::secrets::reveal;
+use golem_rust::golem_schema::CardId;
+use golem_rust::permissions::{self, Bounds, PermissionCard};
 use golem_rust::quota::QuotaToken;
-use golem_rust::schema::wit::GuestPermissionCardHandle;
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
     ConfigSchema, FromSchema, IntoSchema, SchemaValue, agent_definition, agent_implementation,
@@ -66,15 +66,17 @@ fn reveal_secret(secret: &GuestSecretHandle) -> Result<String, String> {
     String::from_value(&value).map_err(|error| error.to_string())
 }
 
-fn permission_card() -> Result<GuestPermissionCardHandle, String> {
-    let card = derive::derive_from_wallet(&[], &[], &[], &[], None)
-        .map_err(|error| format!("{error:?}"))?;
-    Ok(GuestPermissionCardHandle::new(card))
+fn permission_card() -> Result<PermissionCard, String> {
+    permissions::derive_from_wallet(&Bounds::default(), None).map_err(|error| error.to_string())
 }
 
-fn card_id(card: &GuestPermissionCardHandle) -> Result<String, String> {
-    card.with_handle(|card| format!("{:02x?}", types::id(card).uuid))
-        .ok_or_else(|| "permission-card handle has already been transferred".to_string())
+/// Describes `id` relative to the identifier of the card that was sent.
+fn card_identity(id: &CardId, sent: &CardId) -> String {
+    if id == sent {
+        "sent card".to_string()
+    } else {
+        "other card".to_string()
+    }
 }
 
 #[agent_definition]
@@ -85,13 +87,13 @@ pub trait CapabilityRpcReceiver {
         &self,
         secret: GuestSecretHandle,
         quota: QuotaToken,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
     ) -> (
         String,
-        String,
+        CardId,
         GuestSecretHandle,
         QuotaToken,
-        GuestPermissionCardHandle,
+        PermissionCard,
     );
 }
 
@@ -107,16 +109,17 @@ impl CapabilityRpcReceiver for CapabilityRpcReceiverImpl {
         &self,
         secret: GuestSecretHandle,
         quota: QuotaToken,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
     ) -> (
         String,
-        String,
+        CardId,
         GuestSecretHandle,
         QuotaToken,
-        GuestPermissionCardHandle,
+        PermissionCard,
     ) {
         let secret_id = secret_id(&secret).expect("received secret is usable");
-        let card_id = card_id(&card).expect("received permission card is usable");
+        // Card ids cross agent calls in their schema form.
+        let card_id = card.id().__reveal_for_tests();
         quota
             .reserve(0)
             .expect("received quota token is usable")
@@ -160,7 +163,7 @@ impl CapabilityRpcSender for CapabilityRpcSenderImpl {
     async fn round_trip(&self, receiver_name: String) -> Result<Vec<String>, String> {
         let expected_secret_id = secret_id(&self.secret)?;
         let card = permission_card()?;
-        let expected_card_id = card_id(&card)?;
+        let sent_card_id = card.id().__reveal_for_tests();
         let quota = QuotaToken::new("capability-rpc", 1);
         let client = CapabilityRpcReceiverClient::get(receiver_name);
         let (receiver_secret_id, receiver_card_id, secret, quota, card) = client
@@ -173,14 +176,14 @@ impl CapabilityRpcSender for CapabilityRpcSenderImpl {
             .commit(0);
         let revealed = reveal_secret(&secret)?;
         let returned_secret_id = secret_id(&secret)?;
-        let returned_card_id = card_id(&card)?;
+        let returned_card_id = card.id().__reveal_for_tests();
         Ok(vec![
             expected_secret_id,
             receiver_secret_id,
             returned_secret_id,
-            expected_card_id,
-            receiver_card_id,
-            returned_card_id,
+            card_identity(&sent_card_id, &sent_card_id),
+            card_identity(&receiver_card_id, &sent_card_id),
+            card_identity(&returned_card_id, &sent_card_id),
             revealed,
         ])
     }

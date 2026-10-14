@@ -257,6 +257,125 @@ async fn permission_cards_work_across_services_and_replay(
 #[test]
 #[timeout("8m")]
 #[tracing::instrument]
+async fn typed_permission_card_api_runs_the_shared_scenario(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (app, env) = user.app_and_env().await?;
+    let component_name = "permissions-typed-scenario";
+    let recipient = |agent_type: &str| RecipientPattern::Agent {
+        account: user.account_email.clone(),
+        application: app.name.clone(),
+        environment: env.name.clone(),
+        component: ComponentName(component_name.to_string()),
+        agent_type: AgentTypeName(agent_type.to_string()),
+    };
+    let account = user.account_email.as_str();
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name(component_name)
+        .try_update_agent_provision_config("ScopeCardAgent", |config| {
+            for grant in [
+                format!("card({account}) @ * : derive : *"),
+                format!("card({account}) @ * : inspect : *"),
+                format!("card({account}) @ * : revoke : *"),
+                format!(
+                    "card({account}) @ * : install : {}",
+                    recipient("ScopeCardAgent").render()
+                ),
+            ] {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .push(parse_polymorphic_permission(&grant)?);
+            }
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "typed-scenario-caller");
+    let target_name = "typed-scenario-target";
+    let target = agent_id!("ScopeCardAgent", target_name);
+    user.start_agent(&component.id, caller.clone()).await?;
+    user.start_agent(&component.id, target.clone()).await?;
+
+    let checks = user
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "typed_card_scenario",
+            data_value!(
+                SchemaComponentId::from(component.id.0),
+                caller.to_string(),
+                target.to_string(),
+                target_name,
+                recipient("EphemeralScopeCardAgent").render()
+            ),
+        )
+        .await?
+        .into_typed::<Vec<(String, bool)>>()?;
+    let failed = checks
+        .iter()
+        .filter(|(_, passed)| !passed)
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(checks.len(), 14, "unexpected scenario checks: {checks:?}");
+    assert!(failed.is_empty(), "failed scenario checks: {failed:?}");
+
+    let kept = user
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "keep_scope_card",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        kept,
+        "the kept scope card must work during its own invocation"
+    );
+    let stale_checks = user
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "stale_scope_card_observations",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<Vec<(String, bool)>>()?;
+    let failed = stale_checks
+        .iter()
+        .filter(|(_, passed)| !passed)
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stale_checks.len(),
+        7,
+        "unexpected stale scope-card checks: {stale_checks:?}"
+    );
+    assert!(
+        failed.is_empty(),
+        "failed stale scope-card checks: {failed:?}"
+    );
+
+    let error = user
+        .invoke_and_await_agent(&component, &caller, "use_moved_card", data_value!())
+        .await
+        .expect_err("using a moved card must fail the invocation");
+    assert!(
+        format!("{error:#}").contains("already been moved"),
+        "unexpected moved-card failure: {error:#}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("8m")]
+#[tracing::instrument]
 async fn filesystem_permissions_enforce_recipient_isolation_across_recovery(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

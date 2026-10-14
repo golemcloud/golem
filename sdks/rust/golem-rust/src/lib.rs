@@ -49,7 +49,7 @@ pub use golem_schema::schema::{
 };
 #[cfg(feature = "macro")]
 pub use golem_schema::schema::{FromWire, IntoWire, WireSchema};
-pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
+pub use golem_schema::{AgentId, ComponentId, EnvironmentId, PromiseId};
 
 pub fn encode_schema_graph(
     graph: &SchemaGraph,
@@ -178,7 +178,7 @@ pub mod bindings {
         }
 
         pub mod permissions {
-            pub use crate::raw_bindings::golem::permissions::{
+            pub(crate) use crate::raw_bindings::golem::permissions::{
                 derive, inspect, kernel_introspection, revoke, types, wallet,
             };
         }
@@ -218,6 +218,12 @@ pub mod load_snapshot {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -261,6 +267,12 @@ pub mod save_snapshot {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -309,6 +321,12 @@ pub mod golem_agentic {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -370,6 +388,12 @@ pub mod oplog_processor {
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:permissions/types@0.1.0": crate::bindings::golem::permissions::types,
+            "golem:permissions/derive@0.1.0": crate::bindings::golem::permissions::derive,
+            "golem:permissions/inspect@0.1.0": crate::bindings::golem::permissions::inspect,
+            "golem:permissions/revoke@0.1.0": crate::bindings::golem::permissions::revoke,
+            "golem:permissions/wallet@0.1.0": crate::bindings::golem::permissions::wallet,
+            "golem:permissions/kernel-introspection@0.1.0": crate::bindings::golem::permissions::kernel_introspection,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -406,6 +430,7 @@ pub use json::*;
 pub mod durable_streams;
 
 mod checkpoint;
+pub mod permissions;
 pub mod quota;
 pub mod secrets;
 pub mod tool;
