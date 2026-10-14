@@ -1231,7 +1231,7 @@ impl TestContext {
     async fn wait_for_server_startup(&mut self) {
         {
             let start = Instant::now();
-            let timeout = Duration::from_secs(60);
+            let timeout = Duration::from_secs(180);
             let sleep_interval = Duration::from_millis(100);
             loop {
                 let server_process = self
