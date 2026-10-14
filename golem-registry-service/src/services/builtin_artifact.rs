@@ -16,6 +16,9 @@ use crate::config::{BuiltinArtifactSource, BuiltinArtifactsConfig};
 use crate::startup::{BuiltinArtifactKind, StartupPhase, StartupProgress};
 use anyhow::{Context, anyhow};
 use fd_lock::RwLock;
+use golem_common::model::agent::extraction::{
+    ExtractedComponentMetadata, extract_component_metadata_from_bytes,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
@@ -26,6 +29,9 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use url::Url;
+
+// Bump when metadata extraction semantics or its serialized representation changes.
+const METADATA_CACHE_REVISION: u32 = 1;
 
 #[derive(Clone)]
 pub struct BuiltinArtifactResolver {
@@ -128,6 +134,105 @@ impl BuiltinArtifactResolver {
 
         Ok(Arc::new(bytes))
     }
+
+    pub async fn extract_metadata(
+        &self,
+        wasm_bytes: Arc<Vec<u8>>,
+    ) -> anyhow::Result<ExtractedComponentMetadata> {
+        let (wasm_bytes, cache_key) = tokio::task::spawn_blocking(move || {
+            let digest = hex::encode(Sha256::digest(wasm_bytes.as_slice()));
+            (
+                wasm_bytes,
+                format!("{digest}.metadata-v{METADATA_CACHE_REVISION}"),
+            )
+        })
+        .await
+        .context("built-in artifact metadata hash task panicked")?;
+        let in_process_lock = {
+            let mut locks = self.in_process_locks.lock().await;
+            locks
+                .entry(cache_key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _in_process_guard = in_process_lock.lock().await;
+        let cache_dir = self.cache_dir.clone();
+        let handle = Handle::current();
+        tokio::task::spawn_blocking(move || {
+            extract_metadata_locked(&handle, &cache_dir, &cache_key, &wasm_bytes)
+        })
+        .await
+        .context("built-in artifact metadata extraction task panicked")?
+    }
+}
+
+fn extract_metadata_locked(
+    handle: &Handle,
+    cache_dir: &Path,
+    cache_key: &str,
+    wasm_bytes: &[u8],
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    std::fs::create_dir_all(cache_dir).with_context(|| {
+        format!(
+            "failed to create built-in metadata cache directory '{}'",
+            cache_dir.display()
+        )
+    })?;
+    let cache_path = cache_dir.join(format!("{cache_key}.json"));
+    let lock_path = cache_dir.join(format!("{cache_key}.lock"));
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "failed to open built-in metadata cache lock '{}'",
+                lock_path.display()
+            )
+        })?;
+    let mut lock = RwLock::new(lock_file);
+    let _guard = lock.write().with_context(|| {
+        format!(
+            "failed to lock built-in metadata cache entry '{}'",
+            lock_path.display()
+        )
+    })?;
+    match std::fs::read(&cache_path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(metadata) => return Ok(metadata),
+            Err(error) => tracing::warn!(
+                cache_path = %cache_path.display(),
+                error = %error,
+                "Regenerating invalid cached built-in metadata"
+            ),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!(
+            cache_path = %cache_path.display(),
+            error = %error,
+            "Regenerating unreadable cached built-in metadata"
+        ),
+    }
+    let metadata = handle.block_on(extract_component_metadata_from_bytes(
+        wasm_bytes, true, true,
+    ))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)
+        .context("failed to create temporary built-in metadata cache file")?;
+    serde_json::to_writer(&mut temporary, &metadata)
+        .context("failed to serialize built-in artifact metadata")?;
+    temporary
+        .as_file_mut()
+        .sync_all()
+        .context("failed to flush built-in artifact metadata")?;
+    temporary.persist(&cache_path).with_context(|| {
+        format!(
+            "failed to publish built-in metadata cache entry '{}'",
+            cache_path.display()
+        )
+    })?;
+    Ok(metadata)
 }
 
 fn parse_sha256(artifact_id: &str, value: Option<&str>) -> anyhow::Result<Option<[u8; 32]>> {

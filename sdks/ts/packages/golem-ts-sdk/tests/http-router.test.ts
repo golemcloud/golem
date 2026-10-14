@@ -2,6 +2,8 @@
 // Licensed under the Golem Source License v1.1
 
 import { readFileSync } from 'node:fs';
+import * as nativeHttp from 'node:http';
+import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { defineHttpRouter } from '../src/defineHttpRouter';
@@ -30,6 +32,7 @@ import * as agentHost from 'golem:agent/host@2.0.0';
 import { getAllAgentTypes, getAgentType } from '../src/reflection';
 import * as http from '../src/http';
 import { webRequest, webResponse, withRawHeaders } from '../src/httpRouterWeb';
+import { createServer, Server, ServerResponse, nodeHttpHandler } from '../src/nodeHttp';
 
 const corpus = JSON.parse(
   readFileSync(
@@ -549,6 +552,663 @@ it('invalid Web headers dispose the unpolled output and input, preserving the he
   expect(pull).not.toHaveBeenCalled();
   expect(cancel).toHaveBeenCalledOnce();
   expect(inputRelease).toHaveBeenCalledOnce();
+});
+
+describe('socket-free Node server', () => {
+  it('constructs locally, accepts later listeners, and retains public IncomingMessage identity', async () => {
+    const server = createServer();
+    expect(server).toBeInstanceOf(Server);
+    expect(server).not.toBeInstanceOf(nativeHttp.Server);
+    let request: nativeHttp.IncomingMessage | undefined;
+    server.on('request', (req, res) => {
+      request = req;
+      res.end('later listener');
+      return 'not a response';
+    });
+    const response = await nodeHttpHandler(server)(raw(AgentStream.from([])), { config: {} });
+    expect(request).toBeInstanceOf(nativeHttp.IncomingMessage);
+    const chunks = [];
+    for await (const chunk of response.body) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).toString()).toBe('later listener');
+    request!.destroy();
+  });
+
+  it('rejects server options and listen instead of opening a socket', () => {
+    expect(() => createServer({} as never)).toThrow(/options/);
+    expect(() => new Server({} as never)).toThrow(/options/);
+    expect(() => (createServer as Function)(undefined, () => {})).toThrow(/options/);
+    expect(() => createServer().listen()).toThrow(/numeric/);
+    expect(() => createServer().listen(3000)).toThrow(/implementRaw/);
+    expect(() => nodeHttpHandler(nativeHttp.createServer())).toThrow(/component build/);
+  });
+});
+
+describe('Node router requests', () => {
+  it.each([undefined, '', 'x=%ff'])(
+    'preserves the mounted URL and canonical byte headers (%s)',
+    async (query) => {
+      let request!: nativeHttp.IncomingMessage;
+      const response = await nodeHttpHandler(
+        createServer((req, res) => {
+          request = req;
+          res.end();
+        }),
+      )(
+        {
+          ...raw(AgentStream.from([]), 'CUSTOM'),
+          query,
+          headers: [
+            { name: 'X-Byte', value: new Uint8Array([255]) },
+            { name: 'x-byte', value: Buffer.from('right') },
+            { name: 'cookie', value: Buffer.from('a=1') },
+            { name: 'cookie', value: Buffer.from('b=2') },
+            { name: 'content-type', value: Buffer.from('first') },
+            { name: 'content-type', value: Buffer.from('second') },
+            { name: 'set-cookie', value: Buffer.from('left') },
+            { name: 'set-cookie', value: Buffer.from('right') },
+          ],
+        },
+        { config: {} },
+      );
+      expect(request.method).toBe('CUSTOM');
+      expect(request.url).toBe('/api/%61' + (query === undefined ? '' : `?${query}`));
+      expect(request.headers).toMatchObject({
+        host: 'example.test:8443',
+        'x-byte': 'ÿ, right',
+        cookie: 'a=1; b=2',
+        'content-type': 'first',
+        'set-cookie': ['left', 'right'],
+      });
+      expect(request.headersDistinct['content-type']).toEqual(['first', 'second']);
+      expect(request.rawHeaders).toEqual([
+        'X-Byte',
+        'ÿ',
+        'x-byte',
+        'right',
+        'cookie',
+        'a=1',
+        'cookie',
+        'b=2',
+        'content-type',
+        'first',
+        'content-type',
+        'second',
+        'set-cookie',
+        'left',
+        'set-cookie',
+        'right',
+        'host',
+        'example.test:8443',
+      ]);
+      expect(request.socket).toBeNull();
+      expect(request.httpVersion).toBeUndefined();
+      await response.body.return();
+      request.destroy();
+    },
+  );
+
+  it('does not read eagerly, streams Buffer chunks, and completes on EOF', async () => {
+    let opened = false;
+    const source = AgentStream.from<Uint8Array>({
+      async *[Symbol.asyncIterator]() {
+        opened = true;
+        yield new Uint8Array([0, 255, 2]);
+        yield new Uint8Array([9, 4]);
+      },
+    });
+    let request!: nativeHttp.IncomingMessage;
+    const response = await nodeHttpHandler(
+      createServer((req, res) => {
+        request = req;
+        res.flushHeaders();
+      }),
+    )(raw(source), { config: {} });
+    expect(opened).toBe(false);
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) {
+      expect(Buffer.isBuffer(chunk)).toBe(true);
+      chunks.push(chunk);
+    }
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from([0, 255, 2, 9, 4]));
+    expect(request.complete).toBe(true);
+    expect(request.aborted).toBe(false);
+    await response.body.return();
+  });
+
+  it('closes during a pending read independently of the late read result', async () => {
+    let settleRead!: (item: IteratorResult<Uint8Array>) => void;
+    let settleReturn!: () => void;
+    let pulls = 0;
+    let disposals = 0;
+    const source = AgentStream.from<Uint8Array>({
+      [Symbol.asyncIterator]: () => ({
+        next: () => {
+          pulls++;
+          return new Promise((resolve) => {
+            settleRead = resolve;
+          });
+        },
+        return: async () => {
+          disposals++;
+          await new Promise<void>((resolve) => {
+            settleReturn = resolve;
+          });
+          return { done: true as const, value: undefined };
+        },
+      }),
+    });
+    let request!: nativeHttp.IncomingMessage;
+    const response = await nodeHttpHandler(
+      createServer((req, res) => {
+        request = req;
+        res.flushHeaders();
+      }),
+    )(raw(source), { config: {} });
+    let aborted = 0;
+    let data = 0;
+    request.on('aborted', () => {
+      aborted++;
+    });
+    request.on('data', () => {
+      data++;
+    });
+    request.read(0);
+    expect(pulls).toBe(1);
+    const closed = once(request, 'close');
+    request.destroy();
+    request.destroy();
+    expect(disposals).toBe(1);
+    settleReturn();
+    await closed;
+    expect(aborted).toBe(1);
+    expect(request.complete).toBe(false);
+    settleRead({ done: false, value: new Uint8Array([3]) });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(data).toBe(0);
+    expect(pulls).toBe(1);
+    expect(request.complete).toBe(false);
+    await expect(response.body.return()).rejects.toThrow('Request destroyed before completion');
+  });
+
+  it('bounds read-ahead, permits empty chunks, and disposes once at EOF', async () => {
+    let pulls = 0;
+    let active = 0;
+    let maximum = 0;
+    let disposals = 0;
+    let request!: nativeHttp.IncomingMessage;
+    const source = AgentStream.from<Uint8Array>({
+      [Symbol.asyncIterator]: () => ({
+        async next() {
+          pulls++;
+          active++;
+          maximum = Math.max(maximum, active);
+          await Promise.resolve();
+          active--;
+          if (pulls === 1)
+            return { done: false, value: Buffer.alloc(request.readableHighWaterMark, 7) };
+          if (pulls === 2) return { done: false, value: new Uint8Array() };
+          if (pulls === 3) return { done: false, value: Buffer.from([9, 2]) };
+          return { done: true, value: undefined };
+        },
+        async return() {
+          disposals++;
+          return { done: true, value: undefined };
+        },
+      }),
+    });
+    const response = await nodeHttpHandler(
+      createServer((req, res) => {
+        request = req;
+        res.flushHeaders();
+      }),
+    )(raw(source), { config: {} });
+    const readable = once(request, 'readable');
+    request.read(0);
+    await readable;
+    expect(pulls).toBe(1);
+    expect(request.read()).toEqual(Buffer.alloc(request.readableHighWaterMark, 7));
+    const closed = once(request, 'close');
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    await closed;
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from([9, 2]));
+    expect(maximum).toBe(1);
+    expect(disposals).toBe(1);
+    expect(request.complete).toBe(true);
+    expect(request.aborted).toBe(false);
+    await response.body.return();
+  });
+
+  it.each([undefined, new Error('source failure')])(
+    'surfaces cleanup failure without replacing the source error (%s)',
+    async (primary) => {
+      let request!: nativeHttp.IncomingMessage;
+      const cleanup = new Error('cleanup failure');
+      const source = AgentStream.from<Uint8Array>({
+        [Symbol.asyncIterator]: () => ({
+          async next() {
+            if (primary) throw primary;
+            return { done: true, value: undefined };
+          },
+          async return() {
+            throw cleanup;
+          },
+        }),
+      });
+      const response = await nodeHttpHandler(
+        createServer((req, res) => {
+          request = req;
+          res.flushHeaders();
+        }),
+      )(raw(source), { config: {} });
+      const error = once(request, 'error');
+      const closed = new Promise<void>((resolve) => request.once('close', resolve));
+      request.resume();
+      expect((await error)[0]).toBe(primary ?? cleanup);
+      await closed;
+      await expect(response.body.return()).rejects.toBe(primary ?? cleanup);
+    },
+  );
+
+  it('propagates a source error before headers and disposes the source', async () => {
+    let closed = false;
+    const source = AgentStream.from<Uint8Array>({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          throw new Error('upload failed');
+        },
+        return: async () => {
+          closed = true;
+          return { done: true as const, value: undefined };
+        },
+      }),
+    });
+    const handler = nodeHttpHandler(createServer((req) => req.resume()));
+    await expect(handler(raw(source), { config: {} })).rejects.toThrow('upload failed');
+    expect(closed).toBe(true);
+  });
+});
+
+describe('Node router responses', () => {
+  it('commits a stable head before end and retains repeated byte-string headers', async () => {
+    let response!: ServerResponse;
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        response = res;
+        res.setHeader('X-Remove', 'remove');
+        expect(res.hasHeader('x-remove')).toBe(true);
+        res.removeHeader('x-remove');
+        res.setHeader('Set-Cookie', ['left=1', 'right=2']);
+        res.setHeader('x-byte', 'ÿ');
+        res.writeHead(201);
+      }),
+    )(raw(AgentStream.from([])), { config: {} });
+    expect(response.headersSent).toBe(true);
+    expect(response.writableEnded).toBe(false);
+    response.statusCode = 500;
+    (response.getHeader('set-cookie') as string[]).push('too late');
+    expect(() => response.setHeader('x-late', 'late')).toThrow();
+    expect(() => response.removeHeader('set-cookie')).toThrow();
+    expect(() => response.writeHead(202)).toThrow();
+    response.flushHeaders();
+    expect(output.status).toBe(201);
+    expect(
+      output.headers.map(({ name, value }) => [name, Buffer.from(value).toString('latin1')]),
+    ).toEqual([
+      ['set-cookie', 'left=1'],
+      ['set-cookie', 'right=2'],
+      ['x-byte', 'ÿ'],
+    ]);
+    response.write('early');
+    expect(Buffer.from((await output.body.next()).value!).toString()).toBe('early');
+    expect(response.writableEnded).toBe(false);
+    const finished = once(response, 'finish');
+    response.end('late');
+    expect(Buffer.from((await output.body.next()).value!).toString()).toBe('late');
+    expect((await output.body.next()).done).toBe(true);
+    await finished;
+    expect(response.writableFinished).toBe(true);
+  });
+
+  it('serializes queued writes with callbacks and cooperative backpressure', async () => {
+    let response!: ServerResponse;
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        response = res;
+        res.flushHeaders();
+      }),
+    )(raw(AgentStream.from([])), { config: {} });
+    const first = Buffer.alloc(response.writableHighWaterMark, 5);
+    const completed: string[] = [];
+    expect(response.write(first, () => completed.push('first'))).toBe(false);
+    response.write(Buffer.from([1, 9]), () => completed.push('second'));
+    expect(completed).toEqual([]);
+    expect(Buffer.from((await output.body.next()).value!)).toEqual(first);
+    const drained = once(response, 'drain');
+    expect(Buffer.from((await output.body.next()).value!)).toEqual(Buffer.from([1, 9]));
+    await drained;
+    expect(completed).toEqual(['first', 'second']);
+    const finished = once(response, 'finish');
+    response.end();
+    await finished;
+    expect((await output.body.next()).done).toBe(true);
+  });
+
+  it('preserves repeated raw writeHead headers', async () => {
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        res.setHeader('set-cookie', 'replaced');
+        res.writeHead(200, ['Set-Cookie', 'a=1', 'set-cookie', 'b=2']);
+        res.end();
+      }),
+    )(raw(AgentStream.from([])), { config: {} });
+    expect(output.headers.map(({ name, value }) => [name, Buffer.from(value).toString()])).toEqual([
+      ['set-cookie', 'a=1'],
+      ['set-cookie', 'b=2'],
+    ]);
+    await output.body.return();
+  });
+
+  it('settles writes and pending body reads when destroyed after commitment', async () => {
+    let response!: ServerResponse;
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        response = res;
+        res.flushHeaders();
+      }),
+    )(raw(AgentStream.from([])), { config: {} });
+    const waiting = output.body.next();
+    const failure = new Error('response failure');
+    response.destroy(failure);
+    await expect(waiting).rejects.toBe(failure);
+    const second = await nodeHttpHandler(
+      createServer((_req, res) => {
+        response = res;
+        res.write('pending');
+      }),
+    )(raw(AgentStream.from([])), { config: {} });
+    const callback = new Promise<Error | null | undefined>((resolve) =>
+      response.write('queued', resolve),
+    );
+    response.destroy(failure);
+    expect(await callback).toBe(failure);
+    await expect(second.body.next()).rejects.toBe(failure);
+  });
+
+  it.each([
+    (res: ServerResponse) => res.writeHead(101),
+    (res: ServerResponse) => res.writeHead(200, 'Custom'),
+    (res: ServerResponse) => res.addTrailers(),
+    (res: ServerResponse) => res.writeContinue(),
+    (res: ServerResponse) => res.writeProcessing(),
+    (res: ServerResponse) => res.writeEarlyHints(),
+    (res: ServerResponse) => {
+      res.statusMessage = 'Custom';
+    },
+  ])('rejects unsupported response operations', async (operation) => {
+    await expect(
+      nodeHttpHandler(createServer((_req, res) => operation(res)))(raw(AgentStream.from([])), {
+        config: {},
+      }),
+    ).rejects.toBeInstanceOf(Error);
+  });
+});
+
+describe('Node router exchange cleanup', () => {
+  it('completes a zero-length body when the native producer pulls before disposal', async () => {
+    let disposed = false;
+    const input = AgentStream.from<Uint8Array>({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: true, value: undefined }),
+        return: async () => {
+          disposed = true;
+          return { done: true, value: undefined };
+        },
+      }),
+    });
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        res.writeHead(200, { 'content-length': '000' });
+      }),
+    )(raw(input), { config: {} });
+    expect(await output.body.next()).toEqual({ done: true, value: undefined });
+    expect(disposed).toBe(true);
+  });
+
+  it.each([
+    ['HEAD', 200, undefined],
+    ['GET', 204, undefined],
+    ['GET', 205, undefined],
+    ['GET', 304, undefined],
+    ['GET', 200, '0'],
+    ['GET', 200, ' \t000\t '],
+  ] as const)(
+    'disposes %s/%s/%s before a reader or end without a write/dispose cycle',
+    async (method, status, length) => {
+      let response!: ServerResponse;
+      let released!: () => void;
+      const written = new Promise<void>((resolve) => {
+        released = resolve;
+      });
+      let pulls = 0;
+      let disposals = 0;
+      const source = AgentStream.from<Uint8Array>({
+        [Symbol.asyncIterator]: () => ({
+          async next() {
+            pulls++;
+            return { done: true, value: undefined };
+          },
+          async return() {
+            disposals++;
+            await written;
+            return { done: true, value: undefined };
+          },
+        }),
+      });
+      const errors: Error[] = [];
+      const output = await nodeHttpHandler(
+        createServer((_req, res) => {
+          response = res;
+          res.on('error', (error) => errors.push(error));
+          res.writeHead(status, length === undefined ? {} : { 'content-length': length });
+          res.write('not sent', (error) => {
+            if (error) errors.push(error);
+            released();
+          });
+        }),
+      )(raw(source, method), { config: {} });
+      expect(response.writableEnded).toBe(false);
+      await output.body.return();
+      expect(disposals).toBe(1);
+      expect(pulls).toBe(0);
+      expect(response.writableEnded).toBe(false);
+      expect(errors).toEqual([]);
+      const finished = once(response, 'finish');
+      response.end('also discarded');
+      await finished;
+      expect(errors).toEqual([]);
+    },
+  );
+
+  it('local disposal interrupts output writes and releases an unread input', async () => {
+    let response!: ServerResponse;
+    let released = false;
+    const source = AgentStream.from<Uint8Array>({
+      [Symbol.asyncIterator]: () => ({
+        async next() {
+          return { done: false, value: new Uint8Array([1]) };
+        },
+        async return() {
+          released = true;
+          return { done: true, value: undefined };
+        },
+      }),
+    });
+    const results: Array<Error | null | undefined> = [];
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        response = res;
+        res.write('active', (error) => results.push(error));
+        res.write('queued', (error) => results.push(error));
+      }),
+    )(raw(source), { config: {} });
+    await output.body.return();
+    expect(results).toHaveLength(2);
+    expect(results.every((error) => error instanceof Error)).toBe(true);
+    expect(released).toBe(true);
+    expect(response.destroyed).toBe(true);
+  });
+
+  it('keeps overlapping exchanges independent when one output is disposed', async () => {
+    const responses = new Map<string, ServerResponse>();
+    const server = createServer((req, res) => {
+      responses.set(req.url!, res);
+      res.setHeader('x-id', req.url!);
+      res.flushHeaders();
+    });
+    const handler = nodeHttpHandler(server);
+    const first = await handler(
+      { ...raw(AgentStream.from([])), path: '/first', query: undefined },
+      { config: {} },
+    );
+    const second = await handler(
+      { ...raw(AgentStream.from([])), path: '/second', query: undefined },
+      { config: {} },
+    );
+    await first.body.return();
+    expect(responses.get('/first')!.destroyed).toBe(true);
+    expect(responses.get('/second')!.destroyed).toBe(false);
+    responses.get('/second')!.end('second only');
+    const chunks = [];
+    for await (const chunk of second.body) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).toString()).toBe('second only');
+    expect(second.headers.map(({ name, value }) => [name, Buffer.from(value).toString()])).toEqual([
+      ['x-id', '/second'],
+    ]);
+  });
+
+  it('settles headers and input cleanup on a listener failure or early request destruction', async () => {
+    for (const listener of [
+      () => {
+        throw new Error('listener failure');
+      },
+      (req: nativeHttp.IncomingMessage) => req.destroy(),
+    ]) {
+      let released = false;
+      const source = AgentStream.from<Uint8Array>({
+        [Symbol.asyncIterator]: () => ({
+          async next() {
+            return { done: true, value: undefined };
+          },
+          async return() {
+            released = true;
+            return { done: true, value: undefined };
+          },
+        }),
+      });
+      await expect(
+        nodeHttpHandler(createServer(listener))(raw(source), { config: {} }),
+      ).rejects.toBeInstanceOf(Error);
+      expect(released).toBe(true);
+    }
+    await expect(
+      nodeHttpHandler(createServer())(raw(AgentStream.from([])), { config: {} }),
+    ).rejects.toThrow(/listener/);
+  });
+
+  it('does not hide failures after commitment in suppressed responses', async () => {
+    const failure = new Error('after commitment');
+    await expect(
+      nodeHttpHandler(
+        createServer((_req, res) => {
+          res.writeHead(204);
+          throw failure;
+        }),
+      )(raw(AgentStream.from([])), { config: {} }),
+    ).rejects.toBe(failure);
+    let response!: ServerResponse;
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        response = res;
+        res.writeHead(204);
+      }),
+    )(raw(AgentStream.from([])), { config: {} });
+    response.destroy(failure);
+    await expect(output.body.return()).rejects.toBe(failure);
+  });
+
+  it('does not hide a response failure arriving during suppression cleanup', async () => {
+    let started!: () => void;
+    let release!: () => void;
+    const disposing = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const disposed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let disposals = 0;
+    const source = AgentStream.from<Uint8Array>({
+      [Symbol.asyncIterator]: () => ({
+        async next() {
+          return { done: true, value: undefined };
+        },
+        async return() {
+          disposals++;
+          started();
+          await disposed;
+          return { done: true, value: undefined };
+        },
+      }),
+    });
+    let response!: ServerResponse;
+    const output = await nodeHttpHandler(
+      createServer((_req, res) => {
+        response = res;
+        res.writeHead(204);
+      }),
+    )(raw(source), { config: {} });
+    const pending = output.body.return();
+    await disposing;
+    const failure = new Error('failure during cleanup');
+    const observed = once(response, 'error');
+    response.destroy(failure);
+    await observed;
+    release();
+    await expect(pending).rejects.toBe(failure);
+    expect(disposals).toBe(1);
+  });
+
+  it.each(['write', 'end'] as const)(
+    'settles an implicit %s header failure without finish',
+    async (operation) => {
+      let response!: ServerResponse;
+      let finished = false;
+      let callbackError: Error | null | undefined;
+      await expect(
+        nodeHttpHandler(
+          createServer((_req, res) => {
+            response = res;
+            res.statusCode = 199;
+            res.on('finish', () => {
+              finished = true;
+            });
+            if (operation === 'write')
+              res.write('invalid', (error) => {
+                callbackError = error;
+              });
+            else
+              res.end((error?: Error) => {
+                callbackError = error;
+              });
+          }),
+        )(raw(AgentStream.from([])), { config: {} }),
+      ).rejects.toBeInstanceOf(RangeError);
+      expect(response.headersSent).toBe(false);
+      expect(finished).toBe(false);
+      expect(callbackError).toBeInstanceOf(RangeError);
+    },
+  );
 });
 
 it('invalid raw header override disposes the Web response body', async () => {

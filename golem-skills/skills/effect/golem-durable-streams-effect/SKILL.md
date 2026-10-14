@@ -106,7 +106,9 @@ operations and retain one uncertain producer tuple, exact encoded body, and clos
 may omit `nextOffset`. Scope exit releases the local writer without closing the remote stream.
 
 The SDK retries timeout, transport, rate-limit, and unavailable failures with bounded exponential
-backoff, durable timers, and `Retry-After`. Permanent protocol, fencing, conflict, gone, and size
+backoff, durable timers, and `Retry-After`. `maxRetries` defaults to 8 retries after the first
+attempt; the delay starts at `retryDelayMs` (default 100 ms) and doubles up to 30 s, and a longer
+`Retry-After` wins. `maxRetries: 0` disables retries. Permanent protocol, fencing, conflict, gone, and size
 errors remain typed `DurableStreamError`s. Replay reconstructs checkpoints, buffered items,
 producer state, pending data, and retry budgets without repeating completed HTTP effects. Do not
 add another durability or atomic wrapper.

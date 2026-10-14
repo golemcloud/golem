@@ -16,18 +16,22 @@ pub mod api;
 pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
-mod gateway_server;
+pub mod gateway_server;
 pub mod grpcapi;
+pub mod ingress;
 pub mod invocation_session_token;
 pub mod mcp;
 pub mod metrics;
 pub mod model;
 pub mod path;
+pub mod public_endpoint;
 pub mod service;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
+use crate::ingress::TrustedIngress;
+use crate::mcp::{McpOnlyEndpoint, make_mcp_endpoint};
+use crate::public_endpoint::PublicEndpoint;
 use crate::service::registry_event_subscriber::WorkerServiceRegistryInvalidationHandler;
 use anyhow::{Context, anyhow};
 use golem_common::poem::{
@@ -36,13 +40,11 @@ use golem_common::poem::{
 };
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::BoxEndpoint;
-use poem::endpoint::TowerCompatExt;
 use poem::listener::Acceptor;
 use poem::middleware::{CookieJarManager, Cors};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
+use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
@@ -61,6 +63,11 @@ pub struct TrafficReadyEndpoints {
     pub custom_request_port: u16,
     pub mcp_port: u16,
     pub api_endpoint: BoxEndpoint<'static>,
+    /// The endpoint that the custom request port serves: HTTP API and MCP deployments,
+    /// chosen by the request's host. See [`PublicEndpoint`].
+    pub public_endpoint: BoxEndpoint<'static>,
+    /// Decides which peers may set a request's public origin with `X-Forwarded-*` headers.
+    pub trusted_ingress: TrustedIngress,
 }
 
 #[derive(Clone)]
@@ -111,7 +118,7 @@ impl WorkerService {
 
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set, tracer.clone()).await?;
-        let custom_request_port = self
+        let (custom_request_port, _) = self
             .start_api_gateway_server(join_set, tracer.clone())
             .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
@@ -156,7 +163,7 @@ impl WorkerService {
         });
 
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let custom_request_port = self
+        let (custom_request_port, public_endpoint) = self
             .start_api_gateway_server(join_set, tracer.clone())
             .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
@@ -167,6 +174,8 @@ impl WorkerService {
             api_endpoint,
             mcp_port,
             custom_request_port,
+            public_endpoint: public_endpoint.boxed(),
+            trusted_ingress: self.trusted_ingress(),
         })
     }
 
@@ -231,17 +240,33 @@ impl WorkerService {
         Ok(port)
     }
 
+    fn trusted_ingress(&self) -> TrustedIngress {
+        TrustedIngress::new(&self.config.route_resolver.trusted_ingress_addresses)
+    }
+
     async fn start_api_gateway_server(
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
         tracer: Option<SdkTracer>,
-    ) -> Result<u16, anyhow::Error> {
-        let route = Route::new()
-            .nest("/", custom_api::make_custom_api_endpoint(&self.services))
-            .with(OpenTelemetryMetrics::new())
-            .with_if_lazy(tracer.is_some(), || {
-                OpenTelemetryTracing::new(tracer.unwrap())
-            });
+    ) -> Result<(u16, Arc<BoxEndpoint<'static>>), anyhow::Error> {
+        let public_endpoint = PublicEndpoint::new(
+            self.trusted_ingress(),
+            self.services.route_resolver.clone(),
+            self.services.mcp_capability_lookup.clone(),
+            Route::new()
+                .nest("/", custom_api::make_custom_api_endpoint(&self.services))
+                .boxed(),
+            make_mcp_endpoint(&self.services),
+        );
+        let route: Arc<BoxEndpoint<'static>> = Arc::new(
+            public_endpoint
+                .with(OpenTelemetryMetrics::new())
+                .with_if_lazy(tracer.is_some(), || {
+                    OpenTelemetryTracing::new(tracer.unwrap())
+                })
+                .boxed(),
+        );
+        let served_route = route.clone();
 
         let acceptor = golem_service_base::net::bind_poem_acceptor(
             self.config.socket_addr(self.config.custom_request_port),
@@ -253,14 +278,14 @@ impl WorkerService {
 
         join_set.spawn(
             async move {
-                gateway_server::run(acceptor, route)
+                gateway_server::run(acceptor, served_route)
                     .await
                     .map_err(|err| anyhow!(err).context("API Gateway server failed"))
             }
             .in_current_span(),
         );
 
-        Ok(port)
+        Ok((port, route))
     }
 
     async fn start_mcp_server(
@@ -277,54 +302,15 @@ impl WorkerService {
             .expect("socket address")
             .port();
 
-        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
-        let mcp_capability_lookup_for_auth = mcp_capability_lookup.clone();
-        let identity_provider = self.services.identity_provider.clone();
-        let identity_provider_for_auth = identity_provider.clone();
-
-        let worker_service = self.services.worker_service.clone();
-
-        let service = StreamableHttpService::new(
-            move || {
-                Ok(GolemAgentMcpServer::new(
-                    mcp_capability_lookup.clone(),
-                    worker_service.clone(),
-                ))
-            },
-            LocalSessionManager::default().into(),
-            mcp_http_transport_config(),
-        );
-
-        let oauth_routes = oauth_proxy_routes(
-            mcp_capability_lookup_for_auth.clone(),
-            identity_provider.clone(),
-            self.services.session_store.clone(),
-        );
-
-        let mcp_with_auth = service.compat().with(McpBearerAuth::new(
-            mcp_capability_lookup_for_auth,
-            identity_provider_for_auth,
-        ));
-
-        // OAuth routes use .at() so they take priority over .nest("/mcp", ...)
-        let route = oauth_routes
-            .nest("/mcp", mcp_with_auth)
-            .with(
-                Cors::new()
-                    .allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"])
-                    .allow_headers(vec![
-                        "Content-Type",
-                        "Authorization",
-                        "Mcp-Session-Id",
-                        "Accept",
-                        "Last-Event-ID",
-                    ])
-                    .expose_headers(vec!["Mcp-Session-Id"]),
-            )
-            .with(OpenTelemetryMetrics::new())
-            .with_if_lazy(tracer.is_some(), || {
-                OpenTelemetryTracing::new(tracer.unwrap())
-            });
+        let route = McpOnlyEndpoint::new(
+            self.trusted_ingress(),
+            self.services.mcp_capability_lookup.clone(),
+            make_mcp_endpoint(&self.services),
+        )
+        .with(OpenTelemetryMetrics::new())
+        .with_if_lazy(tracer.is_some(), || {
+            OpenTelemetryTracing::new(tracer.unwrap())
+        });
 
         join_set.spawn(
             async move {
@@ -340,21 +326,16 @@ impl WorkerService {
     }
 }
 
-fn mcp_http_transport_config() -> StreamableHttpServerConfig {
-    // Export hosts are deployment domains, not a static loopback allowlist.
-    // Export request limits are independent of the bounded outbound import client.
-    StreamableHttpServerConfig::default()
-        .disable_allowed_hosts()
-        .with_max_request_body_bytes(usize::MAX)
-}
-
 #[cfg(test)]
 mod mcp_transport_tests {
-    use super::*;
+    use crate::mcp::mcp_http_transport_config;
+    use poem::endpoint::TowerCompatExt;
     use poem::{
         Body, Endpoint, Request,
         http::{Method, StatusCode},
     };
+    use rmcp::transport::StreamableHttpService;
+    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
     use serde_json::json;
     use test_r::test;
 

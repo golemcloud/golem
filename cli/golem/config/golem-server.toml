@@ -99,6 +99,9 @@ max_connections = 4
 cleanup_interval = "1h"
 retention = "1day"
 
+[registry_service.domain_registration]
+reserved_domains = []
+
 [registry_service.domain_registration.available_domains]
 type = "Unrestricted"
 
@@ -846,6 +849,7 @@ type = "Disabled"
 # custom_data_bucket = "custom-data"
 # filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
@@ -906,6 +910,7 @@ type = "Disabled"
 # custom_data_bucket = "custom-data"
 # filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
@@ -966,6 +971,9 @@ type = "Disabled"
 # [registry_service.deployment_events]
 # cleanup_interval = "1h"
 # retention = "1day"
+#
+# [registry_service.domain_registration]
+# reserved_domains = []
 #
 # [registry_service.domain_registration.available_domains]
 # type = "Unrestricted"
@@ -1217,6 +1225,7 @@ type = "Disabled"
 # custom_data_bucket = "custom-data"
 # filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
@@ -1597,6 +1606,7 @@ type = "Disabled"
 # custom_data_bucket = "custom-data"
 # filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
