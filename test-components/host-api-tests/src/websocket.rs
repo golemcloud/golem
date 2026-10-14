@@ -39,6 +39,14 @@ pub trait WebsocketTest {
     async fn receive_lock_contention_from_persisted(&self, timeout_ms: u64) -> (String, String);
     /// Closes the persisted websocket and returns any close error to the caller.
     fn close_persisted_result(&self) -> Result<(), String>;
+    /// Connects to two peers and receives one message from each at the same time. Each result
+    /// is the received text or `"Receive error: ..."`. The peers decide when they send, so a
+    /// test can crash the agent while one receive is complete and the other is still pending.
+    async fn receive_from_two_sockets(
+        &self,
+        first_url: String,
+        second_url: String,
+    ) -> (String, String);
 
     /// Activates the agent without touching the persisted websocket.
     fn noop(&self) -> String;
@@ -162,6 +170,24 @@ impl WebsocketTest for WebsocketTestImpl {
             Err(e) => format!("Receive error: {e:?}"),
         };
         (received, timed)
+    }
+
+    async fn receive_from_two_sockets(
+        &self,
+        first_url: String,
+        second_url: String,
+    ) -> (String, String) {
+        let first = WebsocketConnection::connect(&first_url, None, None).expect("connect failed");
+        let second = WebsocketConnection::connect(&second_url, None, None).expect("connect failed");
+        fn text(result: Result<WebSocketMessage, WebSocketError>) -> String {
+            match result {
+                Ok(WebSocketMessage::Text(t)) => t,
+                Ok(WebSocketMessage::Binary(b)) => format!("{} bytes", b.len()),
+                Err(e) => format!("Receive error: {e:?}"),
+            }
+        }
+        let (first_message, second_message) = (first.receive(), second.receive()).join().await;
+        (text(first_message), text(second_message))
     }
 
     fn close_persisted_result(&self) -> Result<(), String> {
