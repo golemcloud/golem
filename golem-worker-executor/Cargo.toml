@@ -135,7 +135,6 @@ rustix = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-raw-sys = { workspace = true }
 golem-xfs-quotad = { workspace = true }
-rustix = { workspace = true, features = ["thread"] }
 
 [[bench]]
 name = "invocation_lowering"

@@ -139,7 +139,7 @@ With `ReflinkXfs`, the volume must be XFS with reflink, and must not be mounted 
 
 With `ManagedXfs`, the executor container is the same, and `xfs-quotad` runs beside it; see [Run xfs-quotad](#run-xfs-quotad). The executor sets the project of its directories itself, which Linux allows only in the initial user namespace, so the container must run in the host user namespace: with Docker, `--userns host` when the daemon remaps user namespaces; in Kubernetes, do not set `hostUsers: false`.
 
-The executor never changes its own capabilities. When the deployment gives it `CAP_SYS_ADMIN`, it logs a warning at startup.
+The executor needs no capabilities and never changes its own.
 
 #### Run xfs-quotad
 

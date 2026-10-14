@@ -16,7 +16,6 @@ use golem_common::SafeDisplay;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::bootstrap;
 use golem_worker_executor::metrics;
-use golem_worker_executor::process_capabilities;
 use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loader};
 use golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
 use std::sync::Arc;
@@ -37,13 +36,6 @@ fn main() -> Result<(), anyhow::Error> {
             config.add_port_to_tracing_file_name_if_enabled();
             init_tracing_with_default_env_filter(&config.tracing);
             info!("Using configuration:\n{}", config.to_safe_string_indented());
-            if process_capabilities::holds_sys_admin()? {
-                warn!(
-                    "The executor process holds CAP_SYS_ADMIN, which it does not need: only \
-                     xfs-quotad, which serves the quota calls of ManagedXfs storage, needs it. \
-                     Drop it from the executor"
-                );
-            }
 
             let prometheus = metrics::register_all();
 
