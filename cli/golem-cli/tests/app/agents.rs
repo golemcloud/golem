@@ -347,30 +347,20 @@ fn stream_cancel_is(entry: &serde_json::Value, role: &str, reason: &str) -> bool
         && case_name("StreamCancelReason", &fields[6]).as_deref() == Some(reason)
 }
 
-/// The invocation writes its first byte and then waits. Only the watch of stdout can end it
-/// after the reader has left, because the command writes nothing more.
-#[cfg(unix)]
-#[test]
-#[tag(agents_streaming)]
-#[timeout("15 minutes")]
-async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
- {
-    let ctx = streaming_invocation_context().await;
-
+/// Runs `agent invoke` with raw stdout and lets the reader of stdout leave after the first byte.
+/// Asserts that the command ends with the exit code of SIGPIPE and that the server got the cancel
+/// of the output stream from a consumer that dropped it.
+async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+    ctx: &TestContext,
+    method_and_arguments: &[&str],
+) {
     let invoke_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let mut arguments = vec![cmd::AGENT, cmd::INVOKE, invoke_agent.as_str()];
+    arguments.extend_from_slice(method_and_arguments);
+    arguments.extend(["--stdout-format", "raw"]);
     let invoked = tokio::time::timeout(
         Duration::from_secs(120),
-        ctx.cli_closing_stdout_after_bytes(
-            [
-                cmd::AGENT,
-                cmd::INVOKE,
-                &invoke_agent,
-                "produce_byte_then_wait",
-                "--stdout-format",
-                "raw",
-            ],
-            1,
-        ),
+        ctx.cli_closing_stdout_after_bytes(arguments, 1),
     )
     .await
     .expect("agent invoke kept running after the reader had left");
@@ -383,7 +373,6 @@ async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the
     assert!(!invoked.stderr_text().contains("panicked"));
     assert!(!invoked.stderr_text().contains("Broken pipe"));
 
-    // The CLI told the server that nobody consumes the output stream any more.
     let cancels = ctx
         .cli([
             cmd::AGENT,
@@ -406,6 +395,36 @@ async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the
             .any(|entry| stream_cancel_is(entry, "OutputConsumer", "GuestDrop")),
         "the server received no cancel of the output stream for a consumer that dropped it: {entries:#?}"
     );
+}
+
+/// The invocation writes its first byte and then waits. Only the watch of stdout can end it
+/// after the reader has left, because the command writes nothing more.
+#[cfg(unix)]
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
+ {
+    let ctx = streaming_invocation_context().await;
+    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+        &ctx,
+        &["produce_byte_then_wait"],
+    )
+    .await;
+}
+
+/// The invocation goes on writing after the reader has left, so a failed write of the output
+/// ends the command, not the watch.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("15 minutes")]
+async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_after_the_cancel() {
+    let ctx = streaming_invocation_context().await;
+    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+        &ctx,
+        &["produce_many_bytes", "1000000"],
+    )
+    .await;
 }
 
 #[cfg(unix)]

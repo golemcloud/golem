@@ -18,7 +18,9 @@ use crate::command_handler::agent::parse_method_argument_schema_value;
 use crate::command_handler::log::render_command_output_document;
 use crate::context::Context;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
-use crate::log::{CLOSED_OUTPUT_EXIT_CODE, ClosedOutputHold, eprint_line, is_closed_pipe};
+use crate::log::{
+    CLOSED_OUTPUT_EXIT_CODE, ClosedOutputHold, end_for_closed_output, eprint_line, is_closed_pipe,
+};
 use crate::model::agent::invocation_session::{
     AgentInvocationSessionEvent, AgentInvocationSessionEventKind,
 };
@@ -737,6 +739,13 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         input_failure_open = false;
                         fatal_input_failure = Some(take_input_failure(&mut input_failure_rx)?);
                         break 'session;
+                    }
+                    // A write of the output found the reader gone. Recording that makes the next
+                    // turn of the loop take the branch of a gone reader, which cancels the
+                    // streams before the process ends.
+                    Err(error) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == CLOSED_OUTPUT_EXIT_CODE) => {
+                        end_for_closed_output();
+                        continue 'session;
                     }
                     Err(error) => return Err(error),
                 }
