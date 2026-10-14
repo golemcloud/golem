@@ -8452,6 +8452,55 @@ async fn archive_open_service(storage: Arc<ReadCountingIndexedStorage>) -> Multi
     MultiLayerOplogService::new(primary, nev![archive], 10, 10)
 }
 
+/// Opens the oplog of `owned_agent_id` on `service` and returns the error of the open, which must
+/// fail without a panic.
+async fn failed_open(
+    service: &MultiLayerOplogService,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    last_oplog_index: Option<OplogIndex>,
+    metadata: AgentMetadata,
+    shard_epoch: Option<ShardEpoch>,
+) -> WorkerExecutorError {
+    let open = AssertUnwindSafe(async {
+        let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
+        service
+            .open(
+                &mut lifecycle,
+                owned_agent_id,
+                agent_mode,
+                last_oplog_index,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(agent_mode),
+                shard_epoch,
+            )
+            .await
+    })
+    .catch_unwind()
+    .await;
+    match open {
+        Ok(Err(error)) => error,
+        Ok(Ok(_)) => panic!("the open must fail"),
+        Err(_) => panic!("the open must fail without a panic"),
+    }
+}
+
+/// Asserts that `error` is the oplog failure of `owned_agent_id` and that its details contain
+/// every one of `needles`.
+fn assert_oplog_failed(
+    error: &WorkerExecutorError,
+    owned_agent_id: &OwnedAgentId,
+    needles: &[&str],
+) {
+    assert!(
+        matches!(error, WorkerExecutorError::OplogFailed { agent_id, details }
+            if agent_id == &owned_agent_id.agent_id
+                && needles.iter().all(|needle| details.contains(needle))),
+        "{error:?}"
+    );
+}
+
 fn archive_open_agent(name: &str) -> (AgentId, OwnedAgentId, AgentMetadata) {
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
@@ -8475,32 +8524,19 @@ async fn an_archive_last_index_that_does_not_read_fails_the_open(_tracing: &Trac
     let service = archive_open_service(storage).await;
     let (_, owned_agent_id, metadata) = archive_open_agent("archive-index-at-open");
 
-    let open = AssertUnwindSafe(async {
-        let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
-        service
-            .open(
-                &mut lifecycle,
-                &owned_agent_id,
-                AgentMode::Durable,
-                None,
-                metadata,
-                default_last_known_status(),
-                default_execution_status(AgentMode::Durable),
-                None,
-            )
-            .await
-    })
-    .catch_unwind()
+    let error = failed_open(
+        &service,
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        metadata,
+        None,
+    )
     .await;
-    let Ok(Err(error)) = open else {
-        panic!("the open must fail without a panic");
-    };
-    assert!(
-        matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
-            if agent_id == &owned_agent_id.agent_id
-                && details.contains("archive layer 0")
-                && details.contains("injected archive index failure")),
-        "{error:?}"
+    assert_oplog_failed(
+        &error,
+        &owned_agent_id,
+        &["archive layer 0", "injected archive index failure"],
     );
 }
 
@@ -8564,32 +8600,16 @@ async fn an_ephemeral_archive_last_index_that_does_not_read_fails_the_open(_trac
     let (_, owned_agent_id, mut metadata) = archive_open_agent("ephemeral-index-at-open");
     metadata.agent_mode = AgentMode::Ephemeral;
 
-    let open = AssertUnwindSafe(async {
-        let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
-        service
-            .open(
-                &mut lifecycle,
-                &owned_agent_id,
-                AgentMode::Ephemeral,
-                None,
-                metadata,
-                default_last_known_status(),
-                default_execution_status(AgentMode::Ephemeral),
-                None,
-            )
-            .await
-    })
-    .catch_unwind()
+    let error = failed_open(
+        &service,
+        &owned_agent_id,
+        AgentMode::Ephemeral,
+        None,
+        metadata,
+        None,
+    )
     .await;
-    let Ok(Err(error)) = open else {
-        panic!("the open must fail without a panic");
-    };
-    assert!(
-        matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
-            if agent_id == &owned_agent_id.agent_id
-                && details.contains("injected archive index failure")),
-        "{error:?}"
-    );
+    assert_oplog_failed(&error, &owned_agent_id, &["injected archive index failure"]);
 }
 
 #[test]
@@ -8621,31 +8641,19 @@ async fn a_blob_archive_epoch_record_that_fails_fails_the_open(_tracing: &Tracin
     let service = MultiLayerOplogService::new(primary, nev![archive], 10, 10);
     let (_, owned_agent_id, metadata) = archive_open_agent("blob-epoch-at-open");
 
-    let open = AssertUnwindSafe(async {
-        let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
-        service
-            .open(
-                &mut lifecycle,
-                &owned_agent_id,
-                AgentMode::Durable,
-                Some(OplogIndex::NONE),
-                metadata,
-                default_last_known_status(),
-                default_execution_status(AgentMode::Durable),
-                Some(ShardEpoch(1)),
-            )
-            .await
-    })
-    .catch_unwind()
+    let error = failed_open(
+        &service,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(OplogIndex::NONE),
+        metadata,
+        Some(ShardEpoch(1)),
+    )
     .await;
-    let Ok(Err(error)) = open else {
-        panic!("the open must fail without a panic");
-    };
-    assert!(
-        matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
-            if agent_id == &owned_agent_id.agent_id
-                && details.contains("injected blob epoch record failure")),
-        "{error:?}"
+    assert_oplog_failed(
+        &error,
+        &owned_agent_id,
+        &["injected blob epoch record failure"],
     );
 }
 
@@ -8704,32 +8712,19 @@ async fn an_archive_epoch_record_that_fails_fails_the_open(_tracing: &Tracing) {
     let service = archive_open_service(storage).await;
     let (_, owned_agent_id, metadata) = archive_open_agent("archive-epoch-at-open");
 
-    let open = AssertUnwindSafe(async {
-        let mut lifecycle = service.lock_lifecycle(&owned_agent_id.agent_id).await;
-        service
-            .open(
-                &mut lifecycle,
-                &owned_agent_id,
-                AgentMode::Durable,
-                Some(OplogIndex::NONE),
-                metadata,
-                default_last_known_status(),
-                default_execution_status(AgentMode::Durable),
-                Some(ShardEpoch(1)),
-            )
-            .await
-    })
-    .catch_unwind()
+    let error = failed_open(
+        &service,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(OplogIndex::NONE),
+        metadata,
+        Some(ShardEpoch(1)),
+    )
     .await;
-    let Ok(Err(error)) = open else {
-        panic!("the open must fail without a panic");
-    };
-    assert!(
-        matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
-            if agent_id == &owned_agent_id.agent_id
-                && details.contains("archive layer 0")
-                && details.contains("injected archive epoch record failure")),
-        "{error:?}"
+    assert_oplog_failed(
+        &error,
+        &owned_agent_id,
+        &["archive layer 0", "injected archive epoch record failure"],
     );
 }
 

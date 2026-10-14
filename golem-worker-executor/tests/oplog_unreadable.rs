@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 
-use golem_common::model::{AgentStatus, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::OplogConfig;
@@ -50,6 +50,23 @@ fn archiving_config() -> OplogConfig {
         entry_count_limit: 5,
         ..Default::default()
     }
+}
+
+/// Asserts that the invocation failed with the cause of the unreadable oplog: the agent, the
+/// archive layer and the decode error.
+fn assert_fails_with_the_decode_error<T: std::fmt::Debug>(
+    result: anyhow::Result<T>,
+    agent_id: &AgentId,
+) {
+    let error = result.expect_err("an agent whose oplog does not read must not run");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains(&agent_id.to_string())
+            && error.contains("archive layer 1")
+            && error.contains("failed to decode compressed oplog chunk")
+            && error.contains("Input ended unexpectedly"),
+        "the failure does not name the agent, the archive layer and the decode error: {error}"
+    );
 }
 
 /// Waits until the primary oplog of the agent is empty, so its whole history, `Create` included,
@@ -111,17 +128,11 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
     // The executor starts on the data, and recovers every agent it can read.
     let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
 
-    let error = executor
-        .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
-        .await
-        .expect_err("an agent whose oplog does not read must not run");
-    let error = format!("{error:#}");
-    assert!(
-        error.contains(&unreadable_id.to_string())
-            && error.contains("archive layer 1")
-            && error.contains("failed to decode compressed oplog chunk")
-            && error.contains("Input ended unexpectedly"),
-        "the failure does not name the agent, the archive layer and the decode error: {error}"
+    assert_fails_with_the_decode_error(
+        executor
+            .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
+            .await,
+        &unreadable_id,
     );
 
     assert_eq!(
@@ -203,17 +214,11 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
 
     let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
 
-    let error = executor
-        .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
-        .await
-        .expect_err("an agent whose oplog does not read must not run");
-    let error = format!("{error:#}");
-    assert!(
-        error.contains(&unreadable_id.to_string())
-            && error.contains("archive layer 1")
-            && error.contains("failed to decode compressed oplog chunk")
-            && error.contains("Input ended unexpectedly"),
-        "the failure does not name the agent, the archive layer and the decode error: {error}"
+    assert_fails_with_the_decode_error(
+        executor
+            .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
+            .await,
+        &unreadable_id,
     );
 
     assert_eq!(
