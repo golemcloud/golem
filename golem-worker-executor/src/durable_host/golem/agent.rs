@@ -822,6 +822,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
 
+        self.process_pending_replay_events().await?;
         let is_secret_config = match self.owner_context() {
             ResolvedOwnerContext::Agent(agent_id) => self
                 .owner_component_metadata()

@@ -1194,6 +1194,7 @@ pub(super) mod tests {
             DeletedRegions::default(),
             None,
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            oplog.current_oplog_index().await,
         )
         .await
         .unwrap();

@@ -1293,6 +1293,7 @@ impl CursorTx<'_> {
         match oplog_entry {
             OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
                 self.record_replay_event(ReplayEvent::InvocationWalletPinned {
+                    oplog_index: read_idx,
                     wallet_pin: wallet_pin.as_ref().clone(),
                 });
             }
@@ -2246,9 +2247,9 @@ impl ReplayState {
         skipped_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
         owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        last_oplog_index: OplogIndex,
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
-        let last_oplog_index = oplog.current_oplog_index().await;
         let (completion_markers, stream_observations) = Self::scan_completion_markers(
             &oplog,
             OplogIndex::INITIAL,
@@ -3447,14 +3448,34 @@ impl ReplayState {
     }
 
     pub fn take_new_replay_events(&self) -> Vec<ReplayEvent> {
+        self.take_new_replay_events_for(true)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_stage_replay_events(&self, events: Vec<ReplayEvent>) {
+        self.cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .extend(events);
+    }
+
+    pub(crate) fn take_new_replay_events_for(&self, root: bool) -> Vec<ReplayEvent> {
         let mut pending = self.cursor.pending_replay_events.lock().unwrap();
-        if self.is_live_published() {
+        if root && self.is_live_published() {
             std::mem::take(&mut *pending)
         } else {
             let events = std::mem::take(&mut *pending);
             let mut ready = Vec::with_capacity(events.len());
             for event in events {
-                if matches!(event, ReplayEvent::ReplayFinished) {
+                if matches!(event, ReplayEvent::ReplayFinished)
+                    || (!root
+                        && matches!(
+                            event,
+                            ReplayEvent::UpdateReplayed { .. }
+                                | ReplayEvent::InvocationWalletPinned { .. }
+                        ))
+                {
                     pending.push(event);
                 } else {
                     ready.push(event);

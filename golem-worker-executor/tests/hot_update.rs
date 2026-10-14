@@ -989,6 +989,454 @@ async fn skips_pre_snapshot_history_and_replays_in_flight_tail(
     Ok(())
 }
 
+#[derive(Default)]
+struct SaveHookCardService {
+    revoked: std::sync::Mutex<HashSet<golem_common::model::card::CardId>>,
+}
+
+#[async_trait::async_trait]
+impl golem_worker_executor::services::card::CardService for SaveHookCardService {
+    async fn record_revoked_cards(&self, ids: &[golem_common::model::card::CardId]) {
+        self.revoked.lock().unwrap().extend(ids);
+    }
+
+    async fn create_runtime_card(
+        &self,
+        card: golem_common::model::card::StoredCard,
+        provenance: golem_common::model::card::CardManagedByRuntimeDerived,
+    ) -> Result<golem_common::model::card::StoredCard, WorkerExecutorError> {
+        golem_worker_executor_test_utils::TestCardService
+            .create_runtime_card(card, provenance)
+            .await
+    }
+
+    async fn check_cards(
+        &self,
+        ids: Vec<golem_common::model::card::CardId>,
+    ) -> Result<
+        HashMap<
+            golem_common::model::card::CardId,
+            golem_worker_executor::services::card::CardState,
+        >,
+        WorkerExecutorError,
+    > {
+        use golem_worker_executor::services::card::CardState;
+        let mut states = golem_worker_executor_test_utils::TestCardService
+            .check_cards(ids)
+            .await?;
+        for (id, state) in &mut states {
+            if self.revoked.lock().unwrap().contains(id) {
+                *state = CardState::Revoked;
+            }
+        }
+        Ok(states)
+    }
+
+    async fn live_ancestor_ids_including_self(
+        &self,
+        card: &golem_common::model::card::StoredCard,
+    ) -> Result<Vec<golem_common::model::card::CardId>, WorkerExecutorError> {
+        Ok(std::iter::once(card.card_id())
+            .chain(card.parent_ids().iter().copied())
+            .collect())
+    }
+
+    async fn revoke_card(
+        &self,
+        id: golem_common::model::card::CardId,
+    ) -> Result<golem_worker_executor::services::card::CardRevokeResult, WorkerExecutorError> {
+        assert!(self.revoked.lock().unwrap().insert(id));
+        Ok(golem_worker_executor::services::card::CardRevokeResult::Revoked(vec![id]))
+    }
+}
+
+#[test]
+#[timeout("120s")]
+async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::card::{
+        Card, CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
+        parse_permission_fields, parse_polymorphic_permission,
+    };
+    use golem_common::model::oplog::OplogEntry;
+    use golem_schema::model::CardId as SchemaCardId;
+    use golem_worker_executor::services::card::CardService;
+
+    for revoke in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let service = Arc::new(SaveHookCardService::default());
+        let overrides = TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+            })),
+            create_card_service: Some(Arc::new({
+                let service = service.clone();
+                move || service.clone()
+            })),
+            // This proves source-side transfer, not target-side delivery.
+            wrap_worker_proxy: Some(Arc::new(crate::api::accepting_card_transfer_proxy)),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v1)
+            .update_agent_provision_config("WalletSnapshotProbe", |config| {
+                let grants = &mut config.initial_permissions.lower_bound.positive;
+                grants.retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Config(_)));
+                grants.push(
+                    parse_polymorphic_permission("config(?agent) @ * : read : control").unwrap(),
+                );
+            })
+            .store()
+            .await?;
+        let agent = agent_id!("WalletSnapshotProbe", format!("save-hook-{revoke}"));
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+        let card_id = CardId::new();
+        let schema_id = SchemaCardId { uuid: card_id.0 };
+        executor
+            .invoke_and_await_agent(&component, &agent, "observe", data_value!(schema_id))
+            .await?;
+        wait_for_snapshot_after(&executor, &worker, OplogIndex::INITIAL).await?;
+        let card = StoredCard::Concrete(Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: vec![
+                parse_permission_fields("config", "*/*/*/*/*", "*", "read", "probe").unwrap(),
+            ],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        });
+        service
+            .create_runtime_card(
+                card.clone(),
+                CardManagedByRuntimeDerived {
+                    environment_id: context.default_environment_id,
+                    agent_id: worker.clone(),
+                    invocation_key: IdempotencyKey::fresh(),
+                    oplog_index: OplogIndex::INITIAL,
+                },
+            )
+            .await?;
+        executor.queue_card_install(&worker, card).await?;
+        let target = if revoke {
+            String::new()
+        } else {
+            agent_id!("WalletSnapshotProbe", "target").to_string()
+        };
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "arm_snapshot_change",
+                data_value!(schema_id, component.id, target),
+            )
+            .await?;
+        let before = last_start_of(&executor, &worker, "arm_snapshot_change").await?;
+        let snapshot_index = wait_for_snapshot_after(&executor, &worker, before).await?;
+        let entries = executor.stored_oplog(&worker).await;
+        let OplogEntry::Snapshot {
+            active_cards,
+            wallet_generation,
+            ..
+        } = &entries[snapshot_index.as_u64() as usize - 1]
+        else {
+            panic!("expected snapshot")
+        };
+        assert!(!active_cards.iter().any(|card| card.card_id() == card_id));
+        assert_eq!(*wallet_generation, 2);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| match entry {
+                    OplogEntry::CardRevokedCascade {
+                        revoked_card_ids,
+                        local_wallet_generation,
+                        ..
+                    } if revoke => {
+                        assert_eq!(*local_wallet_generation, 2);
+                        revoked_card_ids == &[card_id]
+                    }
+                    OplogEntry::CardTransferStarted {
+                        card_id: transferred_card_id,
+                        source_wallet_generation,
+                        ..
+                    } if !revoke => {
+                        assert_eq!(*source_wallet_generation, 2);
+                        *transferred_card_id == card_id
+                    }
+                    _ => false,
+                })
+                .count(),
+            1
+        );
+        let observed = executor
+            .invoke_and_await_agent(&component, &agent, "observe", data_value!(schema_id))
+            .await?
+            .into_typed::<(bool, u64, bool, bool)>()?;
+        assert_eq!(observed, (false, 2, true, true));
+        let observed_start = last_start_of(&executor, &worker, "observe").await?;
+        wait_for_snapshot_after(&executor, &worker, observed_start).await?;
+        executor.shutdown_and_wait_for_invocation_loops().await?;
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let mut events = executor.capture_output(&worker).await?;
+        let recovered = executor
+            .invoke_and_await_agent(&component, &agent, "observe", data_value!(schema_id))
+            .await?
+            .into_typed::<(bool, u64, bool, bool)>()?;
+        assert_eq!(recovered, (false, 2, true, true));
+        assert_snapshot_recovery_loaded(&mut events).await;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    #[tagged_as("agent_update_v2")] _agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::AgentConfigSource;
+    use golem_common::model::card::parse_polymorphic_permission;
+    use golem_common::model::{IdempotencyKey, PromiseId};
+    use golem_test_framework::dsl::stdout_event_matching;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage;
+
+    const PROMISE: &str = "golem::api::get_promise_result";
+    const CLOCK: &str = "clocks::monotonic-clock::wait-until";
+    const CONFIG: &str = "golem::agent::get_config_value";
+    for fail_metadata in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let outage = Arc::new(Outage::default());
+        let wrapped_outage = outage.clone();
+        let overrides = TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapped_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component =
+            executor
+                .component_dep(&context.default_environment_id, agent_update_v1)
+                .update_agent_provision_config("WalletReplayProbe", |config| {
+                    config.initial_permissions.lower_bound.positive.push(
+                        parse_polymorphic_permission("config(?agent) @ * : read : *").unwrap(),
+                    );
+                    config.initial_permissions.lower_bound.negative.push(
+                        parse_polymorphic_permission("secret(?env) @ * : hold : probe").unwrap(),
+                    );
+                })
+                .store()
+                .await?;
+        let agent = agent_id!("WalletReplayProbe", "primary-preparation-cancellation");
+        let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+        let promise = executor
+            .invoke_and_await_agent(&component, &agent, "create_release_promise", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let key = IdempotencyKey::fresh();
+        let params = data_value!(promise);
+        let mut end = executor.gate_next_call_end(&worker_id, true).await;
+        executor
+            .invoke_agent_with_key(
+                &component,
+                &agent,
+                &key,
+                "cancel_then_read_config",
+                params.clone(),
+            )
+            .await?;
+        tokio::time::timeout(Duration::from_secs(10), end.entered()).await?;
+        let clock_start = end.start_index();
+        let invocation_start = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                executor.commit_oplog(&worker_id).await?;
+                let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                assert!(entries.iter().any(|entry| entry.oplog_index == clock_start
+                    && matches!(&entry.entry, PublicOplogEntry::Start(call) if call.function_name == CLOCK)));
+                let promise_start = entries.iter().find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(call) if call.function_name == PROMISE => Some(entry.oplog_index),
+                    _ => None,
+                });
+                let invocation_start = entries.iter().find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::AgentInvocationStarted(start) => match &start.invocation {
+                        PublicAgentInvocation::AgentMethodInvocation(call)
+                            if call.method_name == "cancel_then_read_config" => Some(entry.oplog_index),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+                if let (Some(promise_start), Some(invocation_start)) = (promise_start, invocation_start) {
+                    assert!(entries.iter().any(|entry| matches!(&entry.entry,
+                        PublicOplogEntry::End(call) if call.start_index == clock_start)));
+                    assert!(!entries.iter().any(|entry| match &entry.entry {
+                        PublicOplogEntry::End(call) => call.start_index == promise_start,
+                        PublicOplogEntry::Cancelled(call) => call.start_index == promise_start,
+                        PublicOplogEntry::CompletionDelivered(call) => call.start_index == clock_start,
+                        PublicOplogEntry::CompletionDiscarded(call) => call.start_index == clock_start,
+                        PublicOplogEntry::AgentInvocationFinished(_) => entry.oplog_index > invocation_start,
+                        _ => false,
+                    }), "the committed cut must retain incomplete A and markerless completed C");
+                    break anyhow::Ok(invocation_start);
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await??;
+        let target = executor
+            .update_component(&component.id, "it_agent_update_v2_release")
+            .await?;
+        for (metadata, source) in [
+            (&component.metadata, AgentConfigSource::Local),
+            (&target.metadata, AgentConfigSource::Secret),
+        ] {
+            let agent_type = metadata.find_agent_type_by_name(&agent.agent_type).unwrap();
+            assert_eq!(
+                agent_type
+                    .config
+                    .iter()
+                    .find(|entry| entry.path == ["probe"])
+                    .unwrap()
+                    .source,
+                source
+            );
+        }
+        end.abort();
+        executor.shutdown_and_wait_for_invocation_loops().await?;
+        drop(end);
+        drop(executor);
+
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let mut a = executor.gate_next_replay_access_admission(
+            &worker_id,
+            PROMISE,
+            ReplayAdmissionStage::AfterStart,
+        );
+        let mut c = executor.gate_next_replay_access_admission(
+            &worker_id,
+            CLOCK,
+            ReplayAdmissionStage::AfterStart,
+        );
+        let mut events = executor.capture_output(&worker_id).await?;
+        executor
+            .auto_update_worker(&worker_id, target.revision, false)
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(a.entered(), c.entered());
+        })
+        .await?;
+        // Startup has already fetched its metadata. This gate selects only the update-point
+        // preparation in the unfinished guest invocation, not creation of the replacement Store.
+        let (metadata_entered, metadata_release) = outage.gate_metadata(target.revision);
+        a.release();
+        tokio::time::timeout(Duration::from_secs(10), metadata_entered).await??;
+        let creations_before = outage.gets.lock().unwrap().clone();
+        c.release();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = events.recv().await {
+                if stdout_event_matching(&event, "wallet-replay-accessor-dropped\n") {
+                    return anyhow::Ok(());
+                }
+            }
+            anyhow::bail!("log stream ended before the guest dropped its accessor")
+        })
+        .await??;
+        executor.commit_oplog(&worker_id).await?;
+        let held = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert!(
+            !held.iter().any(|entry| entry.oplog_index > invocation_start
+                && matches!(&entry.entry,
+            PublicOplogEntry::Start(call) if call.function_name == CONFIG)),
+            "the new config decision must wait for retained preparation"
+        );
+        assert_eq!(
+            *outage.gets.lock().unwrap(),
+            creations_before,
+            "dropping an accessor must not replace its Store"
+        );
+        if fail_metadata {
+            outage.begin(target.revision);
+        }
+        metadata_release.send(()).unwrap();
+        if fail_metadata {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while outage.refused() == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            let failed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert!(
+                !failed
+                    .iter()
+                    .any(|entry| entry.oplog_index > invocation_start
+                        && matches!(&entry.entry,
+                PublicOplogEntry::Start(call) if call.function_name == CONFIG)),
+                "metadata failure must not admit a config decision from the stale prefix"
+            );
+        } else {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                executor.invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    &key,
+                    "cancel_then_read_config",
+                    params,
+                ),
+            )
+            .await??
+            .into_typed::<(String, bool)>()?;
+            assert_eq!(
+                result,
+                ("ConfigValueError::PermissionDenied".to_string(), true)
+            );
+            assert_eq!(
+                *outage.gets.lock().unwrap(),
+                creations_before,
+                "the same Store must finish after helping"
+            );
+            executor.commit_oplog(&worker_id).await?;
+            let completed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_eq!(
+                completed
+                    .iter()
+                    .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::Start(call) if call.function_name == PROMISE))
+                    .count(),
+                1,
+                "reconstruction reuses the incomplete promise Start"
+            );
+            assert!(completed.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::CompletionDelivered(call) if call.start_index == clock_start)));
+            assert!(
+                completed
+                    .iter()
+                    .any(|entry| entry.oplog_index > invocation_start
+                        && matches!(&entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
@@ -4351,6 +4799,12 @@ pub(crate) struct FlakyComponentService {
     pub(crate) outage: Arc<Outage>,
 }
 
+struct MetadataFetchGate {
+    revision: ComponentRevision,
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
 /// The revision that a [`FlakyComponentService`] cannot give, whether it is down, and how many
 /// fetches it refused. A revision whose metadata is lost gives its component, and after that no
 /// metadata, as if the revision were deleted between the two fetches. A revision whose metadata
@@ -4372,9 +4826,38 @@ pub(crate) struct Outage {
     metadata_lost: std::sync::Mutex<Option<ComponentRevision>>,
     metadata_unavailable: std::sync::Mutex<Option<ComponentRevision>>,
     fetched: std::sync::atomic::AtomicBool,
+    metadata_gate: std::sync::Mutex<Option<MetadataFetchGate>>,
+    metadata_fetches: std::sync::Mutex<Vec<ComponentRevision>>,
 }
 
 impl Outage {
+    pub(crate) fn gate_metadata(
+        &self,
+        revision: ComponentRevision,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, receipt) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        assert!(
+            self.metadata_gate
+                .lock()
+                .unwrap()
+                .replace(MetadataFetchGate {
+                    revision,
+                    entered,
+                    release: released,
+                })
+                .is_none()
+        );
+        (receipt, release)
+    }
+
+    pub(crate) fn metadata_fetches(&self) -> Vec<ComponentRevision> {
+        self.metadata_fetches.lock().unwrap().clone()
+    }
+
     pub(crate) fn begin(&self, revision: ComponentRevision) {
         *self.revision.lock().unwrap() = Some(revision);
         self.down.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -4510,6 +4993,26 @@ impl ComponentService for FlakyComponentService {
         component_id: golem_common::model::component::ComponentId,
         forced_revision: Option<ComponentRevision>,
     ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+        if let Some(revision) = forced_revision {
+            self.outage.metadata_fetches.lock().unwrap().push(revision);
+        }
+        let gate = {
+            let mut gate = self.outage.metadata_gate.lock().unwrap();
+            if gate
+                .as_ref()
+                .is_some_and(|gate| Some(gate.revision) == forced_revision)
+            {
+                gate.take()
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            gate.release
+                .await
+                .map_err(|_| WorkerExecutorError::runtime("metadata gate dropped"))?;
+        }
         self.outage.check_metadata(component_id, forced_revision)?;
         let mut component = self
             .inner

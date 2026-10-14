@@ -1498,6 +1498,12 @@ where
     };
     use golem_common::model::mcp_import::McpImportSource;
 
+    crate::durable_host::call_coordinator::process_pending_replay_events_access(
+        accessor,
+        accessor.getter(),
+    )
+    .await
+    .map_err(ToolDiscoveryError::Retrieval)?;
     let (service, owner) = accessor.with(|mut access| {
         let ctx = access.get();
         (
@@ -1579,6 +1585,11 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    crate::durable_host::call_coordinator::process_pending_replay_events_access(
+        accessor,
+        accessor.getter(),
+    )
+    .await?;
     let has_stdin = stdin.is_some();
     let ToolInvocationAttempt {
         target,
@@ -2576,6 +2587,7 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             scope.activation().clone(),
             owner_component_metadata,
             scope.authority_wallet().to_vec(),
+            Some(scope.invocation_id().start_index()),
         ),
     )
     .await
@@ -5502,6 +5514,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
+        self.process_pending_replay_events().await?;
         let environment_id = self.state.owned_agent_id.environment_id;
         let owner_component_metadata = self.owner_component_metadata();
         let component_id = owner_component_metadata.id;
@@ -5599,6 +5612,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         tool_name: String,
     ) -> anyhow::Result<Option<Arc<DiscoveredTool>>> {
+        self.process_pending_replay_events().await?;
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
         let owner_component_metadata = self.owner_component_metadata();

@@ -117,10 +117,34 @@ type AgentState = (
     BTreeMap<CardId, StoredCard>,
 );
 
-/// A prepared update of an instance, which [`apply_revision_update`] applies.
+/// A prepared update whose wallet projection is validated before metadata installation.
 pub(crate) struct RevisionUpdate {
     metadata: Component,
     agent_state: Option<AgentState>,
+}
+
+impl RevisionUpdate {
+    pub(crate) fn project_wallet(
+        &self,
+        wallet: &mut crate::worker::owner_wallet::WalletSnapshot,
+    ) -> Result<(), WorkerExecutorError> {
+        if let Some((_, cards)) = &self.agent_state {
+            replace_wallet_cards(&mut wallet.cards, &mut wallet.generation, cards.clone())?;
+        }
+        wallet.metadata = Arc::new(self.metadata.clone());
+        Ok(())
+    }
+
+    pub(crate) fn install_metadata<Ctx: WorkerCtx>(&self, ctx: &mut DurableWorkerCtx<Ctx>) {
+        assert_eq!(ctx.runtime, super::OwnerRuntime::Agent);
+        ctx.state.component_metadata = self.metadata.clone();
+        ctx.executable =
+            crate::workerctx::WorkerCtxExecutable::Component(Box::new(self.metadata.clone()));
+        if let Some((config, _)) = &self.agent_state {
+            ctx.state.agent_config = config.clone();
+            ctx.state.cached_agent_config_retry_policies = None;
+        }
+    }
 }
 
 /// Prepares the update of an instance to `new_revision`: it fetches the metadata, builds the agent
@@ -200,25 +224,4 @@ pub(crate) async fn prepare_revision_update(
         metadata,
         agent_state,
     })
-}
-
-/// Applies a prepared update to the worker context.
-pub(crate) fn apply_revision_update<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    update: RevisionUpdate,
-) -> Result<(), WorkerExecutorError> {
-    ctx.state.component_metadata = update.metadata.clone();
-    ctx.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(update.metadata));
-
-    if let Some((agent_config, initial_wallet_cards)) = update.agent_state {
-        ctx.state.agent_config = agent_config;
-        ctx.state.cached_agent_config_retry_policies = None;
-        replace_wallet_cards(
-            &mut ctx.state.agent_wallet_cards,
-            &mut ctx.state.wallet_generation,
-            initial_wallet_cards,
-        )?;
-        ctx.rederive_agent_effective_surface_from_wallet();
-    }
-    Ok(())
 }

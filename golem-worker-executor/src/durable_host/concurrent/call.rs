@@ -549,16 +549,6 @@ where
     };
     let outcome = pending.finish().await?;
     if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
-        // Publishing live and committing the replay-finalization records form one boundary for
-        // primary accessors. Live durable-call Starts take the same lock, so a sibling cannot
-        // expose target-only effects before an automatic update has succeeded or failed.
-        let boundary_lock = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_lock
-                .clone()
-        });
-        let _boundary_guard = boundary_lock.lock_owned().await;
         process_pending_replay_events_access(store, get_ctx).await?;
     }
     Ok(outcome)
@@ -577,13 +567,6 @@ where
 {
     let outcome = pending.finish().await?;
     if outcome == FinishReplayToLive::Live && primary_runtime {
-        let boundary_lock = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_lock
-                .clone()
-        });
-        let _boundary_guard = boundary_lock.lock_owned().await;
         process_pending_replay_events_access(store, get_ctx).await?;
     }
     Ok(outcome)
@@ -1448,13 +1431,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
         if !is_live {
-            let boundary_lock = store.with(|mut access| {
-                get_ctx(access.data_mut())
-                    .state
-                    .card_event_boundary_lock
-                    .clone()
-            });
-            let _boundary_guard = boundary_lock.lock_owned().await;
             process_pending_replay_events_access(store, get_ctx).await?;
         }
         let prepared = store.with(|mut access| {
@@ -1604,15 +1580,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ))
             };
         }
-        let boundary_lock = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_lock
-                .clone()
-        });
-        let _boundary_guard = boundary_lock.lock_owned().await;
         process_pending_replay_events_access(store, get_ctx).await?;
-        drop(_boundary_guard);
         let mut prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             Self::prepare_access_start(
@@ -2302,16 +2270,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     _phantom: PhantomData,
                 })
             } else {
-                let _boundary_guard = lock_synchronized_card_event_boundary_access(store, get_ctx)
-                    .await
-                    .map_err(|err| {
-                        (
-                            err,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
                 if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
                     return Err((
                         WorkerExecutorError::runtime(
@@ -2334,45 +2292,99 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         get_ctx(access.data_mut()).tail_work_tracker().activity()
                     })
                 });
-                let (start_idx, request_upload) = prepared
-                    .oplog
-                    .add_start_with_indexed_reserved_payload(
-                        move |start_index| {
-                            let started = build_span
-                                .map(|builder| builder(start_index).map(Box::new))
-                                .transpose()
-                                .map_err(|error| error.to_string())?;
-                            *built_span.lock().unwrap() = (start_index, started);
-                            Ok(request)
-                        },
-                        move |request_payload| {
-                            let (start_index, span_started) = {
-                                let mut built = span_started.lock().unwrap();
-                                (built.0, built.1.take())
-                            };
-                            let entry = OplogEntry::Start {
-                                timestamp: Timestamp::now_utc(),
-                                parent_start_index,
-                                function_name: Pair::HOST_FUNCTION_NAME,
-                                invocation_id,
-                                observational_owner,
-                                request: Some(request_payload),
-                                durable_function_type: function_type,
-                                span_started,
-                            };
-                            // All fallible preparation is complete. The actor pushes this entry
-                            // without yielding; cleanup enqueued here follows the current job.
-                            if let Some(observer) = span_observer {
-                                observer.started(start_index, &entry, false);
-                            }
-                            drop(span_activity);
-                            entry
-                        },
+                let (owner, worker, inputs) = store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    (
+                        ctx.state.owner_wallet.clone(),
+                        ctx.public_state.worker().clone(),
+                        ctx.authority_scope_inputs(),
                     )
+                });
+                let work = owner.synchronize(worker.clone(), inputs.clone(), false, true);
+                let oplog = prepared.oplog.clone();
+                let tasks = worker.tasks.clone();
+                let (send, receive) = tokio::sync::oneshot::channel();
+                let _ = tasks.spawn_metadata(async move {
+                    let result = async {
+                        let mut observation = work
+                            .await?
+                            .expect("unrestricted synchronization returns a snapshot");
+                        let boundary = loop {
+                            let boundary = owner.lock_boundary().await?;
+                            if let Some(application) = owner.pending_replay_finalization() {
+                                drop(boundary);
+                                application.result.clone().await?;
+                                observation = owner
+                                    .synchronize(worker.clone(), inputs.clone(), false, true)
+                                    .await?
+                                    .expect("unrestricted synchronization returns a snapshot");
+                                continue;
+                            }
+                            if observation.generation
+                                == worker
+                                    .published_authority_generation()
+                                    .load(std::sync::atomic::Ordering::Acquire)
+                                && Arc::ptr_eq(&observation.wallet, &owner.snapshot())
+                            {
+                                break boundary;
+                            }
+                            drop(boundary);
+                            observation = owner
+                                .synchronize(worker.clone(), inputs.clone(), false, true)
+                                .await?
+                                .expect("unrestricted synchronization returns a snapshot");
+                        };
+                        let result = oplog
+                            .add_start_with_indexed_reserved_payload(
+                                move |start_index| {
+                                    let started = build_span
+                                        .map(|builder| builder(start_index).map(Box::new))
+                                        .transpose()
+                                        .map_err(|error| error.to_string())?;
+                                    *built_span.lock().unwrap() = (start_index, started);
+                                    Ok(request)
+                                },
+                                move |request_payload| {
+                                    let (start_index, span_started) = {
+                                        let mut built = span_started.lock().unwrap();
+                                        (built.0, built.1.take())
+                                    };
+                                    let entry = OplogEntry::Start {
+                                        timestamp: Timestamp::now_utc(),
+                                        parent_start_index,
+                                        function_name: Pair::HOST_FUNCTION_NAME,
+                                        invocation_id,
+                                        observational_owner,
+                                        request: Some(request_payload),
+                                        durable_function_type: function_type,
+                                        span_started,
+                                    };
+                                    // All fallible preparation is complete. The actor pushes this entry
+                                    // without yielding; cleanup enqueued here follows the current job.
+                                    if let Some(observer) = span_observer {
+                                        observer.started(start_index, &entry, false);
+                                    }
+                                    drop(span_activity);
+                                    entry
+                                },
+                            )
+                            .await
+                            .map_err(start_write_error);
+                        drop(boundary);
+                        result
+                    }
+                    .await;
+                    let _ = send.send(result);
+                });
+                let (start_idx, request_upload) = receive
                     .await
+                    .map_err(|_| WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Jump,
+                    })
+                    .and_then(|result| result)
                     .map_err(|err| {
                         (
-                            start_write_error(err),
+                            err,
                             AccessStartCleanup {
                                 atomic_lease: prepared.atomic_lease.clone(),
                             },
@@ -6341,10 +6353,11 @@ mod tests {
                         agent_id: "direct-claim-test".to_string(),
                     },
                 },
-                oplog,
+                oplog.clone(),
                 golem_common::model::regions::DeletedRegions::default(),
                 None,
                 crate::durable_host::tool::operation::OwnerToolOperations::new(),
+                oplog.current_oplog_index().await,
             )
             .await
             .unwrap();

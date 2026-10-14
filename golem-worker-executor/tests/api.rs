@@ -442,6 +442,17 @@ struct RecordingWorkerProxy {
     local_resume: Option<Arc<Mutex<Option<Arc<LocalWorkerResume>>>>>,
 }
 
+pub(crate) fn accepting_card_transfer_proxy(inner: Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> {
+    Arc::new(RecordingWorkerProxy {
+        inner,
+        transfers: Default::default(),
+        forward_transfers: false,
+        lost_response_transfer_ids: Default::default(),
+        local_delivery: None,
+        local_resume: None,
+    })
+}
+
 #[async_trait]
 impl WorkerProxy for RecordingWorkerProxy {
     async fn prepare(

@@ -55,6 +55,7 @@ pub enum ReplayEvent {
         new_phantom_id: Uuid,
     },
     InvocationWalletPinned {
+        oplog_index: OplogIndex,
         wallet_pin: InvocationWalletPin,
     },
     CardInstalled {

@@ -358,7 +358,11 @@ async fn resolve_permission_card<Ctx: WorkerCtx>(
     }
 
     let card_id = CardId(snapshot.card_id);
-    if let Some(card) = ctx.state.agent_wallet_cards.get(&card_id).cloned() {
+    if let Some(card) = ctx
+        .agent_wallet_cards_snapshot()
+        .into_iter()
+        .find(|card| card.card_id() == card_id)
+    {
         if snapshot_matches_card(&snapshot, &card) {
             return Ok(card);
         }
@@ -1020,14 +1024,33 @@ where
         ResolvedCall::Replay(handle) => handle,
     };
 
-    let response = if handle.is_live() {
-        complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?
+    let start = handle.start_index();
+    let owner = ctx.state.owner_wallet.clone();
+    let parent = ctx.entity_parent_start_index();
+    let was_live = handle.is_live();
+    if !was_live {
+        let request = handle.recorded_request(ctx).await?;
+        let requested: StoredCard = deserialize(&request.card).map_err(|error| {
+            anyhow!("failed to deserialize runtime-card request at {start}: {error}")
+        })?;
+        if requested != card {
+            return Err(anyhow!(
+                "runtime-card request at {start} differs from the reconstructed card {card_id}"
+            ));
+        }
+    }
+    let (response, executed_live) = if was_live {
+        (
+            complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?,
+            true,
+        )
     } else {
         match handle.replay(ctx).await? {
-            CallReplayOutcome::Replayed(response) => response,
-            CallReplayOutcome::Incomplete(handle) => {
-                complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?
-            }
+            CallReplayOutcome::Replayed(response) => (response, false),
+            CallReplayOutcome::Incomplete(handle) => (
+                complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?,
+                true,
+            ),
         }
     };
 
@@ -1041,35 +1064,45 @@ where
     }
 
     if !ctx.state.snapshotting_mode {
-        let wallet_generation = ctx.state.wallet_generation;
-        if let Some((replayed_card, replayed_generation)) = ctx
-            .state
-            .replay_state
-            .pending_card_derivation(card_id)
-            .await
-        {
-            if replayed_card != created || replayed_generation != wallet_generation {
+        let found = owner
+            .recorded_derivation(ctx.state.oplog.as_ref(), start, parent, &created)
+            .await?;
+        if !found {
+            if !executed_live {
+                let own_terminal_at_horizon = matches!(
+                    ctx.state.oplog.read(owner.horizon).await,
+                    OplogEntry::End { start_index, .. } if start_index == start
+                );
+                if !own_terminal_at_horizon || ctx.rejects_live_continuation_at_replay_tail() {
+                    return Err(anyhow!(
+                        "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"
+                    ));
+                }
+                let primary = ctx.runtime == super::OwnerRuntime::Agent;
+                if !ctx
+                    .continue_live_at_replay_tail(
+                        primary,
+                        format!("repair of runtime-card audit for Start {start}"),
+                    )
+                    .await?
+                {
+                    return Err(anyhow!(
+                        "replay resumed before runtime-card audit repair for Start {start}"
+                    ));
+                }
+            }
+            if !ctx.state.is_live() {
                 return Err(anyhow!(
-                    "replayed CardDerived audit event does not match permission card {card_id}"
+                    "runtime-card audit repair for Start {start} did not acquire live continuation"
                 ));
             }
-        } else if ctx.state.is_live() {
-            // A replay that ended immediately after the durable response is live here as well. In
-            // that crash window the persisted response proves registry creation succeeded, so
-            // reconstruct the missing audit entry before exposing the handle.
-            ctx.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::CardDerived {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: ctx.entity_parent_start_index(),
-                    card: Box::new(created.clone()),
-                    wallet_generation,
-                })
-                .await?;
-        } else {
-            return Err(anyhow!(
-                "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"
-            ));
+            ctx.commit_wallet_entry(OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: parent,
+                card: Box::new(created.clone()),
+                wallet_generation: 0,
+            })
+            .await?;
         }
         ctx.process_pending_replay_events().await?;
     }
@@ -1135,7 +1168,9 @@ async fn persist_derived_card<Ctx: WorkerCtx>(
                 &ctx.state.created_by_email,
                 parent_id,
                 source,
-                ctx.state.agent_wallet_cards.contains_key(&parent_id),
+                ctx.agent_wallet_cards_snapshot()
+                    .iter()
+                    .any(|card| card.card_id() == parent_id),
             )
         },
     )
@@ -1812,6 +1847,21 @@ async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
         return Ok(());
     }
 
+    if ctx.state.is_live() {
+        return ctx
+            .commit_wallet_entry(OplogEntry::card_transfer_started(
+                entity_parent_start_index,
+                transfer_id,
+                source_card_id,
+                CardHolder::Agent(AgentCardHolder {
+                    agent_id: ctx.owned_agent_id.agent_id.clone(),
+                }),
+                target_holder.clone(),
+                0,
+            ))
+            .await;
+    }
+
     if remove_source_membership
         && super::remove_wallet_card(
             &mut ctx.state.agent_wallet_cards,
@@ -1879,15 +1929,13 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                 ));
             }
             installed_card = persisted;
-            ctx.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::CardDerived {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: ctx.entity_parent_start_index(),
-                    card: Box::new(installed_card.clone()),
-                    wallet_generation: ctx.state.wallet_generation,
-                })
-                .await?;
+            ctx.commit_wallet_entry(OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: ctx.entity_parent_start_index(),
+                card: Box::new(installed_card.clone()),
+                wallet_generation: 0,
+            })
+            .await?;
         }
 
         ctx.public_state
@@ -2048,23 +2096,22 @@ fn pending_transfer_target_agent_id(
 }
 
 #[derive(Clone)]
-pub(super) struct PendingSourceCardTransferRetry {
-    pub(super) transfer_id: Uuid,
-    pub(super) source_card_id: CardId,
-    pub(super) installed_card: StoredCard,
-    pub(super) target_agent_id: AgentId,
-    pub(super) started: bool,
-    pub(super) remove_source_membership: bool,
+pub(crate) struct PendingSourceCardTransferRetry {
+    pub(crate) transfer_id: Uuid,
+    pub(crate) source_card_id: CardId,
+    pub(crate) installed_card: StoredCard,
+    pub(crate) target_agent_id: AgentId,
+    pub(crate) started: bool,
     pending: PendingCardEventRef,
     transfer: QueuedCardEventTransfer,
 }
 
 impl PendingSourceCardTransferRetry {
-    pub(super) fn entity_parent_start_index(&self) -> Option<OplogIndex> {
+    pub(crate) fn entity_parent_start_index(&self) -> Option<OplogIndex> {
         self.pending.entity_parent_start_index
     }
 
-    pub(super) async fn is_confirmed(
+    pub(crate) async fn is_confirmed(
         &self,
         oplog: &dyn Oplog,
         source_agent_id: &AgentId,
@@ -2082,7 +2129,7 @@ impl PendingSourceCardTransferRetry {
     }
 }
 
-pub(super) async fn prepare_pending_source_card_transfer_retry(
+pub(crate) async fn prepare_pending_source_card_transfer_retry(
     oplog: &dyn Oplog,
     source_agent_id: &AgentId,
     pending: &PendingCardEventRef,
@@ -2109,14 +2156,13 @@ pub(super) async fn prepare_pending_source_card_transfer_retry(
         return Ok(None);
     }
 
-    let remove_source_membership = if transfer.card_id == installed_card.card_id() {
+    if transfer.card_id == installed_card.card_id() {
         if !matches!(installed_card, StoredCard::Concrete(_)) {
             return Err(transfer_progress_mismatch(format!(
                 "concrete source transfer {} carries a polymorphic installed card",
                 transfer.transfer_id
             )));
         }
-        true
     } else {
         let StoredCard::Concrete(installed_child) = installed_card else {
             return Err(transfer_progress_mismatch(format!(
@@ -2130,8 +2176,7 @@ pub(super) async fn prepare_pending_source_card_transfer_retry(
                 installed_child.card_id, transfer.card_id
             )));
         }
-        false
-    };
+    }
 
     Ok(Some(PendingSourceCardTransferRetry {
         transfer_id: transfer.transfer_id,
@@ -2139,97 +2184,9 @@ pub(super) async fn prepare_pending_source_card_transfer_retry(
         installed_card: installed_card.clone(),
         target_agent_id: target_agent_id.clone(),
         started: progress.started,
-        remove_source_membership,
         pending: pending.clone(),
         transfer: transfer.clone(),
     }))
-}
-
-pub(super) async fn prepare_pending_source_card_transfers<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<Vec<PendingSourceCardTransferRetry>, WorkerExecutorError> {
-    if !ctx.state.is_live() {
-        return Ok(Vec::new());
-    }
-
-    let pending_events = ctx.pending_card_events_at_boundary().await;
-    let mut retries = Vec::new();
-    for pending in pending_events {
-        if let QueuedCardEvent::TransferStarted(transfer) = &pending.event {
-            let Some(mut retry) = prepare_pending_source_card_transfer_retry(
-                ctx.state.oplog.as_ref(),
-                &ctx.owned_agent_id.agent_id,
-                &pending,
-                transfer,
-            )
-            .await?
-            else {
-                continue;
-            };
-            let target_holder = CardHolder::Agent(AgentCardHolder {
-                agent_id: retry.target_agent_id.clone(),
-            });
-            ensure_source_card_transfer_started(
-                ctx,
-                pending.entity_parent_start_index,
-                retry.transfer_id,
-                retry.source_card_id,
-                &target_holder,
-                retry.started,
-                retry.remove_source_membership,
-            )
-            .await?;
-            retry.started = true;
-            retries.push(retry);
-        }
-    }
-
-    Ok(retries)
-}
-
-pub(super) async fn complete_pending_source_card_transfers<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    retries: Vec<PendingSourceCardTransferRetry>,
-) -> Result<(), WorkerExecutorError> {
-    for retry in retries {
-        ctx.worker_proxy()
-            .deliver_card_transfer(
-                &retry.target_agent_id,
-                ctx.owned_agent_id.environment_id,
-                retry.transfer_id,
-                retry.source_card_id,
-                &retry.installed_card,
-            )
-            .await
-            .map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "permission-card transfer delivery failed: {error}"
-                ))
-            })?;
-
-        let boundary_lock = ctx.state.card_event_boundary_lock.clone();
-        let _boundary_guard = boundary_lock.lock().await;
-        if retry
-            .is_confirmed(ctx.state.oplog.as_ref(), &ctx.owned_agent_id.agent_id)
-            .await?
-        {
-            continue;
-        }
-        ctx.public_state
-            .worker()
-            .add_and_commit_oplog(OplogEntry::card_transfer_confirmed(
-                retry.entity_parent_start_index(),
-                retry.transfer_id,
-                retry.source_card_id,
-                retry.installed_card.card_id(),
-                CardHolder::Agent(AgentCardHolder {
-                    agent_id: retry.target_agent_id,
-                }),
-            ))
-            .await?;
-    }
-
-    Ok(())
 }
 
 fn ensure_revoke_authority(
@@ -2348,9 +2305,9 @@ async fn complete_permission_card_revoke<Ctx: WorkerCtx>(
     };
     let entity_parent_start_index = ctx.entity_parent_start_index();
     // The cascade removes queued revocations of these cards from the pending card events, which
-    // the card event boundary reads from the agent status only. Outside snapshotting the cascade
-    // is committed and folded into the status before this revoke completes; the finish commit
-    // of an ephemeral agent would not fold it. Snapshotting keeps the existing buffered append.
+    // the card event boundary reads from the agent status only. A live revoke commits and folds
+    // the cascade before returning, including in a save hook; the finish commit of an ephemeral
+    // agent would not fold it.
     let commit_immediately = !ctx.state.snapshotting_mode;
     if let Err(error) = ctx
         .apply_card_revoked_cascade(
@@ -2492,9 +2449,12 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
         &mut self,
         snapshot: &PermissionCardValuePayload,
     ) -> Result<Resource<PermissionCardHandleRep>, Self::Error> {
-        let entry = if let Some(card) = self.state.agent_wallet_cards.get(&CardId(snapshot.card_id))
+        let entry = if let Some(card) = self
+            .agent_wallet_cards_snapshot()
+            .into_iter()
+            .find(|card| card.card_id() == CardId(snapshot.card_id))
         {
-            if !snapshot_matches_card(snapshot, card) {
+            if !snapshot_matches_card(snapshot, &card) {
                 return Err(WorkerExecutorError::runtime(format!(
                     "permission-card snapshot for {} does not match the stored card",
                     snapshot.card_id

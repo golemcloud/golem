@@ -810,3 +810,431 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
     );
     Ok(())
 }
+
+#[test]
+#[timeout("120s")]
+async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::card::{Card, CardId, CardManagedByRuntimeDerived, StoredCard};
+    use golem_common::model::entity::EntityInvocationRequest;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::oplog::{HostRequest, OplogEntry};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_worker_executor::services::card::{CardService, CardState};
+    use golem_worker_executor::services::golem_config::SnapshotPolicy;
+    use golem_worker_executor::services::oplog::OplogOps;
+    use golem_worker_executor_test_utils::TestCardService;
+
+    struct CountingCards {
+        calls: AtomicUsize,
+        entered: tokio::sync::mpsc::Sender<(CardId, CardManagedByRuntimeDerived)>,
+        release: [tokio::sync::Semaphore; 2],
+    }
+
+    #[async_trait::async_trait]
+    impl CardService for CountingCards {
+        async fn record_revoked_cards(&self, ids: &[CardId]) {
+            TestCardService.record_revoked_cards(ids).await;
+        }
+
+        async fn check_cards(
+            &self,
+            ids: Vec<CardId>,
+        ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+            TestCardService.check_cards(ids).await
+        }
+
+        async fn create_runtime_card(
+            &self,
+            card: StoredCard,
+            provenance: CardManagedByRuntimeDerived,
+        ) -> Result<StoredCard, WorkerExecutorError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call < self.release.len() {
+                self.entered
+                    .send((card.card_id(), provenance.clone()))
+                    .await
+                    .unwrap();
+                self.release[call].acquire().await.unwrap().forget();
+            }
+            TestCardService.create_runtime_card(card, provenance).await
+        }
+    }
+
+    async fn issuers(
+        executor: &TestWorkerExecutor,
+        owner: &OwnedAgentId,
+        entries: &[OplogEntry],
+    ) -> anyhow::Result<Vec<(OplogIndex, EntityInvocationRequest)>> {
+        let active = executor.active_agent(owner).await.unwrap();
+        let mut issuers = Vec::new();
+        for (offset, entry) in entries.iter().enumerate() {
+            if let OplogEntry::Start {
+                function_name,
+                request: Some(payload),
+                ..
+            } = entry
+                && function_name.to_string() == "golem::entity::invoke"
+            {
+                let HostRequest::EntityInvocation(request) = active
+                    .execution()
+                    .oplog()
+                    .download_payload(payload.clone())
+                    .await
+                    .map_err(anyhow::Error::msg)?
+                else {
+                    panic!("expected entity request")
+                };
+                let metadata =
+                    desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)?;
+                if metadata.entity.name() == "matrix-permission-issuer" {
+                    issuers.push((OplogIndex::from_u64(offset as u64 + 1), metadata));
+                }
+            }
+        }
+        Ok(issuers)
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    environment.set_agent_secret(AgentSecret {
+        id: AgentSecretId::new(),
+        environment_id: context.default_environment_id,
+        path: CanonicalAgentSecretPath(vec!["secret".to_string()]),
+        revision: AgentSecretRevision::INITIAL,
+        secret_type: SchemaGraph::anonymous(SchemaType::string()),
+        secret_value: Some(SchemaValue::String("matrix-secret-value".to_string())),
+    });
+    let (entered, mut derivations) = tokio::sync::mpsc::channel(2);
+    let cards = Arc::new(CountingCards {
+        calls: AtomicUsize::new(0),
+        entered,
+        release: std::array::from_fn(|_| tokio::sync::Semaphore::new(0)),
+    });
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting = SnapshotPolicy::Disabled
+        })),
+        environment_state_service: Some(environment.clone()),
+        create_card_service: Some(Arc::new({
+            let cards = cards.clone();
+            move || cards.clone()
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "RustResourceToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!(
+        "RustResourceToolStreamingCaller",
+        "entity-install-before-primary-pin"
+    );
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let id = CardId(uuid::Uuid::from_u128(1));
+    let card = StoredCard::Concrete(Card {
+        card_id: id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    });
+    TestCardService
+        .create_runtime_card(
+            card.clone(),
+            CardManagedByRuntimeDerived {
+                environment_id: context.default_environment_id,
+                agent_id: worker.clone(),
+                invocation_key: IdempotencyKey::fresh(),
+                oplog_index: OplogIndex::INITIAL,
+            },
+        )
+        .await?;
+    let first = IdempotencyKey::fresh();
+    let second = IdempotencyKey::fresh();
+    let mut body = executor.gate_next_entity_body_start(&worker);
+    let invocation = executor.invoke_and_await_agent_with_key(
+        &caller_component,
+        &agent,
+        &first,
+        "matrix_parallel_permission_issuance",
+        data_value!(),
+    );
+    let install = async {
+        tokio::time::timeout(Duration::from_secs(20), body.entered()).await?;
+        let (first_card, first_derive) =
+            tokio::time::timeout(Duration::from_secs(20), derivations.recv())
+                .await?
+                .unwrap();
+        executor.commit_oplog(&worker).await?;
+        let entries = executor.stored_oplog(&worker).await;
+        let derive_starts = |entries: &[OplogEntry]| {
+            entries.iter().enumerate().filter_map(|(offset, entry)| {
+                matches!(entry, OplogEntry::Start { function_name, parent_start_index: Some(_), .. }
+                    if function_name.to_string() == "golem::permissions::derive::persist-derived-card")
+                    .then_some(OplogIndex::from_u64(offset as u64 + 1))
+            }).collect::<Vec<_>>()
+        };
+        let first_starts = derive_starts(&entries);
+        assert_eq!(first_starts.len(), 1);
+        let first_start = first_starts[0];
+        assert_eq!(first_derive.agent_id, worker);
+        let issuer = issuers(&executor, &owner, &entries).await?;
+        assert_eq!(issuer.len(), 2);
+        assert!(
+            issuer[0]
+                .1
+                .authority_wallet
+                .iter()
+                .any(|parent| parent.card_id() > id)
+        );
+        assert!(!issuer[0].1.authority_wallet.contains(&card));
+        assert!(!issuer[1].1.authority_wallet.contains(&card));
+        executor.queue_card_install(&worker, card.clone()).await?;
+        body.release();
+        let (second_card, second_derive) =
+            tokio::time::timeout(Duration::from_secs(20), derivations.recv())
+                .await?
+                .unwrap();
+        assert_ne!(first_card, second_card);
+        assert_eq!(second_derive.agent_id, worker);
+        executor.commit_oplog(&worker).await?;
+        let starts = derive_starts(&executor.stored_oplog(&worker).await);
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0], first_start);
+        let second_start = starts[1];
+        cards.release[1].add_permits(1);
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let entries = executor.stored_oplog(&worker).await;
+                if entries.iter().any(|entry| {
+                    matches!(entry, OplogEntry::CardDerived { card, wallet_generation: 1, .. } if card.card_id() == second_card)
+                }) {
+                    assert!(!entries.iter().any(|entry| {
+                        matches!(entry, OplogEntry::End { start_index, .. } if *start_index == first_start)
+                    }));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        cards.release[0].add_permits(1);
+        anyhow::Ok((first_start, second_start, first_card, second_card))
+    };
+    let (result, installed) = tokio::join!(invocation, install);
+    let (derived, second_derived, first_card, second_card) = installed?;
+    assert!(result?.into_typed::<bool>()?);
+    assert!(
+        executor
+            .invoke_and_await_agent_with_key(
+                &caller_component,
+                &agent,
+                &second,
+                "matrix_permission_observation",
+                data_value!()
+            )
+            .await?
+            .into_typed::<ResourceObservation>()?
+            .permission_same_identity
+    );
+    executor.commit_oplog(&worker).await?;
+    let recorded = executor.stored_oplog(&worker).await;
+    let issuer = issuers(&executor, &owner, &recorded).await?;
+    assert_eq!(issuer.len(), 3);
+    assert!(!issuer[0].1.authority_wallet.contains(&card));
+    assert!(!issuer[1].1.authority_wallet.contains(&card));
+    assert!(issuer[2].1.authority_wallet.contains(&card));
+    let primary = |key: &IdempotencyKey| {
+        recorded
+            .iter()
+            .enumerate()
+            .find_map(|(offset, entry)| match entry {
+                OplogEntry::AgentInvocationStarted {
+                    idempotency_key,
+                    wallet_pin,
+                    ..
+                } if idempotency_key == key => Some((
+                    OplogIndex::from_u64(offset as u64 + 1),
+                    wallet_pin.as_ref().clone(),
+                )),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let p1 = primary(&first);
+    let p2 = primary(&second);
+    assert!(!p1.1.pinned_card_ids.contains(&id));
+    assert!(p2.1.pinned_card_ids.contains(&id));
+    assert_eq!(p2.1.wallet_token.generation, 1);
+    let index_of = |condition: &dyn Fn(&OplogEntry) -> bool| {
+        OplogIndex::from_u64(recorded.iter().position(condition).unwrap() as u64 + 1)
+    };
+    let queued = index_of(
+        &|entry| matches!(entry, OplogEntry::CardEventQueued { event, .. } if event.card_id() == id),
+    );
+    let installed = index_of(
+        &|entry| matches!(entry, OplogEntry::CardInstalled { card: value, wallet_generation: 1, .. } if value.as_ref() == &card),
+    );
+    let parent_of = |start: OplogIndex| match &recorded[(u64::from(start) - 1) as usize] {
+        OplogEntry::Start {
+            parent_start_index: Some(parent),
+            function_name,
+            ..
+        } if function_name.to_string() == "golem::permissions::derive::persist-derived-card" => {
+            *parent
+        }
+        entry => panic!("expected genuine entity derive Start at {start}, got {entry:?}"),
+    };
+    let first_parent = parent_of(derived);
+    let second_parent = parent_of(second_derived);
+    assert_ne!(first_parent, second_parent);
+    let clock = index_of(
+        &|entry| matches!(entry, OplogEntry::Start { function_name: HostFunctionName::WallClockNow, parent_start_index: Some(parent), .. } if *parent == second_parent),
+    );
+    let first_end = index_of(
+        &|entry| matches!(entry, OplogEntry::End { start_index, .. } if *start_index == derived),
+    );
+    let second_end = index_of(
+        &|entry| matches!(entry, OplogEntry::End { start_index, .. } if *start_index == second_derived),
+    );
+    let first_audit = index_of(
+        &|entry| matches!(entry, OplogEntry::CardDerived { card, entity_parent_start_index: Some(parent), wallet_generation: 1, .. } if card.card_id() == first_card && *parent == first_parent),
+    );
+    let second_audit = index_of(
+        &|entry| matches!(entry, OplogEntry::CardDerived { card, entity_parent_start_index: Some(parent), wallet_generation: 1, .. } if card.card_id() == second_card && *parent == second_parent),
+    );
+    assert_eq!(second_audit, second_end.next());
+    assert!(
+        p1.0 < first_parent
+            && first_parent < derived
+            && derived < queued
+            && queued < installed
+            && installed < clock
+            && clock < second_derived
+            && second_derived < second_end
+            && second_end < second_audit
+            && second_audit < first_end
+            && first_end < first_audit
+            && first_audit < p2.0
+    );
+    assert!(
+        !recorded
+            .iter()
+            .any(|entry| matches!(entry, OplogEntry::Snapshot { .. }))
+    );
+    let writes = cards.calls.load(Ordering::SeqCst);
+    assert_eq!(writes, 3);
+    let expected_second_card = match &recorded[(u64::from(second_audit) - 1) as usize] {
+        OplogEntry::CardDerived { card, .. } => card.as_ref().clone(),
+        _ => unreachable!(),
+    };
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let first_claim = executor.gate_entity_reconstruction_claim_at(&worker, first_parent);
+    let second_body = executor.gate_next_entity_body_start(&worker);
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent,
+        "matrix_permission_observation",
+        data_value!(),
+    );
+    let replay = async {
+        let mut first_claim = first_claim;
+        let mut second_body = second_body;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(20), first_claim.entered()).await?,
+            first_parent
+        );
+        tokio::time::timeout(Duration::from_secs(20), second_body.entered()).await?;
+        let active = executor.active_agent(&owner).await.unwrap();
+        let execution = active.execution();
+        let (horizon, _, _) = execution.test_pending_card_derivation(second_card).await?;
+        let (first_lookup, release_first) =
+            executor.gate_next_direct_card_audit_read(&worker, derived, horizon);
+        let (second_lookup, release_second) =
+            executor.gate_next_direct_card_audit_read(&worker, second_derived, horizon);
+        second_body.release();
+        tokio::time::timeout(Duration::from_secs(20), second_lookup).await??;
+        let (observed_horizon, cursor, pending) =
+            execution.test_pending_card_derivation(second_card).await?;
+        assert_eq!(observed_horizon, horizon);
+        assert!(cursor >= second_audit);
+        assert_eq!(pending, Some((expected_second_card, 1)));
+        first_claim.release();
+        tokio::time::timeout(Duration::from_secs(20), first_lookup).await??;
+        let (observed_horizon, cursor, pending) =
+            execution.test_pending_card_derivation(second_card).await?;
+        assert_eq!(observed_horizon, horizon);
+        assert!(cursor >= first_audit);
+        assert_eq!(pending, None);
+        assert_eq!(cards.calls.load(Ordering::SeqCst), writes);
+        release_second.send(()).unwrap();
+        release_first.send(()).unwrap();
+        anyhow::Ok(())
+    };
+    let (result, ()) = tokio::try_join!(invocation, replay)?;
+    assert!(
+        result
+            .into_typed::<ResourceObservation>()?
+            .permission_same_identity
+    );
+    executor.commit_oplog(&worker).await?;
+    let recovered = executor.stored_oplog(&worker).await;
+    assert_eq!(&recovered[..recorded.len()], &recorded);
+    let last_pin = recovered
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            OplogEntry::AgentInvocationStarted { wallet_pin, .. } => Some(wallet_pin),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last_pin.wallet_token.generation, 1);
+    assert!(last_pin.pinned_card_ids.contains(&id));
+    // Only the new live invocation derives another card; completed replay must not write one.
+    assert_eq!(cards.calls.load(Ordering::SeqCst), writes + 1);
+    let active = executor.active_agent(&owner).await.unwrap();
+    assert!(active.primary().get_wallet_cards().await?.contains(&card));
+    Ok(())
+}

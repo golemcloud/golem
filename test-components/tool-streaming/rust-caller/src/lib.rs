@@ -769,6 +769,7 @@ pub trait RustResourceToolStreamingCaller {
     async fn matrix_secret_observation(&self) -> MatrixResourceObservation;
     async fn matrix_quota_observation(&self) -> MatrixResourceObservation;
     async fn matrix_permission_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_parallel_permission_issuance(&self) -> bool;
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation;
     async fn matrix_resource_observation(&self) -> MatrixResourceObservation;
 }
@@ -4885,6 +4886,23 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
             permission_owner_agent_id: exchange.owner_agent_id,
             ..empty_matrix_resource_observation()
         }
+    }
+
+    async fn matrix_parallel_permission_issuance(&self) -> bool {
+        let first = MatrixPermissionIssuerClient::default();
+        let second = MatrixPermissionIssuerClient::default();
+        let (first, second) = (first.issue(), second.issue()).join().await;
+        let first = first.expect("first concurrent permission issue succeeds");
+        let second = second.expect("second concurrent permission issue succeeds");
+        let first_id = first
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("first concurrently derived card is usable");
+        let second_id = second
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("second concurrently derived card is usable");
+        first_id != second_id
     }
 
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation {

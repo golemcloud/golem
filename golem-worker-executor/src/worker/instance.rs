@@ -15,7 +15,9 @@
 use super::Worker;
 use super::entity_slot::{EntitySlot, EntitySlotRegistration};
 use super::owner_lane::OwnerLane;
+use super::owner_wallet::{OwnerWallet, WalletBaseline};
 use super::state_actor::OwnerCommitController;
+use super::tasks::RuntimeAppendTasks;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
@@ -111,13 +113,15 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> Drop for StoreFuelGuard<Ct
 
 /// The durable execution stream shared by every Store belonging to one owner.
 ///
-/// A replay generation is installed by the primary Store and cloned by entity Stores. Cloning a
-/// [`ReplayState`] shares its cursor; it does not create another cursor over the same oplog.
+/// A replay generation owns its cursor and live wallet together. Stores attach to the installed
+/// generation; cloning a [`ReplayState`] does not create another cursor over the same oplog.
 pub struct OwnerExecution {
     owner_id: OwnedAgentId,
     suspension: Mutex<Arc<super::suspension::OwnerSuspension>>,
     oplog: Arc<dyn Oplog>,
-    replay: tokio::sync::RwLock<Option<ReplayState>>,
+    generation: tokio::sync::RwLock<Option<OwnerReplayGeneration>>,
+    card_boundary: Arc<tokio::sync::Mutex<()>>,
+    append_tasks: Arc<Mutex<Arc<RuntimeAppendTasks>>>,
     commit: Arc<OwnerCommitController>,
     lane: OwnerLane,
     primary_tail_work: crate::durable_host::tail_work::TailWorkTracker,
@@ -126,6 +130,11 @@ pub struct OwnerExecution {
     reached_oplog_marker: AtomicU64,
     #[cfg(feature = "test-utils")]
     monotonic_clock_start_gate: Mutex<Option<Arc<ClockNowGate>>>,
+}
+
+struct OwnerReplayGeneration {
+    replay: ReplayState,
+    wallet: Arc<OwnerWallet>,
 }
 
 #[cfg(feature = "test-utils")]
@@ -171,6 +180,8 @@ impl OwnerExecution {
         owner_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         commit: Arc<OwnerCommitController>,
+        card_boundary: Arc<tokio::sync::Mutex<()>>,
+        append_tasks: Arc<Mutex<Arc<RuntimeAppendTasks>>>,
     ) -> Self {
         let lane = OwnerLane::new(owner_id.clone());
         let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
@@ -178,7 +189,9 @@ impl OwnerExecution {
             owner_id,
             suspension: Mutex::new(super::suspension::OwnerSuspension::new()),
             oplog,
-            replay: tokio::sync::RwLock::new(None),
+            generation: tokio::sync::RwLock::new(None),
+            card_boundary,
+            append_tasks,
             commit,
             lane,
             tool_operations: OwnerToolOperations::new(),
@@ -234,16 +247,6 @@ impl OwnerExecution {
         (marker != OplogIndex::NONE).then_some(marker)
     }
 
-    pub(crate) async fn begin_replay_generation(
-        &self,
-        deleted_regions: DeletedRegions,
-        initial_snapshot_skip_end: Option<OplogIndex>,
-    ) -> Result<ReplayState, WorkerExecutorError> {
-        self.install_replay_generation(deleted_regions, initial_snapshot_skip_end)
-            .await?;
-        self.replay().await
-    }
-
     /// Installs a fresh owner replay cursor. Lifecycle recovery uses the returned cursor through
     /// [`Self::replay`]; exposing the installation step also lets integration tests reconstruct
     /// transient entity Stores without inventing a persistent child runtime.
@@ -252,9 +255,50 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        if let Some(replay) = self.replay.read().await.as_ref() {
-            replay.ensure_reconstruction_claims_empty()?;
+        let old_append_tasks = self.append_tasks.lock().unwrap().clone();
+        old_append_tasks.seal_and_wait().await;
+        let boundary = self.card_boundary.clone().lock_owned().await;
+        self.commit(CommitLevel::Always)
+            .await
+            .map_err(crate::services::oplog::OplogError::Fenced)?;
+        let baseline = self
+            .wallet()
+            .await?
+            .baseline
+            .reselect(self.oplog.as_ref(), initial_snapshot_skip_end)
+            .await?;
+        let horizon = self.oplog.current_oplog_index().await;
+        self.install_replay_generation_locked(
+            deleted_regions,
+            initial_snapshot_skip_end,
+            baseline,
+            horizon,
+            &boundary,
+        )
+        .await
+    }
+
+    pub(crate) async fn install_replay_generation_locked(
+        &self,
+        deleted_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
+        baseline: WalletBaseline,
+        horizon: OplogIndex,
+        _boundary: &tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<(), WorkerExecutorError> {
+        if let Some(generation) = self.generation.read().await.as_ref() {
+            generation.replay.ensure_reconstruction_claims_empty()?;
         }
+        let append_tasks = Arc::new(RuntimeAppendTasks::default());
+        let wallet = OwnerWallet::new(
+            baseline,
+            deleted_regions.clone(),
+            horizon,
+            self.oplog.as_ref(),
+            append_tasks.clone(),
+            self.card_boundary.clone(),
+        )
+        .await?;
         self.tool_operations.join_owner_failure_cleanup().await?;
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
@@ -266,9 +310,15 @@ impl OwnerExecution {
             deleted_regions,
             initial_snapshot_skip_end,
             self.tool_operations.clone(),
+            horizon,
         )
         .await?;
-        *self.replay.write().await = Some(replay.clone());
+        let mut generation = self.generation.write().await;
+        if let Some(old) = generation.as_ref() {
+            old.wallet.retire();
+        }
+        *generation = Some(OwnerReplayGeneration { replay, wallet });
+        *self.append_tasks.lock().unwrap() = append_tasks;
         // Observation state follows the existing replay generation. Old Store callbacks retain
         // the old coordinator and cannot alter eligibility of the reconstructed generation.
         *self.suspension.lock().unwrap() = super::suspension::OwnerSuspension::new();
@@ -276,18 +326,61 @@ impl OwnerExecution {
     }
 
     pub(crate) async fn replay(&self) -> Result<ReplayState, WorkerExecutorError> {
-        self.replay.read().await.clone().ok_or_else(|| {
-            WorkerExecutorError::runtime(format!(
-                "Owner execution for {} has no active replay generation",
-                self.owner_id
-            ))
-        })
+        self.generation
+            .read()
+            .await
+            .as_ref()
+            .map(|generation| generation.replay.clone())
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Owner execution for {} has no active replay generation",
+                    self.owner_id
+                ))
+            })
+    }
+
+    pub(crate) async fn wallet(&self) -> Result<Arc<OwnerWallet>, WorkerExecutorError> {
+        self.generation
+            .read()
+            .await
+            .as_ref()
+            .map(|generation| generation.wallet.clone())
+            .ok_or_else(|| WorkerExecutorError::runtime("owner wallet generation is not installed"))
+    }
+
+    pub(crate) async fn replay_and_wallet(
+        &self,
+    ) -> Result<(ReplayState, Arc<OwnerWallet>), WorkerExecutorError> {
+        self.generation
+            .read()
+            .await
+            .as_ref()
+            .map(|generation| (generation.replay.clone(), generation.wallet.clone()))
+            .ok_or_else(|| WorkerExecutorError::runtime("owner replay generation is not installed"))
     }
 
     #[cfg(feature = "test-utils")]
     #[doc(hidden)]
     pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
         Ok(self.replay().await?.is_live_published())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_pending_card_derivation(
+        &self,
+        card_id: golem_common::model::card::CardId,
+    ) -> Result<
+        (
+            OplogIndex,
+            OplogIndex,
+            Option<(golem_common::model::card::StoredCard, u64)>,
+        ),
+        WorkerExecutorError,
+    > {
+        let (replay, wallet) = self.replay_and_wallet().await?;
+        let pending = replay.pending_card_derivation(card_id).await;
+        Ok((wallet.horizon, replay.last_replayed_index(), pending))
     }
 
     #[cfg(feature = "test-utils")]
@@ -736,6 +829,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     .clone()
                     .expect("Entity instance host must pin its owner component metadata"),
                 authority_wallet,
+                scope.map(|scope| scope.invocation_id().start_index()),
             )
             .await?;
         if let Some(scope) = scope {

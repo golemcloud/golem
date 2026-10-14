@@ -86,6 +86,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use wasmtime::component::Instance;
 use wasmtime::{Store, StoreMemory};
@@ -204,6 +205,577 @@ pub(crate) async fn owner_component_metadata(
         .get_metadata(component_id, Some(component_revision))
         .await
         .map(Arc::new)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WalletChange {
+    Restriction,
+    Grant,
+    Transfer,
+    SiblingScope,
+}
+
+/// Reads an undeclared optional key: success is exactly None, not a resolver error mistaken for
+/// a denial. Both keys use the real config host authorization boundary.
+async fn authority_config_read(
+    ctx: &mut golem_worker_executor::durable_host::DurableWorkerCtx<TestWorkerCtx>,
+    key: &str,
+) -> Result<bool, WorkerExecutorError> {
+    let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::option(
+        SchemaType::s32(),
+    )))
+    .map_err(anyhow::Error::from)?;
+    match AgentHost::get_config_value(ctx, vec![key.to_string()], expected).await? {
+        Ok(value) => {
+            assert_eq!(
+                decode_value(&value).unwrap(),
+                SchemaValue::Option { inner: None }
+            );
+            Ok(true)
+        }
+        Err(
+            golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied,
+        ) => Ok(false),
+    }
+}
+
+async fn observed_wallet(store: &mut Store<TestWorkerCtx>) -> anyhow::Result<(Vec<CardId>, u64)> {
+    use golem_worker_executor::preview2::golem::permissions::{types, wallet};
+    let ctx = store.data_mut().durable_ctx_mut();
+    let mut ids = Vec::new();
+    for handle in wallet::Host::self_wallet(ctx).await? {
+        let id =
+            types::Host::id(ctx, wasmtime::component::Resource::new_borrow(handle.rep())).await?;
+        ids.push(CardId(golem_schema::model::CardId::from(id).uuid));
+        golem_schema::schema::wit::PermissionCardResolver::drop_permission_card_handle(ctx, handle);
+    }
+    Ok((ids, wallet::Host::self_version(ctx).await?.generation))
+}
+
+async fn cross_store_wallet_change(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    component: &PrecompiledComponent,
+    change: WalletChange,
+    cancel_consumer: bool,
+) -> anyhow::Result<()> {
+    use golem_common::model::card::{
+        Card, PolymorphicPermissionPattern, ScopeCard, parse_permission_fields,
+        parse_polymorphic_permission,
+    };
+    use golem_worker_executor::preview2::golem::permissions::{types, wallet};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            // Only delivery is stubbed. Source authorization, membership removal, durable intent,
+            // confirmation, and the sibling's later authorization use the production paths.
+            wrap_worker_proxy: Some(Arc::new(crate::api::accepting_card_transfer_proxy)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .update_agent_provision_config("RpcCounter", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Config(_)));
+            grants
+                .push(parse_polymorphic_permission("config(?agent) @ * : read : control").unwrap());
+            if matches!(
+                change,
+                WalletChange::Restriction | WalletChange::SiblingScope
+            ) {
+                grants.push(
+                    parse_polymorphic_permission("config(?agent) @ * : read : target").unwrap(),
+                );
+            }
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("RpcCounter", format!("cross-store-{change:?}"));
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
+        .await?;
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active = executor.active_agent(&owner_id).await.unwrap();
+    let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
+    let grant = parse_permission_fields("config", "*/*/*/*/*", "*", "read", "target").unwrap();
+    let card = StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: Vec::new(),
+        lower_positive: if matches!(change, WalletChange::Grant | WalletChange::Transfer) {
+            vec![grant.clone()]
+        } else {
+            Vec::new()
+        },
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: if matches!(change, WalletChange::Restriction) {
+            vec![grant.clone()]
+        } else {
+            Vec::new()
+        },
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    });
+    TestCardService
+        .create_runtime_card(
+            card.clone(),
+            CardManagedByRuntimeDerived {
+                environment_id: context.default_environment_id,
+                agent_id: worker_id.clone(),
+                invocation_key: IdempotencyKey::fresh(),
+                oplog_index: OplogIndex::INITIAL,
+            },
+        )
+        .await?;
+    if matches!(change, WalletChange::Transfer) {
+        executor
+            .queue_card_install(&worker_id, card.clone())
+            .await?;
+    }
+    // Read the wallet before either entity starts. Never ask the primary to serve a wallet
+    // query while an entity is executing.
+    let wallet = active.primary().get_wallet_cards().await?;
+    let root = CardId::new();
+    let inherited = matches!(change, WalletChange::SiblingScope).then(|| ScopeCard {
+        scope_card_id: CardId::new(),
+        root_card_ids: vec![root],
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: vec![grant],
+    });
+    let parent_start = active
+        .execution()
+        .oplog()
+        .current_oplog_index()
+        .await
+        .next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+    let parent = active
+        .execution()
+        .lane()
+        .enter_primary(parent_start)?
+        .acquire()
+        .await?;
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: worker_id.clone(),
+    });
+    let entity =
+        AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("wallet-observer").unwrap());
+    let activation = Arc::new(middleware_activation(
+        ExecutableTarget::new(component.id, component.revision),
+        ToolMiddlewareName::try_from("wallet-observer").unwrap(),
+    ));
+    let observer_scope = invocation_scope(
+        &owner_id,
+        &entity,
+        parent_start.next(),
+        parent_start,
+        activation.clone(),
+        principal.clone(),
+    )
+    .with_authority_wallet(wallet.clone())
+    .with_invocation_scope_card(inherited);
+    let changed_card_id = card.card_id();
+    let (primed, primed_rx) = tokio::sync::oneshot::channel();
+    let (observe, observe_rx) = tokio::sync::oneshot::channel();
+    let observer = active.start_entity_invocation(
+        parent_id.clone(),
+        observer_scope,
+        metadata.clone(),
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let (before_ids, before_generation) = observed_wallet(store).await?;
+                assert_eq!(
+                    before_ids.contains(&changed_card_id),
+                    matches!(change, WalletChange::Transfer)
+                );
+                let before =
+                    authority_config_read(store.data_mut().durable_ctx_mut(), "target").await?;
+                assert_eq!(
+                    before,
+                    matches!(change, WalletChange::Restriction | WalletChange::Transfer)
+                );
+                assert!(
+                    authority_config_read(store.data_mut().durable_ctx_mut(), "control").await?,
+                    "the independent grant must allow"
+                );
+                primed.send(()).unwrap();
+                observe_rx.await.unwrap();
+                // This is the same Store, after the other Store has consumed the change completely.
+                let after =
+                    authority_config_read(store.data_mut().durable_ctx_mut(), "target").await?;
+                let control =
+                    authority_config_read(store.data_mut().durable_ctx_mut(), "control").await?;
+                let (after_ids, after_generation) = observed_wallet(store).await?;
+                assert_eq!(
+                    after_ids.contains(&changed_card_id),
+                    !matches!(change, WalletChange::Transfer)
+                );
+                assert_eq!(after_generation, before_generation + 1);
+                Ok((after, control))
+            })
+        },
+        std::future::ready,
+    )?;
+    primed_rx.await?;
+    let tracked_before = executor.active_agents().tracked_card_ids().await;
+    if matches!(change, WalletChange::SiblingScope) {
+        assert!(
+            tracked_before.contains(&root),
+            "the active observer's root must first be registered"
+        );
+    }
+    if matches!(
+        change,
+        WalletChange::Restriction | WalletChange::Grant | WalletChange::SiblingScope
+    ) {
+        executor
+            .queue_card_install(&worker_id, card.clone())
+            .await?;
+    }
+    let consumer_scope = invocation_scope(
+        &owner_id,
+        &entity,
+        parent_start.next().next(),
+        parent_start,
+        activation,
+        principal,
+    )
+    .with_authority_wallet(wallet);
+    let transfer_target = agent_id!("RpcCounter", "card-recipient").to_string();
+    let card_id = card.card_id();
+    let commit_gate = cancel_consumer.then(|| executor.gate_next_wallet_install_commit(&worker_id));
+    let consumer = active.start_entity_invocation(
+        parent_id.clone(),
+        consumer_scope,
+        metadata,
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let ctx = store.data_mut().durable_ctx_mut();
+                if matches!(change, WalletChange::Transfer) {
+                    let mut source = None;
+                    for handle in wallet::Host::self_wallet(ctx).await? {
+                        let id = types::Host::id(
+                            ctx,
+                            wasmtime::component::Resource::new_borrow(handle.rep()),
+                        )
+                        .await?;
+                        if golem_schema::model::CardId::from(id).uuid == card_id.0 {
+                            source = Some(handle);
+                        }
+                    }
+                    let result = wallet::Host::install_card(
+                        ctx,
+                        source.expect("source is in the wallet"),
+                        types::Holder::Agent(
+                            golem_worker_executor::preview2::golem::agent::common::AgentId {
+                                component_id: component.id.into(),
+                                agent_id: transfer_target,
+                            },
+                        ),
+                    )
+                    .await?;
+                    assert!(result.is_ok(), "source transfer must complete: {result:?}");
+                } else {
+                    wallet::Host::self_version(ctx).await?;
+                }
+                // A positive control in the consumer also proves it reached the new surface.
+                assert!(
+                    authority_config_read(store.data_mut().durable_ctx_mut(), "control").await?
+                );
+                let expected = matches!(change, WalletChange::Grant | WalletChange::SiblingScope);
+                assert_eq!(
+                    authority_config_read(store.data_mut().durable_ctx_mut(), "target").await?,
+                    expected,
+                    "the consumer must observe its own completed change"
+                );
+                Ok(())
+            })
+        },
+        std::future::ready,
+    )?;
+    if let Some((committed, release)) = commit_gate {
+        committed.await?;
+        consumer.abort_handle().abort();
+        assert!(
+            consumer.await_result(&parent_id).await.is_err(),
+            "the producer must not return successfully"
+        );
+        release.send(()).unwrap();
+    } else {
+        consumer.await_result(&parent_id).await?;
+    }
+    let oplog = active.execution().oplog();
+    let tip = oplog.current_oplog_index().await;
+    let entries = oplog.read_exact(OplogIndex::INITIAL, u64::from(tip)).await;
+    if matches!(change, WalletChange::Transfer) {
+        assert!(
+            entries.values().any(|entry| matches!(entry,
+            OplogEntry::CardTransferStarted { card_id: id, .. } if *id == card_id)),
+            "source membership removal must have a durable transfer intent"
+        );
+        assert!(
+            entries.values().any(|entry| matches!(entry,
+            OplogEntry::CardTransferConfirmed { source_card_id, .. } if *source_card_id == card_id)),
+            "the source transfer must be confirmed before the observer resumes"
+        );
+    } else {
+        assert!(
+            entries.values().any(|entry| matches!(entry,
+            OplogEntry::CardInstalled { card, .. } if card.card_id() == card_id)),
+            "the consumer must record installation before the observer resumes"
+        );
+    }
+    let tracked_after = executor.active_agents().tracked_card_ids().await;
+    if matches!(change, WalletChange::SiblingScope) {
+        // Use the real owner-interest router, not a direct queue call that bypasses the bug.
+        executor.active_agents().notify_revoked_cards(&[root]).await;
+    }
+    observe.send(()).unwrap();
+    let (after, control) = observer.await_result(&parent_id).await?;
+    drop(parent);
+    assert!(
+        control,
+        "an unrelated config grant must survive every change"
+    );
+    if matches!(change, WalletChange::SiblingScope) {
+        assert!(
+            tracked_after.contains(&root),
+            "a sibling refresh erased an active restrictive scope root; after routed revocation target allowed={after}"
+        );
+    }
+    assert_eq!(
+        after,
+        matches!(change, WalletChange::Grant | WalletChange::SiblingScope),
+        "the existing observer Store must authorize from the changed owner authority ({change:?})"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn gol838_upper_negative_install_reaches_existing_entity_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    cross_store_wallet_change(
+        last_unique_id,
+        deps,
+        component,
+        WalletChange::Restriction,
+        false,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn gol838_lower_grant_install_reaches_existing_entity_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    cross_store_wallet_change(last_unique_id, deps, component, WalletChange::Grant, false).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn gol838_concrete_source_transfer_removes_existing_entity_grant(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    cross_store_wallet_change(
+        last_unique_id,
+        deps,
+        component,
+        WalletChange::Transfer,
+        false,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn gol838_sibling_refresh_preserves_active_scope_revocation_routing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    cross_store_wallet_change(
+        last_unique_id,
+        deps,
+        component,
+        WalletChange::SiblingScope,
+        false,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn gol838_committed_grant_survives_producer_cancellation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    cross_store_wallet_change(last_unique_id, deps, component, WalletChange::Grant, true).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use golem_worker_executor::durable_host::TestReplayEvent;
+
+    // The primary bootstrap context tests preparation ownership, not guest reconstruction.
+    for (fail_fetch, refuse_admission) in [(false, false), (true, false), (false, true)] {
+        let context = TestContext::new(last_unique_id);
+        let outage = Arc::new(crate::hot_update::Outage::default());
+        let wrapped_outage = outage.clone();
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                wrap_component_service: Some(Arc::new(move |inner| {
+                    Arc::new(crate::hot_update::FlakyComponentService {
+                        inner,
+                        outage: wrapped_outage.clone(),
+                    })
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let agent = agent_id!("RpcCounter", "replay-preparation-help");
+        let worker_id = golem_common::model::AgentId {
+            component_id: component.id,
+            agent_id: agent.to_string(),
+        };
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (updated, updated_rx) = tokio::sync::oneshot::channel();
+        let checked = executor.probe_next_primary_context(
+            &worker_id,
+            move |ctx| Box::pin(async move {
+                ctx.process_pending_replay_events().await?;
+                let _ = entered.send(());
+                let (first_target, target): (golem_common::model::component::ComponentDto,
+                    golem_common::model::component::ComponentDto) = updated_rx.await
+                    .map_err(|_| WorkerExecutorError::runtime("test update sender dropped"))?;
+                let agent_type = ctx.parsed_agent_id().unwrap().agent_type;
+                let expected_changed = ctx.component_metadata()
+                    .metadata.agent_type_initial_permission_card(&agent_type)
+                    != target.metadata.agent_type_initial_permission_card(&agent_type);
+                let (_, historical_before, canonical_before, _) = ctx.test_replay_application_state();
+                let fetches_before = outage.metadata_fetches().len();
+                if refuse_admission {
+                    ctx.test_refuse_next_metadata_admission();
+                    let result = ctx.test_stage_replay_applications(vec![
+                        TestReplayEvent::UpdateReplayed { new_revision: first_target.revision },
+                        TestReplayEvent::UpdateReplayed { new_revision: target.revision },
+                    ]);
+                    assert!(matches!(result, Err(WorkerExecutorError::Interrupted { kind: InterruptKind::Jump })));
+                    let (applications, historical, canonical, current) = ctx.test_replay_application_state();
+                    assert!(applications.is_empty(), "a refused application must not be published");
+                    assert!(!current, "the transferred suffix requires reconstruction");
+                    assert_eq!(historical, historical_before);
+                    assert_eq!(canonical, canonical_before);
+                    assert_eq!(outage.metadata_fetches().len(), fetches_before, "refusal must not poll either preparation");
+                    return result;
+                } else {
+                    let (entered, release) = outage.gate_metadata(first_target.revision);
+                    ctx.test_stage_replay_applications(vec![
+                        TestReplayEvent::UpdateReplayed { new_revision: first_target.revision },
+                        TestReplayEvent::UpdateReplayed { new_revision: target.revision },
+                    ])?;
+                    {
+                        let helping = ctx.process_pending_replay_events();
+                        tokio::pin!(helping);
+                        tokio::select! {
+                            result = &mut helping => panic!("preparation escaped the metadata gate: {result:?}"),
+                            result = entered => result.unwrap(),
+                        }
+                    }
+                    let (applications, historical, canonical, _) = ctx.test_replay_application_state();
+                    assert_eq!(applications.len(), 2);
+                    assert_eq!(historical, historical_before, "dropping the helper must retain the unapplied prefix");
+                    assert_eq!(canonical, canonical_before);
+                    assert_eq!(&outage.metadata_fetches()[fetches_before..], &[first_target.revision],
+                        "the later preparation must not overtake the held predecessor");
+                    if fail_fetch {
+                        outage.begin(first_target.revision);
+                    }
+                    release.send(()).unwrap();
+                    let decision = authority_config_read(ctx, "control").await;
+                    if fail_fetch {
+                        assert!(decision.is_err(), "a new config decision must not escape a failed prefix");
+                        assert!(!ctx.test_replay_application_state().3);
+                        assert!(!outage.metadata_fetches()[fetches_before..].contains(&target.revision),
+                            "dependent preparation must not run past a failed predecessor");
+                        return decision.map(|_| ());
+                    } else {
+                        assert!(decision?);
+                        let (applications, historical, canonical, current) = ctx.test_replay_application_state();
+                        assert!(applications.is_empty());
+                        assert_eq!(historical, historical_before + u64::from(expected_changed));
+                        assert_eq!(canonical, canonical_before, "historical application must not overwrite the live wallet");
+                        assert!(current);
+                        assert_eq!(ctx.component_metadata().revision, target.revision);
+                        assert_eq!(&outage.metadata_fetches()[fetches_before..],
+                            &[first_target.revision, target.revision]);
+                    }
+                }
+                Ok(())
+            }),
+        );
+        let startup_executor = executor.clone();
+        let startup =
+            tokio::spawn(async move { startup_executor.start_agent(&component.id, agent).await });
+        tokio::time::timeout(Duration::from_secs(10), entered_rx).await??;
+        let first_target = executor
+            .update_component(&worker_id.component_id, &fixture.wasm_name)
+            .await?;
+        let target = executor
+            .update_component(&worker_id.component_id, &fixture.wasm_name)
+            .await?;
+        updated
+            .send((first_target, target))
+            .map_err(|_| anyhow::anyhow!("primary probe dropped"))?;
+        let result = tokio::time::timeout(Duration::from_secs(20), checked).await??;
+        if fail_fetch || refuse_admission {
+            assert!(
+                result.is_err(),
+                "poisoned bootstrap must propagate its failure"
+            );
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            startup.abort();
+            let _ = startup.await;
+        } else {
+            result?;
+            tokio::time::timeout(Duration::from_secs(10), startup).await???;
+        }
+    }
+    Ok(())
 }
 
 async fn initialize_entity(
@@ -3345,7 +3917,22 @@ async fn entity_agent_config_uses_owner_component_declarations(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let outage = Arc::new(crate::hot_update::Outage::default());
+    let wrapped_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(crate::hot_update::FlakyComponentService {
+                    inner,
+                    outage: wrapped_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     // Keep the declaring owner and the executable tool in separate components so consulting the
     // wrong component metadata cannot accidentally produce the expected value.
     let owner_component = executor
@@ -3377,6 +3964,10 @@ async fn entity_agent_config_uses_owner_component_declarations(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
+    let lower_entity_component = entity_component.clone();
+    let entity_component = executor
+        .update_component(&entity_component.id, &host_api_tests.wasm_name)
+        .await?;
     let entity_component = executor
         .update_component(&entity_component.id, &host_api_tests.wasm_name)
         .await?;
@@ -3405,12 +3996,17 @@ async fn entity_agent_config_uses_owner_component_declarations(
     let owner_metadata =
         owner_component_metadata(&active_agent, owner_component.id, owner_component.revision)
             .await?;
+    let owner_update = executor
+        .update_component(&owner_component.id, &agent_sdk_rust.wasm_name)
+        .await?;
+    assert!(lower_entity_component.revision < owner_update.revision);
+    assert!(entity_component.revision > owner_update.revision);
+    let target_revision = owner_update.revision;
     let tool_name = ToolName::try_from("owner-config-reader").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
     let expected_owner_component_id = owner_component.id;
     let expected_owner_component_revision = owner_component.revision;
     let expected_entity_component_id = entity_component.id;
-    let expected_entity_component_revision = entity_component.revision;
     let foo_path = CanonicalAgentConfigPath(vec!["foo".to_string()]);
     let cases = [
         (ConfigKeyScope::All, "foo", SchemaType::s32(), true),
@@ -3433,20 +4029,23 @@ async fn entity_agent_config_uses_owner_component_declarations(
             false,
         ),
     ];
-    for (scope, key, expected_type, allowed) in cases {
-        let activation = Arc::new(activation_with_config_policy(
-            ExecutableTarget::new(entity_component.id, entity_component.revision),
-            "test:owner-config-reader",
-            agent_id.agent_type.clone(),
-            tool_name.clone(),
-            context.account_id,
-            scope,
-        ));
-        let expected = encode_graph(&SchemaGraph::anonymous(expected_type))?;
-        let key = key.to_string();
-        // The executable deliberately has no LocalConfigAgent declaration. These lookups prove
-        // both declaration ownership and binding-policy narrowing against creation overrides.
-        run_synchronous_entity_invocation(
+    for entity_component in [lower_entity_component, entity_component] {
+        let expected_entity_component_revision = entity_component.revision;
+        for (scope, key, expected_type, allowed) in cases.clone() {
+            let outage = outage.clone();
+            let activation = Arc::new(activation_with_config_policy(
+                ExecutableTarget::new(entity_component.id, entity_component.revision),
+                "test:owner-config-reader",
+                agent_id.agent_type.clone(),
+                tool_name.clone(),
+                context.account_id,
+                scope,
+            ));
+            let expected = encode_graph(&SchemaGraph::anonymous(expected_type))?;
+            let key = key.to_string();
+            // The executable deliberately has no LocalConfigAgent declaration. These lookups prove
+            // both declaration ownership and binding-policy narrowing against creation overrides.
+            run_synchronous_entity_invocation(
             &active_agent,
             owner_metadata.clone(),
             &owner_id,
@@ -3454,6 +4053,17 @@ async fn entity_agent_config_uses_owner_component_declarations(
             activation,
             move |_instance, store, _principal| {
                 Box::pin(async move {
+                    let ctx = store.data_mut().durable_ctx_mut();
+                    let scope_before = ctx.entity_invocation_scope().unwrap().clone();
+                    let (_, historical_before, canonical_before, _) = ctx.test_replay_application_state();
+                    let fetches_before = outage.metadata_fetches();
+                    ctx.test_stage_replay_applications(vec![
+                        golem_worker_executor::durable_host::TestReplayEvent::UpdateReplayed {
+                            new_revision: target_revision,
+                        },
+                    ])?;
+                    ctx.process_pending_replay_events().await?;
+                    assert!(ctx.test_replay_application_state().0.is_empty(), "Entity must not prepare an owner revision update");
                     assert_eq!(
                         store.data().component_metadata().id,
                         expected_entity_component_id
@@ -3498,11 +4108,19 @@ async fn entity_agent_config_uses_owner_component_declarations(
                     )
                     .await?;
                     assert!(agent_type.is_some());
+                    let ctx = store.data().durable_ctx();
+                    assert_eq!(ctx.entity_invocation_scope().unwrap(), &scope_before,
+                        "activation and recorded authority wallet must remain pinned");
+                    let (_, historical, canonical, _) = ctx.test_replay_application_state();
+                    assert_eq!((historical, canonical), (historical_before, canonical_before));
+                    assert_eq!(outage.metadata_fetches(), fetches_before,
+                        "Entity must not fetch update metadata or start initial-file preparation");
                     Ok(())
                 })
             },
         )
         .await?;
+        }
     }
     Ok(())
 }

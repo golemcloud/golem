@@ -195,12 +195,14 @@ async fn test_replay_state(
     skipped_regions: DeletedRegions,
     initial_snapshot_skip_end: Option<OplogIndex>,
 ) -> Result<ReplayState, WorkerExecutorError> {
+    let horizon = oplog.current_oplog_index().await;
     ReplayState::new_for_owner(
         owned_agent_id,
         oplog,
         skipped_regions,
         initial_snapshot_skip_end,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        horizon,
     )
     .await
 }
@@ -1294,10 +1296,39 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
         transition.await.unwrap().unwrap(),
         ReplayToLiveOutcome::Live { .. }
     ));
+    assert!(
+        replay.take_new_replay_events_for(false).is_empty(),
+        "an entity must leave the owner's finalization marker for the primary Store"
+    );
     assert_eq!(
         replay.take_new_replay_events(),
         vec![ReplayEvent::ReplayFinished]
     );
+}
+
+#[test]
+async fn historical_revision_updates_remain_for_root_after_entity_drain() {
+    let replay = replay_state_over(vec![noop(), noop()]).await;
+    assert!(replay.is_replay());
+    assert!(!replay.is_live_published());
+    let update = ReplayEvent::UpdateReplayed {
+        new_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
+    };
+    let fork = ReplayEvent::ForkReplayed {
+        new_phantom_id: uuid::Uuid::new_v4(),
+    };
+    replay
+        .cursor
+        .pending_replay_events
+        .lock()
+        .unwrap()
+        .extend([update.clone(), fork.clone()]);
+
+    assert_eq!(replay.take_new_replay_events_for(false), vec![fork]);
+    assert!(replay.take_new_replay_events_for(false).is_empty());
+    assert_eq!(replay.take_new_replay_events_for(true), vec![update]);
+    assert!(replay.take_new_replay_events_for(true).is_empty());
+    assert!(replay.is_replay());
 }
 
 #[test]
@@ -1514,12 +1545,14 @@ async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await.unwrap();
     let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+    let horizon = oplog.current_oplog_index().await;
     let replay = ReplayState::new_for_owner(
         test_agent_id(),
         oplog,
         DeletedRegions::default(),
         None,
         owner_operations.clone(),
+        horizon,
     )
     .await
     .expect("failed to build replay state");
@@ -1543,12 +1576,14 @@ async fn owner_lifecycle_change_during_reconstruction_remains_an_interrupt() {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await.unwrap();
     let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+    let horizon = oplog.current_oplog_index().await;
     let replay = ReplayState::new_for_owner(
         test_agent_id(),
         oplog,
         DeletedRegions::default(),
         None,
         owner_operations.clone(),
+        horizon,
     )
     .await
     .expect("failed to build replay state");
@@ -1667,13 +1702,68 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
     assert_eq!(
         replay_state.take_new_replay_events(),
         vec![
-            ReplayEvent::InvocationWalletPinned { wallet_pin },
+            ReplayEvent::InvocationWalletPinned {
+                oplog_index: OplogIndex::from_u64(2),
+                wallet_pin,
+            },
             ReplayEvent::CardDerived {
                 card: derived_card,
                 wallet_generation: 0,
             },
         ]
     );
+}
+
+#[test]
+async fn selected_snapshot_leaves_only_post_snapshot_invocation_pin_for_root() {
+    let pin = InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: [3; 32],
+            generation: 7,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
+    };
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        invocation_started(pin.clone()),
+        OplogEntry::Snapshot {
+            timestamp: Timestamp::now_utc(),
+            data: OplogPayload::Inline(Box::new(Vec::new())),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 7,
+            filesystem_snapshot: None,
+        },
+        invocation_started(pin.clone()),
+        start_now(),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let replay = test_replay_state(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]),
+        Some(OplogIndex::from_u64(3)),
+    )
+    .await
+    .unwrap();
+    let invocation = replay
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(invocation.wallet_pin, pin);
+    assert!(replay.take_new_replay_events_for(false).is_empty());
+    assert_eq!(
+        replay.take_new_replay_events_for(true),
+        vec![ReplayEvent::InvocationWalletPinned {
+            oplog_index: OplogIndex::from_u64(4),
+            wallet_pin: pin,
+        }]
+    );
+    assert!(replay.take_new_replay_events_for(true).is_empty());
 }
 
 #[test]
@@ -9458,4 +9548,502 @@ fn scope_claim_requires_the_recorded_invocation_id() {
     assert!(!claim(Some(1)).matches_start_identity(&scope_start(Some(2))));
     assert!(!claim(Some(1)).matches_start_identity(&scope_start(None)));
     assert!(!claim(None).matches_start_identity(&scope_start(Some(1))));
+}
+
+struct WalletComponentService {
+    metadata: golem_service_base::model::component::Component,
+    revisions: std::sync::Mutex<Vec<golem_common::model::component::ComponentRevision>>,
+}
+
+#[async_trait]
+impl crate::services::component::ComponentService for WalletComponentService {
+    async fn get(
+        &self,
+        _engine: &wasmtime::Engine,
+        _component_id: ComponentId,
+        _component_revision: golem_common::model::component::ComponentRevision,
+    ) -> Result<
+        (
+            wasmtime::component::Component,
+            golem_service_base::model::component::Component,
+        ),
+        WorkerExecutorError,
+    > {
+        unreachable!("wallet folding loads metadata, not a guest component")
+    }
+
+    async fn get_metadata(
+        &self,
+        component_id: ComponentId,
+        forced_revision: Option<golem_common::model::component::ComponentRevision>,
+    ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+        assert_eq!(component_id, self.metadata.id);
+        let revision = forced_revision.expect("wallet folding must load the exact revision");
+        self.revisions.lock().unwrap().push(revision);
+        let mut metadata = self.metadata.clone();
+        metadata.revision = revision;
+        Ok(metadata)
+    }
+
+    async fn resolve_component(
+        &self,
+        _component_reference: String,
+        _resolving_environment: EnvironmentId,
+        _resolving_application: golem_common::model::application::ApplicationId,
+        _resolving_account: golem_common::model::account::AccountId,
+    ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        unreachable!("wallet folding does not resolve a component name")
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::component::Component> {
+        Vec::new()
+    }
+
+    async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+}
+
+fn wallet_test_component(
+    component_id: ComponentId,
+    environment_id: EnvironmentId,
+) -> golem_service_base::model::component::Component {
+    golem_service_base::model::component::Component {
+        id: component_id,
+        revision: golem_common::model::component::ComponentRevision::INITIAL,
+        environment_id,
+        component_name: golem_common::model::component::ComponentName(
+            "wallet-prefixes".to_string(),
+        ),
+        hash: golem_common::model::diff::Hash::empty(),
+        application_id: golem_common::model::application::ApplicationId::new(),
+        account_id: golem_common::model::account::AccountId::new(),
+        account_email: golem_common::model::account::AccountEmail::new("test@golem"),
+        application_name: golem_common::model::application::ApplicationName::try_from(
+            "test-app".to_string(),
+        )
+        .unwrap(),
+        environment_name: golem_common::model::environment::EnvironmentName::try_from("test-env")
+            .unwrap(),
+        component_size: 1,
+        metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
+        created_at: chrono::Utc::now(),
+        wasm_hash: golem_common::model::diff::Hash::empty(),
+        object_store_key: "wallet-prefixes".to_string(),
+    }
+}
+
+#[test]
+async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_state() {
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+    use golem_common::model::component::ComponentRevision;
+
+    let component_id = ComponentId::new();
+    let environment_id = EnvironmentId::new();
+    let owner = OwnedAgentId::new(
+        environment_id,
+        &AgentId {
+            component_id,
+            agent_id: "wallet-prefixes".to_string(),
+        },
+    );
+    let metadata = wallet_test_component(component_id, environment_id);
+    let components = Arc::new(WalletComponentService {
+        metadata: metadata.clone(),
+        revisions: std::sync::Mutex::new(Vec::new()),
+    });
+    let oplog = Arc::new(InMemoryOplog::new());
+    let installed = stored_test_card(CardId::new());
+    let derived = stored_test_card(CardId::new());
+    let later = stored_test_card(CardId::new());
+    for entry in [
+        noop(),
+        OplogEntry::card_installed(None, None, Box::new(installed.clone()), 1),
+        start_now(),
+        OplogEntry::card_expired(None, installed.card_id(), 2),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            card: Box::new(derived.clone()),
+            wallet_generation: 2,
+        },
+        OplogEntry::successful_update(
+            ComponentRevision::new(1).unwrap(),
+            1,
+            None,
+            Default::default(),
+            None,
+        ),
+        OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            1,
+            None,
+            Default::default(),
+            None,
+        ),
+        start_now(),
+        OplogEntry::card_installed(None, None, Box::new(later.clone()), 3),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let baseline = WalletBaseline::new(
+        owner,
+        ResolvedOwnerContext::ComponentWorker,
+        components.clone(),
+        &metadata,
+        oplog.as_ref(),
+        None,
+    )
+    .await
+    .unwrap();
+    let wallet = OwnerWallet::new(
+        baseline,
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=6)]),
+        OplogIndex::from_u64(8),
+        oplog.as_ref(),
+        Arc::new(RuntimeAppendTasks::default()),
+        Arc::new(tokio::sync::Mutex::new(())),
+    )
+    .await
+    .unwrap();
+    let canonical = wallet.snapshot();
+    assert_eq!(canonical.generation, 2);
+    assert!(!canonical.cards.contains_key(&installed.card_id()));
+    assert!(!canonical.cards.contains_key(&derived.card_id()));
+    assert!(!canonical.cards.contains_key(&later.card_id()));
+    assert_eq!(
+        canonical.metadata.revision,
+        ComponentRevision::new(2).unwrap()
+    );
+    assert_eq!(
+        *components.revisions.lock().unwrap(),
+        [ComponentRevision::new(2).unwrap()]
+    );
+    assert!(
+        !oplog
+            .reads
+            .lock()
+            .unwrap()
+            .contains(&OplogIndex::from_u64(9))
+    );
+
+    let later_prefix = wallet
+        .historical_before(oplog.as_ref(), OplogIndex::from_u64(8))
+        .await
+        .unwrap();
+    let earlier_prefix = wallet
+        .historical_before(oplog.as_ref(), OplogIndex::from_u64(3))
+        .await
+        .unwrap();
+    assert_eq!(later_prefix.generation, 2);
+    assert!(!later_prefix.cards.contains_key(&installed.card_id()));
+    assert_eq!(earlier_prefix.generation, 1);
+    assert_eq!(earlier_prefix.cards[&installed.card_id()], installed);
+    assert_eq!(earlier_prefix.metadata.revision, ComponentRevision::INITIAL);
+    assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
+    assert!(
+        wallet
+            .historical_before(oplog.as_ref(), OplogIndex::from_u64(9))
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_order_and_event_drain()
+{
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+    let owner_id = OwnedAgentId::new(
+        metadata.environment_id,
+        &AgentId {
+            component_id: metadata.id,
+            agent_id: "audit-prefixes".to_string(),
+        },
+    );
+    let installed = stored_test_card(CardId::new());
+    let first = stored_test_card(CardId::new());
+    let second = stored_test_card(CardId::new());
+    let audit = |card: &StoredCard| OplogEntry::CardDerived {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        card: Box::new(card.clone()),
+        wallet_generation: 1,
+    };
+    let mut entries = vec![noop(); 22];
+    entries[10] = start_now();
+    entries[11] = OplogEntry::card_installed(None, None, Box::new(installed.clone()), 1);
+    entries[12] = end_for(11, 42);
+    entries[13] = audit(&first);
+    entries[16] = start_now();
+    entries[18] = end_for(17, 43);
+    entries[19] = audit(&second);
+    entries[20] = OplogEntry::card_expired(None, installed.card_id(), 2);
+    let replay = replay_state_over(entries.clone()).await;
+    replay
+        .cursor
+        .pending_replay_events
+        .lock()
+        .unwrap()
+        .push(ReplayEvent::CardDerived {
+            card: first.clone(),
+            wallet_generation: 1,
+        });
+    replay.take_new_replay_events();
+    assert_eq!(replay.pending_card_derivation(first.card_id()).await, None);
+
+    let oplog = InMemoryOplog::new();
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    let baseline = WalletBaseline::new(
+        owner_id,
+        ResolvedOwnerContext::ComponentWorker,
+        Arc::new(WalletComponentService {
+            metadata: metadata.clone(),
+            revisions: Default::default(),
+        }),
+        &metadata,
+        &oplog,
+        None,
+    )
+    .await
+    .unwrap();
+    let wallet = OwnerWallet::new(
+        baseline,
+        DeletedRegions::default(),
+        OplogIndex::from_u64(22),
+        &oplog,
+        Arc::new(RuntimeAppendTasks::default()),
+        Arc::new(tokio::sync::Mutex::new(())),
+    )
+    .await
+    .unwrap();
+    let canonical = wallet.snapshot();
+    assert_eq!(canonical.generation, 2);
+    for (start, card) in [(17, &second), (11, &first)] {
+        assert!(
+            wallet
+                .recorded_derivation(&oplog, OplogIndex::from_u64(start), None, card)
+                .await
+                .unwrap()
+        );
+        assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
+    }
+
+    let original = oplog.entries.lock().unwrap()[13].clone();
+    for conflict in 0..4 {
+        {
+            let mut entries = oplog.entries.lock().unwrap();
+            entries[13] = original.clone();
+            entries[14] = noop();
+            match conflict {
+                0 => entries[14] = original.clone(),
+                1 => {
+                    if let OplogEntry::CardDerived {
+                        entity_parent_start_index,
+                        ..
+                    } = &mut entries[13]
+                    {
+                        *entity_parent_start_index = Some(OplogIndex::from_u64(3));
+                    }
+                }
+                2 => {
+                    if let OplogEntry::CardDerived { card, .. } = &mut entries[13] {
+                        if let StoredCard::Concrete(card) = card.as_mut() {
+                            card.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
+                        } else {
+                            panic!("test card must be concrete");
+                        }
+                    }
+                }
+                3 => {
+                    if let OplogEntry::CardDerived {
+                        wallet_generation, ..
+                    } = &mut entries[13]
+                    {
+                        *wallet_generation = 0;
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert!(
+            wallet
+                .recorded_derivation(&oplog, OplogIndex::from_u64(11), None, &first)
+                .await
+                .is_err(),
+            "conflict {conflict} was accepted"
+        );
+    }
+}
+
+#[test]
+async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry() {
+    use crate::worker::owner_wallet::{
+        OwnerWallet, WalletBaseline, WalletCommit, WalletPublicationFailure,
+    };
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    for retire in [false, true] {
+        let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+        let owner_id = OwnedAgentId::new(
+            metadata.environment_id,
+            &AgentId {
+                component_id: metadata.id,
+                agent_id: "wallet-publication".to_string(),
+            },
+        );
+        let oplog = InMemoryOplog::new();
+        oplog.add(noop()).await.unwrap();
+        let baseline = WalletBaseline::new(
+            owner_id,
+            ResolvedOwnerContext::ComponentWorker,
+            Arc::new(WalletComponentService {
+                metadata: metadata.clone(),
+                revisions: Default::default(),
+            }),
+            &metadata,
+            &oplog,
+            None,
+        )
+        .await
+        .unwrap();
+        let owner = OwnerWallet::new(
+            baseline.clone(),
+            DeletedRegions::default(),
+            OplogIndex::INITIAL,
+            &oplog,
+            Arc::new(RuntimeAppendTasks::default()),
+            Arc::new(tokio::sync::Mutex::new(())),
+        )
+        .await
+        .unwrap();
+        let card = stored_test_card(CardId::new());
+        let commit = WalletCommit::prepare(
+            owner.lock_boundary().await.unwrap(),
+            OplogEntry::card_installed(None, None, Box::new(card.clone()), 0),
+        )
+        .await
+        .unwrap();
+        commit.validate_before_append().unwrap();
+        let index = oplog.add(commit.entry()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        let before_fault = owner.snapshot();
+        if retire {
+            owner.retire();
+        } else {
+            owner
+                .publish(&before_fault, Arc::new(before_fault.as_ref().clone()))
+                .unwrap();
+        }
+        let preserved = owner.snapshot();
+        assert_eq!(
+            commit.publish(),
+            Err(if retire {
+                WalletPublicationFailure::RetiredGeneration
+            } else {
+                WalletPublicationFailure::PredecessorChanged
+            })
+        );
+        assert!(owner.validate_current().is_err());
+        assert!(Arc::ptr_eq(&preserved, &owner.snapshot()));
+        assert!(!owner.snapshot().cards.contains_key(&card.card_id()));
+        drop(commit);
+
+        let replacement = OwnerWallet::new(
+            baseline,
+            DeletedRegions::default(),
+            index,
+            &oplog,
+            Arc::new(RuntimeAppendTasks::default()),
+            Arc::new(tokio::sync::Mutex::new(())),
+        )
+        .await
+        .unwrap();
+        replacement.validate_current().unwrap();
+        assert_eq!(replacement.snapshot().cards[&card.card_id()], card);
+        assert_eq!(replacement.snapshot().generation, 1);
+        assert_eq!(oplog.current_oplog_index().await, index);
+        assert!(owner.publish(&preserved, preserved.clone()).is_err());
+        replacement.validate_current().unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition() {
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+    let owner_id = OwnedAgentId::new(
+        metadata.environment_id,
+        &AgentId {
+            component_id: metadata.id,
+            agent_id: "wallet-boundary".to_string(),
+        },
+    );
+    let oplog = InMemoryOplog::new();
+    oplog.add(noop()).await.unwrap();
+    let baseline = WalletBaseline::new(
+        owner_id,
+        ResolvedOwnerContext::ComponentWorker,
+        Arc::new(WalletComponentService {
+            metadata: metadata.clone(),
+            revisions: Default::default(),
+        }),
+        &metadata,
+        &oplog,
+        None,
+    )
+    .await
+    .unwrap();
+    for phase in 0..3 {
+        let append_tasks = Arc::new(RuntimeAppendTasks::default());
+        let boundary_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let owner = OwnerWallet::new(
+            baseline.clone(),
+            DeletedRegions::default(),
+            OplogIndex::INITIAL,
+            &oplog,
+            append_tasks.clone(),
+            boundary_lock.clone(),
+        )
+        .await
+        .unwrap();
+        let contention = if phase == 2 {
+            Some(boundary_lock.lock_owned().await)
+        } else {
+            None
+        };
+        let mut captured = Box::pin({
+            let transient = owner.clone();
+            transient.lock_boundary()
+        });
+        let mut drain = Box::pin(append_tasks.seal_and_wait());
+        assert!(futures::poll!(drain.as_mut()).is_pending());
+        assert!(owner.lock_boundary().await.is_err());
+        match phase {
+            0 => drop(captured),
+            1 => {
+                let boundary = captured.await.unwrap();
+                assert!(futures::poll!(drain.as_mut()).is_pending());
+                drop(boundary);
+            }
+            2 => {
+                assert!(futures::poll!(captured.as_mut()).is_pending());
+                drop(captured);
+            }
+            _ => unreachable!(),
+        }
+        drain.await;
+        drop(contention);
+    }
 }
