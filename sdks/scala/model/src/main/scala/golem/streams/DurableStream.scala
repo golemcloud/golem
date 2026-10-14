@@ -17,12 +17,17 @@ enum DurableStreamTransport {
   case CatchUp, LongPoll, Sse
 }
 
+/**
+ * Retries of consecutive transient failures, not counting the first attempt.
+ * The delay starts at initialDelayMs and doubles up to maxDelayMs; a longer
+ * retry-after wins.
+ */
 final case class DurableStreamRetry(
-  budgetMs: Long = 60000,
+  maxRetries: Int = 8,
   initialDelayMs: Long = 100,
-  maxDelayMs: Long = 5000
+  maxDelayMs: Long = 30000
 ) {
-  require(budgetMs >= 0 && initialDelayMs > 0 && maxDelayMs >= initialDelayMs)
+  require(maxRetries >= 0 && initialDelayMs > 0 && maxDelayMs >= initialDelayMs)
 }
 
 final case class DurableStreamReadOptions(
@@ -105,7 +110,6 @@ private[golem] final case class DurableStreamAppendRequest(
 )
 
 private[golem] trait DurableStreamHost {
-  def nowMs(): BigInt
   def sleep(ms: Long): Future[Unit]
   def dispose(): Future[Unit]
 }
@@ -119,16 +123,17 @@ private[golem] trait DurableStreamWriteHost extends DurableStreamHost {
 }
 
 /**
- * Retry state is reconstructed by the same durable host results and clock
- * reads.
+ * Retry state is reconstructed by the same durable host results and timers. The
+ * failure count persists until reset, so an explicit retry after exhaustion
+ * makes one attempt without a fresh budget.
  */
 private[streams] final class DurableStreamRetries(host: DurableStreamHost, options: DurableStreamRetry) {
   private implicit val ec: ExecutionContext = ExecutionContext.parasitic
-  private var started: Option[BigInt]       = None
+  private var failures                      = 0
   private var delay                         = options.initialDelayMs
 
   def reset(): Unit = {
-    started = None
+    failures = 0
     delay = options.initialDelayMs
   }
 
@@ -138,17 +143,12 @@ private[streams] final class DurableStreamRetries(host: DurableStreamHost, optio
       else
         Future.fromTry(Try(operation)).flatten.recoverWith {
           case error: DurableStreamError if error.retryable =>
-            val now       = host.nowMs()
-            val start     = started.getOrElse { started = Some(now); now }
-            val remaining = BigInt(options.budgetMs) - (now - start).max(BigInt(0))
-            val wait      = BigInt(delay).max(error.retryAfterMs.getOrElse(BigInt(0)))
-            if (cancelled() || wait >= remaining) Future.failed(error)
+            if (cancelled() || failures >= options.maxRetries) Future.failed(error)
             else {
+              val wait = BigInt(delay).max(error.retryAfterMs.getOrElse(BigInt(0)))
+              failures += 1
               delay = (BigInt(delay) * 2).min(BigInt(options.maxDelayMs)).toLong
-              host.sleep(wait.toLong).flatMap { _ =>
-                if (host.nowMs() - start >= options.budgetMs) Future.failed(error)
-                else attempt()
-              }
+              host.sleep(wait.min(BigInt(Long.MaxValue)).toLong).flatMap(_ => attempt())
             }
         }
     attempt()

@@ -33,7 +33,7 @@ export interface Options {
   readonly auth?: Secret
   /** Whole attempt deadline, 1–300000 ms; default 30000. */
   readonly timeoutMs?: number
-  /** Automatic retries, excluding the initial attempt; default 5. */
+  /** Automatic retries, excluding the initial attempt; default 8. */
   readonly maxRetries?: number
   /** Initial exponential delay, capped at 30000 ms; default 100. */
   readonly retryDelayMs?: number
@@ -312,7 +312,7 @@ const checkedOptions = (options: Options) =>
       url: options.url,
       auth: yield* borrowAuth(options.auth),
       timeoutMs: yield* bounded(options.timeoutMs ?? 30000, 1, 300000, "timeoutMs"),
-      maxRetries: yield* bounded(options.maxRetries ?? 5, 0, 1000, "maxRetries"),
+      maxRetries: yield* bounded(options.maxRetries ?? 8, 0, 1000, "maxRetries"),
       retryDelayMs: yield* bounded(options.retryDelayMs ?? 100, 1, 30000, "retryDelayMs"),
     }
   })

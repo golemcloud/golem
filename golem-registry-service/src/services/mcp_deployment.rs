@@ -15,6 +15,7 @@
 use super::deployment::{DeploymentError, DeploymentService};
 use super::domain_registration::{DomainRegistrationError, DomainRegistrationService};
 use super::environment::{EnvironmentError, EnvironmentService};
+use crate::repo::http_api_deployment::HttpApiDeploymentRepo;
 use crate::repo::mcp_deployment::McpDeploymentRepo;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::mcp_deployment::{
@@ -53,6 +54,10 @@ pub enum McpDeploymentError {
     McpDeploymentForDomainAlreadyExists(Domain),
     #[error("Domain {0} is not registered")]
     DomainNotRegistered(Domain),
+    #[error(
+        "Domain {0} already has an HTTP API deployment; a domain may hold an HTTP API deployment or an MCP deployment, not both"
+    )]
+    DomainHasHttpApiDeployment(Domain),
     #[error(
         "Domain {domain} cannot be used for an MCP deployment. Only {direct_only_fragment}subdomains of {available_domain} may be used.",
         direct_only_fragment = if !allow_arbitrary_subdomains { "direct " } else { "" }
@@ -128,6 +133,7 @@ impl SafeDisplay for McpDeploymentError {
             Self::DeploymentRevisionNotFound(_) => self.to_string(),
             Self::McpDeploymentForDomainAlreadyExists(_) => self.to_string(),
             Self::DomainNotRegistered(_) => self.to_string(),
+            Self::DomainHasHttpApiDeployment(_) => self.to_string(),
             Self::DomainNotValidForMcp { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
@@ -147,6 +153,7 @@ error_forwarding!(
 
 pub struct McpDeploymentService {
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
+    http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
     environment_service: Arc<EnvironmentService>,
     deployment_service: Arc<DeploymentService>,
     domain_registration_service: Arc<DomainRegistrationService>,
@@ -155,12 +162,14 @@ pub struct McpDeploymentService {
 impl McpDeploymentService {
     pub fn new(
         mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
+        http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
         environment_service: Arc<EnvironmentService>,
         deployment_service: Arc<DeploymentService>,
         domain_registration_service: Arc<DomainRegistrationService>,
     ) -> Self {
         Self {
             mcp_deployment_repo,
+            http_api_deployment_repo,
             environment_service,
             deployment_service,
             domain_registration_service,
@@ -215,6 +224,15 @@ impl McpDeploymentService {
                 },
                 other => other.into(),
             })?;
+
+        if self
+            .http_api_deployment_repo
+            .get_staged_by_domain(environment_id.0, &data.domain.0)
+            .await?
+            .is_some()
+        {
+            return Err(McpDeploymentError::DomainHasHttpApiDeployment(data.domain));
+        }
 
         let id = McpDeploymentId::new();
         let record = McpDeploymentRevisionRecord::creation(
