@@ -35,7 +35,7 @@ use crate::model::oplog::payload::types::{
     SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
     SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
-    SerializableWebsocketMessage,
+    SerializableWebsocketMessage, SerializableWebsocketReconstructionPolicy,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -243,6 +243,7 @@ oplog_payload! {
         WebsocketConnect {
             url: String,
             headers: Option<Vec<(String, String)>>,
+            reconstruction_policy: SerializableWebsocketReconstructionPolicy,
         },
         WebsocketSend {
             message: SerializableWebsocketMessage,

@@ -34,30 +34,150 @@ object SchemaValueCodec {
 
   // --- Encoding ------------------------------------------------------------
 
+  def render(value: SchemaValue): String = {
+    val output = new java.lang.StringBuilder
+    writeJson(value, output)
+    output.toString
+  }
+
+  private[runtime] def writeJson(value: SchemaValue, output: java.lang.StringBuilder): Unit = {
+    def string(value: String): Unit             = { output.append(Json.string(value).render); () }
+    def node(kind: String)(body: => Unit): Unit = {
+      output.append("{\"kind\":\"").append(kind).append("\",\"value\":")
+      body
+      output.append('}')
+      ()
+    }
+    def array[A](items: Iterable[A])(write: A => Unit): Unit = {
+      output.append('[')
+      var first = true
+      items.foreach { item =>
+        if (!first) output.append(',')
+        first = false
+        write(item)
+      }
+      output.append(']')
+      ()
+    }
+    def children(kind: String, member: String, items: List[SchemaValue]): Unit = node(kind) {
+      output.append("{\"").append(member).append("\":")
+      array(items)(writeJson(_, output))
+      output.append('}')
+      ()
+    }
+    def optional(value: Option[SchemaValue]): Unit = value match {
+      case Some(value) => writeJson(value, output)
+      case None        => output.append("null"); ()
+    }
+    value match {
+      case BoolValue(v)                 => node("bool") { output.append(v); () }
+      case S8Value(v)                   => node("s8") { output.append(v.toInt); () }
+      case S16Value(v)                  => node("s16") { output.append(v.toInt); () }
+      case S32Value(v)                  => node("s32") { output.append(v); () }
+      case S64Value(v)                  => node("s64")(string(v.toString))
+      case U8Value(v)                   => node("u8") { output.append(v); () }
+      case U16Value(v)                  => node("u16") { output.append(v); () }
+      case U32Value(v)                  => node("u32") { output.append(v); () }
+      case U64Value(v)                  => node("u64")(string((BigInt(v) & MaxU64).toString))
+      case F32Value(v)                  => node("f32") { output.append(floatJson(v).render); () }
+      case F64Value(v)                  => node("f64") { output.append(floatJson(v).render); () }
+      case CharValue(v)                 => node("char")(string(charString(v)))
+      case StringValue(v)               => node("string")(string(v))
+      case RecordValue(values)          => children("record", "fields", values)
+      case TupleValue(values)           => children("tuple", "elements", values)
+      case ListValue(values)            => children("list", "elements", values)
+      case FixedListValue(values)       => children("fixed-list", "elements", values)
+      case VariantValue(index, payload) =>
+        node("variant") {
+          output.append("{\"case\":").append(index)
+          payload.foreach { value => output.append(",\"payload\":"); writeJson(value, output) }
+          output.append('}'); ()
+        }
+      case EnumValue(index) => node("enum") { output.append("{\"case\":").append(index).append('}'); () }
+      case FlagsValue(bits) =>
+        node("flags") {
+          output.append("{\"bits\":"); array(bits) { bit => output.append(bit); () }; output.append('}'); ()
+        }
+      case MapValue(entries) =>
+        node("map") {
+          output.append("{\"entries\":")
+          array(entries) { entry =>
+            output.append('['); writeJson(entry.key, output); output.append(','); writeJson(entry.value, output);
+            output.append(']'); ()
+          }
+          output.append('}'); ()
+        }
+      case OptionValue(inner) =>
+        node("option") { output.append("{\"inner\":"); optional(inner); output.append('}'); () }
+      case ResultValue(result) =>
+        node("result") {
+          val (tag, inner) = result match {
+            case SchemaResult.Ok(value)  => ("ok", value)
+            case SchemaResult.Err(value) => ("err", value)
+          }
+          output.append("{\"tag\":"); string(tag); output.append(",\"value\":"); optional(inner); output.append('}'); ()
+        }
+      case TextValue(text, language) =>
+        node("text") {
+          output.append('{')
+          language.foreach { language => output.append("\"language\":"); string(language); output.append(',') }
+          output.append("\"text\":"); string(text); output.append('}'); ()
+        }
+      case BinaryValue(bytes, mime) =>
+        node("binary") {
+          output.append("{\"bytes\":"); array(bytes) { byte => output.append(byte & 0xff); () }
+          mime.foreach { mime => output.append(",\"mimeType\":"); string(mime) }
+          output.append('}'); ()
+        }
+      case PathValue(v)     => node("path") { output.append("{\"path\":"); string(v); output.append('}'); () }
+      case UrlValue(v)      => node("url") { output.append("{\"url\":"); string(v); output.append('}'); () }
+      case UuidValue(v)     => node("uuid")(string(Uuid.toStandardString(v)))
+      case DatetimeValue(v) => node("datetime") { output.append("{\"value\":"); string(v); output.append('}'); () }
+      case DurationValue(v) =>
+        node("duration") { output.append("{\"nanoseconds\":"); string(v.toString); output.append('}'); () }
+      case QuantityValue(mantissa, scale, unit) =>
+        node("quantity") {
+          output.append("{\"mantissa\":"); string(mantissa.toString);
+          output.append(",\"scale\":").append(scale).append(",\"unit\":"); string(unit); output.append('}'); ()
+        }
+      case StreamReferenceValue(provisional, token, _) =>
+        node("stream") {
+          (provisional, token) match {
+            case (Some(v), None) => output.append("{\"provisionalRef\":"); string(v)
+            case (None, Some(v)) => output.append("{\"streamToken\":"); string(v)
+            case _               => throw BridgeException("A stream reference must contain exactly one reference")
+          }
+          output.append('}'); ()
+        }
+      case UnionValue(tag, body) =>
+        node("union") {
+          output.append("{\"body\":"); writeJson(body, output); output.append(",\"tag\":"); string(tag);
+          output.append('}'); ()
+        }
+    }
+  }
+
   def toJson(value: SchemaValue): Json = value match {
-    case BoolValue(v)   => node("bool", Json.bool(v))
-    case S8Value(v)     => node("s8", Json.fromByte(v))
-    case S16Value(v)    => node("s16", Json.fromShort(v))
-    case S32Value(v)    => node("s32", Json.fromInt(v))
-    case S64Value(v)    => node("s64", Json.string(v.toString))
-    case U8Value(v)     => node("u8", Json.fromInt(v))
-    case U16Value(v)    => node("u16", Json.fromInt(v))
-    case U32Value(v)    => node("u32", Json.fromLong(v))
+    case BoolValue(v) => node("bool", Json.bool(v))
+    case S8Value(v)   => node("s8", Json.fromByte(v))
+    case S16Value(v)  => node("s16", Json.fromShort(v))
+    case S32Value(v)  => node("s32", Json.fromInt(v))
+    case S64Value(v)  => node("s64", Json.string(v.toString))
+    case U8Value(v)   => node("u8", Json.fromInt(v))
+    case U16Value(v)  => node("u16", Json.fromInt(v))
+    case U32Value(v)  => node("u32", Json.fromLong(v))
     // U64Value holds the raw 64 bits (matching the Scala SDK); the wire form is
     // the unsigned decimal value, so reinterpret the bits as unsigned.
     case U64Value(v)    => node("u64", Json.string((BigInt(v) & MaxU64).toString))
     case F32Value(v)    => node("f32", floatJson(v))
     case F64Value(v)    => node("f64", floatJson(v))
-    case CharValue(v) =>
-      if (v < 0 || v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff))
-        throw BridgeException(f"Schema char U+$v%04X is not a valid Unicode scalar value")
-      node("char", Json.string(new String(Character.toChars(v))))
+    case CharValue(v)   => node("char", Json.string(charString(v)))
     case StringValue(v) => node("string", Json.string(v))
 
     case RecordValue(fields) =>
       node("record", Json.obj("fields" -> Json.arr(fields.map(toJson).toVector)))
     case VariantValue(caseIndex, payload) =>
-      val base = Vector[(String, Json)]("case" -> Json.fromInt(caseIndex))
+      val base        = Vector[(String, Json)]("case" -> Json.fromInt(caseIndex))
       val withPayload = payload match {
         case Some(p) => base :+ ("payload" -> toJson(p))
         case None    => base
@@ -103,18 +223,18 @@ object SchemaValueCodec {
         case None    => base
       }
       node("binary", Json.obj(withMime))
-    case PathValue(v)     => node("path", Json.obj("path" -> Json.string(v)))
-    case UrlValue(v)      => node("url", Json.obj("url" -> Json.string(v)))
-    case UuidValue(v)     => node("uuid", Json.string(Uuid.toStandardString(v)))
-    case DatetimeValue(v) => node("datetime", Json.obj("value" -> Json.string(v)))
-    case DurationValue(v) => node("duration", Json.obj("nanoseconds" -> Json.string(v.toString)))
+    case PathValue(v)                         => node("path", Json.obj("path" -> Json.string(v)))
+    case UrlValue(v)                          => node("url", Json.obj("url" -> Json.string(v)))
+    case UuidValue(v)                         => node("uuid", Json.string(Uuid.toStandardString(v)))
+    case DatetimeValue(v)                     => node("datetime", Json.obj("value" -> Json.string(v)))
+    case DurationValue(v)                     => node("duration", Json.obj("nanoseconds" -> Json.string(v.toString)))
     case QuantityValue(mantissa, scale, unit) =>
       node(
         "quantity",
         Json.obj(
           "mantissa" -> Json.string(mantissa.toString),
-          "scale" -> Json.fromInt(scale),
-          "unit" -> Json.string(unit)
+          "scale"    -> Json.fromInt(scale),
+          "unit"     -> Json.string(unit)
         )
       )
 
@@ -122,7 +242,7 @@ object SchemaValueCodec {
       val reference = (provisional, token) match {
         case (Some(value), None) => Json.obj("provisionalRef" -> Json.string(value))
         case (None, Some(value)) => Json.obj("streamToken" -> Json.string(value))
-        case _ => throw BridgeException("A stream reference must contain exactly one reference")
+        case _                   => throw BridgeException("A stream reference must contain exactly one reference")
       }
       node("stream", reference)
 
@@ -132,6 +252,12 @@ object SchemaValueCodec {
 
   private def node(kind: String, value: Json): Json =
     Json.obj("kind" -> Json.string(kind), "value" -> value)
+
+  private def charString(value: Int): String = {
+    if (value < 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff))
+      throw BridgeException(f"Schema char U+$value%04X is not a valid Unicode scalar value")
+    new String(Character.toChars(value))
+  }
 
   private def floatJson(value: Float): Json =
     if (value.isNaN) Json.obj("$float" -> Json.string("nan"))
@@ -278,7 +404,7 @@ object SchemaValueCodec {
   }
   def asBinary(v: SchemaValue): (Vector[Byte], Option[String]) = v match {
     case BinaryValue(bytes, mimeType) => (bytes, mimeType)
-    case o => mismatch("binary", o)
+    case o                            => mismatch("binary", o)
   }
 
   def recordFields(v: SchemaValue): List[SchemaValue] = v match {
@@ -328,7 +454,7 @@ object SchemaValueCodec {
 
   def streamReference(v: SchemaValue): (Option[String], Option[String]) = v match {
     case StreamReferenceValue(provisional, token, _) => (provisional, token)
-    case o => mismatch("stream reference", o)
+    case o                                           => mismatch("stream reference", o)
   }
 
   /** Returns a required composite payload, throwing on a missing one. */
@@ -359,7 +485,9 @@ object SchemaValueCodec {
     case other => Left(s"Expected a uuid record (two u64 fields), got $other")
   }
 
-  /** [[decodeUuid]] variant that throws [[BridgeException]] on a shape mismatch. */
+  /**
+   * [[decodeUuid]] variant that throws [[BridgeException]] on a shape mismatch.
+   */
   def decodeUuidOrThrow(value: SchemaValue): Uuid =
     decodeUuid(value) match {
       case Right(uuid)   => uuid
@@ -369,24 +497,27 @@ object SchemaValueCodec {
   // --- Decoding ------------------------------------------------------------
 
   def fromJson(json: Json): Either[String, SchemaValue] = for {
-    outer <- exactObject(json, Set("kind", "value"), "schema value")
-    kind <- member(outer, "kind").flatMap(Json.asString)
-    value <- member(outer, "value")
+    outer   <- exactObject(json, Set("kind", "value"), "schema value")
+    kind    <- member(outer, "kind").flatMap(Json.asString)
+    value   <- member(outer, "value")
     decoded <- decode(kind, value)
   } yield decoded
 
   private def decode(kind: String, value: Json): Either[String, SchemaValue] = kind match {
-    case "bool"   => Json.asBoolean(value).map(BoolValue(_))
-    case "s8"     => ranged(value, MinI8, MaxI8, "s8").map(n => S8Value(n.toByte))
-    case "s16"    => ranged(value, MinI16, MaxI16, "s16").map(n => S16Value(n.toShort))
-    case "s32"    => ranged(value, MinI32, MaxI32, "s32").map(n => S32Value(n.toInt))
-    case "s64"    => decimalString(value, signed = true, MinI64, MaxI64, "s64").map(n => S64Value(n.toLong))
-    case "u8"     => ranged(value, Zero, MaxU8, "u8").map(n => U8Value(n.toInt))
-    case "u16"    => ranged(value, Zero, MaxU16, "u16").map(n => U16Value(n.toInt))
-    case "u32"    => ranged(value, Zero, MaxU32, "u32").map(n => U32Value(n.toLong))
+    case "bool" => Json.asBoolean(value).map(BoolValue(_))
+    case "s8"   => ranged(value, MinI8, MaxI8, "s8").map(n => S8Value(n.toByte))
+    case "s16"  => ranged(value, MinI16, MaxI16, "s16").map(n => S16Value(n.toShort))
+    case "s32"  => ranged(value, MinI32, MaxI32, "s32").map(n => S32Value(n.toInt))
+    case "s64"  => decimalString(value, signed = true, MinI64, MaxI64, "s64").map(n => S64Value(n.toLong))
+    case "u8"   => ranged(value, Zero, MaxU8, "u8").map(n => U8Value(n.toInt))
+    case "u16"  => ranged(value, Zero, MaxU16, "u16").map(n => U16Value(n.toInt))
+    case "u32"  => ranged(value, Zero, MaxU32, "u32").map(n => U32Value(n.toLong))
     // The unsigned wire value is stored as its raw 64 bits (matching the SDK).
-    case "u64"    => decimalString(value, signed = false, Zero, MaxU64, "u64").map(n => U64Value(n.toLong))
-    case "f32"    => floatValue(value).flatMap { d => val f = d.toFloat; if (f.isInfinite && d.isFinite) Left("f32 is out of range") else Right(F32Value(f)) }
+    case "u64" => decimalString(value, signed = false, Zero, MaxU64, "u64").map(n => U64Value(n.toLong))
+    case "f32" =>
+      floatValue(value).flatMap { d =>
+        val f = d.toFloat; if (f.isInfinite && d.isFinite) Left("f32 is out of range") else Right(F32Value(f))
+      }
     case "f64"    => floatValue(value).map(F64Value(_))
     case "char"   => Json.asString(value).flatMap(charValue)
     case "string" => Json.asString(value).map(StringValue(_))
@@ -397,14 +528,17 @@ object SchemaValueCodec {
       }
     case "variant" =>
       for {
-        fields <- Json.asObject(value)
+        fields        <- Json.asObject(value)
         payloadPresent = fields.exists(_._1 == "payload")
-        exact <- exactObject(value, if (payloadPresent) Set("case", "payload") else Set("case"), "variant")
-        caseIndex <- member(exact, "case").flatMap(n => ranged(n, Zero, MaxI32, "variant case"))
-        payload <- if (payloadPresent) member(exact, "payload").flatMap(fromJson).map(Some(_)) else Right(None)
+        exact         <- exactObject(value, if (payloadPresent) Set("case", "payload") else Set("case"), "variant")
+        caseIndex     <- member(exact, "case").flatMap(n => ranged(n, Zero, MaxI32, "variant case"))
+        payload       <- if (payloadPresent) member(exact, "payload").flatMap(fromJson).map(Some(_)) else Right(None)
       } yield VariantValue(caseIndex.toInt, payload)
     case "enum" =>
-      exactObject(value, Set("case"), "enum").flatMap(member(_, "case")).flatMap(n => ranged(n, Zero, MaxI32, "enum case")).map(n => EnumValue(n.toInt))
+      exactObject(value, Set("case"), "enum")
+        .flatMap(member(_, "case"))
+        .flatMap(n => ranged(n, Zero, MaxI32, "enum case"))
+        .map(n => EnumValue(n.toInt))
     case "flags" =>
       exactObject(value, Set("bits"), "flags").flatMap(member(_, "bits")).flatMap(Json.asArray).flatMap { items =>
         sequence(items.map(Json.asBoolean)).map(bits => FlagsValue(bits.toList))
@@ -427,58 +561,73 @@ object SchemaValueCodec {
         fields  <- exactObject(value, Set("tag", "value"), "result")
         tag     <- member(fields, "tag").flatMap(Json.asString)
         payload <- nullableValue(fields, "value")
-        result <- tag match {
-          case "ok"  => Right(SchemaResult.Ok(payload))
-          case "err" => Right(SchemaResult.Err(payload))
-          case other => Left(s"Invalid result tag '$other'")
-        }
+        result  <- tag match {
+                    case "ok"  => Right(SchemaResult.Ok(payload))
+                    case "err" => Right(SchemaResult.Err(payload))
+                    case other => Left(s"Invalid result tag '$other'")
+                  }
       } yield ResultValue(result)
 
     case "text" =>
       for {
-        fields <- exactOptionalObject(value, Set("text"), Set("language"), "text")
-        text <- member(fields, "text").flatMap(Json.asString)
+        fields   <- exactOptionalObject(value, Set("text"), Set("language"), "text")
+        text     <- member(fields, "text").flatMap(Json.asString)
         language <- optionalStringMember(fields, "language")
       } yield TextValue(text, language)
     case "binary" =>
       for {
-        fields <- exactOptionalObject(value, Set("bytes"), Set("mimeType"), "binary")
-        bytes <- member(fields, "bytes").flatMap(Json.asArray).flatMap(decodeBytes)
+        fields   <- exactOptionalObject(value, Set("bytes"), Set("mimeType"), "binary")
+        bytes    <- member(fields, "bytes").flatMap(Json.asArray).flatMap(decodeBytes)
         mimeType <- optionalStringMember(fields, "mimeType")
       } yield BinaryValue(bytes, mimeType)
-    case "path"     => exactObject(value, Set("path"), "path").flatMap(member(_, "path")).flatMap(Json.asString).map(PathValue(_))
-    case "url"      => exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(Json.asString).map(UrlValue(_))
+    case "path" =>
+      exactObject(value, Set("path"), "path").flatMap(member(_, "path")).flatMap(Json.asString).map(PathValue(_))
+    case "url" =>
+      exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(Json.asString).map(UrlValue(_))
     case "uuid" =>
       Json.asString(value).flatMap(Uuid.fromStandardString).map(UuidValue(_))
-    case "datetime" => exactObject(value, Set("value"), "datetime").flatMap(member(_, "value")).flatMap(Json.asString).map(DatetimeValue(_))
+    case "datetime" =>
+      exactObject(value, Set("value"), "datetime")
+        .flatMap(member(_, "value"))
+        .flatMap(Json.asString)
+        .map(DatetimeValue(_))
     case "duration" =>
-      exactObject(value, Set("nanoseconds"), "duration").flatMap(member(_, "nanoseconds"))
+      exactObject(value, Set("nanoseconds"), "duration")
+        .flatMap(member(_, "nanoseconds"))
         .flatMap(n => decimalString(n, signed = true, MinI64, MaxI64, "duration nanoseconds"))
         .map(n => DurationValue(n.toLong))
     case "quantity" =>
       for {
-        fields <- exactObject(value, Set("mantissa", "scale", "unit"), "quantity")
-        mantissa <- member(fields, "mantissa").flatMap(n => decimalString(n, signed = true, MinI64, MaxI64, "quantity mantissa"))
+        fields   <- exactObject(value, Set("mantissa", "scale", "unit"), "quantity")
+        mantissa <-
+          member(fields, "mantissa").flatMap(n => decimalString(n, signed = true, MinI64, MaxI64, "quantity mantissa"))
         scale <- member(fields, "scale").flatMap(n => ranged(n, MinI32, MaxI32, "quantity scale"))
-        unit <- member(fields, "unit").flatMap(Json.asString)
+        unit  <- member(fields, "unit").flatMap(Json.asString)
       } yield QuantityValue(mantissa.toLong, scale.toInt, unit)
 
     case "union" =>
       for {
         fields <- exactObject(value, Set("tag", "body"), "union")
-        tag <- member(fields, "tag").flatMap(Json.asString)
-        body <- member(fields, "body").flatMap(fromJson)
+        tag    <- member(fields, "tag").flatMap(Json.asString)
+        body   <- member(fields, "body").flatMap(fromJson)
       } yield UnionValue(tag, body)
 
     case "stream" =>
       Json.asObject(value).flatMap { fields =>
         val names = fields.map(_._1)
         if (names.distinct.size != 1 || fields.size != 1) Left("stream reference must contain exactly one member")
-        else names.head match {
-          case "provisionalRef" => member(fields, "provisionalRef").flatMap(Json.asString).map(v => StreamReferenceValue(Some(v), None, StreamSession.currentBinding))
-          case "streamToken" => member(fields, "streamToken").flatMap(Json.asString).map(v => StreamReferenceValue(None, Some(v), StreamSession.currentBinding))
-          case _ => Left("stream reference must contain exactly one known member")
-        }
+        else
+          names.head match {
+            case "provisionalRef" =>
+              member(fields, "provisionalRef")
+                .flatMap(Json.asString)
+                .map(v => StreamReferenceValue(Some(v), None, StreamSession.currentBinding))
+            case "streamToken" =>
+              member(fields, "streamToken")
+                .flatMap(Json.asString)
+                .map(v => StreamReferenceValue(None, Some(v), StreamSession.currentBinding))
+            case _ => Left("stream reference must contain exactly one known member")
+          }
       }
 
     case other => Left(s"Unsupported schema value kind '$other'")
@@ -509,7 +658,10 @@ object SchemaValueCodec {
     sequence(items.map(j => ranged(j, Zero, MaxU8, "byte"))).map(_.map(_.toInt.toByte))
 
   private def elements(value: Json, context: String): Either[String, Vector[SchemaValue]] =
-    exactObject(value, Set("elements"), context).flatMap(member(_, "elements")).flatMap(Json.asArray).flatMap(items => sequence(items.map(fromJson)))
+    exactObject(value, Set("elements"), context)
+      .flatMap(member(_, "elements"))
+      .flatMap(Json.asArray)
+      .flatMap(items => sequence(items.map(fromJson)))
 
   private def field(value: Json, name: String): Either[String, Json] =
     Json.requireField(value, name)
@@ -529,14 +681,23 @@ object SchemaValueCodec {
   private def exactObject(value: Json, expected: Set[String], context: String): Either[String, Vector[(String, Json)]] =
     Json.asObject(value).flatMap { fields =>
       val names = fields.map(_._1)
-      if (names.distinct.size != names.size || names.toSet != expected) Left(s"$context members do not match the expected representation")
+      if (names.distinct.size != names.size || names.toSet != expected)
+        Left(s"$context members do not match the expected representation")
       else Right(fields)
     }
 
-  private def exactOptionalObject(value: Json, required: Set[String], optional: Set[String], context: String): Either[String, Vector[(String, Json)]] =
+  private def exactOptionalObject(
+    value: Json,
+    required: Set[String],
+    optional: Set[String],
+    context: String
+  ): Either[String, Vector[(String, Json)]] =
     Json.asObject(value).flatMap { fields =>
       val names = fields.map(_._1)
-      if (names.distinct.size != names.size || !required.subsetOf(names.toSet) || !names.toSet.subsetOf(required ++ optional))
+      if (
+        names.distinct.size != names.size || !required
+          .subsetOf(names.toSet) || !names.toSet.subsetOf(required ++ optional)
+      )
         Left(s"$context members do not match the expected representation")
       else Right(fields)
     }
@@ -547,37 +708,52 @@ object SchemaValueCodec {
   private def optionalStringMember(fields: Vector[(String, Json)], name: String): Either[String, Option[String]] =
     fields.find(_._1 == name).map(_._2) match {
       case Some(value) => Json.asString(value).map(Some(_))
-      case None => Right(None)
+      case None        => Right(None)
     }
 
   private def nullableValue(fields: Vector[(String, Json)], name: String): Either[String, Option[SchemaValue]] =
     member(fields, name).flatMap(value => if (value == Json.`null`) Right(None) else fromJson(value).map(Some(_)))
 
-  private def decimalString(value: Json, signed: Boolean, min: BigInt, max: BigInt, kind: String): Either[String, BigInt] =
+  private def decimalString(
+    value: Json,
+    signed: Boolean,
+    min: BigInt,
+    max: BigInt,
+    kind: String
+  ): Either[String, BigInt] =
     Json.asString(value).flatMap { text =>
       val canonical = if (signed) text.matches("0|-?[1-9][0-9]*") else text.matches("0|[1-9][0-9]*")
       if (!canonical) Left(s"$kind must be a canonical decimal string")
-      else try {
-        val number = BigInt(text)
-        if (number < min || number > max) Left(s"$kind is out of range") else Right(number)
-      } catch { case _: NumberFormatException => Left(s"$kind is out of range") }
+      else
+        try {
+          val number = BigInt(text)
+          if (number < min || number > max) Left(s"$kind is out of range") else Right(number)
+        } catch { case _: NumberFormatException => Left(s"$kind is out of range") }
     }
 
   private def floatValue(value: Json): Either[String, Double] =
-    Json.asNumberLiteral(value).flatMap { literal =>
-      if (literal == "-0") Right(-0.0d)
-      else try Right(BigDecimal(literal).toDouble)
-      catch { case _: NumberFormatException => Left(s"Invalid number literal '$literal'") }
-    }.flatMap { decoded =>
-      if (decoded.isFinite) Right(decoded) else Left("finite float is out of range")
-    }.orElse {
-      exactObject(value, Set("$float"), "exceptional float").flatMap(member(_, "$float")).flatMap(Json.asString).flatMap {
-        case "nan" => Right(Double.NaN)
-        case "positive-infinity" => Right(Double.PositiveInfinity)
-        case "negative-infinity" => Right(Double.NegativeInfinity)
-        case _ => Left("unknown exceptional float representation")
+    Json
+      .asNumberLiteral(value)
+      .flatMap { literal =>
+        if (literal == "-0") Right(-0.0d)
+        else
+          try Right(BigDecimal(literal).toDouble)
+          catch { case _: NumberFormatException => Left(s"Invalid number literal '$literal'") }
       }
-    }
+      .flatMap { decoded =>
+        if (decoded.isFinite) Right(decoded) else Left("finite float is out of range")
+      }
+      .orElse {
+        exactObject(value, Set("$float"), "exceptional float")
+          .flatMap(member(_, "$float"))
+          .flatMap(Json.asString)
+          .flatMap {
+            case "nan"               => Right(Double.NaN)
+            case "positive-infinity" => Right(Double.PositiveInfinity)
+            case "negative-infinity" => Right(Double.NegativeInfinity)
+            case _                   => Left("unknown exceptional float representation")
+          }
+      }
 
   private def num(json: Json): Either[String, BigDecimal] =
     Json.asNumberLiteral(json).flatMap { literal =>
@@ -612,7 +788,9 @@ object SchemaValueCodec {
       else Left(s"Expected an integral number, got '${value.toString}'")
     }
 
-  /** Decode an integral JSON number and check it fits the given closed range. */
+  /**
+   * Decode an integral JSON number and check it fits the given closed range.
+   */
   private def ranged(json: Json, min: BigInt, max: BigInt, kind: String): Either[String, BigInt] =
     integral(json).flatMap { value =>
       if (value < min || value > max)
@@ -635,12 +813,12 @@ object SchemaValueCodec {
   private val MaxU64: BigInt = (BigInt(1) << 64) - 1
 
   private def sequence[A](results: Vector[Either[String, A]]): Either[String, Vector[A]] = {
-    val builder = Vector.newBuilder[A]
-    val iterator = results.iterator
+    val builder               = Vector.newBuilder[A]
+    val iterator              = results.iterator
     var error: Option[String] = None
     while (iterator.hasNext && error.isEmpty) {
       iterator.next() match {
-        case Right(value) => builder += value
+        case Right(value)  => builder += value
         case Left(message) => error = Some(message)
       }
     }

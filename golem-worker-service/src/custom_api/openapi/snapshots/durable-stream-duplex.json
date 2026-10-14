@@ -246,9 +246,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "All slots closed or deleted",
+                "description": "Present as true only when all slots are closed or deleted; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               }
             }
@@ -311,9 +314,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "All slots closed or deleted",
+                "description": "Present as true only when all slots are closed or deleted; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -527,9 +533,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -583,9 +592,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -639,9 +651,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -749,9 +764,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -946,9 +964,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -1007,9 +1028,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -1262,9 +1286,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -1318,9 +1345,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -1374,9 +1404,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -1484,9 +1517,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -1696,9 +1732,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Closure on success or closed-stream conflict",
+                "description": "Present as true on closed success or closed-stream conflict; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Next-Offset": {
@@ -1729,9 +1768,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Closure on success or closed-stream conflict",
+                "description": "Present as true on closed success or closed-stream conflict; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Next-Offset": {
@@ -1795,9 +1837,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Closure on success or closed-stream conflict",
+                "description": "Present as true on closed success or closed-stream conflict; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Next-Offset": {
@@ -1979,9 +2024,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -2040,9 +2088,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -2197,9 +2248,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "All slots closed or deleted",
+                "description": "Present as true only when all slots are closed or deleted; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               }
             }
@@ -2251,9 +2305,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "All slots closed or deleted",
+                "description": "Present as true only when all slots are closed or deleted; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -2517,9 +2574,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -2573,9 +2633,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -2629,9 +2692,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -2728,9 +2794,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -2850,9 +2919,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -2905,9 +2977,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -3121,9 +3196,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -3177,9 +3255,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -3233,9 +3314,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Cursor": {
@@ -3332,9 +3416,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -3533,9 +3620,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Closure on success or closed-stream conflict",
+                "description": "Present as true on closed success or closed-stream conflict; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Next-Offset": {
@@ -3566,9 +3656,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Closure on success or closed-stream conflict",
+                "description": "Present as true on closed success or closed-stream conflict; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Next-Offset": {
@@ -3632,9 +3725,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Closure on success or closed-stream conflict",
+                "description": "Present as true on closed success or closed-stream conflict; otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Next-Offset": {
@@ -3741,9 +3837,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {
@@ -3796,9 +3895,12 @@
                 }
               },
               "Stream-Closed": {
-                "description": "Terminal state; on reads true only at EOF",
+                "description": "Present as true only when closed (on reads only at EOF); otherwise omitted",
                 "schema": {
-                  "type": "boolean"
+                  "enum": [
+                    "true"
+                  ],
+                  "type": "string"
                 }
               },
               "Stream-Expires-At": {

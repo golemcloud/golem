@@ -63,6 +63,10 @@ inherit_test_dep!(
     #[tagged_as("constructor_parameter_echo")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("snapshot_sqlite_effect")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 /// The agent type of the test component that takes snapshots.
@@ -1719,7 +1723,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
 
 #[test]
 #[timeout("2m")]
-async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
+async fn enabled_snapshots_on_storage_without_copy_on_write_fail_at_startup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1732,7 +1736,7 @@ async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_snapshots = FilesystemSnapshotsConfig::Managed(Box::new(
+                config.filesystem_snapshots = FilesystemSnapshotsConfig::Enabled(Box::new(
                     FilesystemSnapshotStoreConfig::new(&key, Duration::from_secs(60), 1, 1)
                         .expect("valid store settings"),
                 ));
@@ -1744,13 +1748,13 @@ async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
 
     match started {
         Ok(_) => Err(anyhow!(
-            "the executor started with managed snapshots on storage without copy-on-write"
+            "the executor started with enabled snapshots on storage without copy-on-write"
         )),
         Err(error) => {
             let message = format!("{error:#}");
             assert!(
                 message.contains(
-                    "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                    "filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)"
                 ),
                 "{message}"
             );
@@ -2313,10 +2317,10 @@ fn managed_xfs_test_root() -> PathBuf {
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
 }
 
-/// The store settings of the managed XFS tests: the store over the blob storage of the executor.
-#[cfg(target_os = "linux")]
-fn managed_snapshots() -> FilesystemSnapshotsConfig {
-    FilesystemSnapshotsConfig::Managed(Box::new(
+/// The settings of the store over the blob storage of the executor.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn enabled_snapshots() -> FilesystemSnapshotsConfig {
+    FilesystemSnapshotsConfig::Enabled(Box::new(
         FilesystemSnapshotStoreConfig::new(&"5a".repeat(64), Duration::from_secs(60), 2, 2)
             .expect("valid store settings")
             .with_uploads(uploads(Duration::from_secs(30))),
@@ -2385,6 +2389,36 @@ async fn reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
     .await
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+#[test_r::tag(local_filesystem)]
+#[timeout("4m")]
+async fn apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_apfs;
+
+    let root = tempfile::tempdir()?;
+    let context = TestContext::new(last_unique_id);
+    restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
+        &context,
+        initial_file_system,
+        "apfs-replay",
+        |snapshots| {
+            start_with_filesystem_snapshots_on_apfs(
+                deps,
+                &context,
+                Box::from(root.path()),
+                snapshots,
+            )
+        },
+    )
+    .await
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the unprivileged reflink XFS test runner"]
@@ -2417,7 +2451,7 @@ async fn reflink_xfs_with_filesystem_metering_fails_at_startup(
 /// Starts the agent `name` with read-only and read-write initial files on executors that `start`
 /// makes, changes its files with a write, renames, a hard link and a symlink, and checks that a
 /// restart from a snapshot and a restart with a full replay both give the tree of the live agent.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn restart_from_a_snapshot_gives_the_tree_of_a_full_replay<F>(
     context: &TestContext,
     initial_file_system: &PrecompiledComponent,
@@ -2427,7 +2461,7 @@ async fn restart_from_a_snapshot_gives_the_tree_of_a_full_replay<F>(
 where
     F: std::future::Future<Output = anyhow::Result<TestWorkerExecutor>>,
 {
-    let executor = start(managed_snapshots()).await?;
+    let executor = start(enabled_snapshots()).await?;
     let agent = Agent::start(
         &executor,
         context,
@@ -2483,8 +2517,10 @@ where
     let live = agent.describe(&executor).await?;
     executor.release().await?;
 
-    let restarted = start(managed_snapshots()).await?;
+    let restarted = start(enabled_snapshots()).await?;
+    let mut events = restarted.capture_output(&agent.worker_id).await?;
     let restored = agent.describe(&restarted).await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
     let restored_shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
     restarted.release().await?;
     let replaying = start(FilesystemSnapshotsConfig::default()).await?;
@@ -2521,7 +2557,7 @@ async fn managed_xfs_manual_update_brings_the_files_into_the_target_revision(
             &context,
             MANAGED_XFS_DISK_SPACE,
             managed_xfs_test_root(),
-            managed_snapshots(),
+            enabled_snapshots(),
         )
     };
     let executor = start().await?;
@@ -3616,6 +3652,145 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
         Ok(())
     })
     .await
+}
+
+#[test]
+#[timeout("6m")]
+async fn effect_sqlite_snapshots_restore_files_and_replay_the_suffix_in_both_modes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("snapshot_sqlite_effect")] snapshot_sqlite_effect: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for agent_type in ["SimpleSqlite", "MultipartSqlite"] {
+        let context = TestContext::new(last_unique_id);
+        with_snapshot_store(|store| async move {
+            let executor =
+                start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+            let component = executor
+                .component_dep(&context.default_environment_id, snapshot_sqlite_effect)
+                .store()
+                .await?;
+            let agent = agent_id!(agent_type, "effect-sqlite");
+            let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+            executor
+                .invoke_and_await_agent(&component, &agent, "append", data_value!(17.0f64))
+                .await?;
+            newest_snapshot_confirmed(&executor, &worker_id).await?;
+
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let snapshot = oplog
+                .iter()
+                .rev()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Snapshot(snapshot) => Some(&snapshot.data),
+                    _ => None,
+                })
+                .ok_or_else(|| anyhow!("no Effect snapshot"))?;
+            let PublicSnapshotData::Multipart(snapshot) = snapshot else {
+                return Err(anyhow!("Effect snapshot is not multipart"));
+            };
+            let names: Vec<_> = snapshot
+                .parts
+                .iter()
+                .map(|part| part.name.as_str())
+                .collect();
+            assert_eq!(
+                names,
+                if agent_type == "SimpleSqlite" {
+                    vec!["state", "db:memory", "db:temp"]
+                } else {
+                    vec!["state", "db:memory", "db:temp", "part:opaque"]
+                }
+            );
+            let MultipartPartData::Json(envelope) = &snapshot.parts[0].data else {
+                return Err(anyhow!("Effect state is not JSON"));
+            };
+            let locations = envelope.data["fileDatabases"]
+                .as_object()
+                .ok_or_else(|| anyhow!("no file database locations"))?;
+            assert_eq!(locations.len(), 2);
+            assert!(
+                locations["file"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/effect-sqlite.db")
+            );
+            assert!(
+                locations["wrappedFile"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/effect-sqlite-wrapped.db")
+            );
+
+            // This recorded read is a suffix after the confirmed snapshot. The load warms
+            // SQLite before replay, so these reads retain the live host-call sequence.
+            executor
+                .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
+                .await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let last_snapshot = oplog
+                .iter()
+                .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                .unwrap();
+            assert!(
+                oplog[last_snapshot..].iter().any(|entry| matches!(
+                    entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(_)
+                ))
+            );
+            executor.release().await?;
+            let executor =
+                start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+            let mut events = executor.capture_output(&worker_id).await?;
+            let restored = executor
+                .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_snapshot_recovery_loaded(&mut events).await;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&restored)?,
+                serde_json::json!({
+                    "count": 1, "values": [[17], [17], [17], [17]]
+                })
+            );
+            executor
+                .invoke_and_await_agent(&component, &agent, "append", data_value!(31.0f64))
+                .await?;
+
+            let updated = executor
+                .update_component(&component.id, "golem_it_snapshot_sqlite_effect")
+                .await?;
+            executor
+                .manual_update_worker(&worker_id, updated.revision, false)
+                .await?;
+            executor
+                .wait_for_component_revision(&worker_id, updated.revision, Duration::from_secs(60))
+                .await?;
+            executor
+                .invoke_and_await_agent(&updated, &agent, "append", data_value!(53.0f64))
+                .await?;
+            let state = executor
+                .invoke_and_await_agent(&updated, &agent, "inspect", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&state)?,
+                serde_json::json!({
+                    "count": 3, "values": [[17, 31, 53], [17, 31, 53], [17, 31, 53], [17, 31, 53]]
+                })
+            );
+            executor.check_oplog_is_queryable(&worker_id).await?;
+            assert_eq!(
+                invocation_shape(&executor.stored_oplog(&worker_id).await),
+                InvocationShape::settled()
+            );
+            executor.release().await?;
+            Ok(())
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 /// Waits until the store holds exactly the snapshots `names` of the incarnation `incarnation`, in

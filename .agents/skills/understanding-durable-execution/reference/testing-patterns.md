@@ -199,7 +199,7 @@ caller_recovery_restarts_input_drain_after_rpc_result_commit}`,
 `tests/tool_streaming.rs::{deterministic_stream_crash_checkpoint_matrix,
 active_stream_crash_replays_pinned_activation_with_fresh_attachments,
 concurrent_tool_attempt_identity_survives_reordered_admission_and_replay,
-completed_reconstruction_claim_blocks_concurrent_replay_to_live}`.
+incomplete_custom_durability_waits_for_completed_reconstruction}`.
 
 ## Pattern 11: treat owner and entities as one lifecycle unit
 
@@ -221,6 +221,110 @@ Copy: `tests/tool_streaming/mod.rs::suspended_restart_replays_completed_tool_wit
 the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`, and the retained
 entity shutdown cases in `src/services/active_agents/tests.rs` and
 `src/worker/entity_invocation.rs`.
+
+## Filesystem snapshots on APFS
+
+For the macOS seed synchronization policy, see
+[macOS seed synchronization](../../../../golem-worker-executor/worker-executor-walkthrough.html#macos-seed-synchronization).
+Changes to macOS seed synchronization must cover `Apfs`, `Directory` and `Temporary`: plain
+native `fsync` for each seeded regular file and the required scoped namespace `fsync` calls.
+Each fresh macOS filesystem has one `seed_flusher`, an unlinked regular file that `NativeRoot`
+creates and owns. A root on another platform has no `seed_flusher`. Check that admission pins the
+root directory and its `seed_flusher` together, and every admitted batch attempts one final
+`F_FULLFSYNC` through the pinned `seed_flusher`. Include empty, symlink-only and directory-only
+batches, and batches that fail early. Verify that flush
+finalization creates no per-batch directory entry, does not change the root's modification time,
+works without a writable root, and cannot be redirected by pathname replacement. Distinguish
+a setup or admission failure, which happens before admission and has no pinned `seed_flusher` to
+flush.
+Check that the namespace and batch finalizers attempt every required synchronization after an
+admitted batch error while preserving the first error. Keep Linux seed
+synchronization and explicit guest flush behavior unchanged. These are correctness checks,
+not performance or workload-suitability claims.
+
+The `build-apfs-test-bin` CI job compiles the executor library test binary on macOS. It selects
+that executable from Cargo JSON output and uploads it for the same workflow run. The `apfs-tests`
+job runs its `:tag:native_apfs` cases on macOS. The host script creates and attaches one 32MiB HFS+
+image outside the test binary, then uses `--include-ignored` to run the constructor-refusal case.
+The other native cases use the runner's existing volume. The script detaches and removes the
+fixture after the run. A failed detach retains the fixture and fails the job. Worker tests spawn
+no fixture processes. Native CI needs no Lima VM, WASM, built-in artifact or Redis dependency.
+
+For broader local verification on macOS, use these commands. The first and the third also select
+portable helpers that the ordinary unit suite covers. The second runs the only `local_filesystem`
+case, `apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay`. That case is macOS-only and
+no CI job runs it, so run it locally after a change to APFS capture or restore. It needs the
+`test-components/it_initial_file_system_release.wasm` fixture:
+
+```shell
+cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- sandbox_filesystem:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
+RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- :tag:local_filesystem --test-threads 1 --report-time
+cargo test --locked -j 4 --profile dev-ci -p golem --lib -- filesystem_config:: command_handler:: launch:: --test-threads 1 --report-time
+```
+
+The library module filters automatically select every portable and macOS seed helper test
+in those modules, without a naming prefix or a per-test filter edit. They cover the clone test
+in `sandbox_filesystem::apfs::tests`, the startup probe, conservative filename coordination,
+the configuration round trip and the capture pressure check.
+The portable seed tests also run their APFS branches. They check file attributes and temporary-file
+cleanup, symlink times and cleanup, and merging an unreadable empty directory without a sync-only
+child open. `macos_seed_syncs_directory_attributes_through_restrictive_permissions` checks directory
+permissions and modification time through a descriptor opened before restrictive permissions.
+`apfs_conservative_coordination_covers_both_edit_observation_orders` polls contenders under held
+leases. It checks that observations run together, edits wait for observations, observations wait
+for an active edit, and a different parent remains independent. It uses lease release, not sleeps.
+`apfs_native_coordination_preserves_filename_spelling_and_lookup` creates a Unicode name through
+the adapter. It checks the stored and requested spellings, native normalization aliases and distinct
+files. It runs on the existing volume, so it observes only that volume's case mode.
+The `apfs_alias_renamed_initial_file` cases rename a read-only initial file or an ancestor through
+an intermediate path to a Unicode alias. They check that capture keeps the stored spelling and bytes,
+leaves the declaration out of `left_out`, and restores the same tree. The case-only test runs that
+history when the existing volume has case-insensitive lookup; it reports the observed case mode.
+`apfs_capture_of_a_tree_with_hard_links_restores_the_link_groups` builds a tree through lifecycle
+calls: a new file and a hard link to it, a hard link to a read-only initial file, a renamed file, a
+deleted file, and a moved directory that holds the read-only initial file. It checks the two link
+groups of the source, then captures the tree, restores it into a new agent on APFS and compares
+both trees, link groups included.
+The portable `capture_spelling_` cases check raw name comparisons, per-parent reuse, root-to-leaf
+targets, error propagation and closing after a failed listing. The scripted opaque-facts test separates
+a positive lookup proof from a canonical coordination label, even when the label matches the raw name.
+`apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes` checks copy-on-write
+copies, unflushed writes, exclusions and hard-link groups through the sandbox operations.
+`apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload` checks capture admission.
+The native CI selection covers APFS cloning and lookup, the shared macOS seed effects, the
+permission regression, capture pressure, and capture and restore with native spelling and with
+hard links.
+Compilation runs in a separate job, so a failed test does not prevent the successful build from
+saving its dependency cache. The ordinary unit suite keeps portable decisions and configuration
+coverage; the Linux runner keeps the shared managed and reflink XFS recovery cases.
+
+The ordinary unit suite covers hard-link behavior and the fixed-seed restore property. A directory hard link
+must give `not-permitted` even when the destination exists. The scripted collision test programs
+`AlreadyExists` followed by a fresh directory observation. The preservation tests cover files,
+symlinks, stale directory hints and nonterminal proof failures. A terminal proof failure invalidates
+the generation and revokes later calls. The coordination test blocks the post-error source probe
+and explicitly polls a source replacement before it releases the probe. It does not infer exclusion
+from a sleep. The native minimized history runs the collision before and after capture, compares
+the tree with full replay, and checks a successful later write. The independent model tests keep
+ancestor and missing-source precedence and do not follow source symlinks.
+
+The native APFS restart test needs the `test-components/it_initial_file_system_release.wasm` fixture.
+It takes a periodic snapshot, drops the executor, starts a new one over the same storage and
+compares the files with a full replay. It includes hard links. Build the fixture before a local run with the
+`modifying-test-components` skill. This optional native integration uses the same recovery helper
+as the managed and reflink XFS cases in the Linux managed-filesystem runner. CI keeps those cases
+and the native backend proofs without compiling the duplicate macOS integration target.
+
+The ordinary unit suite runs the `golem` library's configuration, command-handler and launch modules.
+The focused wiring test parses the real `server run` command, forwards the argument or manifest
+root through the production launch builder, and applies filesystem settings through the same
+function as startup. It checks defaults, the root argument, TOML over that argument, and
+environment over TOML. Two preparations check retained repository key reuse and Unix permissions.
+These tests do not start services or provision built-in tools. Existing configuration cases also
+cover optional TOML, validation before key effects and corrupt or concurrent retained keys.
+The launch module checks that local blob storage remains at `<data_dir>/blobs`.
+`Enabled` enables the snapshot service, but an agent still needs a snapshotting policy to save and
+restore snapshots. The executor restart test supplies that policy.
 
 ## Anti-patterns
 

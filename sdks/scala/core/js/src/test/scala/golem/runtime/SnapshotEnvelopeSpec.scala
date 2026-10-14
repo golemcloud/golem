@@ -45,7 +45,10 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
   private def parseJsonEnvelope(bytes: Array[Byte]): (Principal, String) =
     Guest
       .decodeSnapshotPayload(bytes, "application/json")
-      .fold(error => throw new RuntimeException(error), result => (result._1, new String(result._2, "UTF-8")))
+      .fold(
+        error => throw new RuntimeException(error),
+        result => (result._1, new String(result._2.asInstanceOf[SnapshotPayload].bytes, "UTF-8"))
+      )
 
   private def buildBinaryEnvelopeV2(principal: Principal, stateBytes: Array[Byte]): Array[Byte] = {
     val principalBytes = PrincipalConverter.toJson(principal)
@@ -64,7 +67,10 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
   private def parseBinaryEnvelopeV2(bytes: Array[Byte]): (Principal, Array[Byte]) =
     Guest
       .decodeSnapshotPayload(bytes, "application/octet-stream")
-      .fold(error => throw new RuntimeException(error), identity)
+      .fold(
+        error => throw new RuntimeException(error),
+        result => (result._1, result._2.asInstanceOf[SnapshotPayload].bytes)
+      )
 
   def spec = suite("SnapshotEnvelopeSpec")(
     suite("JSON envelope")(
@@ -219,7 +225,7 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         val decoded = Guest.decodeSnapshotPayload(Array[Byte](1, 10, 20), "application/octet-stream")
         assertTrue(
           decoded.exists { case (principal, state) =>
-            principal == Principal.Anonymous && state.toSeq == Seq[Byte](10, 20)
+            principal == Principal.Anonymous && state.asInstanceOf[SnapshotPayload].bytes.toSeq == Seq[Byte](10, 20)
           }
         )
       },

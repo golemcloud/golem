@@ -1,17 +1,24 @@
 /**
  * @since 1.6.0
  */
-import { Effect, Pipeable, Result, Schema, SchemaAST } from "effect"
+import { Effect, Option, Pipeable, Result, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { HostServices } from "../host/HostLive.js"
 import type { EndpointDef } from "../Http.js"
 import { isMultimodal, type Multimodal } from "../Multimodal.js"
 import { Principal, type PrincipalInputSchema } from "../Principal.js"
-import { SelfAgentId } from "../SelfAgentId.js"
-import { isElementSpec, tryGetter, type ElementSpec } from "../Unstructured.js"
+import {
+  isElementSpec,
+  isOptionalElementSpec,
+  tryGetter,
+  type ElementSpec,
+  type OptionalElementSpec,
+} from "../Unstructured.js"
 import {
   makeWireDecoder,
+  makeWireEncoder,
+  prepareWireRecordCodec,
   toWitCodec,
   type UnsupportedSchemaError,
   type WitCodec,
@@ -37,17 +44,23 @@ import {
   type SchemaType,
   type SchemaValue,
 } from "./schema-model/model.js"
-import { GraphEncoder, schemaValueToWit, schemaValueToWitAsync } from "./schema-model/wit.js"
+import { GraphEncoder } from "./schema-model/wit.js"
 
 /** @since 1.6.0 @category models */
 export type MethodParam = Schema.Top | ElementSpec<any> | Multimodal<any>
 /** @since 1.6.0 @category models */
 export type MethodParams = Readonly<Record<string, MethodParam>>
 /** @since 1.6.0 @category models */
-export type MethodSuccess = Schema.Top | ElementSpec<any>
+export type MethodSuccess = Schema.Top | ElementSpec<any> | OptionalElementSpec<any>
 /** @since 1.6.0 @category models */
 export type MethodSuccessType<S extends MethodSuccess> =
-  S extends ElementSpec<infer T> ? T : S extends Schema.Top ? S["Type"] : never
+  S extends OptionalElementSpec<infer T>
+    ? Option.Option<T>
+    : S extends ElementSpec<infer T>
+      ? T
+      : S extends Schema.Top
+        ? S["Type"]
+        : never
 /** @since 1.6.0 @category models */
 export type ParamInputType<P extends MethodParam> =
   P extends Multimodal<infer S>
@@ -104,9 +117,9 @@ type HandlerServices<S extends MethodSpec<any, any, any>, CfgTag> =
   S extends MethodSpec<any, any, any, any, infer ReadOnly>
     ? ReadOnly extends true | ReadOnlyOption
       ? HasPrincipalInput<S["input"]> extends true
-        ? Principal | SelfAgentId | HostServices | CfgTag
-        : SelfAgentId | HostServices | CfgTag
-      : Principal | SelfAgentId | HostServices | CfgTag
+        ? Principal | HostServices | CfgTag
+        : HostServices | CfgTag
+      : Principal | HostServices | CfgTag
     : never
 
 type UnsupportedBinding<N extends string, A extends string, S extends string> = string extends N
@@ -167,7 +180,7 @@ type IsNonEmptyTuple<T extends ReadonlyArray<unknown>> = T extends readonly [
 export const method: {
   <
     const Input extends MethodParams,
-    Success extends Schema.Top,
+    Success extends MethodSuccess,
     Error extends Schema.Top,
     const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Input>>> = readonly [],
     const ReadOnly extends boolean | ReadOnlyOption | undefined = undefined,
@@ -235,7 +248,7 @@ export interface Method<
 }
 /** @since 1.6.0 @category constructors */
 export const defineMethod: {
-  <const I extends MethodParams, S extends Schema.Top, E extends Schema.Top, R>(definition: {
+  <const I extends MethodParams, S extends MethodSuccess, E extends Schema.Top, R>(definition: {
     readonly name: string
     readonly input: I
     readonly success: S
@@ -353,17 +366,17 @@ export const compileParamBindings = <Input extends MethodParams>(
     const codec = valueToRecord.pipe(
       Schema.decodeTo(EncodedRecord),
     ) as unknown as CompiledInputCodec<Input>["codec"]
-    const encodeValue = Schema.encodeEffect(codec)
+    prepareWireRecordCodec(
+      codec,
+      entries.map((entry) => ({ name: entry.name, codec: entry.codec.codec })),
+    )
     return {
       graph,
       schemaGraph,
       inputSchema,
       codec,
-      encode: (value) => Effect.map(encodeValue(value), schemaValueToWit),
-      encodeAsync: (value) =>
-        Effect.flatMap(encodeValue(value), (sv) =>
-          Effect.promise((signal) => schemaValueToWitAsync(sv, signal)),
-        ),
+      encode: makeWireEncoder(codec, false),
+      encodeAsync: makeWireEncoder(codec),
       decode: makeWireDecoder(codec),
     }
   })
@@ -406,6 +419,41 @@ export interface MethodCodec<
 }
 
 const isVoidSchema = (schema: Schema.Top): boolean => schema.ast._tag === "Void"
+
+/**
+ * `result<ok, err>` codec for an unstructured success element and a typed
+ * error schema. The element is not an Effect Schema, so the result is built
+ * from the two compiled codecs instead of `toWitCodec(Schema.Result(...))`.
+ * Element graphs carry no nominal defs, so the error graph's defs are complete.
+ */
+const unstructuredResultCodec = (
+  ok: WitCodec<Schema.Top>,
+  err: WitCodec<Schema.Top>,
+): WitCodec<Schema.Top> => {
+  const Carrier = Schema.declare((_): _ is SchemaValue => true)
+  const EncodedResult = Schema.declare((_): _ is Result.Result<SchemaValue, SchemaValue> => true)
+  const schema = Schema.Result(ok.codec, err.codec)
+  const codec = Carrier.pipe(
+    Schema.decodeTo(EncodedResult, {
+      decode: tryGetter((sv: SchemaValue) => {
+        if (sv.tag !== "result") throw new Error(`Expected result value, got ${sv.tag}`)
+        const value = sv.result.value
+        if (value === undefined) throw new Error(`Expected a ${sv.result.tag} payload`)
+        return sv.result.tag === "ok" ? Result.succeed(value) : Result.fail(value)
+      }),
+      encode: tryGetter((result: Result.Result<SchemaValue, SchemaValue>) =>
+        Result.isSuccess(result) ? v.ok(result.success) : v.err(result.failure),
+      ),
+    }),
+    Schema.decodeTo(schema),
+  )
+  return {
+    schema,
+    graph: { defs: err.graph.defs, root: t.result(ok.graph.root, err.graph.root) },
+    isUnit: false,
+    codec: codec as unknown as WitCodec<Schema.Top>["codec"],
+  }
+}
 const readOnlyConfig = (
   option: boolean | ReadOnlyOption | undefined,
   usesPrincipal: boolean,
@@ -439,20 +487,28 @@ export const compileMethodSpec = <
       (param) => !isElementSpec(param) && !isMultimodal(param) && isPrincipal(param as Schema.Top),
     )
     const errorWrapped = !isVoidSchema(spec.error)
-    if (errorWrapped && isElementSpec(spec.success)) {
-      return yield* Effect.fail({
-        _tag: "UnsupportedSchemaError",
-        reason: `${name}: an unstructured success value cannot be combined with a typed error`,
-      } as UnsupportedSchemaError)
-    }
-    const successVoid = !isElementSpec(spec.success) && isVoidSchema(spec.success)
-    const outputSchemaValue: Schema.Top | ElementSpec<any> = errorWrapped
-      ? Schema.Result(successVoid ? Schema.Struct({}) : (spec.success as Schema.Top), spec.error)
-      : spec.success
-    const outputCodec =
-      successVoid && !errorWrapped
-        ? undefined
-        : ((yield* paramCodec(outputSchemaValue)) as WitCodec<Schema.Top>)
+    const success: MethodSuccess = spec.success
+    const unstructured = isElementSpec(success)
+      ? success.witCodec
+      : isOptionalElementSpec(success)
+        ? success.witCodec
+        : undefined
+    const successVoid = unstructured === undefined && isVoidSchema(success as Schema.Top)
+    const outputCodec: WitCodec<Schema.Top> | undefined =
+      unstructured !== undefined
+        ? errorWrapped
+          ? unstructuredResultCodec(
+              unstructured as WitCodec<Schema.Top>,
+              yield* toWitCodec(spec.error),
+            )
+          : (unstructured as WitCodec<Schema.Top>)
+        : errorWrapped
+          ? yield* toWitCodec(
+              Schema.Result(successVoid ? Schema.Struct({}) : (success as Schema.Top), spec.error),
+            )
+          : successVoid
+            ? undefined
+            : yield* toWitCodec(success as Schema.Top)
     const composed = composeSchemaGraphs(
       [inputCodec.graph, ...(outputCodec ? [outputCodec.graph] : [])],
       name,
@@ -471,7 +527,7 @@ export const compileMethodSpec = <
       ...inputCodec.inputSchema,
       val: inputCodec.inputSchema.val.map((f, i) => ({ ...f, schema: inputRoots[i]! })),
     }
-    const encodeOutput = outputCodec && Schema.encodeEffect(outputCodec.codec)
+    const encodeOutput = outputCodec && makeWireEncoder(outputCodec.codec)
     return {
       name,
       spec,
@@ -487,13 +543,7 @@ export const compileMethodSpec = <
         outputCodec && outputType
           ? { ...outputCodec, graph: { defs: graph.defs, root: outputType } }
           : undefined,
-      encodeOutput:
-        encodeOutput === undefined
-          ? undefined
-          : (value) =>
-              Effect.flatMap(encodeOutput(value), (encoded) =>
-                Effect.promise((signal) => schemaValueToWitAsync(encoded, signal)),
-              ),
+      encodeOutput: encodeOutput === undefined ? undefined : encodeOutput,
       inputSchema,
       outputSchema: outputRoot === undefined ? { tag: "unit" } : { tag: "single", val: outputRoot },
       errorWrapped,
@@ -533,12 +583,7 @@ export const invokeSchemaValue = <
 ): Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R> =>
   invokeWireValue(
     inputCodec,
-    outputCodec === undefined
-      ? undefined
-      : (value) =>
-          Effect.flatMap(Schema.encodeEffect(outputCodec.codec)(value), (encoded) =>
-            Effect.promise((signal) => schemaValueToWitAsync(encoded, signal)),
-          ),
+    outputCodec === undefined ? undefined : makeWireEncoder(outputCodec.codec),
     options,
     handler,
     input,

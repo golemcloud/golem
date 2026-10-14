@@ -112,8 +112,7 @@ fn resolver_resolve_before_register_buffers() {
 #[test]
 fn resolver_missing_pending_is_dropped_not_buffered() {
     let mut resolver = ConcurrentReplayResolver::default();
-    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case,
-    // e.g. the guest-facing manual durability pair).
+    // No registration: resolve_if_pending must not buffer (this is the unregistered-End case).
     assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     let mut rx = resolver.register(idx(1), None);
     assert!(rx.try_recv().is_err());
@@ -197,6 +196,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             observational_owner: None,
             entity_parent_start_index: None,
             atomic_lease: unregistered_atomic_lease(atomic_region, true),
+            invocation_id: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -306,7 +306,6 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
                 span_observer: None,
-                executor_shutdown: tokio_util::sync::CancellationToken::new(),
                 atomic_lease: None,
                 trap_context: DurableCallTrapContext {
                     retry_from: idx(4),
@@ -316,7 +315,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
             },
             NotCancellable::production_drop_sink(Some(tx.clone())),
             Some(tx),
-            Arc::new(|| false),
+            TeardownProbe::never(),
         );
         assert_eq!(counter.load(Ordering::Acquire), 1);
         let terminal = tokio::spawn(async move {
@@ -355,6 +354,33 @@ async fn live_delivery_token(
     permit_counter: Arc<AtomicUsize>,
     cleanup_tx: mpsc::UnboundedSender<DropEvent>,
 ) -> CompletionDelivery {
+    live_delivery_token_with_teardown(oplog, permit_counter, cleanup_tx, TeardownProbe::never())
+        .await
+}
+
+async fn live_delivery_token_with_teardown(
+    oplog: Arc<InMemoryOplog>,
+    permit_counter: Arc<AtomicUsize>,
+    cleanup_tx: mpsc::UnboundedSender<DropEvent>,
+    teardown: TeardownProbe,
+) -> CompletionDelivery {
+    CompletionDelivery {
+        state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
+            marker: marker_record_over(oplog).await,
+            trap_context: DurableCallTrapContext {
+                retry_from: idx(1),
+                in_atomic_region: false,
+            },
+            live_call_permit: Some(LiveCallPermit::new(permit_counter)),
+            cleanup_sink: Some(cleanup_tx),
+            pending_append: None,
+            teardown,
+        })),
+    }
+}
+
+/// A `CompletionDiscarded` marker record for call `Start` 1 whose appends land on `oplog`.
+async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord {
     let oplog_dyn: Arc<dyn Oplog> = oplog;
     // The replay state is built over a separately seeded [Start, End] oplog so the observed
     // oplog contains only what the token itself appends (and so an End gate installed on the
@@ -403,20 +429,9 @@ async fn live_delivery_token(
     .await
     .expect("failed to build replay state");
     let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
-    CompletionDelivery {
-        state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
-            marker: CompletionMarkerRecord {
-                start_idx: idx(1),
-                recorder,
-            },
-            trap_context: DurableCallTrapContext {
-                retry_from: idx(1),
-                in_atomic_region: false,
-            },
-            live_call_permit: Some(LiveCallPermit::new(permit_counter)),
-            cleanup_sink: Some(cleanup_tx),
-            pending_append: None,
-        })),
+    CompletionMarkerRecord {
+        start_idx: idx(1),
+        recorder,
     }
 }
 
@@ -436,6 +451,35 @@ async fn completion_delivery_suppress_records_no_marker() {
         oplog.entries.lock().await.is_empty(),
         "no marker may be recorded"
     );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn replay_discarded_accessor_delivery_waits_for_cancellation_after_restoration() {
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, None::<u32>);
+
+    store
+        .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+            // The caller restores its taken resource before reaching the delivery boundary.
+            let token = CompletionDelivery::replay_discarded();
+            accessor.with(|mut store| *store.data_mut() = Some(42));
+            let mut delivery = Box::pin(token.deliver_at_accessor_terminal(accessor));
+            assert!(
+                futures::poll!(&mut delivery).is_pending(),
+                "a discarded completion must not return its result to the guest"
+            );
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            // Cancelling the host future must leave the restored resource available.
+            drop(delivery);
+            accessor.with(|mut store| assert_eq!(*store.data_mut(), Some(42)));
+            Ok(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[test]
@@ -627,6 +671,113 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
         }
         other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
     }
+}
+
+#[test]
+async fn completion_delivery_armed_drop_during_teardown_leaves_end_markerless() {
+    // A Store unload (simulated crash, interrupt, eviction) or an executor shutdown tears the
+    // delivering future with the token still armed. The guest never observed the completion,
+    // so no `CompletionDiscarded` marker may be recorded: replay must tail-gate the markerless
+    // `End` and deliver it. Only the permit is released; nothing is queued for the drain.
+    for executor_shutdown in [false, true] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let tearing_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = tearing_down.clone();
+        let teardown = TeardownProbe::new(
+            shutdown.clone(),
+            Arc::new(move || probe.load(Ordering::Acquire)),
+        );
+        let token =
+            live_delivery_token_with_teardown(oplog.clone(), counter.clone(), tx, teardown).await;
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        if executor_shutdown {
+            shutdown.cancel();
+        } else {
+            tearing_down.store(true, Ordering::Release);
+        }
+        drop(token);
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            counter.load(Ordering::Acquire),
+            0,
+            "the torn token must release the in-flight permit"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected)),
+            "no marker receipt may be queued for the drain"
+        );
+        assert!(
+            oplog.entries.lock().await.is_empty(),
+            "a teardown tear must not append a CompletionDiscarded marker"
+        );
+    }
+}
+
+#[test]
+async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
+    // The same tear can hit the guard before it is converted into a token (the delivery future
+    // is torn between the owned `End` append and `take_completion_delivery`). The queued
+    // `CleanupAfterTerminal` event must still carry the terminal join and the permit, but the
+    // armed discard marker must not be recorded.
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let tearing_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let probe = tearing_down.clone();
+    {
+        let mut guard = AccessTerminalGuard::<NotCancellable>::new(
+            DroppedCall {
+                start_idx: idx(1),
+                begin_index: idx(1),
+                function_type: DurableFunctionType::ReadLocal,
+                request_upload: PendingUpload::already_durable(),
+                span_finished: None,
+                span_observer: None,
+                atomic_lease: None,
+                trap_context: DurableCallTrapContext {
+                    retry_from: idx(1),
+                    in_atomic_region: false,
+                },
+                live_call_permit: Some(LiveCallPermit::new(counter.clone())),
+            },
+            NotCancellable::production_drop_sink(Some(tx.clone())),
+            Some(tx),
+            TeardownProbe::new(
+                tokio_util::sync::CancellationToken::new(),
+                Arc::new(move || probe.load(Ordering::Acquire)),
+            ),
+        );
+        let terminal = tokio::spawn(async { Ok(()) });
+        guard.cleanup_after_terminal(terminal, Some(marker_record_over(oplog.clone()).await));
+        tearing_down.store(true, Ordering::Release);
+    }
+    let event = rx
+        .try_recv()
+        .expect("expected a CleanupAfterTerminal drop event");
+    let DropEvent::CleanupAfterTerminal {
+        terminal,
+        live_call_permit,
+        ..
+    } = event
+    else {
+        panic!("expected CleanupAfterTerminal, got {event:?}");
+    };
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    terminal
+        .expect("the terminal join must still be handed to the drain")
+        .await
+        .expect("terminal task must not panic")
+        .expect("terminal must succeed");
+    drop(live_call_permit);
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+    assert!(
+        oplog.entries.lock().await.is_empty(),
+        "a teardown tear must not append a CompletionDiscarded marker"
+    );
 }
 
 #[test]
@@ -1410,7 +1561,6 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             request_upload: PendingUpload::already_durable(),
             span_finished: None,
             span_observer: Some(span_observer.clone()),
-            executor_shutdown: tokio_util::sync::CancellationToken::new(),
             atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: start_idx,
@@ -1420,7 +1570,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         },
         NotCancellable::production_drop_sink(Some(cleanup_tx.clone())),
         Some(cleanup_tx),
-        Arc::new(|| false),
+        TeardownProbe::never(),
     );
     assert_eq!(permit_counter.load(Ordering::Acquire), 1);
 
@@ -1453,7 +1603,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             NotCancellable,
         >::persist_access_terminal(
             persist_oplog,
-            completion_marker_recorder,
+            Some(completion_marker_recorder),
             &mut guard,
             start_idx,
             response,
@@ -1661,7 +1811,10 @@ fn terminal_guard_distinguishes_guest_drop_from_owner_teardown() {
             call,
             Some(tx.clone()),
             None,
-            Arc::new(move || probe.load(Ordering::Acquire)),
+            TeardownProbe::new(
+                tokio_util::sync::CancellationToken::new(),
+                Arc::new(move || probe.load(Ordering::Acquire)),
+            ),
         );
         fenced.store(teardown, Ordering::Release);
         drop(guard);
@@ -1831,6 +1984,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1848,6 +2002,7 @@ fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1865,6 +2020,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -1890,6 +2046,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -1897,6 +2054,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     let error_a = {
@@ -1939,6 +2097,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -1946,6 +2105,7 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
+        invocation_id: None,
     };
 
     let error_a = {
@@ -2006,6 +2166,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
     let terminal_error: anyhow::Error = TerminalCallError::new(
@@ -2062,6 +2223,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
+        invocation_id: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2069,6 +2231,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -2121,7 +2284,6 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
         span_observer: None,
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
         trap_context: DurableCallTrapContext {
             retry_from: idx(3),
@@ -2138,7 +2300,6 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
         span_observer: None,
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: None,
         trap_context: DurableCallTrapContext {
             retry_from: idx(8),
@@ -2181,6 +2342,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2198,6 +2360,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         parent_start_index: None,
         atomic_region: None,
         observational_owner: None,
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2214,6 +2377,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: Some(idx(7)),
+        invocation_id: None,
         entity_parent_start_index: None,
     };
 
@@ -2235,6 +2399,7 @@ fn call_execution_scope_owns_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         atomic_lease: None,
+        invocation_id: None,
     };
 
     assert_eq!(scope.retry_from, idx(42));

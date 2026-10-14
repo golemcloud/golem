@@ -79,6 +79,7 @@ steps:
         preserve existing manifest entries, and make sure the project builds successfully.
       scala: *non-effect-add-recurring-poller-prompt
       moonbit: *non-effect-add-recurring-poller-prompt
+      go: *non-effect-add-recurring-poller-prompt
     expectedSkills:
       rust:
         - "golem-recurring-task-rust"
@@ -90,6 +91,8 @@ steps:
         - "golem-recurring-task-scala"
       moonbit:
         - "golem-recurring-task-moonbit"
+      go:
+        - "golem-recurring-task-go"
     verify:
       build: true
       deploy: true
@@ -103,6 +106,7 @@ steps:
         effect: "start"
         scala: "start"
         moonbit: "start"
+        go: "start"
 
   - id: "verify-first-poll-ran"
     http:
@@ -141,6 +145,7 @@ steps:
         effect: "stop"
         scala: "stop"
         moonbit: "stop"
+        go: "stop"
 
   - id: "wait-for-stopped-poll-to-fire"
     sleep: 6

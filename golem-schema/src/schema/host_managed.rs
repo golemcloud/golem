@@ -122,59 +122,111 @@ impl std::error::Error for HostManagedTraversalError {}
 /// Finds the first host-managed capability in `value`, including nested
 /// occurrences in every structural container.
 pub fn find_host_managed_value(value: &SchemaValue) -> Option<HostManagedOccurrence> {
-    find_host_managed_value_at(value, "$".to_string())
+    find_host_managed_value_at(value, &mut Vec::new())
 }
 
-fn find_host_managed_value_at(value: &SchemaValue, path: String) -> Option<HostManagedOccurrence> {
+enum CapabilityPathSegment<'a> {
+    Index(&'static str, usize),
+    Map(usize, &'static str),
+    Payload(&'static str),
+    Union(&'a str),
+}
+
+fn find_host_managed_value_at<'a>(
+    value: &'a SchemaValue,
+    path: &mut Vec<CapabilityPathSegment<'a>>,
+) -> Option<HostManagedOccurrence> {
     if let Some(kind) = HostManagedKind::from_value(value) {
-        return Some(HostManagedOccurrence { kind, path });
+        let mut rendered = "$".to_string();
+        for segment in path.iter() {
+            match segment {
+                CapabilityPathSegment::Index(kind, index) => {
+                    write!(&mut rendered, ".{kind}[{index}]").unwrap()
+                }
+                CapabilityPathSegment::Map(index, side) => {
+                    write!(&mut rendered, ".map[{index}].{side}").unwrap()
+                }
+                CapabilityPathSegment::Payload(kind) => write!(&mut rendered, ".{kind}").unwrap(),
+                CapabilityPathSegment::Union(tag) => {
+                    write!(&mut rendered, ".union[{tag:?}]").unwrap()
+                }
+            }
+        }
+        return Some(HostManagedOccurrence {
+            kind,
+            path: rendered,
+        });
     }
 
     match value {
         SchemaValue::Record { fields } => fields.iter().enumerate().find_map(|(index, value)| {
-            find_host_managed_value_at(value, format!("{path}.fields[{index}]"))
+            find_host_managed_child(value, path, CapabilityPathSegment::Index("fields", index))
         }),
         SchemaValue::Variant(value) => value.payload.as_deref().and_then(|payload| {
-            find_host_managed_value_at(payload, format!("{path}.variant[{}]", value.case))
+            find_host_managed_child(
+                payload,
+                path,
+                CapabilityPathSegment::Index("variant", value.case as usize),
+            )
         }),
-        SchemaValue::Tuple { elements } => find_host_managed_sequence(elements, &path, "tuple"),
-        SchemaValue::List { elements } => find_host_managed_sequence(elements, &path, "list"),
+        SchemaValue::Tuple { elements } => find_host_managed_sequence(elements, path, "tuple"),
+        SchemaValue::List { elements } => find_host_managed_sequence(elements, path, "list"),
         SchemaValue::FixedList { elements } => {
-            find_host_managed_sequence(elements, &path, "fixed-list")
+            find_host_managed_sequence(elements, path, "fixed-list")
         }
         SchemaValue::Map { entries } => {
             entries
                 .iter()
                 .enumerate()
                 .find_map(|(index, (key, value))| {
-                    find_host_managed_value_at(key, format!("{path}.map[{index}].key")).or_else(
-                        || find_host_managed_value_at(value, format!("{path}.map[{index}].value")),
-                    )
+                    find_host_managed_child(key, path, CapabilityPathSegment::Map(index, "key"))
+                        .or_else(|| {
+                            find_host_managed_child(
+                                value,
+                                path,
+                                CapabilityPathSegment::Map(index, "value"),
+                            )
+                        })
                 })
         }
-        SchemaValue::Option { inner } => inner
-            .as_deref()
-            .and_then(|value| find_host_managed_value_at(value, format!("{path}.some"))),
-        SchemaValue::Result(ResultValuePayload::Ok { value }) => value
-            .as_deref()
-            .and_then(|value| find_host_managed_value_at(value, format!("{path}.ok"))),
-        SchemaValue::Result(ResultValuePayload::Err { value }) => value
-            .as_deref()
-            .and_then(|value| find_host_managed_value_at(value, format!("{path}.err"))),
+        SchemaValue::Option { inner } => inner.as_deref().and_then(|value| {
+            find_host_managed_child(value, path, CapabilityPathSegment::Payload("some"))
+        }),
+        SchemaValue::Result(ResultValuePayload::Ok { value }) => {
+            value.as_deref().and_then(|value| {
+                find_host_managed_child(value, path, CapabilityPathSegment::Payload("ok"))
+            })
+        }
+        SchemaValue::Result(ResultValuePayload::Err { value }) => {
+            value.as_deref().and_then(|value| {
+                find_host_managed_child(value, path, CapabilityPathSegment::Payload("err"))
+            })
+        }
         SchemaValue::Union(value) => {
-            find_host_managed_value_at(&value.body, append_named_path(&path, "union", &value.tag))
+            find_host_managed_child(&value.body, path, CapabilityPathSegment::Union(&value.tag))
         }
         _ => None,
     }
 }
 
-fn find_host_managed_sequence(
-    values: &[SchemaValue],
-    path: &str,
-    kind: &str,
+fn find_host_managed_child<'a>(
+    value: &'a SchemaValue,
+    path: &mut Vec<CapabilityPathSegment<'a>>,
+    segment: CapabilityPathSegment<'a>,
+) -> Option<HostManagedOccurrence> {
+    path.push(segment);
+    let found = find_host_managed_value_at(value, path);
+    path.pop();
+    found
+}
+
+fn find_host_managed_sequence<'a>(
+    values: &'a [SchemaValue],
+    path: &mut Vec<CapabilityPathSegment<'a>>,
+    kind: &'static str,
 ) -> Option<HostManagedOccurrence> {
     values.iter().enumerate().find_map(|(index, value)| {
-        find_host_managed_value_at(value, format!("{path}.{kind}[{index}]"))
+        find_host_managed_child(value, path, CapabilityPathSegment::Index(kind, index))
     })
 }
 
@@ -752,6 +804,86 @@ mod tests {
                 path: "$.fields[0].map[0].value".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn capability_paths_preserve_first_occurrence_and_discard_sibling_segments() {
+        let containers = [
+            (
+                SchemaValue::Tuple {
+                    elements: vec![secret_value()],
+                },
+                ".tuple[0]",
+            ),
+            (
+                SchemaValue::FixedList {
+                    elements: vec![secret_value()],
+                },
+                ".fixed-list[0]",
+            ),
+            (
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 7,
+                    payload: Some(Box::new(secret_value())),
+                }),
+                ".variant[7]",
+            ),
+            (
+                SchemaValue::Option {
+                    inner: Some(Box::new(secret_value())),
+                },
+                ".some",
+            ),
+            (
+                SchemaValue::Result(ResultValuePayload::Ok {
+                    value: Some(Box::new(secret_value())),
+                }),
+                ".ok",
+            ),
+            (
+                SchemaValue::Result(ResultValuePayload::Err {
+                    value: Some(Box::new(secret_value())),
+                }),
+                ".err",
+            ),
+            (
+                SchemaValue::Map {
+                    entries: vec![(secret_value(), quota_token_value())],
+                },
+                ".map[0].key",
+            ),
+            (
+                SchemaValue::Union(UnionValuePayload {
+                    tag: "a\"\n".into(),
+                    body: Box::new(secret_value()),
+                }),
+                ".union[\"a\\\"\\n\"]",
+            ),
+        ];
+        for (container, suffix) in containers {
+            let mut elements = vec![SchemaValue::U8(1); 10_000];
+            assert_eq!(
+                find_host_managed_value(&SchemaValue::List {
+                    elements: elements.clone()
+                }),
+                None
+            );
+            elements.push(container);
+            elements.push(quota_token_value());
+            let value = SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::Option { inner: None },
+                    SchemaValue::List { elements },
+                ],
+            };
+            assert_eq!(
+                find_host_managed_value(&value),
+                Some(HostManagedOccurrence {
+                    kind: HostManagedKind::Secret,
+                    path: format!("$.fields[1].list[10000]{suffix}"),
+                })
+            );
+        }
     }
 
     #[test]

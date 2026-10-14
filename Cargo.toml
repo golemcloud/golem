@@ -83,6 +83,7 @@ bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
+bzip2 = "0.6.1"
 bytes = "1.10.1"
 bytesize = "2.7.0"
 camino = "1.1.10"
@@ -255,6 +256,7 @@ shadow-rs = { version = "1.2.0", default-features = false, features = ["build"] 
 shell-words = "1.1.0"
 shlex = "2.0.1"
 similar = "2.7.0"
+socket2 = "0.6"
 spdx = "0.10.8"
 sqlparser = { version = "=0.62.0", features = ["visitor"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "mysql", "uuid", "migrate", "derive", "chrono", "json", "bigdecimal", "mac_address", "bit-vec", "ipnetwork", ] }
@@ -269,6 +271,7 @@ synoptic = "2.2.9"
 sysinfo = { version = "0.33.1", default-features = false, features = ["system"] }
 system-interface = "0.27.3"
 tap = "1.0.1"
+tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.12", default-features = true }
@@ -300,6 +303,7 @@ tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
 tree-sitter = "0.26.5"
+tree-sitter-go = "0.23.4"
 tree-sitter-json = "0.24.8"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
@@ -320,7 +324,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.9", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.12", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"
@@ -348,7 +352,7 @@ wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 # The head of the branch `golem-rustic_core-v0.13.0` of the fork.
-rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b1f72158c3b07c2efb8c546aa9d2aaff0819ea95" }
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "2269cbb0b2b89dc55cd4dca0172ead894b7b43fd" }
 
 [profile.dev]
 panic = "abort"

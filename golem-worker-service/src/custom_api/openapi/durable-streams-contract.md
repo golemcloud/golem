@@ -11,7 +11,7 @@ must not be advertised as implemented operations.
 | --- | --- | --- | --- |
 | Method base | PUT | 201 (200 for replay) | Compiled non-stream request body and arguments; optional expiry policy; empty response with session Location |
 | Invocation session | PUT | 201 / 200 | Same compiled body, arguments and optional expiry policy; empty response; conflicting invocation identity or policy is 409 |
-| Invocation session | HEAD | 200 | No body; JSON Content-Type, Cache-Control: no-store, Stream-Closed and configured expiry policy |
+| Invocation session | HEAD | 200 | No body; JSON Content-Type, Cache-Control: no-store, Stream-Closed: true only when all slots are closed or deleted, and configured expiry policy |
 | Invocation session | GET | 200 | Manifest: session, streams, closed |
 | Invocation session | DELETE | 204 | Cooperative cancellation; repeated cancellation succeeds; history remains readable |
 | Concrete stream slot | PUT | 201 / 200 | Empty body only; optional matching Content-Type; stream metadata response headers |
@@ -79,6 +79,10 @@ Do not apply REST option/result status or text/binary response lowering to slots
   otherwise streamCursor (string). Base64 encoding applies only to data events.
 - Manifest stream entries contain name, contentType, nextOffset, closed,
   cancelled and deleted. The manifest does not include stream data.
+- Responses emit Stream-Closed: true when closed, and otherwise omit the header.
+  Reads emit it only at EOF; HEAD reports the current closure state. Session
+  GET/HEAD emit it only when all slots are closed or deleted. Manifest closed
+  fields remain JSON booleans.
 
 ## Append representations
 
@@ -92,7 +96,8 @@ Do not apply REST option/result status or text/binary response lowering to slots
   and sequence are integers from 0 through 9007199254740991. Newly accepted
   producer writes return 200 and duplicates 204. Stale epochs return 403 with
   Producer-Epoch; gaps return 409 with Producer-Expected-Seq/Received-Seq.
-- Successful writes report Stream-Next-Offset and Stream-Closed; producer
+- Successful writes report Stream-Next-Offset and, only when closed,
+  Stream-Closed: true; producer
   successes also report Producer-Epoch and Producer-Seq. Closed-stream conflicts
   report final offset and closure. Body limits return 413, rate limits 429.
 - Append validation can return application/problem+json with path and detail;

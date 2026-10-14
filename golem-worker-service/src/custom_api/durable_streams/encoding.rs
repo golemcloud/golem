@@ -118,14 +118,12 @@ fn headers(
             .parse()
             .map_err(anyhow::Error::from)?,
     );
-    out.headers.insert(
-        HeaderName::from_static("stream-closed"),
-        HeaderValue::from_static(if r.closed && (head || r.up_to_date) {
-            "true"
-        } else {
-            "false"
-        }),
-    );
+    if r.closed && (head || r.up_to_date) {
+        out.headers.insert(
+            HeaderName::from_static("stream-closed"),
+            HeaderValue::from_static("true"),
+        );
+    }
     if r.cancelled && (head || r.up_to_date) {
         out.headers.insert(
             HeaderName::from_static("stream-cancelled"),
@@ -539,7 +537,7 @@ mod tests {
         let slot = binary_slot();
         let page = data_response(&batch, false, &slot).unwrap();
         let closed = HeaderName::from_static("stream-closed");
-        assert_eq!(page.headers[&closed], HeaderValue::from_static("false"));
+        assert!(!page.headers.contains_key(&closed));
         assert_eq!(
             page.headers[&http::header::CACHE_CONTROL],
             HeaderValue::from_static("public, max-age=31536000, immutable")

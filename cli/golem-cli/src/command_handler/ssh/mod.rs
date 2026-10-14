@@ -33,11 +33,11 @@ mod syntax;
 use self::completion::{Completions, Fetch};
 pub(crate) use self::contract::NOT_RUN_EXIT;
 use self::contract::{
-    BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LateAnswer,
-    LocalCommand, Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel,
-    classify_invoke_error, decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice,
-    global_args, help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
-    run_argv, runs_nothing, strip_cursor_reports, time_limit, tools_listing,
+    BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LocalCommand,
+    Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_invoke_error,
+    decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice, global_args,
+    help_text, input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv,
+    runs_nothing, strip_cursor_reports, time_limit, tools_listing,
 };
 use self::editor::{PLAIN_CONTINUATION, SshPrompt};
 use self::history::{SessionHistory, history_file};
@@ -62,7 +62,7 @@ use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_common::schema::tool::Tool;
 use golem_schema::tool::argv::{self, ParsedToolArguments};
-use reedline::{Color, EditCommand, Reedline, Signal};
+use reedline::{Color, Reedline, Signal};
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -107,8 +107,8 @@ struct Terminal {
     loader: Loader,
     /// The palette for what is written on stderr, when stderr is a terminal too.
     styled: Option<Palette>,
-    /// The question about the terminal's background, open until the first prompt.
-    background: Option<backdrop::Query>,
+    /// The band behind every prompt, when the prompts have one.
+    band: Option<&'static str>,
 }
 
 enum Submission {
@@ -255,8 +255,6 @@ impl SshCommandHandler {
         } else {
             Output::Stderr
         });
-        // Read before connecting, so the terminal has that long to say what its background is.
-        let terminal = command.is_none().then(|| self.terminal());
         self.ctx.silence_app_context_init().await;
 
         let connected = tokio::select! {
@@ -282,10 +280,7 @@ impl SshCommandHandler {
 
         let status = match command {
             Some(script) => self.run_once(&session, &script).await,
-            None => {
-                let terminal = terminal.unwrap_or_else(|| self.terminal());
-                self.run_interactive(&mut session, terminal).await
-            }
+            None => self.run_interactive(&mut session, self.terminal()).await,
         };
         // What the CLI held back is shown only for a failure of its own, which has shown it.
         discard_held_log();
@@ -332,8 +327,7 @@ impl SshCommandHandler {
         anyhow!(PipedExitCode(NOT_RUN_EXIT))
     }
 
-    /// Reads off the terminal how a session at it reads and draws, and asks it for its
-    /// background when the prompts will have a band.
+    /// Reads off the terminal how a session at it reads and draws.
     fn terminal(&self) -> Terminal {
         // An AI coding agent, as the CLI's help recognises one, gets a plain session.
         let agent = is_agent_help_enabled();
@@ -352,8 +346,8 @@ impl SshCommandHandler {
             palette,
             loader: Loader::detect(|name| std::env::var(name).ok()),
             styled,
-            background: banded
-                .then(|| backdrop::Query::send(|name| std::env::var(name).ok()))
+            band: banded
+                .then(|| backdrop::band(|name| std::env::var(name).ok()))
                 .flatten(),
         }
     }
@@ -422,17 +416,9 @@ impl SshCommandHandler {
             palette,
             loader,
             styled,
-            background,
+            band,
         } = terminal;
         let at_terminal = mode != InputMode::Lines;
-        // The band behind every prompt, a shade off the terminal's own background, what was
-        // typed while the session connected, and whether the terminal may still answer.
-        let backdrop::Answer {
-            band,
-            typed_ahead,
-            late,
-        } = background.map(backdrop::Query::finish).unwrap_or_default();
-        let mut late_answer = LateAnswer::expected(late);
         // Output of a command that could not be written.
         let mut lost_output = false;
         if let Some(palette) = styled {
@@ -462,14 +448,11 @@ impl SshCommandHandler {
                         }
                     });
                 }
-                let mut editor = editor::build(
+                let editor = editor::build(
                     colorize.then_some(palette),
                     self.history(session),
                     completions.clone(),
                 );
-                if !typed_ahead.is_empty() {
-                    editor.run_edit_commands(&[EditCommand::InsertString(typed_ahead)]);
-                }
                 Input::Editor(Some(Box::new(editor)))
             }
             InputMode::PromptedLines => Input::lines(true),
@@ -528,13 +511,13 @@ impl SshCommandHandler {
                             &session.cwd,
                             branch.as_deref(),
                             palette,
-                            band.as_deref(),
+                            band,
                             room,
                         ),
                         look::marker(last_status == 0)
                     ),
                     right: if with_result {
-                        look::result(last_status, last_elapsed, queue, palette, band.as_deref())
+                        look::result(last_status, last_elapsed, queue, palette, band)
                     } else {
                         String::new()
                     },
@@ -549,7 +532,7 @@ impl SshCommandHandler {
                 spaced: colorize,
             };
             let line = match input.read(prompt).await {
-                Ok(ReadLine::Line(line)) => late_answer.taken_from(line),
+                Ok(ReadLine::Line(line)) => line,
                 Ok(ReadLine::Cancelled) => continue,
                 Ok(ReadLine::End) => return ended(last_status, lost_output),
                 Ok(ReadLine::Interrupted) => {

@@ -1,0 +1,1763 @@
+## Generated from default config
+data_dir = "/var/lib/golem"
+
+[component_compilation_service]
+bind_address = "127.0.0.1"
+runtime_metrics_sampling_interval = "5s"
+
+[component_compilation_service.blob_storage]
+type = "LocalFileSystem"
+
+[component_compilation_service.blob_storage.config]
+
+[component_compilation_service.compile_worker]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 33554432
+
+[component_compilation_service.compile_worker.retries_on_unavailable]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
+[component_compilation_service.compile_worker.tls]
+type = "Disabled"
+
+[component_compilation_service.compile_worker.tls.config]
+
+[component_compilation_service.compiled_component_service]
+type = "Enabled"
+
+[component_compilation_service.compiled_component_service.config]
+
+[component_compilation_service.engine]
+enable_fs_cache = false
+
+[component_compilation_service.grpc.tls]
+type = "Disabled"
+
+[component_compilation_service.grpc.tls.config]
+
+[registry_service]
+bind_address = "127.0.0.1"
+cors_origin_regex = ".*"
+environment = "dev"
+runtime_metrics_sampling_interval = "5s"
+workspace = "release"
+
+[registry_service.blob_storage]
+type = "LocalFileSystem"
+
+[registry_service.blob_storage.config]
+
+[registry_service.builtin_artifacts.source_overrides]
+
+[registry_service.builtin_plugins]
+type = "Enabled"
+
+[registry_service.builtin_plugins.config]
+
+[registry_service.component_compilation]
+type = "Enabled"
+
+[registry_service.component_compilation.config]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 33554432
+
+[registry_service.component_compilation.config.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[registry_service.component_compilation.config.tls]
+type = "Disabled"
+
+[registry_service.component_compilation.config.tls.config]
+
+[registry_service.component_file_upload]
+max_concurrent_files = 16
+max_uncompressed_archive_size = 1073741824
+max_uncompressed_file_size = 536870912
+
+[registry_service.db]
+type = "Sqlite"
+
+[registry_service.db.config]
+foreign_keys = true
+max_connections = 4
+
+[registry_service.deployment_events]
+cleanup_interval = "1h"
+retention = "1day"
+
+[registry_service.domain_registration]
+reserved_domains = []
+
+[registry_service.domain_registration.available_domains]
+type = "Unrestricted"
+
+[registry_service.domain_registration.available_domains.config]
+
+[registry_service.grpc.tls]
+type = "Disabled"
+
+[registry_service.grpc.tls.config]
+
+[registry_service.initial_accounts.builtin_plugin_owner]
+email = "builtin-plugin-owner@golem.cloud"
+id = "b0a654af-d67f-4d73-a824-cf75e122bfc0"
+name = "Builtin Plugin Owner"
+plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+role = "builtin-plugin-owner"
+
+[registry_service.initial_accounts.builtin_tool_owner]
+email = "builtin-tool-owner@golem.cloud"
+id = "58bda34c-10d4-4bfb-8abd-d5e67f09ba3c"
+name = "Builtin Tool Owner"
+plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+role = "builtin-plugin-owner"
+
+[registry_service.initial_accounts.root]
+email = "initial@user"
+id = "51de7d7d-f286-49aa-b79a-96022f7e2df9"
+name = "Initial User"
+plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+role = "admin"
+token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+
+[registry_service.initial_plans.default]
+app_limit = 1000000000000000000
+blob_storage_limit = 1000000000000000000
+component_limit = 1000000000000000000
+env_limit = 1000000000000000000
+max_concurrent_agents_per_executor = 1000000000000000000
+max_disk_space_per_worker = 1000000000000000000
+max_disk_space_per_worker_user_configurable = true
+max_memory_per_worker = 1000000000000000000
+max_memory_per_worker_ceiling = 1000000000000000000
+max_memory_per_worker_user_configurable = true
+max_table_elements_per_worker = 1000000000000000000
+monthly_gas_limit = 1000000000000000000
+monthly_http_call_limit = 1000000000000000000
+monthly_memory_gb_seconds = 1000000000000000000
+monthly_memory_gb_seconds_ceiling = 1000000000000000000
+monthly_memory_gb_seconds_user_configurable = true
+monthly_rpc_call_limit = 1000000000000000000
+monthly_upload_limit = 1000000000000000000
+oplog_writes_per_second = 1000000000000000000
+per_invocation_http_call_limit = 1000000000000000000
+per_invocation_rpc_call_limit = 1000000000000000000
+plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+plan_name = "default"
+storage_limit = 1000000000000000000
+worker_connection_limit = 1000000000000000000
+
+[registry_service.login]
+type = "Disabled"
+
+[registry_service.login.config]
+
+[registry_service.mcp_import]
+cache_entries = 128
+cache_ttl = "5m"
+failure_ttl = "1s"
+fetch_concurrency = 16
+operation_timeout = "25s"
+refresh_interval = "1m"
+
+[registry_service.mcp_import.projection]
+max_listing_bytes = 8388608
+max_tools = 1024
+
+[registry_service.mcp_import.projection.content]
+max_blocks = 256
+max_decoded_bytes = 4194304
+max_json_depth = 32
+max_total_bytes = 8388608
+
+[registry_service.mcp_import.projection.schema]
+instanceBytes = 4194304
+instanceDepth = 256
+schemaBytes = 1048576
+schemaDepth = 128
+schemaNodes = 16384
+
+[registry_service.mcp_import.transport]
+concurrency = 16
+json_depth = 512
+listing_bytes = 16777216
+notifications = 1024
+pages = 64
+request_bytes = 8388608
+response_bytes = 16777216
+timeout = "20s"
+tools = 1024
+
+[registry_service.mcp_oauth]
+challenge_bytes = 16384
+document_bytes = 1048576
+request_bytes = 65536
+timeout = "20s"
+
+[registry_service.security_scheme]
+strict_issuer_url_validation = false
+
+[router]
+address = "127.0.0.1"
+port = 9881
+
+[shard_manager]
+bind_address = "127.0.0.1"
+initial_health_check_timeout = "15s"
+number_of_shards = 1024
+rebalance_threshold = 0.1
+runtime_metrics_sampling_interval = "5s"
+shard_lease_duration = "1m"
+state_read_timeout = "30s"
+state_write_timeout = "4s"
+
+[shard_manager.grpc.tls]
+type = "Disabled"
+
+[shard_manager.grpc.tls.config]
+
+[shard_manager.health_check]
+delay = "10s"
+silent = true
+
+[shard_manager.health_check.mode]
+type = "Grpc"
+
+[shard_manager.health_check.mode.config]
+
+[shard_manager.persistence]
+type = "Sqlite"
+
+[shard_manager.persistence.config]
+foreign_keys = true
+max_connections = 4
+
+[shard_manager.quota]
+definition_staleness_ttl = "5m"
+lease_duration = "1m"
+min_executors = 2
+
+[shard_manager.registry_service]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 52428800
+
+[shard_manager.registry_service.invalidation_event_subscriber]
+initial_backoff = "100ms"
+max_backoff = "30s"
+
+[shard_manager.registry_service.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[shard_manager.registry_service.tls]
+type = "Disabled"
+
+[shard_manager.registry_service.tls.config]
+
+[shard_manager.resource_definition_fetcher]
+cache_eviction_period = "1m"
+cache_max_capacity = 1024
+cache_ttl = "5m"
+
+[shard_manager.worker_executors]
+assign_shards_timeout = "5s"
+connect_timeout = "10s"
+health_check_timeout = "2s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 33554432
+revoke_shards_timeout = "5s"
+
+[shard_manager.worker_executors.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[shard_manager.worker_executors.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[shard_manager.worker_executors.tls]
+type = "Disabled"
+
+[shard_manager.worker_executors.tls.config]
+
+[worker_executor]
+bind_address = "127.0.0.1"
+max_in_function_retry_delay = "20s"
+max_websocket_connections = 100
+runtime_metrics_sampling_interval = "5s"
+
+[worker_executor.active_agents]
+drop_when_full = 0.25
+ttl = "8h"
+
+[worker_executor.agent_status_checkpoint]
+enabled = true
+min_oplog_delta = 1000
+
+[worker_executor.agent_status_flush]
+enabled = true
+interval = "1s"
+max_concurrency = 128
+
+[worker_executor.agent_types_service]
+type = "Grpc"
+
+[worker_executor.agent_types_service.config]
+cache_time_to_idle = "1m"
+
+[worker_executor.agent_webhooks_service]
+hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+use_https_for_webhook_url = false
+
+[worker_executor.blob_storage]
+type = "LocalFileSystem"
+
+[worker_executor.blob_storage.config]
+
+[worker_executor.compiled_component_service]
+type = "Enabled"
+
+[worker_executor.compiled_component_service.config]
+
+[worker_executor.component_cache]
+max_capacity = 32
+max_concurrent_compilations = 16
+max_metadata_capacity = 16384
+max_resolved_component_capacity = 1024
+time_to_idle = "12h"
+
+[worker_executor.direct_invocation_auth_cache]
+cache_capacity = 1024
+cache_eviction_interval = "1m"
+cache_ttl = "5m"
+
+[worker_executor.durable_stream]
+abandoned_prepare_after = "5m"
+external_batch_max_size = "8388608 B"
+lease_ttl = "1m"
+reconciliation_batch_size = 256
+reconciliation_interval = "30s"
+
+[worker_executor.engine]
+enable_fs_cache = false
+
+[worker_executor.environment_state_service]
+cache_capacity = 0
+cache_eviction_interval = "1m"
+
+[worker_executor.environment_state_service.cache_ttl]
+nanos = 0
+secs = 300
+
+[worker_executor.filesystem_snapshots]
+type = "Disabled"
+
+[worker_executor.filesystem_snapshots.config]
+
+[worker_executor.filesystem_storage.cleanup_retry]
+max_attempts = 4
+max_delay = "250ms"
+min_delay = "25ms"
+multiplier = 4.0
+
+[worker_executor.filesystem_storage.filesystem_object_limit_policy]
+maximum_objects = 131072
+minimum_objects = 8192
+objects_per_gib = 32768
+
+[worker_executor.filesystem_storage.mode]
+type = "Temporary"
+
+[worker_executor.filesystem_storage.pressure]
+minimum_available_bytes = 67108864
+minimum_available_filesystem_objects = 8192
+reclamation_observation_attempts = 4
+reclamation_observation_delay = "25ms"
+target_available_bytes = 134217728
+target_available_filesystem_objects = 16384
+
+[worker_executor.grpc]
+max_message_size = 33554432
+
+[worker_executor.grpc.tls]
+type = "Disabled"
+
+[worker_executor.grpc.tls.config]
+
+[worker_executor.http_client]
+type = "Enabled"
+
+[worker_executor.http_client.config]
+connect_timeout = "30s"
+idle_timeout = "1m 30s"
+max_connections_per_host = 20
+max_host_entries = 1024
+max_idle_per_host = 8
+max_total_connections = 200
+
+[worker_executor.indexed_storage]
+type = "KVStoreMultiSqlite"
+
+[worker_executor.indexed_storage.config]
+
+[worker_executor.indexed_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
+[worker_executor.invocation_results]
+bloom_bits = 1048576
+bloom_hashes = 4
+hydrated_cache_capacity = 1024
+physical_index_catch_up_chunk_size = 1024
+recent_capacity = 1024
+
+[worker_executor.key_value_storage]
+type = "MultiSqlite"
+
+[worker_executor.key_value_storage.config]
+foreign_keys = false
+max_connections = 4
+
+[worker_executor.key_value_storage_retry]
+max_attempts = 15
+max_delay = "10s"
+max_jitter_factor = 0.15
+min_delay = "200ms"
+multiplier = 2.0
+
+[worker_executor.limits]
+ephemeral_fuel_overdraft_multiplier = 100
+epoch_interval = "10ms"
+epoch_ticks = 1
+event_broadcast_capacity = 1024
+event_history_size = 128
+fuel_to_borrow = 10000
+invocation_result_broadcast_capacity = 100000
+live_stream_event_broadcast_capacity = 32
+max_active_agents = 1024
+max_concurrent_streams = 1024
+max_invocation_context_stack_depth = 1024
+max_oplog_query_pages_size = 100
+max_tool_attachment_bytes = 16777216
+tail_work_settle_timeout = "30s"
+
+[worker_executor.mcp_transport]
+concurrency = 16
+json_depth = 512
+listing_bytes = 16777216
+notifications = 1024
+pages = 64
+request_bytes = 8388608
+response_bytes = 16777216
+timeout = "1m"
+tools = 1024
+
+[worker_executor.memory]
+acquire_retry_delay = "500ms"
+component_size_coefficient = 2.0
+enable_measured_admission = true
+worker_memory_ratio = 0.8
+
+[worker_executor.memory.oom_retry_config]
+max_attempts = 4294967295
+max_delay = "5s"
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_executor.oplog]
+archive_interval = "1day"
+blob_storage_layers = 1
+entry_count_limit = 1024
+indexed_storage_layers = 2
+max_operations_before_commit = 128
+max_operations_before_commit_ephemeral = 1024
+max_payload_size = 65536
+oplog_rate_limit_enabled = false
+plugin_max_commit_count = 3
+plugin_max_elapsed_time = "5s"
+
+[worker_executor.oplog.default_snapshotting]
+type = "Disabled"
+
+[worker_executor.oplog.oplog_processor_snapshotting]
+type = "EveryNInvocation"
+
+[worker_executor.oplog.oplog_processor_snapshotting.config]
+count = 10
+
+[worker_executor.oplog.sweep]
+enabled = true
+interval = "1m"
+max_archives_per_tick = 256
+max_backoff_intervals = 8
+max_concurrency = 4
+max_scanned_per_tick = 4096
+max_tick_duration = "30s"
+max_tracked_agents = 100000
+page_size = 128
+
+[worker_executor.public_worker_api]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 33554432
+
+[worker_executor.public_worker_api.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_executor.public_worker_api.tls]
+type = "Disabled"
+
+[worker_executor.public_worker_api.tls.config]
+
+[worker_executor.quota_service]
+inline_wait_threshold = "1m"
+renewal_interval = "10s"
+renewal_threshold = "20s"
+
+[worker_executor.rdbms.pool]
+acquire_timeout = "3s"
+eviction_period = "2m"
+eviction_ttl = "10m"
+max_connections = 20
+
+[worker_executor.rdbms.query]
+query_batch = 50
+
+[worker_executor.read_only_cache]
+cache_capacity = 256
+cache_eviction_interval = "1m"
+max_entry_age = "2h"
+
+[worker_executor.registry_service]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 52428800
+
+[worker_executor.registry_service.invalidation_event_subscriber]
+initial_backoff = "100ms"
+max_backoff = "30s"
+
+[worker_executor.registry_service.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_executor.registry_service.tls]
+type = "Disabled"
+
+[worker_executor.registry_service.tls.config]
+
+[worker_executor.resource_limits]
+type = "Grpc"
+
+[worker_executor.resource_limits.config]
+batch_update_interval = "1m"
+limit_refresh_interval = "5m"
+
+[worker_executor.resource_usage_metering]
+compute = false
+filesystem = false
+memory = false
+
+[worker_executor.retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
+[worker_executor.scheduler]
+claim_batch_size = 100
+lease_ttl = "30s"
+max_batches_per_tick = 10
+max_concurrent_action_processing = 64
+refresh_interval = "2s"
+
+[worker_executor.scheduler_storage]
+type = "Sqlite"
+
+[worker_executor.scheduler_storage.config]
+foreign_keys = false
+max_connections = 4
+
+[worker_executor.scheduler_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
+[worker_executor.shard_manager]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 33554432
+
+[worker_executor.shard_manager.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_executor.shard_manager.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_executor.shard_manager.tls]
+type = "Disabled"
+
+[worker_executor.shard_manager.tls.config]
+
+[worker_executor.suspend]
+ephemeral_max_sleep = "1m"
+rpc_resume_after = "5s"
+rpc_suspend_after = "30s"
+suspend_after = "10s"
+wait_suspend_check_interval = "10s"
+wait_suspend_grace = "1s"
+
+[worker_service]
+bind_address = "127.0.0.1"
+custom_request_port = 9006
+environment = "local"
+mcp_port = 9007
+runtime_metrics_sampling_interval = "5s"
+workspace = "release"
+
+[worker_service.agent_resolution_cache]
+eviction_period = "1m"
+max_capacity = 10000
+ttl = "1h"
+
+[worker_service.auth_service]
+auth_ctx_cache_eviction_period = "1m"
+auth_ctx_cache_max_capacity = 1024
+auth_ctx_cache_ttl = "10m"
+environment_auth_details_cache_eviction_period = "1m"
+environment_auth_details_cache_max_capacity = 1024
+environment_auth_details_cache_ttl = "10m"
+
+[worker_service.blob_storage]
+type = "LocalFileSystem"
+
+[worker_service.blob_storage.config]
+
+[worker_service.component_service]
+component_cache_max_capacity = 1024
+current_component_cache_ttl = "1m"
+
+[worker_service.durable_streams]
+long_poll_timeout = "30s"
+max_append_body_bytes = 1048576
+
+[worker_service.durable_streams.forks]
+max_copied_bytes = 67108864
+max_forks_per_second = 4
+max_forks_per_session = 128
+
+[worker_service.durable_streams.load]
+max_append_requests_per_second_per_stream = 100
+max_catch_up_requests_per_second_per_stream = 100
+max_concurrent_readers_per_node = 4096
+max_concurrent_readers_per_stream = 16
+
+[worker_service.gateway_session_storage]
+type = "Sqlite"
+
+[worker_service.gateway_session_storage.config]
+cleanup_interval = "5m"
+foreign_keys = false
+max_connections = 4
+pending_login_expiration = "1h"
+
+[worker_service.grpc]
+max_message_size = 33554432
+
+[worker_service.grpc.tls]
+type = "Disabled"
+
+[worker_service.grpc.tls.config]
+
+[worker_service.http_session]
+cleanup_timeout = "2s"
+command_queue_frames = 16
+event_queue_frames = 2
+exchange_timeout = "5m"
+max_event_bytes = 17825792
+max_resume_attempts = 4
+retained_input_bytes = 4194304
+retained_input_frames = 32
+retry_deadline = "10s"
+retry_delay = "100ms"
+
+[worker_service.invocation_session_tokens]
+issuer = "local-worker-service"
+verify_only_keys = []
+
+[worker_service.invocation_session_tokens.active_key]
+id = "local-development"
+key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
+
+[worker_service.registry_service]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 52428800
+
+[worker_service.registry_service.invalidation_event_subscriber]
+initial_backoff = "100ms"
+max_backoff = "30s"
+
+[worker_service.registry_service.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_service.registry_service.tls]
+type = "Disabled"
+
+[worker_service.registry_service.tls.config]
+
+[worker_service.route_resolver]
+router_cache_eviction_period = "0s"
+router_cache_max_capacity = 0
+router_cache_ttl = "0s"
+trusted_ingress_addresses = []
+
+[worker_service.routing_table]
+invalidation_min_delay = "500ms"
+
+[worker_service.shard_manager]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 33554432
+
+[worker_service.shard_manager.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_service.shard_manager.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_service.shard_manager.tls]
+type = "Disabled"
+
+[worker_service.shard_manager.tls.config]
+
+[worker_service.webhook_callback_handler]
+hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+
+[worker_service.worker_executor]
+connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_message_size = 33554432
+
+[worker_service.worker_executor.retries]
+max_attempts = 5
+max_delay = "3s"
+max_jitter_factor = 0.15
+min_delay = "10ms"
+multiplier = 10.0
+
+[worker_service.worker_executor.retries_on_unavailable]
+max_attempts = 0
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[worker_service.worker_executor.tls]
+type = "Disabled"
+
+[worker_service.worker_executor.tls.config]
+
+
+## Generated from example config: Postgres and S3
+# data_dir = "/var/lib/golem"
+#
+# [component_compilation_service]
+# bind_address = "127.0.0.1"
+# runtime_metrics_sampling_interval = "5s"
+#
+# [component_compilation_service.blob_storage]
+# type = "S3"
+#
+# [component_compilation_service.blob_storage.config]
+# compilation_cache_bucket = "golem-compiled-components"
+# components_bucket = "component-store"
+# compressed_oplog_buckets = ["oplog-archive-1"]
+# custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
+# initial_agent_files_bucket = "golem-initial-agent-files"
+# object_prefix = ""
+# oplog_payload_bucket = "oplog-payload"
+# region = "us-east-1"
+#
+# [component_compilation_service.blob_storage.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [component_compilation_service.compile_worker]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 33554432
+#
+# [component_compilation_service.compile_worker.retries_on_unavailable]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [component_compilation_service.compile_worker.tls]
+# type = "Disabled"
+#
+# [component_compilation_service.compile_worker.tls.config]
+#
+# [component_compilation_service.compiled_component_service]
+# type = "Enabled"
+#
+# [component_compilation_service.compiled_component_service.config]
+#
+# [component_compilation_service.engine]
+# enable_fs_cache = false
+#
+# [component_compilation_service.grpc.tls]
+# type = "Disabled"
+#
+# [component_compilation_service.grpc.tls.config]
+#
+# [registry_service]
+# bind_address = "127.0.0.1"
+# cors_origin_regex = ".*"
+# environment = "dev"
+# runtime_metrics_sampling_interval = "5s"
+# workspace = "release"
+#
+# [registry_service.blob_storage]
+# type = "S3"
+#
+# [registry_service.blob_storage.config]
+# compilation_cache_bucket = "golem-compiled-components"
+# components_bucket = "component-store"
+# compressed_oplog_buckets = ["oplog-archive-1"]
+# custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
+# initial_agent_files_bucket = "golem-initial-agent-files"
+# object_prefix = ""
+# oplog_payload_bucket = "oplog-payload"
+# region = "us-east-1"
+#
+# [registry_service.blob_storage.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [registry_service.builtin_artifacts.source_overrides]
+#
+# [registry_service.builtin_plugins]
+# type = "Enabled"
+#
+# [registry_service.builtin_plugins.config]
+#
+# [registry_service.component_compilation]
+# type = "Enabled"
+#
+# [registry_service.component_compilation.config]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 33554432
+#
+# [registry_service.component_compilation.config.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [registry_service.component_compilation.config.tls]
+# type = "Disabled"
+#
+# [registry_service.component_compilation.config.tls.config]
+#
+# [registry_service.component_file_upload]
+# max_concurrent_files = 16
+# max_uncompressed_archive_size = 1073741824
+# max_uncompressed_file_size = 536870912
+#
+# [registry_service.db]
+# type = "Postgres"
+#
+# [registry_service.db.config]
+# database = "golem"
+# host = "localhost"
+# max_connections = 10
+# password = "golem"
+# port = 5432
+# schema = "golem_registry_service"
+# username = "golem"
+#
+# [registry_service.deployment_events]
+# cleanup_interval = "1h"
+# retention = "1day"
+#
+# [registry_service.domain_registration]
+# reserved_domains = []
+#
+# [registry_service.domain_registration.available_domains]
+# type = "Unrestricted"
+#
+# [registry_service.domain_registration.available_domains.config]
+#
+# [registry_service.grpc.tls]
+# type = "Disabled"
+#
+# [registry_service.grpc.tls.config]
+#
+# [registry_service.initial_accounts.builtin_plugin_owner]
+# email = "builtin-plugin-owner@golem.cloud"
+# id = "b0a654af-d67f-4d73-a824-cf75e122bfc0"
+# name = "Builtin Plugin Owner"
+# plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+# role = "builtin-plugin-owner"
+#
+# [registry_service.initial_accounts.builtin_tool_owner]
+# email = "builtin-tool-owner@golem.cloud"
+# id = "58bda34c-10d4-4bfb-8abd-d5e67f09ba3c"
+# name = "Builtin Tool Owner"
+# plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+# role = "builtin-plugin-owner"
+#
+# [registry_service.initial_accounts.root]
+# email = "initial@user"
+# id = "51de7d7d-f286-49aa-b79a-96022f7e2df9"
+# name = "Initial User"
+# plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+# role = "admin"
+# token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+#
+# [registry_service.initial_plans.default]
+# app_limit = 1000000000000000000
+# blob_storage_limit = 1000000000000000000
+# component_limit = 1000000000000000000
+# env_limit = 1000000000000000000
+# max_concurrent_agents_per_executor = 1000000000000000000
+# max_disk_space_per_worker = 1000000000000000000
+# max_disk_space_per_worker_user_configurable = true
+# max_memory_per_worker = 1000000000000000000
+# max_memory_per_worker_ceiling = 1000000000000000000
+# max_memory_per_worker_user_configurable = true
+# max_table_elements_per_worker = 1000000000000000000
+# monthly_gas_limit = 1000000000000000000
+# monthly_http_call_limit = 1000000000000000000
+# monthly_memory_gb_seconds = 1000000000000000000
+# monthly_memory_gb_seconds_ceiling = 1000000000000000000
+# monthly_memory_gb_seconds_user_configurable = true
+# monthly_rpc_call_limit = 1000000000000000000
+# monthly_upload_limit = 1000000000000000000
+# oplog_writes_per_second = 1000000000000000000
+# per_invocation_http_call_limit = 1000000000000000000
+# per_invocation_rpc_call_limit = 1000000000000000000
+# plan_id = "e808bd76-a6ab-4090-ade4-8447b8e8550f"
+# plan_name = "default"
+# storage_limit = 1000000000000000000
+# worker_connection_limit = 1000000000000000000
+#
+# [registry_service.login]
+# type = "Disabled"
+#
+# [registry_service.login.config]
+#
+# [registry_service.mcp_import]
+# cache_entries = 128
+# cache_ttl = "5m"
+# failure_ttl = "1s"
+# fetch_concurrency = 16
+# operation_timeout = "25s"
+# refresh_interval = "1m"
+#
+# [registry_service.mcp_import.projection]
+# max_listing_bytes = 8388608
+# max_tools = 1024
+#
+# [registry_service.mcp_import.projection.content]
+# max_blocks = 256
+# max_decoded_bytes = 4194304
+# max_json_depth = 32
+# max_total_bytes = 8388608
+#
+# [registry_service.mcp_import.projection.schema]
+# instanceBytes = 4194304
+# instanceDepth = 256
+# schemaBytes = 1048576
+# schemaDepth = 128
+# schemaNodes = 16384
+#
+# [registry_service.mcp_import.transport]
+# concurrency = 16
+# json_depth = 512
+# listing_bytes = 16777216
+# notifications = 1024
+# pages = 64
+# request_bytes = 8388608
+# response_bytes = 16777216
+# timeout = "20s"
+# tools = 1024
+#
+# [registry_service.mcp_oauth]
+# challenge_bytes = 16384
+# document_bytes = 1048576
+# request_bytes = 65536
+# timeout = "20s"
+#
+# [registry_service.security_scheme]
+# strict_issuer_url_validation = false
+#
+# [router]
+# address = "127.0.0.1"
+# port = 9881
+#
+# [shard_manager]
+# bind_address = "127.0.0.1"
+# initial_health_check_timeout = "15s"
+# number_of_shards = 1024
+# rebalance_threshold = 0.1
+# runtime_metrics_sampling_interval = "5s"
+# shard_lease_duration = "1m"
+# state_read_timeout = "30s"
+# state_write_timeout = "4s"
+#
+# [shard_manager.grpc.tls]
+# type = "Disabled"
+#
+# [shard_manager.grpc.tls.config]
+#
+# [shard_manager.health_check]
+# delay = "10s"
+# silent = true
+#
+# [shard_manager.health_check.mode]
+# type = "Grpc"
+#
+# [shard_manager.health_check.mode.config]
+#
+# [shard_manager.persistence]
+# type = "Postgres"
+#
+# [shard_manager.persistence.config]
+# database = "golem"
+# host = "localhost"
+# max_connections = 10
+# password = "golem"
+# port = 5432
+# schema = "golem_shard_manager"
+# username = "golem"
+#
+# [shard_manager.quota]
+# definition_staleness_ttl = "5m"
+# lease_duration = "1m"
+# min_executors = 2
+#
+# [shard_manager.registry_service]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 52428800
+#
+# [shard_manager.registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
+#
+# [shard_manager.registry_service.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [shard_manager.registry_service.tls]
+# type = "Disabled"
+#
+# [shard_manager.registry_service.tls.config]
+#
+# [shard_manager.resource_definition_fetcher]
+# cache_eviction_period = "1m"
+# cache_max_capacity = 1024
+# cache_ttl = "5m"
+#
+# [shard_manager.worker_executors]
+# assign_shards_timeout = "5s"
+# connect_timeout = "10s"
+# health_check_timeout = "2s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 33554432
+# revoke_shards_timeout = "5s"
+#
+# [shard_manager.worker_executors.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [shard_manager.worker_executors.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [shard_manager.worker_executors.tls]
+# type = "Disabled"
+#
+# [shard_manager.worker_executors.tls.config]
+#
+# [worker_executor]
+# bind_address = "127.0.0.1"
+# max_in_function_retry_delay = "20s"
+# max_websocket_connections = 100
+# runtime_metrics_sampling_interval = "5s"
+#
+# [worker_executor.active_agents]
+# drop_when_full = 0.25
+# ttl = "8h"
+#
+# [worker_executor.agent_status_checkpoint]
+# enabled = true
+# min_oplog_delta = 1000
+#
+# [worker_executor.agent_status_flush]
+# enabled = true
+# interval = "1s"
+# max_concurrency = 128
+#
+# [worker_executor.agent_types_service]
+# type = "Grpc"
+#
+# [worker_executor.agent_types_service.config]
+# cache_time_to_idle = "1m"
+#
+# [worker_executor.agent_webhooks_service]
+# hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+# use_https_for_webhook_url = false
+#
+# [worker_executor.blob_storage]
+# type = "S3"
+#
+# [worker_executor.blob_storage.config]
+# compilation_cache_bucket = "golem-compiled-components"
+# components_bucket = "component-store"
+# compressed_oplog_buckets = ["oplog-archive-1"]
+# custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
+# initial_agent_files_bucket = "golem-initial-agent-files"
+# object_prefix = ""
+# oplog_payload_bucket = "oplog-payload"
+# region = "us-east-1"
+#
+# [worker_executor.blob_storage.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [worker_executor.compiled_component_service]
+# type = "Enabled"
+#
+# [worker_executor.compiled_component_service.config]
+#
+# [worker_executor.component_cache]
+# max_capacity = 32
+# max_concurrent_compilations = 16
+# max_metadata_capacity = 16384
+# max_resolved_component_capacity = 1024
+# time_to_idle = "12h"
+#
+# [worker_executor.direct_invocation_auth_cache]
+# cache_capacity = 1024
+# cache_eviction_interval = "1m"
+# cache_ttl = "5m"
+#
+# [worker_executor.durable_stream]
+# abandoned_prepare_after = "5m"
+# external_batch_max_size = "8388608 B"
+# lease_ttl = "1m"
+# reconciliation_batch_size = 256
+# reconciliation_interval = "30s"
+#
+# [worker_executor.engine]
+# enable_fs_cache = false
+#
+# [worker_executor.environment_state_service]
+# cache_capacity = 0
+# cache_eviction_interval = "1m"
+#
+# [worker_executor.environment_state_service.cache_ttl]
+# nanos = 0
+# secs = 300
+#
+# [worker_executor.filesystem_snapshots]
+# type = "Disabled"
+#
+# [worker_executor.filesystem_snapshots.config]
+#
+# [worker_executor.filesystem_storage.cleanup_retry]
+# max_attempts = 4
+# max_delay = "250ms"
+# min_delay = "25ms"
+# multiplier = 4.0
+#
+# [worker_executor.filesystem_storage.filesystem_object_limit_policy]
+# maximum_objects = 131072
+# minimum_objects = 8192
+# objects_per_gib = 32768
+#
+# [worker_executor.filesystem_storage.mode]
+# type = "Temporary"
+#
+# [worker_executor.filesystem_storage.pressure]
+# minimum_available_bytes = 67108864
+# minimum_available_filesystem_objects = 8192
+# reclamation_observation_attempts = 4
+# reclamation_observation_delay = "25ms"
+# target_available_bytes = 134217728
+# target_available_filesystem_objects = 16384
+#
+# [worker_executor.grpc]
+# max_message_size = 33554432
+#
+# [worker_executor.grpc.tls]
+# type = "Disabled"
+#
+# [worker_executor.grpc.tls.config]
+#
+# [worker_executor.http_client]
+# type = "Enabled"
+#
+# [worker_executor.http_client.config]
+# connect_timeout = "30s"
+# idle_timeout = "1m 30s"
+# max_connections_per_host = 20
+# max_host_entries = 1024
+# max_idle_per_host = 8
+# max_total_connections = 200
+#
+# [worker_executor.indexed_storage]
+# type = "Postgres"
+#
+# [worker_executor.indexed_storage.config]
+# database = "golem"
+# drop_prefix_delete_batch_size = 1024
+# host = "localhost"
+# max_connections = 10
+# password = "golem"
+# port = 5432
+# schema = "golem_worker_executor_indexed"
+# username = "golem"
+#
+# [worker_executor.indexed_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [worker_executor.invocation_results]
+# bloom_bits = 1048576
+# bloom_hashes = 4
+# hydrated_cache_capacity = 1024
+# physical_index_catch_up_chunk_size = 1024
+# recent_capacity = 1024
+#
+# [worker_executor.key_value_storage]
+# type = "Postgres"
+#
+# [worker_executor.key_value_storage.config]
+# database = "golem"
+# host = "localhost"
+# max_connections = 10
+# password = "golem"
+# port = 5432
+# schema = "golem_worker_executor"
+# username = "golem"
+#
+# [worker_executor.key_value_storage_retry]
+# max_attempts = 15
+# max_delay = "10s"
+# max_jitter_factor = 0.15
+# min_delay = "200ms"
+# multiplier = 2.0
+#
+# [worker_executor.limits]
+# ephemeral_fuel_overdraft_multiplier = 100
+# epoch_interval = "10ms"
+# epoch_ticks = 1
+# event_broadcast_capacity = 1024
+# event_history_size = 128
+# fuel_to_borrow = 10000
+# invocation_result_broadcast_capacity = 100000
+# live_stream_event_broadcast_capacity = 32
+# max_active_agents = 1024
+# max_concurrent_streams = 1024
+# max_invocation_context_stack_depth = 1024
+# max_oplog_query_pages_size = 100
+# max_tool_attachment_bytes = 16777216
+# tail_work_settle_timeout = "30s"
+#
+# [worker_executor.mcp_transport]
+# concurrency = 16
+# json_depth = 512
+# listing_bytes = 16777216
+# notifications = 1024
+# pages = 64
+# request_bytes = 8388608
+# response_bytes = 16777216
+# timeout = "1m"
+# tools = 1024
+#
+# [worker_executor.memory]
+# acquire_retry_delay = "500ms"
+# component_size_coefficient = 2.0
+# enable_measured_admission = true
+# worker_memory_ratio = 0.8
+#
+# [worker_executor.memory.oom_retry_config]
+# max_attempts = 4294967295
+# max_delay = "5s"
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_executor.oplog]
+# archive_interval = "1day"
+# blob_storage_layers = 1
+# entry_count_limit = 1024
+# indexed_storage_layers = 2
+# max_operations_before_commit = 128
+# max_operations_before_commit_ephemeral = 1024
+# max_payload_size = 65536
+# oplog_rate_limit_enabled = false
+# plugin_max_commit_count = 3
+# plugin_max_elapsed_time = "5s"
+#
+# [worker_executor.oplog.default_snapshotting]
+# type = "Disabled"
+#
+# [worker_executor.oplog.oplog_processor_snapshotting]
+# type = "EveryNInvocation"
+#
+# [worker_executor.oplog.oplog_processor_snapshotting.config]
+# count = 10
+#
+# [worker_executor.oplog.sweep]
+# enabled = true
+# interval = "1m"
+# max_archives_per_tick = 256
+# max_backoff_intervals = 8
+# max_concurrency = 4
+# max_scanned_per_tick = 4096
+# max_tick_duration = "30s"
+# max_tracked_agents = 100000
+# page_size = 128
+#
+# [worker_executor.public_worker_api]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 33554432
+#
+# [worker_executor.public_worker_api.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_executor.public_worker_api.tls]
+# type = "Disabled"
+#
+# [worker_executor.public_worker_api.tls.config]
+#
+# [worker_executor.quota_service]
+# inline_wait_threshold = "1m"
+# renewal_interval = "10s"
+# renewal_threshold = "20s"
+#
+# [worker_executor.rdbms.pool]
+# acquire_timeout = "3s"
+# eviction_period = "2m"
+# eviction_ttl = "10m"
+# max_connections = 20
+#
+# [worker_executor.rdbms.query]
+# query_batch = 50
+#
+# [worker_executor.read_only_cache]
+# cache_capacity = 256
+# cache_eviction_interval = "1m"
+# max_entry_age = "2h"
+#
+# [worker_executor.registry_service]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 52428800
+#
+# [worker_executor.registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
+#
+# [worker_executor.registry_service.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_executor.registry_service.tls]
+# type = "Disabled"
+#
+# [worker_executor.registry_service.tls.config]
+#
+# [worker_executor.resource_limits]
+# type = "Grpc"
+#
+# [worker_executor.resource_limits.config]
+# batch_update_interval = "1m"
+# limit_refresh_interval = "5m"
+#
+# [worker_executor.resource_usage_metering]
+# compute = false
+# filesystem = false
+# memory = false
+#
+# [worker_executor.retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [worker_executor.scheduler]
+# claim_batch_size = 100
+# lease_ttl = "30s"
+# max_batches_per_tick = 10
+# max_concurrent_action_processing = 64
+# refresh_interval = "2s"
+#
+# [worker_executor.scheduler_storage]
+# type = "Postgres"
+#
+# [worker_executor.scheduler_storage.config]
+# database = "golem"
+# host = "localhost"
+# max_connections = 10
+# password = "golem"
+# port = 5432
+# schema = "golem_worker_executor_scheduler"
+# username = "golem"
+#
+# [worker_executor.scheduler_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [worker_executor.shard_manager]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 33554432
+#
+# [worker_executor.shard_manager.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_executor.shard_manager.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_executor.shard_manager.tls]
+# type = "Disabled"
+#
+# [worker_executor.shard_manager.tls.config]
+#
+# [worker_executor.suspend]
+# ephemeral_max_sleep = "1m"
+# rpc_resume_after = "5s"
+# rpc_suspend_after = "30s"
+# suspend_after = "10s"
+# wait_suspend_check_interval = "10s"
+# wait_suspend_grace = "1s"
+#
+# [worker_service]
+# bind_address = "127.0.0.1"
+# custom_request_port = 9006
+# environment = "local"
+# mcp_port = 9007
+# runtime_metrics_sampling_interval = "5s"
+# workspace = "release"
+#
+# [worker_service.agent_resolution_cache]
+# eviction_period = "1m"
+# max_capacity = 10000
+# ttl = "1h"
+#
+# [worker_service.auth_service]
+# auth_ctx_cache_eviction_period = "1m"
+# auth_ctx_cache_max_capacity = 1024
+# auth_ctx_cache_ttl = "10m"
+# environment_auth_details_cache_eviction_period = "1m"
+# environment_auth_details_cache_max_capacity = 1024
+# environment_auth_details_cache_ttl = "10m"
+#
+# [worker_service.blob_storage]
+# type = "S3"
+#
+# [worker_service.blob_storage.config]
+# compilation_cache_bucket = "golem-compiled-components"
+# components_bucket = "component-store"
+# compressed_oplog_buckets = ["oplog-archive-1"]
+# custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
+# initial_agent_files_bucket = "golem-initial-agent-files"
+# object_prefix = ""
+# oplog_payload_bucket = "oplog-payload"
+# region = "us-east-1"
+#
+# [worker_service.blob_storage.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
+# [worker_service.component_service]
+# component_cache_max_capacity = 1024
+# current_component_cache_ttl = "1m"
+#
+# [worker_service.durable_streams]
+# long_poll_timeout = "30s"
+# max_append_body_bytes = 1048576
+#
+# [worker_service.durable_streams.forks]
+# max_copied_bytes = 67108864
+# max_forks_per_second = 4
+# max_forks_per_session = 128
+#
+# [worker_service.durable_streams.load]
+# max_append_requests_per_second_per_stream = 100
+# max_catch_up_requests_per_second_per_stream = 100
+# max_concurrent_readers_per_node = 4096
+# max_concurrent_readers_per_stream = 16
+#
+# [worker_service.gateway_session_storage]
+# type = "Postgres"
+#
+# [worker_service.gateway_session_storage.config]
+# cleanup_interval = "5m"
+# database = "golem"
+# host = "localhost"
+# max_connections = 10
+# password = "golem"
+# pending_login_expiration = "1h"
+# port = 5432
+# schema = "golem_worker_service_session_store"
+# username = "golem"
+#
+# [worker_service.grpc]
+# max_message_size = 33554432
+#
+# [worker_service.grpc.tls]
+# type = "Disabled"
+#
+# [worker_service.grpc.tls.config]
+#
+# [worker_service.http_session]
+# cleanup_timeout = "2s"
+# command_queue_frames = 16
+# event_queue_frames = 2
+# exchange_timeout = "5m"
+# max_event_bytes = 17825792
+# max_resume_attempts = 4
+# retained_input_bytes = 4194304
+# retained_input_frames = 32
+# retry_deadline = "10s"
+# retry_delay = "100ms"
+#
+# [worker_service.invocation_session_tokens]
+# issuer = "local-worker-service"
+# verify_only_keys = []
+#
+# [worker_service.invocation_session_tokens.active_key]
+# id = "local-development"
+# key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
+#
+# [worker_service.registry_service]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 52428800
+#
+# [worker_service.registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
+#
+# [worker_service.registry_service.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_service.registry_service.tls]
+# type = "Disabled"
+#
+# [worker_service.registry_service.tls.config]
+#
+# [worker_service.route_resolver]
+# router_cache_eviction_period = "0s"
+# router_cache_max_capacity = 0
+# router_cache_ttl = "0s"
+# trusted_ingress_addresses = []
+#
+# [worker_service.routing_table]
+# invalidation_min_delay = "500ms"
+#
+# [worker_service.shard_manager]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 33554432
+#
+# [worker_service.shard_manager.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_service.shard_manager.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_service.shard_manager.tls]
+# type = "Disabled"
+#
+# [worker_service.shard_manager.tls.config]
+#
+# [worker_service.webhook_callback_handler]
+# hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+#
+# [worker_service.worker_executor]
+# connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
+# max_message_size = 33554432
+#
+# [worker_service.worker_executor.retries]
+# max_attempts = 5
+# max_delay = "3s"
+# max_jitter_factor = 0.15
+# min_delay = "10ms"
+# multiplier = 10.0
+#
+# [worker_service.worker_executor.retries_on_unavailable]
+# max_attempts = 0
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_service.worker_executor.tls]
+# type = "Disabled"
+#
+# [worker_service.worker_executor.tls.config]

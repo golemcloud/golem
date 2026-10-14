@@ -43,115 +43,6 @@ impl Palette {
     }
 }
 
-/// A colour as a terminal reports and takes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rgb(pub u8, pub u8, pub u8);
-
-/// Asks the terminal for its background colour and then for its device attributes. Every
-/// terminal answers the second, so its answer marks the end of the wait for the first.
-pub const BACKGROUND_QUERY: &str = "\x1b]11;?\x07\x1b[c";
-
-/// Whether `reply` holds the terminal's answer about its device attributes, the last thing
-/// asked.
-pub fn answered(reply: &[u8]) -> bool {
-    const OPENING: &[u8] = b"\x1b[?";
-    reply
-        .windows(OPENING.len())
-        .position(|window| window == OPENING)
-        .is_some_and(|at| reply[at..].contains(&b'c'))
-}
-
-/// The background colour in a terminal's `reply`, when it gave one. The answer reads
-/// `rgb:RRRR/GGGG/BBBB`, with one to four hexadecimal digits a part.
-pub fn parse_background(reply: &[u8]) -> Option<Rgb> {
-    const OPENING: &[u8] = b"\x1b]11;";
-    let at = reply
-        .windows(OPENING.len())
-        .position(|window| window == OPENING)?;
-    let answer = &reply[at + OPENING.len()..];
-    let end = answer
-        .iter()
-        .position(|byte| matches!(byte, 0x07 | 0x1b))
-        .unwrap_or(answer.len());
-    let answer = std::str::from_utf8(&answer[..end]).ok()?;
-    let parts = answer
-        .strip_prefix("rgba:")
-        .or_else(|| answer.strip_prefix("rgb:"))?;
-    let mut parts = parts.split('/').map(|part| {
-        // Each part is a fraction of the largest number its digits can write.
-        let full = match part.len() {
-            1 => 0xf,
-            2 => 0xff,
-            3 => 0xfff,
-            4 => 0xffff,
-            _ => return None,
-        };
-        let value = u32::from_str_radix(part, 16).ok()?;
-        u8::try_from((value * 255 + full / 2) / full).ok()
-    });
-    Some(Rgb(parts.next()??, parts.next()??, parts.next()??))
-}
-
-/// The background a session shows in place of `background`: a little lighter on a dark one
-/// and a little darker on a light one, with a hint of purple, so that it reads as another
-/// shell without changing how the text on it reads.
-pub fn session_shade(background: Rgb) -> Rgb {
-    const PURPLE: Rgb = Rgb(143, 99, 255);
-    let Rgb(red, green, blue) = background;
-    let luma = (u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000;
-    let dark = luma < 128;
-    let shade = |channel: u8, purple: u8| {
-        let channel = u32::from(channel);
-        // Six parts in a hundred towards white or black,
-        let stepped = if dark {
-            channel + (255 - channel) * 6 / 100
-        } else {
-            channel * 94 / 100
-        };
-        // then five in a hundred towards purple.
-        ((stepped * 95 + u32::from(purple) * 5) / 100) as u8
-    };
-    Rgb(
-        shade(red, PURPLE.0),
-        shade(green, PURPLE.1),
-        shade(blue, PURPLE.2),
-    )
-}
-
-/// The SGR parameters of the band behind a prompt, for a terminal whose own background is
-/// `background`. `truecolor` says whether the terminal shows any colour or only its 256.
-pub fn band(background: Rgb, truecolor: bool) -> String {
-    let Rgb(red, green, blue) = session_shade(background);
-    if truecolor {
-        return format!("48;2;{red};{green};{blue}");
-    }
-    // The nearest of the 256: the six steps a channel of the colour cube takes, or one of the
-    // twenty-four greys.
-    const STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    let distance = |candidate: (u8, u8, u8)| {
-        let square = |a: u8, b: u8| u32::from(a.abs_diff(b)).pow(2);
-        square(candidate.0, red) + square(candidate.1, green) + square(candidate.2, blue)
-    };
-    let nearest_step = |channel: u8| {
-        (0..STEPS.len())
-            .min_by_key(|&step| STEPS[step].abs_diff(channel))
-            .unwrap_or(0)
-    };
-    let (r, g, b) = (nearest_step(red), nearest_step(green), nearest_step(blue));
-    let cube = (16 + 36 * r + 6 * g + b, (STEPS[r], STEPS[g], STEPS[b]));
-    let grey = (0..24u8)
-        .map(|index| (232 + usize::from(index), 8 + 10 * index))
-        .map(|(index, level)| (index, (level, level, level)))
-        .min_by_key(|(_, colour)| distance(*colour))
-        .unwrap_or(cube);
-    let index = if distance(grey.1) < distance(cube.1) {
-        grey.0
-    } else {
-        cube.0
-    };
-    format!("48;5;{index}")
-}
-
 /// Text that comes from the agent, as the session draws it: a directory, a branch, a tool's
 /// name, a message. Control characters are written in caret notation (`^[` for escape), and the
 /// characters that reorder or hide the text around them as `\u{...}`, so none of it can act on
@@ -938,10 +829,9 @@ pub fn cancelled(palette: Palette) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BACKGROUND_QUERY, CONTINUATION, Loader, Palette, Readiness, Rgb, VERBS, animation,
-        answered, band, banner, cancelled, context, detached, elapsed_text, finished, layout,
-        marker, parse_background, result, result_width, running, running_compact, session_shade,
-        shown, shown_message, split_agent, verb,
+        CONTINUATION, Loader, Palette, Readiness, VERBS, animation, banner, cancelled, context,
+        detached, elapsed_text, finished, layout, marker, result, result_width, running,
+        running_compact, shown, shown_message, split_agent, verb,
     };
     use std::time::Duration;
     use test_r::test;
@@ -1141,67 +1031,6 @@ mod tests {
                 100
             ))
         );
-    }
-
-    #[test]
-    fn the_terminals_answer_about_its_background_is_read() {
-        for (reply, colour) in [
-            (
-                &b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07"[..],
-                Some(Rgb(30, 30, 30)),
-            ),
-            // Ended the other way a terminal may end it, and followed by the second answer.
-            (
-                b"\x1b]11;rgb:ffff/8080/0000\x1b\\\x1b[?62;4c",
-                Some(Rgb(255, 128, 0)),
-            ),
-            // One, two or three digits a part: each is a fraction of its own full scale.
-            (b"\x1b]11;rgb:1e/1e/1e\x07", Some(Rgb(30, 30, 30))),
-            (b"\x1b]11;rgb:f/0/8\x07", Some(Rgb(255, 0, 136))),
-            (
-                b"\x1b]11;rgba:1e1e/1e1e/1e1e/ffff\x07",
-                Some(Rgb(30, 30, 30)),
-            ),
-            // A terminal that does not know the question answers only the second one.
-            (b"\x1b[?62;4c", None),
-            (b"\x1b]11;rgb:zz/00/00\x07", None),
-            (b"\x1b]11;rgb:00/00\x07", None),
-            (b"", None),
-        ] {
-            assert_eq!(
-                parse_background(reply),
-                colour,
-                "{:?}",
-                String::from_utf8_lossy(reply)
-            );
-        }
-        assert!(answered(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07\x1b[?62;4c"));
-        assert!(answered(b"\x1b[?1;2c"));
-        assert!(!answered(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07"));
-        assert!(!answered(b"\x1b[?62;4"));
-        assert!(!answered(b""));
-    }
-
-    #[test]
-    fn a_session_shows_a_slightly_lifted_purple_tinged_background() {
-        // A dark background gets a little lighter, a light one a little darker,
-        assert_eq!(session_shade(Rgb(30, 30, 30)), Rgb(48, 45, 53));
-        assert_eq!(session_shade(Rgb(255, 255, 255)), Rgb(234, 232, 239));
-        assert_eq!(session_shade(Rgb(0, 0, 0)), Rgb(21, 19, 27));
-        // and either way the step is small and leans to purple: most blue, least green.
-        for value in [0u8, 12, 30, 60, 127, 128, 200, 245, 255] {
-            let Rgb(red, green, blue) = session_shade(Rgb(value, value, value));
-            assert!(blue > red && red > green, "{value}: {red} {green} {blue}");
-            for channel in [red, green, blue] {
-                assert!(channel.abs_diff(value) <= 28, "{value}: {channel}");
-            }
-        }
-        // The band behind a prompt is that shade, exactly where the terminal can show any
-        // colour and as the nearest of its 256 where it cannot.
-        assert_eq!(band(Rgb(30, 30, 30), true), "48;2;48;45;53");
-        assert_eq!(band(Rgb(30, 30, 30), false), "48;5;236");
-        assert_eq!(band(Rgb(255, 255, 255), false), "48;5;255");
-        assert_eq!(BACKGROUND_QUERY, "\x1b]11;?\x07\x1b[c");
     }
 
     #[test]

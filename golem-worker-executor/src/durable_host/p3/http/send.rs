@@ -22,7 +22,7 @@ use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallSpanObserver, Cancellable, DeferredCallReplayOutcome, DropPolicy,
     DurableCallSession, LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access,
-    finish_span_in_memory,
+    finish_span_in_memory, reserve_access_invocation_id,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -47,7 +47,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpScheme,
 };
 use golem_common::model::oplog::{
-    AttributeMap, DurableFunctionType, HostRequest, HostRequestP3HttpClientSend,
+    AttributeMap, DurableFunctionType, DurableInvocationId, HostRequestP3HttpClientSend,
     HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex, SpanFinished, SpanKind,
     SpanStarted,
 };
@@ -119,6 +119,10 @@ where
     U: Send + 'static,
     P: DropPolicy,
 {
+    // The live path awaits authorization before it starts the send, so the send reserves its
+    // invocation id first. The body transmission recorded after the send carries the same id.
+    let invocation_id = reserve_access_invocation_id(store, durable_worker_ctx::<Ctx, U>)
+        .map_err(HttpError::trap)?;
     // Replay must claim and restore the recorded outcome without rebuilding a permission target.
     // On the live path only the request head is inspected here; no body/resource ownership or
     // transmission state is consumed before admission.
@@ -207,27 +211,14 @@ where
                 "failed to serialize outgoing p3 HTTP request: {err}"
             )))
         })?;
-    // Concurrent sends share the durable identity of their records (same function name and
-    // durable function type), so both the send's batched-write scope and its host-call `Start`
-    // are made claim-safe by the request itself: the scope name carries a canonical digest of
-    // the request head, and the `Start` claim matches the recorded request payload by value.
-    // Sends with equal requests remain interchangeable and are claimed in oplog order.
+    // Concurrent sends are told apart by their invocation id.
     let host_request = HostRequestP3HttpClientSend {
         request: serialized_request.clone(),
     };
-    let scope_discriminator =
-        p3_send_request_discriminator(&serialized_request).map_err(|err| {
-            HttpError::trap(WorkerExecutorError::runtime(format!(
-                "failed to compute outgoing p3 HTTP request discriminator: {err}"
-            )))
-        })?;
     let claim_options = AccessClaimOptions {
-        scope_discriminator: Some(format!("req:{scope_discriminator}")),
-        request_identity: Some(HostRequest::from(host_request.clone())),
-        entity_invocation_identity: None,
-        tool_invocation_identity: None,
         parent_start_index: None,
         observational_owner: None,
+        invocation_id,
         ..Default::default()
     };
     let span_seed = store.with(|mut access| {
@@ -251,12 +242,23 @@ where
             OplogIndex::INITIAL,
             None,
             persisted,
+            invocation_id.reserved(),
         )
     });
     let lifecycle = Arc::new(P3SendSpanLifecycle::new(cleanup_recorder));
     let send_terminal =
         SendTerminalObserver::register(store, lifecycle.clone()).map_err(HttpError::trap)?;
     let span_started_at = golem_common::model::Timestamp::now_utc();
+    // Start admission itself can await a replay claim while the guest drops this send.
+    // Keep request cleanup owned by the Store until either replay or live send takes it.
+    let replay_scope = Arc::new(Mutex::new(None));
+    let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
+    spawn_replayed_request_leak_guard::<Ctx, U>(
+        store,
+        req.rep(),
+        replay_scope.clone(),
+        disarm_leak_guard_rx,
+    );
     let mut handle =
         DurableCallSession::<P3HttpClientSend, P>::start_access_with_options_and_indexed_span(
             store,
@@ -285,6 +287,8 @@ where
         )
         .await
         .map_err(HttpError::trap)?;
+    *replay_scope.lock().unwrap() = (handle.begin_index() != handle.start_index())
+        .then_some((function_type.clone(), handle.begin_index()));
     let send_start_index = handle.start_index();
     let observational_owner = handle.observational_owner();
 
@@ -331,6 +335,7 @@ where
             Ok::<_, WorkerExecutorError>(P3HttpSendSpan {
                 span_id: span_started.span_id.clone(),
                 send_start_index,
+                invocation_id: invocation_id.reserved(),
                 persisted: handle.is_persisted(),
                 closure_claimed: lifecycle.closure_claimed.clone(),
             })
@@ -339,21 +344,6 @@ where
     handle.close_span_on_cancellation(span.span_id.clone());
 
     if !handle.is_live() {
-        // The guest may drop this send future at any await point below (e.g.
-        // it cancels the response future after losing a race) while the future
-        // still owns the replayed request resource. Arm a store-owned leak
-        // guard that consumes the request in that case — see
-        // `ReplayedRequestLeakGuard`. Both arms below hand request ownership
-        // over (inline consume / live re-execution) and disarm it first.
-        let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-        let replay_scope = (handle.begin_index() != handle.start_index())
-            .then_some((function_type.clone(), handle.begin_index()));
-        spawn_replayed_request_leak_guard::<Ctx, U>(
-            store,
-            req.rep(),
-            replay_scope,
-            disarm_leak_guard_rx,
-        );
         match handle
             .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await
@@ -441,6 +431,7 @@ where
                             store,
                             pending_transmission,
                             observational_owner,
+                            invocation_id,
                         );
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
@@ -475,6 +466,7 @@ where
                             store,
                             pending_transmission,
                             observational_owner,
+                            invocation_id,
                         );
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
@@ -498,6 +490,8 @@ where
                 handle = live_handle
             }
         }
+    } else {
+        let _ = disarm_leak_guard_tx.send(());
     }
 
     if authorization_denied {
@@ -524,7 +518,12 @@ where
                 .await
                 .map_err(HttpError::trap)?;
         }
-        start_transmission_recording::<Ctx, U>(store, pending_transmission, observational_owner);
+        start_transmission_recording::<Ctx, U>(
+            store,
+            pending_transmission,
+            observational_owner,
+            invocation_id,
+        );
         span.claim_closure();
         send_terminal
             .attach(store, delivery)
@@ -617,6 +616,7 @@ where
                     store,
                     pending_transmission,
                     observational_owner,
+                    invocation_id,
                 );
                 // The guest-visible error return below still crosses Wasmtime's lowering
                 // and terminal-consumption boundary: hand the token to the terminal
@@ -636,6 +636,7 @@ where
                     store,
                     pending_transmission,
                     observational_owner,
+                    invocation_id,
                 );
                 delivery.delivered();
             }
@@ -955,6 +956,7 @@ where
                 store,
                 pending_transmission,
                 observational_owner,
+                invocation_id,
             );
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
@@ -1055,6 +1057,7 @@ where
                 store,
                 pending_transmission,
                 observational_owner,
+                invocation_id,
             );
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead
@@ -1433,11 +1436,12 @@ where
 pub(crate) struct P3HttpSendSpan {
     pub(crate) span_id: SpanId,
     pub(crate) persisted: bool,
-    /// The send's own host-call `Start` index. Used to discriminate the durable consume-body
-    /// scope of the response body: unlike the span id (which is derived from the owning agent's
-    /// id and therefore changes when the oplog is forked to another agent), the `Start` index is
-    /// part of the recorded oplog itself and survives fork/revert unchanged.
+    /// The send's own host-call `Start` index. Unlike the span id (which is derived from the
+    /// owning agent's id and therefore changes when the oplog is forked to another agent), the
+    /// `Start` index is part of the recorded oplog itself and survives fork/revert unchanged.
     pub(crate) send_start_index: OplogIndex,
+    /// The invocation id of the send. The span cleanup record of the send carries it.
+    pub(crate) invocation_id: Option<DurableInvocationId>,
     closure_claimed: Arc<AtomicBool>,
 }
 
@@ -1730,51 +1734,6 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, DurableP3<Ctx>>
     }
 }
 
-/// A deterministic digest of a P3 send's serialized request head, used to discriminate the
-/// send's batched-write scope name among concurrent sends. Every field is length-prefixed and
-/// the headers are folded in sorted by name, so the digest does not depend on the `HashMap`
-/// iteration order (which is process-random and therefore differs between the recording run and
-/// a post-restart replay).
-pub(super) fn p3_send_request_discriminator(
-    request: &SerializableP3HttpClientSend,
-) -> Result<String, String> {
-    fn update(hasher: &mut blake3::Hasher, bytes: &[u8]) {
-        hasher.update(&(bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
-    }
-    let mut hasher = blake3::Hasher::new();
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.method)?,
-    );
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.scheme)?,
-    );
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.authority)?,
-    );
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.path_with_query)?,
-    );
-    let mut headers: Vec<(&String, &Vec<Vec<u8>>)> = request.headers.iter().collect();
-    headers.sort_by_key(|(name, _)| name.as_str());
-    for (name, values) in headers {
-        update(&mut hasher, name.as_bytes());
-        update(
-            &mut hasher,
-            &golem_common::serialization::serialize(values)?,
-        );
-    }
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.options)?,
-    );
-    Ok(hasher.finalize().to_hex().to_string())
-}
-
 /// Finishes the send's derived `outgoing-http-request` span in memory.
 pub(super) async fn finish_p3_send_span<Ctx: WorkerCtx, U: 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
@@ -1906,7 +1865,7 @@ mod terminal_tests {
     use golem_common::model::Timestamp;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{
-        HostPayloadPair, HostRequestNoInput, OplogEntry, OplogPayload,
+        HostPayloadPair, HostRequest, HostRequestNoInput, OplogEntry, OplogPayload,
     };
     use test_r::test;
 

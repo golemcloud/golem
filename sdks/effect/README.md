@@ -158,6 +158,69 @@ field and use `null` for an absent option. Wide integers are decimal strings: du
 `{ nanoseconds: "..." }` and quantity uses a decimal-string `mantissa`; integers through 32 bits
 remain numbers. Streams and opaque capabilities require `*Value` APIs and transfer ownership once.
 
+## Unstructured outputs and HTTP responses
+
+`Unstructured.UnstructuredText()` and `Unstructured.UnstructuredBinary()` declare unstructured
+values. A method returns them as `TextReferenceValue` or `BinaryReferenceValue`: either
+`{ _tag: "inline", val, ... }` with the data, or `{ _tag: "url", val }`. Wrap an element in
+`Unstructured.Option(...)` to return an `Option` of the reference. `Unstructured.Option` is only a
+method `success`; it is not an input parameter or a multimodal member. Each form combines with a
+typed `error`:
+
+```ts
+import { Effect, Option, Schema } from "effect"
+import { defineAgent, Http, method, Method, Unstructured } from "@golemcloud/effect-golem"
+
+const Pending = Schema.Struct({ _tag: Schema.Literal("Pending") })
+
+export const Files = defineAgent({
+  name: "Files",
+  id: { bucket: Schema.String },
+  http: Http.mount("/files/{bucket}"),
+  methods: {
+    download: method({
+      input: { id: Schema.String },
+      success: Unstructured.Option(
+        Unstructured.UnstructuredBinary({ restrictions: [{ mimeType: "image/png" }] }),
+      ),
+      error: Pending,
+    }).pipe(Method.withHttp(Http.get("/{id}"))),
+  },
+})
+
+Files.implement({
+  init: () => Effect.void,
+  methods: () => ({
+    download: ({ id }) =>
+      id === "missing"
+        ? Effect.succeed(Option.none())
+        : id === "pending"
+          ? Effect.fail({ _tag: "Pending" as const })
+          : Effect.succeed(
+              Option.some({ _tag: "inline", val: new Uint8Array(), mimeType: "image/png" }),
+            ),
+  }),
+})
+```
+
+The output schema is the element's `variant { inline, url }` with an `unstructured-text` or
+`unstructured-binary` role. `Unstructured.Option` wraps it in `option<_>`, and a typed error wraps
+the success in `result<_, error>`. The role stays on the nested variant. Typed clients decode the
+same reference and `Option` values and return the typed error in the Effect error channel.
+Reflection and `DynamicClient` see the schema value with the role intact.
+
+The Golem HTTP host maps the output of an HTTP endpoint method as follows:
+
+| Output                       | Response                                                        |
+| ---------------------------- | --------------------------------------------------------------- |
+| element                      | `inline` → 200 with the raw body; `url` → redirect              |
+| `option<element>`            | `none` → 404; `some` → as the element                           |
+| `result<element, E>`         | `ok` → as the element; `err` → 500 with the error as JSON       |
+| `result<option<element>, E>` | `ok(none)` → 404; `ok(some)` → as the element; `err` → 500 JSON |
+
+Other success schemas use the same `option` and `result` rules with a JSON body in place of the raw
+body.
+
 ## Configuration and opaque secrets
 
 `Schema.Redacted(inner)` declares a secret. The config wire value is an opaque host handle;
@@ -243,7 +306,7 @@ definition.implement({
 ```
 
 For SQLite snapshots, add `databases: state => ({ main: state.database })` to the snapshot strategy;
-the SDK restores each declared image before constructing methods. DDL must be idempotent. A
+the SDK hydrates in-memory/temp images before constructing methods. DDL must be idempotent. A
 `Snapshot.custom(...)` implementation uses `{ save(state), restore(saved, context) }` with raw
 bytes. Snapshot schema evolution remains the application's responsibility.
 
@@ -251,6 +314,36 @@ Auto snapshots can declare `databases: ["main"] as const`; expose the correspond
 `SqliteClient` or `node:sqlite` `DatabaseSync` from the implementation snapshot strategy. Every
 declared database must be present, be in autocommit mode, and have no extra attached schemas.
 External Postgres/MySQL/Ignite data is not part of a worker snapshot.
+
+For schema state plus arbitrary named bytes, opt into `Snapshot.multipart({ schema, policy,
+databases? })` and provide an explicit strategy. `save(ref)` returns an Effect of
+`{ state, parts: new Map([["index", { bytes, contentType: "application/octet-stream" }]]) }`;
+`restore(saved, context)` receives decoded state and the complete user-part Map.
+`yield* Snapshot.requirePart(saved.parts, "index", "application/octet-stream")` checks both presence
+and MIME type. Binary-only applications use `Schema.Null` state. Logical names are case-sensitive
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`; content types are bare ASCII MIME types without parameters.
+The SDK owns the envelope and principal, always emits multipart (including zero parts), and never
+interprets user parts as resources. Existing JSON and byte-only modes are unchanged.
+
+Optional managed SQLite composition uses the same `databases` accessor in both `Snapshot.define`
+and `Snapshot.multipart`. `DatabaseSync.location()` classifies each handle: `null` means an
+in-memory/temp image; a non-null location is recorded in `fileDatabases` metadata only. Host
+filesystem snapshots exclusively own file-backed contents. The SDK never captures those contents
+as application parts or hydrates them from bytes, even when filesystem snapshotting is disabled.
+Filesystem snapshot availability is controlled by the host; without it, changed files prevent
+periodic snapshots and snapshot-based manual updates.
+
+The SDK validates the complete, disjoint image/location inventory and checks recorded files exist
+before `restore`. That factory must reopen the recorded locations. All returned handles must match
+their recorded categories and locations. Memory/temp images hydrate and connection caches warm
+before `methods`; defer database-dependent reconstruction until then. Small nonempty file databases
+may be read in full during cache warming, with the bytes discarded rather than stored in the
+application snapshot. Use scoped database acquisition for cleanup if restoration fails. Raw
+handles and `SqliteClient.fromDatabase` wrappers remain externally owned unless you register a
+finalizer or request `closeOnScopeClose: true`. Arbitrary user parts remain application-owned.
+Snapshot hooks run unpersisted and may be retried. Whole-buffer
+copies amplify peak memory use; the host's 64 KiB inline/blob-spill threshold is not a size cap.
+See the [multipart examples](https://learn.golem.cloud/next/develop/snapshotting) for all SDKs.
 
 ## Agent streams
 
@@ -545,6 +638,46 @@ middleware. The sender must not inspect or reuse a transferred card. Transaction
 does not consume it if validation or another sibling conversion fails, so a corrected retry remains
 possible. The SDK intentionally has no card inspection, wallet, derivation, or installation API.
 
+### Restrictive evaluator permissions
+
+Pure agent initialization does not read self metadata and does not require self-view permission.
+For an ephemeral evaluator, keep `init` and the handler independent of host services, declare no
+tools or secrets, and keep agent operations outside the `initialCard` upper bound. Grant only the
+operations needed by the evaluator runtime; for nested JavaScript runtime startup, this can include
+filesystem stat on the agent's root. The upper bound is a ceiling, not a grant: each required
+operation must also be admitted by the effective permission card.
+
+Self metadata is read in these cases:
+
+| Operation                                                                  | Self-view required?                                  |
+| -------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Pure initialization and methods without metadata or identity reads         | No                                                   |
+| `Agents.getSelfMetadata`                                                   | Yes                                                  |
+| `SelfAgentId.SelfAgentId`, including when used in `init`                   | Yes                                                  |
+| Restoration with an explicit snapshot strategy, including `Snapshot.ref()` | Yes, to populate the restoration context's `agentId` |
+| Plain schema-state restoration without a snapshot strategy                 | No implicit self-metadata read                       |
+
+Every snapshot load also reads `GOLEM_AGENT_ID` through the WASI environment API,
+including plain schema-state restoration. This requires environment-read permission
+for that variable independently of self-view; neither permission grants the other.
+
+`SelfAgentId.SelfAgentId` extracts the identity from the full metadata response; it is not an
+identity-only host operation. If self-view is needed for trusted code, the permission target is
+`agent(?agent) @ ?agent : view : *`. The effective card must admit that operation and the
+`initialCard` upper bound must permit it. Do not add this grant merely to initialize a pure evaluator.
+
+Self metadata includes stored environment and configuration fields. The metadata host operation
+checks agent view permission, but does not apply the per-key env/config permission filters used by
+WASI reads. An empty or denied WASI environment/configuration read therefore does not establish
+that those fields are inaccessible through metadata. Keep self-view denied for untrusted code that
+must not read those fields; do not treat self-view as a harmless bootstrap permission.
+
+`Agents.getSelfMetadata` returns an `AgentsHostError` in the Effect error channel and retains
+the host failure as its cause. `SelfAgentId.SelfAgentId` preserves its defect-based failure
+contract, including during restoration with an explicit snapshot strategy. Neither path changes
+the card or retries with broader permissions. Atomic and Saga traps preserve typed error
+messages as well as native error stacks, regardless of which host operation failed.
+
 ## Tool middleware
 
 Standalone middleware imports only the middleware-safe entry point:
@@ -596,6 +729,26 @@ host resource owns their begin index and lifecycle.
 Other durability controls remain under `Durability`: persistence and idempotence scopes, atomic
 regions, checkpoint/revert/compensable helpers, oplog commits, and `FunctionType` constructors.
 `Saga` provides fallible/infallible compensating transactions; compensations run in reverse order.
+
+`Durability.checkpoint` captures an invocation-local oplog position when the Effect runs:
+
+```ts
+const program = Effect.gen(function* () {
+  const cp = yield* Durability.checkpoint
+  const value = yield* cp.runOrRevert(doWork)
+  yield* cp.assertOrRevert(value.isValid)
+  return value
+})
+```
+
+`cp.revert` rewinds with `Oplog.setIndex` and never returns on successful rollback.
+`Durability.unwrapOrRevert(doWork)` captures a checkpoint and runs the same typed-failure
+policy. Defects and interruption propagate without rollback. Host errors remain typed
+`OplogHostError` failures; a host that returns after rollback causes an unreachable defect.
+There is no returned `reverted` result. Do not persist a checkpoint or use it in another
+invocation. Rollback does not undo external side effects; `Durability.compensable` runs its
+compensation before rewind on typed body failure. `Agents.revertAgent` manages other agents;
+management self-revert is unsupported.
 
 ## Existing Effect integrations
 

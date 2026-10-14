@@ -58,8 +58,7 @@ use golem_common::model::oplog::{
     AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
-    OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -129,11 +128,6 @@ pub trait EntityInvocationBodyHook: Send + Sync {
 #[async_trait]
 pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
-
-    /// Runs first in the spawned supervisor of a completed historical reconstruction, before the
-    /// supervisor polls the body or the recorded terminal.
-    #[cfg(feature = "test-utils")]
-    async fn before_completed_supervisor(&self, _start_index: OplogIndex) {}
 }
 
 /// Where a replaying accessor durable call is paused relative to its scope admission.
@@ -144,10 +138,14 @@ pub enum ReplayAdmissionStage {
     BeforeScope,
     /// After the scope `Start` is claimed but before the call's own `Start` is claimed.
     AfterScope,
+    /// After the call claimed its own `Start`, before it resolves the recorded result.
+    AfterStart,
     /// Before a deferred call is prepared, on both live execution and replay.
     BeforeDeferredStart,
     /// After the deferred call owns its `Start`, before resolution or live execution.
     AfterDeferredStart,
+    /// After a live host-internal End, before its owning host continuation resumes.
+    AfterHostInternalTerminal,
     /// Before committing the Jump that abandons an incomplete batched attempt.
     BeforeBatchedJump,
     /// After that Jump is committed and registered, before continuing the scope.
@@ -490,7 +488,7 @@ pub trait InvocationHooks {
     /// Called when a worker is about to be invoked
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        invocation: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.

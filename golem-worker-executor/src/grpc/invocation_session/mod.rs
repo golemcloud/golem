@@ -1657,9 +1657,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
-        let (result, new_stream_mappings) = match &output.result {
+        let (result, new_stream_mappings) = match output.result {
             AgentInvocationResult::ExternalTool { result } => {
-                let result = match result.clone() {
+                let result = match result {
                     Ok(result) => golem_common::model::oplog::PublicExternalToolResult::Success(result),
                     Err(error) => golem_common::model::oplog::PublicExternalToolResult::Failure(error),
                 };
@@ -1671,7 +1671,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }
             }
-            AgentInvocationResult::AgentMethod { output } => match output.clone().try_into() {
+            AgentInvocationResult::AgentMethod { output } => match output.try_into() {
                 Ok(output) => (
                     Some(invocation_session_result::Result::MethodResult(output)),
                     Vec::new(),

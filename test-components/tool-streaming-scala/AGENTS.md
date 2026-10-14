@@ -113,14 +113,15 @@ Key concepts:
 
 ## Durability & Automatic Retries
 
-Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `try/catch` + retry patterns, `Future.recoverWith` retry chains, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `try/catch` + retry patterns, `Future.recoverWith` retry chains, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-The following are retried transparently:
+Retryable failures in the following operations are handled transparently:
 
 - **HTTP requests** to external services (via `fetch`, ZIO HTTP, `wasi:http`, etc.)
 - **RPC calls** between agents
 - **Database / storage calls** — `golem.host.Rdbms.Postgres`, `golem.host.Rdbms.Mysql`, `wasi:blobstore`, `wasi:keyvalue`
-- **Uncaught exceptions** (`Throwable`s thrown from, or `Future` failures escaping, an agent method) — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+
+An uncaught exception or failed `Future` outside an atomic region fails the agent without retry. Inside an atomic region, these errors trap and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-scala` skill.
 

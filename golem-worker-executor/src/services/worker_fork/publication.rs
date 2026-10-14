@@ -12,8 +12,8 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{StreamId, StreamOffset, StreamSessionRecord};
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
-    DurableFunctionType, FilesystemSnapshotName, HostPayloadPair, HostRequest, HostRequestNoInput,
-    HostResponse, HostResponseGolemApiFork, OplogEntry, OplogIndex,
+    DurableFunctionType, DurableInvocationId, FilesystemSnapshotName, HostPayloadPair, HostRequest,
+    HostRequestNoInput, HostResponse, HostResponseGolemApiFork, OplogEntry, OplogIndex,
 };
 use golem_common::model::{AgentFingerprint, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -24,7 +24,7 @@ pub(crate) fn request_hash(
     fingerprint: AgentFingerprint,
     cut: OplogIndex,
     selected: Option<(StreamId, Option<StreamOffset>)>,
-    guest_result: Option<(Option<OplogIndex>, Uuid)>,
+    guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
 ) -> Result<[u8; 32], String> {
     let bytes = golem_common::serialization::serialize(&(
         "golem-fork-request-v1".to_string(),
@@ -194,6 +194,7 @@ pub(crate) fn found_after(
 pub(crate) async fn write_guest_result(
     oplog: &dyn Oplog,
     copied_scope_start: Option<OplogIndex>,
+    invocation_id: Option<DurableInvocationId>,
     forked_phantom_id: Uuid,
 ) -> Result<(), WorkerExecutorError> {
     let request = HostRequest::NoInput(HostRequestNoInput {});
@@ -216,7 +217,7 @@ pub(crate) async fn write_guest_result(
                 timestamp: now,
                 parent_start_index: copied_scope_start,
                 function_name: GolemApiFork::HOST_FUNCTION_NAME,
-                invocation_id: None,
+                invocation_id,
                 observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::WriteRemote,
@@ -340,7 +341,14 @@ mod tests {
         );
         assert_ne!(
             hash,
-            request_hash(&source, generation, cut, None, Some((None, Uuid::nil()))).unwrap()
+            request_hash(
+                &source,
+                generation,
+                cut,
+                None,
+                Some((None, None, Uuid::nil()))
+            )
+            .unwrap()
         );
         let selected = StreamId(Uuid::from_u128(9));
         let empty = request_hash(&source, generation, cut, Some((selected, None)), None).unwrap();
@@ -380,7 +388,7 @@ mod tests {
             source_fingerprint,
             cut,
             None,
-            Some((None, phantom)),
+            Some((None, None, phantom)),
         )
         .unwrap();
         assert_eq!(
@@ -455,7 +463,7 @@ mod tests {
             })
             .await
             .unwrap();
-        write_guest_result(stage.as_ref(), None, phantom)
+        write_guest_result(stage.as_ref(), None, None, phantom)
             .await
             .unwrap();
         // Extra entries after creation must not affect retry recognition.

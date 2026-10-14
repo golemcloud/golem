@@ -293,6 +293,28 @@ pub struct RemoteToolDeployment {
 
 pub const TOOL_METADATA_WIT_VERSION: &str = "0.1.0";
 
+/// Email of the account that owns the built-in tool releases of a server with the default
+/// configuration.
+pub const BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL: &str = "builtin-tool-owner@golem.cloud";
+
+/// Version of the built-in `bash` tool release that a server provisions.
+pub const BUILTIN_BASH_TOOL_VERSION: &str = "0.2.1";
+
+/// A built-in tool release that the CLI adds to every deployment, bound to every agent type,
+/// unless the environment opts out of the default tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultTool {
+    pub name: &'static str,
+    pub version: &'static str,
+    pub filesystem_access: ToolFilesystemAccess,
+}
+
+pub const DEFAULT_TOOLS: &[DefaultTool] = &[DefaultTool {
+    name: "bash",
+    version: BUILTIN_BASH_TOOL_VERSION,
+    filesystem_access: ToolFilesystemAccess::Allowed,
+}];
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",

@@ -119,7 +119,9 @@ data. Only an exact acknowledgement advances sequence. `next_offset: None` is st
 acknowledgement. Dropping a writer cannot undo a possibly committed write.
 
 Timeout, transport, rate-limit, and unavailable failures use bounded exponential backoff and
-durable timers; protocol, fencing, conflict, gone, and payload-too-large errors do not. Replay
+durable timers; protocol, fencing, conflict, gone, and payload-too-large errors do not.
+`RetryOptions::default()` retries 8 times after the first attempt, with a delay that starts at
+100 ms and doubles up to 30 s; a longer `Retry-After` wins. `max_retries: 0` disables retries. Replay
 returns recorded host results and reconstructs buffers, checkpoints, retry state, and pending
 writes without repeating completed HTTP effects. Do not wrap these calls in custom durability or
 atomic scopes.
@@ -127,8 +129,9 @@ atomic scopes.
 For bearer auth, pass a host secret capability in `ReadOptions::auth` or `WriteOptions::auth` as
 `Arc<schema::wit::wire::Secret>`. For configured `Secret<String>`, call `handle()` and transfer the
 returned `GuestSecretHandle` with `take()`; never call `get()` or reveal the token. HTTPS is
-required except when the host is exactly `localhost` or a loopback IP; a name such as
-`app.localhost` is not exempt. Redirects and URL credentials are rejected.
+required except when the host is `localhost`, a dot-delimited subdomain such as `app.localhost`,
+or a loopback IP. Localhost names are case-insensitive and may have one terminal DNS dot. The URL
+authority stays unchanged. Redirects and URL credentials are rejected.
 
 Build and deploy after adding the `httpApi` deployment:
 

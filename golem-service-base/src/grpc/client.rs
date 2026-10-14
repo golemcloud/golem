@@ -43,6 +43,7 @@ fn build_endpoint(
     uri: Uri,
     config: &GrpcClientConfig,
 ) -> Result<Endpoint, tonic::transport::Error> {
+    let ip_literal_host = ip_literal_tls_server_name(&uri);
     let mut endpoint = Endpoint::new(uri)?.connect_timeout(config.connect_timeout);
 
     if let Some(request_timeout) = config.request_timeout {
@@ -62,10 +63,26 @@ fn build_endpoint(
     }
 
     if let GrpcClientTlsConfig::Enabled(tls) = &config.tls {
-        endpoint = endpoint.tls_config(tls.to_tonic())?;
+        let mut tls_config = tls.to_tonic();
+        if tls.server_domain_name.is_none()
+            && let Some(server_name) = ip_literal_host
+        {
+            tls_config = tls_config.domain_name(server_name);
+        }
+        endpoint = endpoint.tls_config(tls_config)?;
     }
 
     Ok(endpoint)
+}
+
+/// The TLS server name for a URI whose host is an IPv6 literal. Without a configured domain name,
+/// tonic takes the server name from the URI host, which keeps the brackets of an IPv6 literal, and
+/// rustls rejects a bracketed name.
+fn ip_literal_tls_server_name(uri: &Uri) -> Option<String> {
+    uri.host()?
+        .strip_prefix('[')?
+        .strip_suffix(']')
+        .map(str::to_string)
 }
 
 /// A connection attempt shared by every caller waiting for the same target.
@@ -2229,5 +2246,17 @@ mod test {
 
         assert!(result.is_err());
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn ip_literal_tls_server_name_strips_ipv6_brackets() {
+        let name = |uri: &str| ip_literal_tls_server_name(&uri.parse::<Uri>().unwrap());
+
+        assert_eq!(
+            name("https://[fdaa:0:1:a7b::2]:9000/"),
+            Some("fdaa:0:1:a7b::2".to_string())
+        );
+        assert_eq!(name("https://10.0.0.1:9000/"), None);
+        assert_eq!(name("https://golem-shard-manager:9000/"), None);
     }
 }

@@ -35,6 +35,7 @@ use golem_common::model::{AgentId, PendingUpdateKind, PendingUpdateRef, Timestam
 use golem_service_base::error::worker_executor::{
     ComponentServiceRefusal, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::storage::blob::BlobRefusal;
 use std::sync::Arc;
 
 /// The selected record of a snapshot-assisted update, or the record of a pending snapshot-based
@@ -53,8 +54,11 @@ pub(crate) const UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS: &str =
 pub(crate) const UPDATE_SNAPSHOT_RESTORE_FAILED: &str = "UPDATE_SNAPSHOT_RESTORE_FAILED";
 /// The target revision of an update does not exist.
 pub(crate) const UPDATE_TARGET_NOT_FOUND: &str = "UPDATE_TARGET_NOT_FOUND";
-/// The component service refused the target revision of an update.
+/// The component service or this executor refused the target revision of an update.
 pub(crate) const UPDATE_TARGET_REFUSED: &str = "UPDATE_TARGET_REFUSED";
+/// The blob storage refused the executor a read of an initial-file source of the target revision
+/// at the update point.
+pub(crate) const UPDATE_BLOB_STORAGE_REFUSED: &str = "UPDATE_BLOB_STORAGE_REFUSED";
 
 /// The baseline of a start: the column of the outcome table, without the head of a plain
 /// automatic update, which [`decide`] takes on its own.
@@ -114,8 +118,10 @@ pub(crate) enum SnapshotRecoveryResult {
 pub(crate) enum ManualLoadResult {
     /// The load failed with the details.
     Failed(String),
-    /// The load was interrupted, or the guest exited.
-    Interrupted,
+    /// The load was interrupted with the interrupt kind.
+    Interrupted(InterruptKind),
+    /// The guest exited during the load.
+    Exited,
 }
 
 /// The raw failure of a start, as the place that found it has it.
@@ -125,6 +131,10 @@ pub(crate) enum RawStartError<'a> {
     StaleSource(&'a SourceFound),
     /// The target revision of the pending update could not be fetched.
     TargetFetch(&'a WorkerExecutorError),
+    /// The target component could not be loaded or compiled.
+    TargetLoad(&'a WorkerExecutorError),
+    /// The executor does not support the target revision; the text says why.
+    TargetUnsupported(&'a str),
     /// The target revision changes the mode of the agent type; the text says how.
     ModeChange(&'a str),
     /// The baseline names a filesystem snapshot, and this executor keeps none.
@@ -167,8 +177,6 @@ pub(crate) enum StartAction {
     Error(WorkerExecutorError),
     /// Retry the start with this decision.
     Retry(RetryDecision),
-    /// The update is applied.
-    Succeed,
     /// Write nothing; the update stays pending for the new owner of the shard.
     ShardLost,
 }
@@ -228,7 +236,6 @@ pub(crate) fn decide(
             }
             _ => StartAction::Error(error.passed_through()),
         },
-        Cell::Succeed => StartAction::Succeed,
     }
 }
 
@@ -283,7 +290,9 @@ pub(crate) fn reconstruction_startup_error(error: &FilesystemError) -> WorkerExe
 
 /// The error of a failed initial-file rule at the update point: a full quota suspends, an
 /// unavailable initial-file source retries as a recovery, and every other error is a
-/// reconstruction error ([`reconstruction_startup_error`]).
+/// reconstruction error ([`reconstruction_startup_error`]). A refused initial-file source reaches
+/// this only in a column that fails no update, because every pending column fails the update
+/// for it.
 ///
 /// The update point can be inside a host call of a replayed invocation, where only a required
 /// recovery stays off the guest's failure path. An unavailable source is transient: the install
@@ -406,6 +415,8 @@ impl FetchProblem {
 enum StartProblem {
     StaleSource,
     Target(FetchProblem),
+    TargetExecutor,
+    TargetUnsupported,
     ModeChange,
     Disabled,
     Restore(RestoreClass),
@@ -422,6 +433,7 @@ enum StartProblem {
     LoadFailed,
     ManualLoadFailed,
     ManualLoadInterrupted,
+    ManualLoadExited,
     RecoveryRequired,
     Interrupted,
     AgentFailed,
@@ -433,6 +445,9 @@ enum StartProblem {
     UpdateState(FetchProblem),
     /// The agent filesystem failed after the replay.
     AfterReplay,
+    /// The blob storage refused the executor a read of an initial-file source of the target at
+    /// the update point.
+    BlobStorageRefused(BlobRefusal),
 }
 
 impl StartProblem {
@@ -440,6 +455,13 @@ impl StartProblem {
         match error {
             RawStartError::StaleSource(_) => Self::StaleSource,
             RawStartError::TargetFetch(error) => Self::Target(FetchProblem::of(error)),
+            RawStartError::TargetLoad(error) => match error {
+                WorkerExecutorError::Runtime { .. }
+                | WorkerExecutorError::RecoveryRequired { .. }
+                | WorkerExecutorError::Interrupted { .. } => Self::TargetExecutor,
+                _ => Self::Target(FetchProblem::of(error)),
+            },
+            RawStartError::TargetUnsupported(_) => Self::TargetUnsupported,
             RawStartError::ModeChange(_) => Self::ModeChange,
             RawStartError::Disabled => Self::Disabled,
             RawStartError::Filesystem(error) => match error {
@@ -449,6 +471,7 @@ impl StartProblem {
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
                 | FilesystemError::InitialFileUnavailable(_)
+                | FilesystemError::InitialFileRefused { .. }
                 | FilesystemError::PhysicalCapacity(_)
                 | FilesystemError::RuntimeInvalidated => Self::Reconstruction,
             },
@@ -470,7 +493,10 @@ impl StartProblem {
                 }
             },
             RawStartError::ManualLoad(ManualLoadResult::Failed(_)) => Self::ManualLoadFailed,
-            RawStartError::ManualLoad(ManualLoadResult::Interrupted) => Self::ManualLoadInterrupted,
+            RawStartError::ManualLoad(ManualLoadResult::Interrupted(_)) => {
+                Self::ManualLoadInterrupted
+            }
+            RawStartError::ManualLoad(ManualLoadResult::Exited) => Self::ManualLoadExited,
             RawStartError::Replay { error, diverged } => match error {
                 WorkerExecutorError::UnexpectedOplogEntry { .. } => Self::Divergence,
                 _ if *diverged => Self::Divergence,
@@ -483,12 +509,16 @@ impl StartProblem {
             RawStartError::UpdateState(UpdateStateError::Metadata(error)) => {
                 Self::UpdateState(FetchProblem::of(error))
             }
-            // The initial-file rule at the update point fails the update only for a conflict;
-            // the other filesystem errors retry the start, as they do at the restore. The update
-            // point restores nothing, so a restore error counts as a reconstruction error.
-            // `update_point_filesystem_error` gives the error of each passed one.
+            // The initial-file rule at the update point fails the update for a conflict and for a
+            // source that the blob storage refuses; the other filesystem errors retry the start,
+            // as they do at the restore. The update point restores nothing, so a restore error
+            // counts as a reconstruction error. `update_point_filesystem_error` gives the error of
+            // each passed one.
             RawStartError::UpdateState(UpdateStateError::InitialFiles(error)) => match error {
                 FilesystemError::InitialFileConflict(_) => Self::UpdateState(FetchProblem::Other),
+                FilesystemError::InitialFileRefused { refusal, .. } => {
+                    Self::BlobStorageRefused(*refusal)
+                }
                 FilesystemError::AgentQuota(_) => Self::Quota,
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
@@ -522,6 +552,8 @@ enum Code {
     SnapshotRestoreDiskFull,
     TargetNotFound,
     TargetRefused(ComponentServiceRefusal),
+    TargetUnsupported,
+    BlobStorageRefused(BlobRefusal),
 }
 
 impl Code {
@@ -567,6 +599,11 @@ impl Code {
                 "{UPDATE_TARGET_REFUSED}: the component service refused the target revision \
                  ({kind}); check the executor's access to the component service and the target \
                  revision, then request the update again"
+            ),
+            Self::TargetUnsupported => UPDATE_TARGET_REFUSED.to_string(),
+            Self::BlobStorageRefused(refusal) => format!(
+                "{UPDATE_BLOB_STORAGE_REFUSED}: the executor cannot read blob storage \
+                 ({refusal}); request the update again after the storage is fixed"
             ),
         }
     }
@@ -618,8 +655,6 @@ enum Cell {
     Pass,
     /// `D`: the retry decision of the load.
     Retry,
-    /// `OK`: the update is applied.
-    Succeed,
 }
 
 /// The outcome table. A cell that cannot occur passes the error.
@@ -642,13 +677,18 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             _ => Cell::Pass,
         },
         // A pending manual update loads its record through its own load, which reports a failed
-        // load as `ManualLoadFailed` and an interrupted load or an exited guest as
-        // `ManualLoadInterrupted`, so the other load rows of this column are not reached.
+        // load as `ManualLoadFailed`, an exited guest as `ManualLoadExited` and an interrupted
+        // load as `ManualLoadInterrupted`, so the other load rows of this column are not reached.
+        // An interrupted load passes its interrupt: the update stays pending, and the next start
+        // loads the snapshot again.
         Column::ManualPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
+            Problem::TargetUnsupported => coded(Code::TargetUnsupported),
+            Problem::BlobStorageRefused(refusal) => coded(Code::BlobStorageRefused(refusal)),
             Problem::ModeChange
             | Problem::RestoreConflict
             | Problem::ManualLoadFailed
+            | Problem::ManualLoadExited
             | Problem::LoadUnavailable
             | Problem::LoadFailed
             | Problem::RecoveryRequired
@@ -657,7 +697,6 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             Problem::Restore(RestoreClass::Lost) => coded(Code::ManualSnapshotUnavailable),
             Problem::Restore(RestoreClass::Fixed) => coded(Code::SnapshotRestoreFailed),
             Problem::Restore(RestoreClass::DiskFull) => coded(Code::SnapshotRestoreDiskFull),
-            Problem::ManualLoadInterrupted => Cell::Succeed,
             _ => Cell::Pass,
         },
         Column::ManualPromoted | Column::AssistedPromoted => match problem {
@@ -673,6 +712,8 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         Column::InitialFiles => Cell::Pass,
         Column::AutomaticPending(base) => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
+            Problem::TargetUnsupported => coded(Code::TargetUnsupported),
+            Problem::BlobStorageRefused(refusal) => coded(Code::BlobStorageRefused(refusal)),
             Problem::ModeChange => fail,
             Problem::Disabled
             | Problem::Restore(_)
@@ -690,6 +731,8 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         },
         Column::AssistedPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
+            Problem::TargetUnsupported => coded(Code::TargetUnsupported),
+            Problem::BlobStorageRefused(refusal) => coded(Code::BlobStorageRefused(refusal)),
             Problem::StaleSource
             | Problem::ModeChange
             | Problem::RestoreConflict
@@ -809,6 +852,9 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
             "Snapshot-assisted automatic update failed while instantiating the target: {error}"
         ),
         RawStartError::ManualLoad(ManualLoadResult::Failed(text)) => text.clone(),
+        RawStartError::ManualLoad(ManualLoadResult::Exited) => {
+            format!("Manual update failed to load snapshot: {}", raw_text(error))
+        }
         RawStartError::UpdateState(error) => format!("Applying worker update failed: {error}"),
         RawStartError::Load(_) | RawStartError::Replay { .. } => match column {
             Column::AssistedPending => format!(
@@ -819,10 +865,12 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
             _ => format!("Automatic update failed: {}", raw_text(error)),
         },
         RawStartError::TargetFetch(_)
+        | RawStartError::TargetLoad(_)
+        | RawStartError::TargetUnsupported(_)
         | RawStartError::Disabled
         | RawStartError::Filesystem(_)
         | RawStartError::Finish(_)
-        | RawStartError::ManualLoad(ManualLoadResult::Interrupted) => raw_text(error),
+        | RawStartError::ManualLoad(ManualLoadResult::Interrupted(_)) => raw_text(error),
     }
 }
 
@@ -834,8 +882,10 @@ fn raw_text(error: &RawStartError<'_>) -> String {
             found.revision, found.start_index
         ),
         RawStartError::TargetFetch(error)
+        | RawStartError::TargetLoad(error)
         | RawStartError::Instantiation(error)
         | RawStartError::Replay { error, .. } => error.to_string(),
+        RawStartError::TargetUnsupported(reason) => reason.to_string(),
         RawStartError::ModeChange(text) => text.to_string(),
         RawStartError::Disabled => SnapshotsDisabled.to_string(),
         RawStartError::Filesystem(error) | RawStartError::Finish(error) => error.to_string(),
@@ -851,8 +901,11 @@ fn raw_text(error: &RawStartError<'_>) -> String {
             }
         },
         RawStartError::ManualLoad(ManualLoadResult::Failed(text)) => text.clone(),
-        RawStartError::ManualLoad(ManualLoadResult::Interrupted) => {
+        RawStartError::ManualLoad(ManualLoadResult::Interrupted(_)) => {
             "the snapshot load was interrupted".to_string()
+        }
+        RawStartError::ManualLoad(ManualLoadResult::Exited) => {
+            "the agent exited during the snapshot load".to_string()
         }
         RawStartError::UpdateState(error) => error.to_string(),
     }
@@ -868,6 +921,7 @@ impl RawStartError<'_> {
                 reconstruction_startup_error(error)
             }
             RawStartError::TargetFetch(error)
+            | RawStartError::TargetLoad(error)
             | RawStartError::Instantiation(error)
             | RawStartError::Replay { error, .. } => (*error).clone(),
             RawStartError::Load(
@@ -876,11 +930,17 @@ impl RawStartError<'_> {
                 | SnapshotRecoveryResult::Lost(error),
             ) => error.clone(),
             RawStartError::UpdateState(error) => error.to_worker_executor_error(),
+            RawStartError::ManualLoad(ManualLoadResult::Interrupted(kind)) => {
+                WorkerExecutorError::Interrupted { kind: *kind }
+            }
             RawStartError::StaleSource(_)
+            | RawStartError::TargetUnsupported(_)
             | RawStartError::ModeChange(_)
             | RawStartError::Disabled
             | RawStartError::Load(_)
-            | RawStartError::ManualLoad(_) => WorkerExecutorError::runtime(raw_text(self)),
+            | RawStartError::ManualLoad(ManualLoadResult::Failed(_) | ManualLoadResult::Exited) => {
+                WorkerExecutorError::runtime(raw_text(self))
+            }
         }
     }
 }
@@ -947,6 +1007,264 @@ mod tests {
         head(PendingUpdateKind::Automatic, 12, 10)
     }
 
+    #[test]
+    fn cancelled_compilation_keeps_the_update_pending() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let join_error = runtime.block_on(async {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.await.unwrap();
+            // A blocking task can be cancelled only before it starts. Occupy the sole thread.
+            let compilation = tokio::task::spawn_blocking(|| ());
+            compilation.abort();
+            release_tx.send(()).unwrap();
+            blocker.await.unwrap();
+            compilation.await.unwrap_err()
+        });
+        assert!(join_error.is_cancelled());
+        let error = crate::services::component::compilation_join_error(join_error);
+        let action = decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::TargetLoad(&error),
+        );
+        assert!(
+            matches!(
+                action,
+                StartAction::Error(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Restart
+                })
+            ),
+            "cancelled compilation must interrupt startup without failing the update: {action:?}"
+        );
+    }
+
+    #[test]
+    async fn panicked_compilation_keeps_the_update_pending() {
+        let join_error = tokio::task::spawn_blocking(|| panic!("compile task panic"))
+            .await
+            .unwrap_err();
+        assert!(join_error.is_panic());
+        let error = crate::services::component::compilation_join_error(join_error);
+        let action = decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::TargetLoad(&error),
+        );
+        assert!(
+            matches!(
+                action,
+                StartAction::Error(WorkerExecutorError::Runtime { .. })
+            ),
+            "a compiler panic must retry startup without failing the update: {action:?}"
+        );
+    }
+
+    #[test]
+    fn target_load_executor_errors_preserve_every_pending_update() {
+        let errors = [
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Restart,
+            },
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Interrupt(Timestamp::from(1_000)),
+            },
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Suspend(Timestamp::from(2_000)),
+            },
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            },
+            WorkerExecutorError::RecoveryRequired {
+                retry_from: Some(OplogIndex::from_u64(5)),
+                details: "retry target load".to_string(),
+            },
+            WorkerExecutorError::runtime("compile task panic"),
+        ];
+        let automatic = automatic_head();
+        let manual = manual_head();
+        let assisted = assisted_head();
+        let cases = [
+            (BaselineRole::InitialFiles, automatic.clone()),
+            (BaselineRole::ManualPromoted, automatic.clone()),
+            (BaselineRole::AssistedPromoted, automatic),
+            (
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
+                manual,
+            ),
+            (
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+                assisted,
+            ),
+        ];
+        for (role, head) in cases {
+            for error in &errors {
+                let action = decide_now(&role, Some(&head), RawStartError::TargetLoad(error));
+                assert!(
+                    matches!(&action, StartAction::Error(passed) if passed == error),
+                    "executor failures must pass through for {role:?}: {action:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_runtime_failures_and_component_parse_failures_still_fail_updates() {
+        let runtime = WorkerExecutorError::runtime("metadata could not be parsed");
+        let parse = WorkerExecutorError::ComponentParseFailed {
+            component_id: component_id(),
+            component_revision: revision(3),
+            reason: "invalid component".to_string(),
+        };
+        for problem in [
+            RawStartError::TargetFetch(&runtime),
+            RawStartError::TargetLoad(&parse),
+        ] {
+            assert!(matches!(
+                decide_now(
+                    &BaselineRole::InitialFiles,
+                    Some(&automatic_head()),
+                    problem
+                ),
+                StartAction::FailUpdate { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn shared_memory_target_is_refused_without_a_snapshot_fault() {
+        let bytes = wat::parse_str(
+            "(component (core module $m (memory 1 1 shared)) (core instance (instantiate $m)))",
+        )
+        .unwrap();
+        let metadata =
+            golem_common::model::component_metadata::ComponentMetadata::analyse_component(
+                &bytes,
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap();
+        assert!(metadata.has_shared_linear_memory());
+        let reason = crate::services::component::component_support_error(&metadata)
+            .expect("shared memory must fail metadata support validation");
+
+        let engine = wasmtime::Engine::new(
+            &golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache(),
+        )
+        .unwrap();
+        let compilation_error = wasmtime::component::Component::from_binary(&engine, &bytes)
+            .err()
+            .expect("the production engine must reject shared memory");
+        assert!(!compilation_error.to_string().is_empty());
+        let automatic = automatic_head();
+        let manual = manual_head();
+        let assisted = assisted_head();
+        let cases = [
+            (BaselineRole::InitialFiles, automatic.clone()),
+            (BaselineRole::ManualPromoted, automatic.clone()),
+            (BaselineRole::AssistedPromoted, automatic),
+            (
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
+                manual,
+            ),
+            (
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+                assisted,
+            ),
+        ];
+        for (role, head) in cases {
+            let (entry, reject) = failed_entry(decide_now(
+                &role,
+                Some(&head),
+                RawStartError::TargetUnsupported(reason),
+            ));
+            let (target, details, assisted, attempt, fault) = entry_fields(&entry);
+            assert_eq!(target, revision(3));
+            assert_eq!(attempt, Some(head.admission_index));
+            assert_eq!(
+                assisted,
+                matches!(head.kind, PendingUpdateKind::SnapshotAssistedAutomatic(_))
+                    .then_some(assisted_details())
+            );
+            assert_eq!(fault, None);
+            assert_eq!(reject, None);
+            assert_eq!(
+                details,
+                "UPDATE_TARGET_REFUSED: The target revision uses WebAssembly threads, which Golem does not support"
+            );
+            assert!(matches!(
+                decide(
+                    &role,
+                    Some(&head),
+                    RawStartError::TargetUnsupported(reason),
+                    &agent_id(),
+                    true
+                ),
+                StartAction::ShardLost
+            ));
+        }
+    }
+
+    #[test]
+    fn unsupported_target_preserves_a_non_thread_refusal_reason() {
+        let reason = "The target revision requires a disabled Wasm feature";
+        for (role, head) in [
+            (BaselineRole::InitialFiles, automatic_head()),
+            (
+                BaselineRole::ManualPending(Arc::new(manual_head())),
+                manual_head(),
+            ),
+            (
+                BaselineRole::AssistedPending(Arc::new(assisted_head())),
+                assisted_head(),
+            ),
+        ] {
+            let (entry, reject) = failed_entry(decide_now(
+                &role,
+                Some(&head),
+                RawStartError::TargetUnsupported(reason),
+            ));
+            let (_, details, _, attempt, fault) = entry_fields(&entry);
+            assert_eq!(
+                details,
+                "UPDATE_TARGET_REFUSED: The target revision requires a disabled Wasm feature"
+            );
+            assert_eq!(attempt, Some(head.admission_index));
+            assert_eq!(fault, None);
+            assert_eq!(reject, None);
+        }
+    }
+
+    #[test]
+    fn ordinary_instantiation_errors_are_not_target_refusals() {
+        let error = WorkerExecutorError::worker_creation_failed(
+            agent_id(),
+            crate::services::linear_memory::SHARED_LINEAR_MEMORY_ERROR,
+        );
+        assert!(super::super::is_infrastructure_recovery_error(&error));
+        let action = decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::Instantiation(&error),
+        );
+        assert!(
+            matches!(
+                action,
+                StartAction::Error(WorkerExecutorError::AgentCreationFailed { .. })
+            ),
+            "only the typed unsupported-target outcome refuses an update: {action:?}"
+        );
+    }
+
     fn storage() -> FilesystemStorageError {
         FilesystemStorageError::verification("seed initial file", Path::new("<scripted>"))
     }
@@ -956,6 +1274,13 @@ mod tests {
             class,
             source: anyhow::anyhow!("restore failed"),
         }))
+    }
+
+    fn refused_source() -> FilesystemError {
+        FilesystemError::InitialFileRefused {
+            refusal: BlobRefusal::AccessDenied,
+            source: storage(),
+        }
     }
 
     fn conflict() -> InitialFileConflict {
@@ -1014,14 +1339,14 @@ mod tests {
                     false,
                 ) => "Fx",
                 (Some(Code::TargetNotFound), None, false) => "Fn",
-                (Some(Code::TargetRefused(_)), None, false) => "Fz",
+                (Some(Code::TargetRefused(_) | Code::TargetUnsupported), None, false) => "Fz",
+                (Some(Code::BlobStorageRefused(_)), None, false) => "Fb",
                 _ => "?",
             },
             Cell::Visible => "V",
             Cell::VisibleInvocation => "V2",
             Cell::Pass => "P",
             Cell::Retry => "D",
-            Cell::Succeed => "OK",
         }
     }
 
@@ -1029,9 +1354,11 @@ mod tests {
     /// InitialFiles, AutomaticPending (on a promoted manual baseline), AssistedPending,
     /// AssistedPromoted.
     ///
-    /// Rows for causes that only some sites report: `Target(Other)` and `ManualLoadFailed` (both
-    /// fail the update), `Restore(DiskFull)` (the cells of `Restore(Fixed)` with their own text),
-    /// `AfterReplay` (a filesystem failure after the replay, which passes in every column), and
+    /// Rows for causes that only some sites report: `Target(Other)`, `ManualLoadFailed` and
+    /// `ManualLoadExited` (all fail the update), `ManualLoadInterrupted` (which passes its
+    /// interrupt), `Restore(DiskFull)` (the cells of `Restore(Fixed)` with their own text),
+    /// `AfterReplay` (a filesystem failure after the replay, which passes in every column),
+    /// `BlobStorageRefused` (a refused initial-file source at the update point), and
     /// `LoadLost` (a lost payload of the selected record, which only a snapshot-assisted attempt
     /// reports).
     #[test]
@@ -1047,8 +1374,13 @@ mod tests {
             Column::AssistedPromoted,
         ];
         let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-        let table: [(Problem, [&str; 7]); 32] = [
+        let table: [(Problem, [&str; 7]); 36] = [
             (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
+            (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
+            (
+                Problem::TargetUnsupported,
+                ["P", "Fz", "P", "P", "Fz", "Fz", "P"],
+            ),
             (
                 Problem::Target(FetchProblem::Unavailable),
                 ["P", "P", "P", "P", "P", "P", "P"],
@@ -1110,7 +1442,11 @@ mod tests {
             ),
             (
                 Problem::ManualLoadInterrupted,
-                ["P", "OK", "P", "P", "P", "P", "P"],
+                ["P", "P", "P", "P", "P", "P", "P"],
+            ),
+            (
+                Problem::ManualLoadExited,
+                ["P", "F", "P", "P", "P", "P", "P"],
             ),
             (
                 Problem::RecoveryRequired,
@@ -1137,6 +1473,10 @@ mod tests {
                 ["P", "F", "P", "P", "F", "F", "P"],
             ),
             (Problem::AfterReplay, ["P", "P", "P", "P", "P", "P", "P"]),
+            (
+                Problem::BlobStorageRefused(BlobRefusal::AccessDenied),
+                ["P", "Fb", "P", "P", "Fb", "Fb", "P"],
+            ),
         ];
         table.iter().for_each(|(problem, expected)| {
             let actual = columns.map(|column| code(cell(column, *problem)));
@@ -1273,6 +1613,7 @@ mod tests {
                 FilesystemError::InitialFileUnavailable(storage()),
                 Problem::Reconstruction,
             ),
+            (refused_source(), Problem::Reconstruction),
             (
                 FilesystemError::InitialFileConflict(Box::new(conflict())),
                 Problem::RestoreConflict,
@@ -1398,7 +1739,10 @@ mod tests {
                 StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Failed(
                     "load".to_string()
                 ))),
-                StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Interrupted)),
+                StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Interrupted(
+                    InterruptKind::Restart
+                ))),
+                StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Exited)),
                 StartProblem::of(&RawStartError::Finish(&FilesystemError::AgentQuota(
                     storage()
                 ))),
@@ -1411,6 +1755,7 @@ mod tests {
                 Problem::Instantiation { interrupted: true },
                 Problem::ManualLoadFailed,
                 Problem::ManualLoadInterrupted,
+                Problem::ManualLoadExited,
                 Problem::AfterReplay,
             ]
         );
@@ -1922,12 +2267,14 @@ mod tests {
         });
     }
 
-    /// The initial-file rule at the update point fails the update only for a conflict. A full
-    /// quota suspends the start, an initial-file source that the blob storage cannot give now
-    /// retries as a recovery, and every other filesystem error, a failed download of an initial
-    /// file included, retries the start; none of them writes a failed update.
+    /// The initial-file rule at the update point fails the update for a conflict and for an
+    /// initial-file source that the blob storage refuses. A full quota suspends the start, an
+    /// initial-file source that the blob storage cannot give now retries as a recovery, and every
+    /// other filesystem error, a failed download of an initial file included, retries the start;
+    /// none of them writes a failed update.
     #[test]
-    fn the_initial_file_rule_at_the_update_point_fails_the_update_only_for_a_conflict() {
+    fn the_initial_file_rule_at_the_update_point_fails_the_update_for_a_conflict_or_a_refused_source()
+     {
         let assisted = assisted_head();
         let manual = manual_head();
         let automatic = automatic_head();
@@ -1953,11 +2300,12 @@ mod tests {
             _ => "other",
         };
         type MakeError = fn() -> FilesystemError;
-        let errors: [(MakeError, &str); 7] = [
+        let errors: [(MakeError, &str); 8] = [
             (
                 || FilesystemError::InitialFileConflict(Box::new(conflict())),
                 "fail",
             ),
+            (refused_source, "fail"),
             (|| FilesystemError::AgentQuota(storage()), "suspend"),
             (|| FilesystemError::Sandbox(storage()), "retry"),
             (
@@ -1983,6 +2331,39 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// An initial-file source that the blob storage refuses at the update point fails the update
+    /// with `UPDATE_BLOB_STORAGE_REFUSED`, the refusal and what to do next, then the cause. The
+    /// failed update carries the attempt index and no snapshot fault, and rejects no record: the
+    /// agent starts again on its source revision, as for a full local disk.
+    #[test]
+    fn a_refused_initial_file_source_at_the_update_point_fails_the_update_with_its_code() {
+        let error = UpdateStateError::InitialFiles(refused_source());
+        let head = automatic_head();
+
+        let (entry, reject) = failed_entry(decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&head),
+            RawStartError::UpdateState(&error),
+        ));
+        let (_, details, assisted, attempt, fault) = entry_fields(&entry);
+
+        assert_eq!(
+            (details, assisted, attempt, fault, reject),
+            (
+                format!(
+                    "UPDATE_BLOB_STORAGE_REFUSED: the executor cannot read blob storage (access \
+                     denied); request the update again after the storage is fixed: Applying \
+                     worker update failed: {}",
+                    error
+                ),
+                None,
+                Some(head.admission_index),
+                None,
+                None
+            )
+        );
     }
 
     /// A passed error at the update point: an unavailable component service and an unavailable
@@ -2387,13 +2768,68 @@ mod tests {
             ),
             StartAction::Error(WorkerExecutorError::Runtime { .. })
         ));
+    }
+
+    /// An interrupted load of a pending manual update ends the start with its interrupt, so the
+    /// update stays pending and the next start loads the snapshot again; on a lost shard the new
+    /// owner does. A guest exit during the load fails the update and names the exit.
+    #[test]
+    fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
+        let manual = manual_head();
+        let role = BaselineRole::ManualPending(Arc::new(manual.clone()));
+        [
+            InterruptKind::Interrupt(Timestamp::from(5)),
+            InterruptKind::Suspend(Timestamp::from(5)),
+            InterruptKind::Restart,
+            InterruptKind::Jump,
+            InterruptKind::ShardLost,
+        ]
+        .into_iter()
+        .for_each(|kind| {
+            [false, true].into_iter().for_each(|lost_shard| {
+                let action = decide(
+                    &role,
+                    Some(&manual),
+                    RawStartError::ManualLoad(&ManualLoadResult::Interrupted(kind)),
+                    &agent_id(),
+                    lost_shard,
+                );
+                assert!(
+                    matches!(
+                        &action,
+                        StartAction::Error(WorkerExecutorError::Interrupted { kind: actual })
+                            if *actual == kind
+                    ),
+                    "{kind:?} {lost_shard}: {action:?}"
+                );
+            });
+        });
+
+        let (target, details, assisted, attempt, fault) = entry_fields(
+            &failed_entry(decide_now(
+                &role,
+                Some(&manual),
+                RawStartError::ManualLoad(&ManualLoadResult::Exited),
+            ))
+            .0,
+        );
+        assert_eq!(
+            (target, assisted, attempt, fault),
+            (revision(3), None, Some(OplogIndex::from_u64(9)), None)
+        );
+        assert_eq!(
+            details,
+            "Manual update failed to load snapshot: the agent exited during the snapshot load"
+        );
         assert!(matches!(
-            decide_now(
-                &BaselineRole::ManualPending(Arc::new(manual_head())),
-                Some(&manual_head()),
-                RawStartError::ManualLoad(&ManualLoadResult::Interrupted)
+            decide(
+                &role,
+                Some(&manual),
+                RawStartError::ManualLoad(&ManualLoadResult::Exited),
+                &agent_id(),
+                true,
             ),
-            StartAction::Succeed
+            StartAction::ShardLost
         ));
     }
 

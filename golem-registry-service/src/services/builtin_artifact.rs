@@ -13,8 +13,12 @@
 // limitations under the License.
 
 use crate::config::{BuiltinArtifactSource, BuiltinArtifactsConfig};
+use crate::startup::{BuiltinArtifactKind, StartupPhase, StartupProgress};
 use anyhow::{Context, anyhow};
 use fd_lock::RwLock;
+use golem_common::model::agent::extraction::{
+    ExtractedComponentMetadata, extract_component_metadata_from_bytes,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
@@ -26,16 +30,23 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use url::Url;
 
+// Bump when metadata extraction semantics or its serialized representation changes.
+const METADATA_CACHE_REVISION: u32 = 1;
+
 #[derive(Clone)]
 pub struct BuiltinArtifactResolver {
     cache_dir: PathBuf,
     sources: BTreeMap<String, BuiltinArtifactSource>,
     client: reqwest::Client,
     in_process_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    startup_progress: StartupProgress,
 }
 
 impl BuiltinArtifactResolver {
-    pub fn new(config: &BuiltinArtifactsConfig) -> anyhow::Result<Self> {
+    pub fn new(
+        config: &BuiltinArtifactsConfig,
+        startup_progress: StartupProgress,
+    ) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .user_agent(concat!(
                 "golem-registry-service/",
@@ -50,17 +61,28 @@ impl BuiltinArtifactResolver {
             sources: config.resolved_artifacts()?,
             client,
             in_process_locks: Arc::new(Mutex::new(HashMap::new())),
+            startup_progress,
         })
     }
 
     pub async fn resolve_many(
         &self,
+        kind: BuiltinArtifactKind,
         artifact_ids: impl IntoIterator<Item = &'static str>,
     ) -> anyhow::Result<BTreeMap<&'static str, Arc<Vec<u8>>>> {
         let artifact_ids = artifact_ids.into_iter().collect::<BTreeSet<_>>();
+        self.startup_progress
+            .set_phase(StartupPhase::FetchingBuiltinArtifacts {
+                kind,
+                completed: 0,
+                total: artifact_ids.len(),
+                downloaded_bytes: 0,
+            });
         let artifacts =
             futures::future::try_join_all(artifact_ids.into_iter().map(|artifact_id| async move {
-                Ok::<_, anyhow::Error>((artifact_id, self.resolve(artifact_id).await?))
+                let bytes = self.resolve(artifact_id).await?;
+                self.startup_progress.step_completed();
+                Ok::<_, anyhow::Error>((artifact_id, bytes))
             }))
             .await?;
         Ok(artifacts.into_iter().collect())
@@ -94,10 +116,12 @@ impl BuiltinArtifactResolver {
         let client = self.client.clone();
         let artifact_id = artifact_id.to_string();
         let handle = Handle::current();
+        let startup_progress = self.startup_progress.clone();
         let bytes = tokio::task::spawn_blocking(move || {
             resolve_locked(
                 &handle,
                 &client,
+                &startup_progress,
                 &cache_dir,
                 &artifact_id,
                 &url,
@@ -110,6 +134,105 @@ impl BuiltinArtifactResolver {
 
         Ok(Arc::new(bytes))
     }
+
+    pub async fn extract_metadata(
+        &self,
+        wasm_bytes: Arc<Vec<u8>>,
+    ) -> anyhow::Result<ExtractedComponentMetadata> {
+        let (wasm_bytes, cache_key) = tokio::task::spawn_blocking(move || {
+            let digest = hex::encode(Sha256::digest(wasm_bytes.as_slice()));
+            (
+                wasm_bytes,
+                format!("{digest}.metadata-v{METADATA_CACHE_REVISION}"),
+            )
+        })
+        .await
+        .context("built-in artifact metadata hash task panicked")?;
+        let in_process_lock = {
+            let mut locks = self.in_process_locks.lock().await;
+            locks
+                .entry(cache_key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _in_process_guard = in_process_lock.lock().await;
+        let cache_dir = self.cache_dir.clone();
+        let handle = Handle::current();
+        tokio::task::spawn_blocking(move || {
+            extract_metadata_locked(&handle, &cache_dir, &cache_key, &wasm_bytes)
+        })
+        .await
+        .context("built-in artifact metadata extraction task panicked")?
+    }
+}
+
+fn extract_metadata_locked(
+    handle: &Handle,
+    cache_dir: &Path,
+    cache_key: &str,
+    wasm_bytes: &[u8],
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    std::fs::create_dir_all(cache_dir).with_context(|| {
+        format!(
+            "failed to create built-in metadata cache directory '{}'",
+            cache_dir.display()
+        )
+    })?;
+    let cache_path = cache_dir.join(format!("{cache_key}.json"));
+    let lock_path = cache_dir.join(format!("{cache_key}.lock"));
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "failed to open built-in metadata cache lock '{}'",
+                lock_path.display()
+            )
+        })?;
+    let mut lock = RwLock::new(lock_file);
+    let _guard = lock.write().with_context(|| {
+        format!(
+            "failed to lock built-in metadata cache entry '{}'",
+            lock_path.display()
+        )
+    })?;
+    match std::fs::read(&cache_path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(metadata) => return Ok(metadata),
+            Err(error) => tracing::warn!(
+                cache_path = %cache_path.display(),
+                error = %error,
+                "Regenerating invalid cached built-in metadata"
+            ),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!(
+            cache_path = %cache_path.display(),
+            error = %error,
+            "Regenerating unreadable cached built-in metadata"
+        ),
+    }
+    let metadata = handle.block_on(extract_component_metadata_from_bytes(
+        wasm_bytes, true, true,
+    ))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)
+        .context("failed to create temporary built-in metadata cache file")?;
+    serde_json::to_writer(&mut temporary, &metadata)
+        .context("failed to serialize built-in artifact metadata")?;
+    temporary
+        .as_file_mut()
+        .sync_all()
+        .context("failed to flush built-in artifact metadata")?;
+    temporary.persist(&cache_path).with_context(|| {
+        format!(
+            "failed to publish built-in metadata cache entry '{}'",
+            cache_path.display()
+        )
+    })?;
+    Ok(metadata)
 }
 
 fn parse_sha256(artifact_id: &str, value: Option<&str>) -> anyhow::Result<Option<[u8; 32]>> {
@@ -138,6 +261,7 @@ fn cache_key(url: &Url, expected_sha256: Option<&[u8; 32]>) -> String {
 fn resolve_locked(
     handle: &Handle,
     client: &reqwest::Client,
+    startup_progress: &StartupProgress,
     cache_dir: &Path,
     artifact_id: &str,
     url: &Url,
@@ -222,6 +346,7 @@ fn resolve_locked(
         .with_context(|| format!("failed while downloading built-in artifact '{artifact_id}'"))?
     {
         hasher.update(&chunk);
+        startup_progress.builtin_artifact_bytes_downloaded(chunk.len() as u64);
         temporary
             .write_all(&chunk)
             .with_context(|| format!("failed to cache built-in artifact '{artifact_id}'"))?;
@@ -363,7 +488,7 @@ mod tests {
                 },
             )]),
         };
-        let resolver = BuiltinArtifactResolver::new(&config).unwrap();
+        let resolver = BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
         let (first, second) = tokio::join!(resolver.resolve("test"), resolver.resolve("test"));
         assert_eq!(first.unwrap().as_slice(), payload);
         assert_eq!(second.unwrap().as_slice(), payload);
@@ -380,11 +505,68 @@ mod tests {
                 },
             )]),
         };
-        let offline_resolver = BuiltinArtifactResolver::new(&offline_config).unwrap();
+        let offline_resolver =
+            BuiltinArtifactResolver::new(&offline_config, StartupProgress::default()).unwrap();
         assert_eq!(
             offline_resolver.resolve("test").await.unwrap().as_slice(),
             payload
         );
+    }
+
+    #[test]
+    async fn resolve_many_reports_fetch_progress() {
+        let payload = b"component payload".to_vec();
+        let acceptor = poem::listener::TcpListener::bind("127.0.0.1:0")
+            .into_acceptor()
+            .await
+            .unwrap();
+        let port = acceptor.local_addr()[0].as_socket_addr().unwrap().port();
+        let endpoint = poem::endpoint::make({
+            let payload = payload.clone();
+            move |_| {
+                let payload = payload.clone();
+                async move { poem::Response::builder().body(payload) }
+            }
+        });
+        let server = tokio::spawn(async move {
+            poem::Server::new_with_acceptor(acceptor)
+                .run(endpoint)
+                .await
+                .unwrap();
+        });
+
+        let cache = tempfile::tempdir().unwrap();
+        let progress = StartupProgress::default();
+        let resolver = BuiltinArtifactResolver::new(
+            &BuiltinArtifactsConfig {
+                cache_dir: Some(cache.path().to_path_buf()),
+                source_overrides: BTreeMap::from([(
+                    "test".to_string(),
+                    BuiltinArtifactSource {
+                        url: format!("http://127.0.0.1:{port}/artifact.wasm"),
+                        sha256: Some(hex::encode(Sha256::digest(&payload))),
+                    },
+                )]),
+            },
+            progress.clone(),
+        )
+        .unwrap();
+
+        resolver
+            .resolve_many(BuiltinArtifactKind::Plugins, ["test"])
+            .await
+            .unwrap();
+        assert_eq!(
+            progress.current(),
+            StartupPhase::FetchingBuiltinArtifacts {
+                kind: BuiltinArtifactKind::Plugins,
+                completed: 1,
+                total: 1,
+                downloaded_bytes: payload.len() as u64,
+            }
+        );
+
+        server.abort();
     }
 
     #[test]
@@ -406,16 +588,19 @@ mod tests {
         let expected = hex::encode([0; 32]);
         let cache_path = cache.path().join(format!("{expected}.wasm"));
         std::fs::write(&cache_path, b"corrupt").unwrap();
-        let resolver = BuiltinArtifactResolver::new(&BuiltinArtifactsConfig {
-            cache_dir: Some(cache.path().to_path_buf()),
-            source_overrides: BTreeMap::from([(
-                "test".to_string(),
-                BuiltinArtifactSource {
-                    url: format!("http://127.0.0.1:{port}/artifact.wasm"),
-                    sha256: Some(expected.clone()),
-                },
-            )]),
-        })
+        let resolver = BuiltinArtifactResolver::new(
+            &BuiltinArtifactsConfig {
+                cache_dir: Some(cache.path().to_path_buf()),
+                source_overrides: BTreeMap::from([(
+                    "test".to_string(),
+                    BuiltinArtifactSource {
+                        url: format!("http://127.0.0.1:{port}/artifact.wasm"),
+                        sha256: Some(expected.clone()),
+                    },
+                )]),
+            },
+            StartupProgress::default(),
+        )
         .unwrap();
 
         let error = resolver.resolve("test").await.unwrap_err();
@@ -453,16 +638,19 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let cache_path = cache.path().join(format!("{expected}.wasm"));
         std::fs::write(&cache_path, b"corrupt").unwrap();
-        let resolver = BuiltinArtifactResolver::new(&BuiltinArtifactsConfig {
-            cache_dir: Some(cache.path().to_path_buf()),
-            source_overrides: BTreeMap::from([(
-                "test".to_string(),
-                BuiltinArtifactSource {
-                    url: format!("http://127.0.0.1:{port}/artifact.wasm"),
-                    sha256: Some(expected),
-                },
-            )]),
-        })
+        let resolver = BuiltinArtifactResolver::new(
+            &BuiltinArtifactsConfig {
+                cache_dir: Some(cache.path().to_path_buf()),
+                source_overrides: BTreeMap::from([(
+                    "test".to_string(),
+                    BuiltinArtifactSource {
+                        url: format!("http://127.0.0.1:{port}/artifact.wasm"),
+                        sha256: Some(expected),
+                    },
+                )]),
+            },
+            StartupProgress::default(),
+        )
         .unwrap();
 
         assert_eq!(resolver.resolve("test").await.unwrap().as_slice(), payload);

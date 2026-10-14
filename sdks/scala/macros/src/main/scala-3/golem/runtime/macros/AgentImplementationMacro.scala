@@ -350,7 +350,14 @@ object AgentImplementationMacro {
         }
 
         val snapshotHandlersExpr: Expr[Option[SnapshotHandlers[Trait]]] = {
-          val snapshottedState    = detectSnapshottedStateType(implRepr)
+          val snapshottedState = detectSnapshottedStateType(implRepr)
+          val partsHooks       = detectCustomSnapshotHooks(implSymbol, false, multipart = true)
+          if (
+            partsHooks.isDefined && (snapshottedState.isDefined ||
+              implSymbol.declaredMethod("saveSnapshot").nonEmpty ||
+              implSymbol.companionModule.declaredMethod("loadSnapshot").nonEmpty)
+          )
+            report.errorAndAbort("Multipart snapshot hooks cannot be combined with byte hooks or Snapshotted[S]")
           val customHooks         = detectCustomSnapshotHooks(implSymbol, snapshottedState.isDefined)
           val snapshotting        = extractSnapshottingFromTrait(traitSymbol)
           val snapshottingEnabled = snapshotting match {
@@ -358,118 +365,163 @@ object AgentImplementationMacro {
             case _                       => false
           }
 
-          customHooks match {
-            case Some((saveSym, loadSym)) =>
-              // Use helper methods to avoid Scala 3 LambdaLift issues with
-              // macro-generated lambdas that capture outer lambda parameters.
-
-              // Build raw save: (Trait) => Future[Array[Byte]]
-              val rawSaveLambdaExpr: Expr[Trait => scala.concurrent.Future[Array[Byte]]] = {
-                val lambdaType = MethodType(List("instance"))(
-                  _ => List(TypeRepr.of[Trait]),
-                  _ => TypeRepr.of[scala.concurrent.Future[Array[Byte]]]
+          if (partsHooks.isDefined) {
+            val (saveSym, loadSym) = partsHooks.get
+            val saveLambda         = Lambda(
+              Symbol.spliceOwner,
+              MethodType(List("instance"))(
+                _ => List(TypeRepr.of[Trait]),
+                _ => TypeRepr.of[scala.concurrent.Future[golem.runtime.MultipartSnapshot]]
+              ),
+              (_, params) =>
+                Apply(
+                  Select(
+                    TypeApply(Select.unique(params.head.asInstanceOf[Term], "asInstanceOf"), List(TypeTree.of[Impl])),
+                    saveSym
+                  ),
+                  Nil
                 )
-                Lambda(
-                  Symbol.spliceOwner,
-                  lambdaType,
-                  { (_, params) =>
-                    val instanceTerm = params.head.asInstanceOf[Term]
-                    val implTerm     = TypeApply(
-                      Select.unique(instanceTerm, "asInstanceOf"),
-                      List(TypeTree.of[Impl])
-                    )
-                    Apply(Select(implTerm, saveSym), Nil)
-                  }
-                ).asExprOf[Trait => scala.concurrent.Future[Array[Byte]]]
-              }
-
-              val loadLambdaExpr: Expr[
-                (Array[Byte], golem.runtime.SnapshotRestoreContext) => scala.concurrent.Future[Trait]
-              ] = {
-                val lambdaType = MethodType(List("bytes", "context"))(
-                  _ => List(TypeRepr.of[Array[Byte]], TypeRepr.of[golem.runtime.SnapshotRestoreContext]),
-                  _ => TypeRepr.of[scala.concurrent.Future[Trait]]
+            ).asExprOf[Trait => scala.concurrent.Future[golem.runtime.MultipartSnapshot]]
+            val loadLambda = Lambda(
+              Symbol.spliceOwner,
+              MethodType(List("snapshot", "context"))(
+                _ =>
+                  List(TypeRepr.of[golem.runtime.MultipartSnapshot], TypeRepr.of[golem.runtime.SnapshotRestoreContext]),
+                _ => TypeRepr.of[scala.concurrent.Future[Trait]]
+              ),
+              (_, params) => Apply(Select(Ref(implSymbol.companionModule), loadSym), params.map(_.asInstanceOf[Term]))
+            ).asExprOf[
+              (golem.runtime.MultipartSnapshot, golem.runtime.SnapshotRestoreContext) => scala.concurrent.Future[Trait]
+            ]
+            '{
+              Some(
+                SnapshotHandlers[Trait](
+                  save = $saveLambda,
+                  load = (data, context) =>
+                    data match {
+                      case parts: golem.runtime.MultipartSnapshot => $loadLambda(parts, context)
+                      case _                                      =>
+                        scala.concurrent.Future.failed(golem.runtime.SnapshotError("Expected multipart snapshot"))
+                    }
                 )
-                Lambda(
-                  Symbol.spliceOwner,
-                  lambdaType,
-                  { (_, params) =>
-                    val bytesTerm   = params.head.asInstanceOf[Term]
-                    val contextTerm = params(1).asInstanceOf[Term]
-                    Apply(Select(Ref(implSymbol.companionModule), loadSym), List(bytesTerm, contextTerm))
-                  }
-                ).asExprOf[
-                  (Array[Byte], golem.runtime.SnapshotRestoreContext) => scala.concurrent.Future[Trait]
-                ]
-              }
+              )
+            }
+          } else
+            customHooks match {
+              case Some((saveSym, loadSym)) =>
+                // Use helper methods to avoid Scala 3 LambdaLift issues with
+                // macro-generated lambdas that capture outer lambda parameters.
 
-              val saveLambdaExpr = '{ SnapshotHandlers.wrapSave[Trait]($rawSaveLambdaExpr) }
-              '{
-                Some(
-                  SnapshotHandlers[Trait](
-                    save = $saveLambdaExpr,
-                    load = $loadLambdaExpr
+                // Build raw save: (Trait) => Future[Array[Byte]]
+                val rawSaveLambdaExpr: Expr[Trait => scala.concurrent.Future[Array[Byte]]] = {
+                  val lambdaType = MethodType(List("instance"))(
+                    _ => List(TypeRepr.of[Trait]),
+                    _ => TypeRepr.of[scala.concurrent.Future[Array[Byte]]]
                   )
-                )
-              }
-            case None =>
-              snapshottedState match {
-                case Some(stateTpe) =>
-                  stateTpe.asType match {
-                    case '[s] =>
-                      val schemaExpr = Expr.summon[zio.blocks.schema.Schema[s]].getOrElse {
-                        report.errorAndAbort(
-                          s"Automatic snapshotting for ${implSymbol.fullName} requires an implicit Schema[${stateTpe.show}]"
-                        )
-                      }
-                      val loadSym = detectSnapshottedLoadHook(implSymbol, stateTpe)
-                      '{
-                        Some(
-                          SnapshotHandlers[Trait](
-                            save = (instance: Trait) => {
-                              val snap  = instance.asInstanceOf[golem.Snapshotted[s]]
-                              val codec = $schemaExpr.derive(zio.blocks.schema.json.JsonCodecDeriver)
-                              scala.concurrent.Future.successful(
-                                SnapshotPayload(
-                                  bytes = codec.encode(snap.state),
-                                  mimeType = "application/json"
-                                )
-                              )
-                            },
-                            load = (bytes: Array[Byte], context: golem.runtime.SnapshotRestoreContext) => {
-                              val codec = $schemaExpr.derive(zio.blocks.schema.json.JsonCodecDeriver)
-                              codec.decode(bytes) match {
-                                case Right(restored) =>
-                                  ${
-                                    Apply(
-                                      Select(Ref(implSymbol.companionModule), loadSym),
-                                      List('restored.asTerm, 'context.asTerm)
-                                    ).asExprOf[scala.concurrent.Future[Trait]]
-                                  }
-                                case Left(err) =>
-                                  scala.concurrent.Future.failed(
-                                    new IllegalArgumentException(
-                                      s"Failed to decode JSON snapshot for ${${ Expr(implSymbol.fullName) }}: " + err
-                                    )
-                                  )
-                              }
-                            }
-                          )
-                        )
-                      }
-                  }
-                case None =>
-                  if (snapshottingEnabled) {
-                    report.errorAndAbort(
-                      s"Snapshotting is enabled for ${traitSymbol.fullName}, but ${implSymbol.fullName} " +
-                        s"provides no snapshot support. Either:\n" +
-                        s"  (1) Mix in Snapshotted[S], provide Schema[S], and declare companion `loadSnapshot(state: S, context: SnapshotRestoreContext): Future[Impl]`\n" +
-                        s"  (2) Implement instance `saveSnapshot(): Future[Array[Byte]]` and companion `loadSnapshot(bytes: Array[Byte], context: SnapshotRestoreContext): Future[Impl]`"
+                  Lambda(
+                    Symbol.spliceOwner,
+                    lambdaType,
+                    { (_, params) =>
+                      val instanceTerm = params.head.asInstanceOf[Term]
+                      val implTerm     = TypeApply(
+                        Select.unique(instanceTerm, "asInstanceOf"),
+                        List(TypeTree.of[Impl])
+                      )
+                      Apply(Select(implTerm, saveSym), Nil)
+                    }
+                  ).asExprOf[Trait => scala.concurrent.Future[Array[Byte]]]
+                }
+
+                val loadLambdaExpr: Expr[
+                  (Array[Byte], golem.runtime.SnapshotRestoreContext) => scala.concurrent.Future[Trait]
+                ] = {
+                  val lambdaType = MethodType(List("bytes", "context"))(
+                    _ => List(TypeRepr.of[Array[Byte]], TypeRepr.of[golem.runtime.SnapshotRestoreContext]),
+                    _ => TypeRepr.of[scala.concurrent.Future[Trait]]
+                  )
+                  Lambda(
+                    Symbol.spliceOwner,
+                    lambdaType,
+                    { (_, params) =>
+                      val bytesTerm   = params.head.asInstanceOf[Term]
+                      val contextTerm = params(1).asInstanceOf[Term]
+                      Apply(Select(Ref(implSymbol.companionModule), loadSym), List(bytesTerm, contextTerm))
+                    }
+                  ).asExprOf[
+                    (Array[Byte], golem.runtime.SnapshotRestoreContext) => scala.concurrent.Future[Trait]
+                  ]
+                }
+
+                val saveLambdaExpr = '{ SnapshotHandlers.wrapSave[Trait]($rawSaveLambdaExpr) }
+                '{
+                  Some(
+                    SnapshotHandlers[Trait](
+                      save = $saveLambdaExpr,
+                      load = SnapshotHandlers.wrapLoad("application/octet-stream", $loadLambdaExpr)
                     )
-                  }
-                  '{ None }
-              }
-          }
+                  )
+                }
+              case None =>
+                snapshottedState match {
+                  case Some(stateTpe) =>
+                    stateTpe.asType match {
+                      case '[s] =>
+                        val schemaExpr = Expr.summon[zio.blocks.schema.Schema[s]].getOrElse {
+                          report.errorAndAbort(
+                            s"Automatic snapshotting for ${implSymbol.fullName} requires an implicit Schema[${stateTpe.show}]"
+                          )
+                        }
+                        val loadSym = detectSnapshottedLoadHook(implSymbol, stateTpe)
+                        '{
+                          Some(
+                            SnapshotHandlers[Trait](
+                              save = (instance: Trait) => {
+                                val snap  = instance.asInstanceOf[golem.Snapshotted[s]]
+                                val codec = $schemaExpr.derive(zio.blocks.schema.json.JsonCodecDeriver)
+                                scala.concurrent.Future.successful(
+                                  SnapshotPayload(
+                                    bytes = codec.encode(snap.state),
+                                    mimeType = "application/json"
+                                  )
+                                )
+                              },
+                              load = SnapshotHandlers.wrapLoad(
+                                "application/json",
+                                (bytes: Array[Byte], context: golem.runtime.SnapshotRestoreContext) => {
+                                  val codec = $schemaExpr.derive(zio.blocks.schema.json.JsonCodecDeriver)
+                                  codec.decode(bytes) match {
+                                    case Right(restored) =>
+                                      ${
+                                        Apply(
+                                          Select(Ref(implSymbol.companionModule), loadSym),
+                                          List('restored.asTerm, 'context.asTerm)
+                                        ).asExprOf[scala.concurrent.Future[Trait]]
+                                      }
+                                    case Left(err) =>
+                                      scala.concurrent.Future.failed(
+                                        new IllegalArgumentException(
+                                          s"Failed to decode JSON snapshot for ${${ Expr(implSymbol.fullName) }}: " + err
+                                        )
+                                      )
+                                  }
+                                }
+                              )
+                            )
+                          )
+                        }
+                    }
+                  case None =>
+                    if (snapshottingEnabled) {
+                      report.errorAndAbort(
+                        s"Snapshotting is enabled for ${traitSymbol.fullName}, but ${implSymbol.fullName} " +
+                          s"provides no snapshot support. Either:\n" +
+                          s"  (1) Mix in Snapshotted[S], provide Schema[S], and declare companion `loadSnapshot(state: S, context: SnapshotRestoreContext): Future[Impl]`\n" +
+                          s"  (2) Implement instance `saveSnapshot(): Future[Array[Byte]]` and companion `loadSnapshot(bytes: Array[Byte], context: SnapshotRestoreContext): Future[Impl]`"
+                      )
+                    }
+                    '{ None }
+                }
+            }
         }
 
         lazy val wireCtor    = wireInputCodecExpr[ctor](ctorAccess, idParams)
@@ -618,12 +670,17 @@ object AgentImplementationMacro {
     Quotes
   )(
     implSymbol: quotes.reflect.Symbol,
-    isSnapshotted: Boolean
+    isSnapshotted: Boolean,
+    multipart: Boolean = false
   ): Option[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = {
     import quotes.reflect.*
 
-    val saveDecls = implSymbol.declaredMethod("saveSnapshot")
-    val loadDecls = implSymbol.companionModule.declaredMethod("loadSnapshot")
+    val saveName    = if (multipart) "saveSnapshotParts" else "saveSnapshot"
+    val loadName    = if (multipart) "loadSnapshotParts" else "loadSnapshot"
+    val payloadName = if (multipart) "MultipartSnapshot" else "Array[Byte]"
+    val payloadType = if (multipart) TypeRepr.of[golem.runtime.MultipartSnapshot] else TypeRepr.of[Array[Byte]]
+    val saveDecls   = implSymbol.declaredMethod(saveName)
+    val loadDecls   = implSymbol.companionModule.declaredMethod(loadName)
 
     def isPublicNonGeneric(sym: Symbol): Boolean =
       sym.isDefDef &&
@@ -648,7 +705,7 @@ object AgentImplementationMacro {
     val saveMatches = saveDecls.filter { sym =>
       isPublicNonGeneric(sym) &&
       termParameterLists(sym) == List(Nil) &&
-      returnsFutureOf(sym, TypeRepr.of[Array[Byte]])
+      returnsFutureOf(sym, payloadType)
     }
 
     val loadMatches = loadDecls.filter { sym =>
@@ -656,7 +713,7 @@ object AgentImplementationMacro {
       (termParameterLists(sym) match {
         case List(termParams) if termParams.length == 2 =>
           val types = termParams.map(_.tree.asInstanceOf[ValDef].tpt.tpe.dealias)
-          types.head =:= TypeRepr.of[Array[Byte]] &&
+          types.head =:= payloadType &&
           types(1) =:= TypeRepr.of[golem.runtime.SnapshotRestoreContext]
         case _ => false
       }) &&
@@ -666,8 +723,8 @@ object AgentImplementationMacro {
     val hasDeclarations = saveDecls.nonEmpty || (!isSnapshotted && loadDecls.nonEmpty)
     if (hasDeclarations && (saveMatches.size != 1 || loadMatches.size != 1))
       report.errorAndAbort(
-        s"${implSymbol.fullName} must declare exactly instance saveSnapshot(): Future[Array[Byte]] and companion " +
-          s"loadSnapshot(bytes: Array[Byte], context: SnapshotRestoreContext): Future[${implSymbol.name}], with no type parameters or additional parameter lists"
+        s"${implSymbol.fullName} must declare exactly instance $saveName(): Future[$payloadName] and companion " +
+          s"$loadName(snapshot: $payloadName, context: SnapshotRestoreContext): Future[${implSymbol.name}], with no type parameters or additional parameter lists"
       )
 
     saveMatches.headOption.zip(loadMatches.headOption).headOption

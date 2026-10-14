@@ -285,7 +285,7 @@ impl ReconstructionClaimState {
         self.active_bodies.borrow().contains(&start_index)
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(test)]
     pub(crate) async fn wait_for_fences(&self) {
         let mut active = self.active_fences.subscribe();
         tracing::debug!(
@@ -403,9 +403,7 @@ impl ConcurrentReplayResolver {
     /// Resolves a registered awaiter if (and only if) one exists, returning whether it did.
     ///
     /// This is the only entry point used by the committed-consume replay hook: an `End`/`Cancelled`
-    /// for a call nobody is awaiting — e.g. the guest-facing manual durability pair written by
-    /// `persist_durable_function_invocation`, which is consumed through the same cursor but never
-    /// registers an awaiter — is silently ignored rather than buffered forever.
+    /// for a call nobody is awaiting is silently ignored rather than buffered forever.
     pub fn resolve_if_pending(
         &mut self,
         start_idx: OplogIndex,
@@ -438,24 +436,6 @@ impl ConcurrentReplayResolver {
             .expect("a completion is prefetched only while registering its claimed Start");
         self.prefetched_terminals.insert(start_idx, terminal_idx);
         let _ = claim.tx.send(ResolutionOutcome::Resolved(resolution));
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) fn resolve_prefetched_for_test(
-        &mut self,
-        start_idx: OplogIndex,
-        terminal_idx: OplogIndex,
-        resolution: Resolution,
-    ) {
-        if self.pending.contains_key(&start_idx) {
-            self.resolve_prefetched(start_idx, terminal_idx, resolution);
-        } else {
-            assert_eq!(
-                self.prefetched_terminals.get(&start_idx),
-                Some(&terminal_idx),
-                "test replay driver expected an active claim for Start {start_idx}"
-            );
-        }
     }
 
     /// Resolves every still-registered awaiter as [`ResolutionOutcome::Incomplete`].

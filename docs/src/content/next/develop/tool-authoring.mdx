@@ -2,13 +2,13 @@ import { Callout, Tabs } from "nextra/components"
 
 # Tool Authoring and Lifecycle
 
-This page shows how to define, test, bind, publish, and consume a [Golem-native tool](/next/concepts/golem-native-tools). A tool is stateless metadata plus handlers. Its identity is scoped to the owning agent and tool name, and each component-tool invocation runs in a fresh isolated instance under the owner's execution.
+This page shows how to define, test, bind, publish, and consume a [Golem tool](/next/concepts/tools). A tool is stateless metadata plus handlers. Its identity is scoped to the owning agent and tool name, and each component-tool invocation runs in a fresh isolated instance under the owner's execution.
 
 ## Define a tool
 
 The SDKs project the same model: a command tree, inherited global options and flags, command bodies, typed results, declared errors, and optional stdin/stdout/stderr byte streams.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -116,6 +116,35 @@ pub fn Files::read(path : String) -> Result[String, FileError] {
 
 Use `@asyncCore.Stream[Byte]` for stdin and `@tool.ProviderOutput` for outputs. An unannotated provider output is stdout; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
   </Tabs.Tab>
+  <Tabs.Tab>
+```go
+import (
+    "github.com/golemcloud/golem/sdks/go/golem"
+    "github.com/golemcloud/golem/sdks/go/golem/tool"
+)
+
+type Files struct{}
+
+var Tool = tool.DefineTool[Files]("files", tool.Spec{Version: "1.0.0"})
+
+var ErrNotFound = tool.DefineToolError[golem.Unit](Tool, "not-found", tool.ErrorSpec{
+    Kind: tool.RuntimeError, ExitCode: 2,
+})
+
+type ReadArgs struct{ Path string }
+
+var Read = Tool.Command[ReadArgs, string]("read", func(a *ReadArgs, s *tool.CommandSpec) {
+    s.Positional(&a.Path)
+    s.Raises(ErrNotFound)
+})
+
+var _ = Read.Handle(func(_ *tool.Context, a ReadArgs) (string, error) {
+    return a.Path, nil
+})
+```
+
+Return a declared error with `ErrNotFound.New(golem.Unit{})`. Declare a command with `Tool.OutputCommand` and `s.Stdout()` / `s.Stderr()` to write stdout and stderr, and bind an `io.Reader` field with `s.Stdin` for stdin.
+  </Tabs.Tab>
 </Tabs>
 
 ## Model commands precisely
@@ -132,19 +161,43 @@ Prefer structure over parsing strings yourself:
 
 The command tree is metadata, not a spawned shell. A component cannot currently run an arbitrary native executable. Implement operations with code and libraries compiled into the component, or call an external service through supported network APIs.
 
+On a command line, an enum value is matched without regard to letter case when that names exactly one case, so `literal` selects a case named `Literal`. Generated `--help` lists the positional arguments of a command with their summaries, and shows the possible values of an argument or option whose value is an enum.
+
+### Give a tool the caller's directory
+
+A tool is not a child process of its caller. It does not inherit a working directory or an environment; it receives only its input record. To start where the caller is, declare an option for the directory and name the `PWD` variable on it:
+
+```rust
+#[arg(cwd = "option", env = "PWD", default = "/")]
+```
+
+```typescript
+.option("cwd", z.string(), { default: "/", env: "PWD" })
+```
+
+An option or flag that the command line leaves out, and that declares an environment variable, takes the value of that variable when the caller supplies variables. The built-in Bash tool does: a tool called from a script or from a `golem ssh` session gets the shell's exported variables, and `PWD` is always the directory the shell is in. A value on the command line still wins, and the default applies when the caller supplies no such variable. From a variable, a boolean flag reads `1`, `true`, `yes`, `on`, `y` or `t` as set and `0`, `false`, `no`, `off`, `n` or `f` as not set, in any letter case, and refuses other text; a count flag reads a number. A value that comes from a variable counts as given, also for the command's constraints. Resolve relative path arguments against this option inside the tool.
+
+Callers that are not a shell supply no variables: `golem tool invoke`, generated typed clients and MCP. For them the option is an ordinary input that they pass or leave at its default.
+
 ## Call through a typed client
 
-Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, and MoonBit code generators project equivalent clients. For a tool implemented in another component or language, add it to bridge generation:
+For an existing built-in tool or MCP import, use [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients). The guide selects metadata from a release or import, generates the client with `golem build`, and shows how to import and call it. Do not manually reconstruct the existing tool's schema. Generation and deployment bindings are separate: generating a client does not authorize its calls.
+
+Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, MoonBit, and Go code generators project equivalent clients. For a tool implemented in another component, add it to the consumer's tool dependencies:
 
 ```yaml filename="golem.yaml"
-bridge:
-  ts:
-    internal:
+components:
+  acme:assistant:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
       tools: [files]
-  rust:
-    internal:
-      tools: [files]
+    tools:
+      files: {}
 ```
+
+`golem build` selects the consumer's language, not the provider's language. The
+complete local declaration and binding appear in [Declare and bind](#declare-and-bind).
+Use an explicit bridge selection only for a separate language or output target.
 
 Generated clients call the canonical name through `tool-rpc`; they do not embed a component ID, MCP endpoint, host-native implementation ID, or credential.
 
@@ -174,7 +227,7 @@ export const safeFiles = files.middleware({
 });
 ```
 
-Effect exports typed and universal middleware from `@golemcloud/effect-golem/middleware`. Rust, Scala, and MoonBit expose the same runtime middleware contract through their SDK authoring forms. Binding and traversal are separate: registering middleware in a component does not attach it to any call.
+Effect exports typed and universal middleware from `@golemcloud/effect-golem/middleware`. Rust, Scala, MoonBit, and Go expose the same runtime middleware contract through their SDK authoring forms. Binding and traversal are separate: registering middleware in a component does not attach it to any call.
 
 ## Declare and bind
 
@@ -209,6 +262,13 @@ Bindings expose a tool; permission cards authorize calls. Component bindings pro
 
 The example assumes that the `audit` middleware is declared separately under `tools.middleware`.
 
+`dependencies.tools: [files]` automatically generates the client in the consumer's
+language during `golem build`, after the local provider builds. No explicit bridge
+selection is needed. The separate `tools.files` binding exposes the tool at runtime;
+a dependency does not add a binding, and a binding alone does not generate a client.
+For a tool defined in the same component, use the language SDK's definition-owned
+client instead of a guest-bridge self-dependency.
+
 See [Application Manifest](/next/app-manifest) for every field, merge rule, and validation mode.
 
 ## Publish and consume
@@ -221,7 +281,7 @@ toolReleases:
     files: {}
 ```
 
-The published version comes from the tool's discovered metadata. The Effect SDK currently emits tool metadata version `0.1.0`; its `toolDefinition` does not expose a version option. The `1.0.0` consumer below therefore applies to the TypeScript, Rust, Scala, and MoonBit definitions shown above.
+The published version comes from the tool's discovered metadata. The Effect SDK currently emits tool metadata version `0.1.0`; its `toolDefinition` does not expose a version option. The `1.0.0` consumer below therefore applies to the TypeScript, Rust, Scala, MoonBit, and Go definitions shown above.
 
 A consumer selects an exact release and supplies its own configuration:
 
@@ -254,4 +314,4 @@ Deployment reconciles the environment's release grant before reading metadata or
 4. Deploy with the intended binding and permission cards. Test both missing-binding and missing-permission cases.
 5. For durable middleware, restart while a call or approval is pending and verify logical recovery without repeating recorded effects. External effects still require an appropriate idempotency policy across an ambiguous crash window.
 
-Build and deploy with the normal [component workflow](/next/develop/building-components). Tool and middleware publication is committed with deployment, but release de-publication and grant administration are explicit lifecycle operations.
+Build and deploy with the normal [component workflow](/next/develop#build-and-deploy). Tool and middleware publication is committed with deployment, but release de-publication and grant administration are explicit lifecycle operations.

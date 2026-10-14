@@ -8,19 +8,10 @@ import { method } from '../src/method';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { Principal } from '../src/principal';
-import type { SavedAgentSnapshot } from '../src/internal/resolvedAgent';
+import type { ResolvedAgent, SnapshotTransport } from '../src/internal/resolvedAgent';
 import type { SnapshotDatabases } from '../src/internal/databaseSnapshot';
 
-interface Resolved {
-  saveSnapshot(): Promise<SavedAgentSnapshot>;
-}
-
-function typed(saved: SavedAgentSnapshot): Extract<SavedAgentSnapshot, { kind: 'typed' }> {
-  if (saved.kind !== 'typed') {
-    throw new Error(`expected a typed snapshot, got a ${saved.kind} one`);
-  }
-  return saved;
-}
+type Resolved = ResolvedAgent;
 
 async function initiate(name: string): Promise<Resolved> {
   // id is `{ name: z.string() }` → a one-field record.
@@ -31,7 +22,7 @@ async function initiate(name: string): Promise<Resolved> {
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
   if (res.tag !== 'ok') throw new Error(`initiate failed: ${JSON.stringify(res.val)}`);
-  return res.val as unknown as Resolved;
+  return res.val;
 }
 
 async function restore(name: string, data: Uint8Array): Promise<Resolved> {
@@ -51,6 +42,14 @@ async function restore(name: string, data: Uint8Array): Promise<Resolved> {
 }
 
 const jsonOf = (data: Uint8Array) => JSON.parse(new TextDecoder().decode(data));
+const simpleSnapshot = (snapshot: SnapshotTransport) => {
+  if (snapshot.kind === 'multipart') throw new Error('expected a simple snapshot');
+  return snapshot;
+};
+const multipartSnapshot = (snapshot: SnapshotTransport) => {
+  if (snapshot.kind !== 'multipart') throw new Error('expected a multipart snapshot');
+  return snapshot;
+};
 
 let separationInitCount = 0;
 let separationRestoreCount = 0;
@@ -266,7 +265,7 @@ defineAgent({
 describe('snapshot — typed state', () => {
   it('serializes the declared state fields without config or helpers', async () => {
     const agent = await initiate('SnapTypedCounter');
-    const snap = typed(await agent.saveSnapshot());
+    const snap = simpleSnapshot(await agent.saveSnapshot());
     expect(snap.mimeType).toBe('application/json');
     expect(jsonOf(snap.data)).toEqual({ count: 7 });
   });
@@ -288,7 +287,7 @@ describe('snapshot — typed state', () => {
       'SnapTypedCounter',
       new TextEncoder().encode(JSON.stringify({ count: 42 })),
     );
-    expect(jsonOf((await agent.saveSnapshot()).data)).toEqual({ count: 42 });
+    expect(jsonOf(simpleSnapshot(await agent.saveSnapshot()).data)).toEqual({ count: 42 });
   });
 
   it('rejects a snapshot that violates the declared schema', async () => {
@@ -301,7 +300,7 @@ describe('snapshot — typed state', () => {
 describe('snapshot — schema-backed config', () => {
   it('does NOT serialize the live config accessor', async () => {
     const agent = await initiate('SnapReflConfig');
-    const state = jsonOf((await agent.saveSnapshot()).data);
+    const state = jsonOf(simpleSnapshot(await agent.saveSnapshot()).data);
     expect(state).toEqual({ count: 3 });
     expect('config' in state).toBe(false);
   });
@@ -310,27 +309,29 @@ describe('snapshot — schema-backed config', () => {
 describe('snapshot — custom save/load', () => {
   it('uses typed saving with a custom load-only restoration factory', async () => {
     const initial = await initiate('SnapTypedSaveCustomLoad');
-    const snapshot = typed(await initial.saveSnapshot());
+    const snapshot = simpleSnapshot(await initial.saveSnapshot());
     expect(snapshot.mimeType).toBe('application/json');
     expect(jsonOf(snapshot.data)).toEqual({ count: 4 });
 
     const restored = await restore('SnapTypedSaveCustomLoad', snapshot.data);
-    expect(jsonOf((await restored.saveSnapshot()).data)).toEqual({ count: 4 });
+    expect(jsonOf(simpleSnapshot(await restored.saveSnapshot()).data)).toEqual({ count: 4 });
   });
 
   it('returns the bytes of a custom save as a custom result and restores from them', async () => {
     const agent = await initiate('SnapCustom');
-    const snap = await agent.saveSnapshot();
-    expect(snap.kind).toBe('custom');
+    const snap = simpleSnapshot(await agent.saveSnapshot());
+    expect(snap.mimeType).toBe('application/octet-stream');
     expect(new TextDecoder().decode(snap.data)).toBe('count=5');
 
     const restored = await restore('SnapCustom', new TextEncoder().encode('count=99'));
-    expect(new TextDecoder().decode((await restored.saveSnapshot()).data)).toBe('count=99');
+    expect(new TextDecoder().decode(simpleSnapshot(await restored.saveSnapshot()).data)).toBe(
+      'count=99',
+    );
   });
 
   it('keeps the complete custom-restored state when a state schema is also declared', async () => {
     const restored = await restore('SnapCustomWithStateSchema', new Uint8Array());
-    expect(jsonOf((await restored.saveSnapshot()).data)).toMatchObject({
+    expect(jsonOf(simpleSnapshot(await restored.saveSnapshot()).data)).toMatchObject({
       count: 11,
       resource: { marker: 'restored' },
     });
@@ -350,7 +351,7 @@ describe('snapshot — custom save/load', () => {
     expect(restoredId).toEqual({ name: 'c1' });
     expect((restoredAgentId as { value: string }).value).toContain('SnapSeparatedFactories(');
     expect(Object.getOwnPropertyDescriptor(restoredConfig, 'greeting')?.get).toBeTypeOf('function');
-    const saved = jsonOf((await restored.saveSnapshot()).data);
+    const saved = jsonOf(simpleSnapshot(await restored.saveSnapshot()).data);
     expect(saved).toMatchObject({ count: 12, principal: 'anonymous' });
     expect(saved.agentId).toContain('SnapSeparatedFactories(');
 
@@ -457,7 +458,7 @@ async function isolate() {
       .initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
     if (result.tag === 'err') throw result.val;
     return result.val as unknown as {
-      saveSnapshot(): Promise<SavedAgentSnapshot>;
+      saveSnapshot(): Promise<SnapshotTransport>;
     };
   };
   const boundaryOf = (mimeType: string) => mimeType.match(/boundary=([^\s;]+)/)![1];
@@ -797,6 +798,46 @@ describe('snapshot — restore plan', () => {
 describe('snapshot — in-memory and file-backed databases', () => {
   afterEach(unmockSqlite);
 
+  it('leaves databases returned by custom multipart hooks entirely under user control', async () => {
+    const env = await isolate();
+    const db = new env.FakeDatabaseSync(':memory:');
+    const prepare = vi.spyOn(db, 'prepare');
+    env
+      .isolatedDefineAgent({
+        name: 'CustomDatabaseParts',
+        id: { name: z.string() },
+        snapshotting: { multipart: { state: z.null() } },
+        methods: {},
+      })
+      .implement({
+        init: () => ({ db }),
+        methods: {},
+        snapshot: {
+          save: () => ({ state: null, parts: new Map() }),
+          load: () => ({ db }),
+        },
+      });
+    env.select('CustomDatabaseParts');
+    const encoded = env.multipart.encodeMultipart([
+      {
+        name: 'state',
+        contentType: 'application/json',
+        body: new TextEncoder().encode(
+          JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state: null }),
+        ),
+      },
+    ]);
+    await env.isolatedGuest.loadSnapshot.load({
+      payload: encoded.data,
+      mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
+    });
+    await env.isolatedGuest.saveSnapshot.save();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(env.serializeDatabaseSync).not.toHaveBeenCalled();
+    expect(env.restoreDatabaseSync).not.toHaveBeenCalled();
+    expect(env.warmed).toEqual([]);
+  });
+
   it('serializes an in-memory database as a db part and records a file-backed database by its location', async () => {
     const env = await isolate();
     env
@@ -815,12 +856,13 @@ describe('snapshot — in-memory and file-backed databases', () => {
         methods: {},
       });
 
-    const saved = typed(await (await env.initiateIsolated('MixedDatabases')).saveSnapshot());
+    const saved = multipartSnapshot(
+      await (await env.initiateIsolated('MixedDatabases')).saveSnapshot(),
+    );
 
-    expect(saved.mimeType).toMatch(/^multipart\/mixed; boundary=/);
-    const parts = env.multipart.decodeMultipart(saved.data, env.boundaryOf(saved.mimeType));
-    expect(parts.map((part) => part.name)).toEqual(['state', 'db:memDb']);
-    expect(parts[1].body).toEqual(new Uint8Array([1, 2, 3]));
+    expect(saved.state).toEqual({ count: 1 });
+    expect(saved.parts.map((part) => part.name)).toEqual(['db:memDb']);
+    expect(saved.parts[0].body).toEqual(new Uint8Array([1, 2, 3]));
     expect(saved.fileDatabases).toEqual({ fileDb: '/data/app.db' });
     expect(env.serializeDatabaseSync).toHaveBeenCalledTimes(1);
   });
@@ -839,7 +881,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
         methods: {},
       });
 
-    const saved = typed(await (await env.initiateIsolated('FileDatabaseOnly')).saveSnapshot());
+    const saved = await (await env.initiateIsolated('FileDatabaseOnly')).saveSnapshot();
+    if (saved.kind !== 'json') throw new Error('expected JSON');
 
     expect(saved.mimeType).toBe('application/json');
     expect(jsonOf(saved.data)).toEqual({ count: 2 });
@@ -861,10 +904,12 @@ describe('snapshot — in-memory and file-backed databases', () => {
         methods: {},
       });
 
-    const saved = typed(await (await env.initiateIsolated('TemporaryDatabase')).saveSnapshot());
+    const saved = multipartSnapshot(
+      await (await env.initiateIsolated('TemporaryDatabase')).saveSnapshot(),
+    );
 
-    const parts = env.multipart.decodeMultipart(saved.data, env.boundaryOf(saved.mimeType));
-    expect(parts.map((part) => part.name)).toEqual(['state', 'db:tempDb']);
+    expect(saved.state).toEqual({ count: 3 });
+    expect(saved.parts.map((part) => part.name)).toEqual(['db:tempDb']);
     expect(saved.fileDatabases).toEqual({});
   });
 
@@ -890,16 +935,12 @@ describe('snapshot — in-memory and file-backed databases', () => {
       });
 
     const first = await env.initiateIsolated('ProtoNamedDatabase');
-    const saved = typed(await first.saveSnapshot());
+    const saved = await first.saveSnapshot();
+    if (saved.kind === 'binary') throw new Error('expected a typed snapshot');
     const fileDatabases = location === ':memory:' ? {} : JSON.parse(`{"__proto__":"${location}"}`);
     expect(JSON.stringify(saved.fileDatabases)).toBe(JSON.stringify(fileDatabases));
-    const parts =
-      saved.mimeType === 'application/json'
-        ? []
-        : env.multipart.decodeMultipart(saved.data, env.boundaryOf(saved.mimeType));
-    expect(parts.map((part) => part.name)).toEqual(
-      location === ':memory:' ? ['state', 'db:__proto__'] : [],
-    );
+    const parts = saved.kind === 'multipart' ? saved.parts : [];
+    expect(parts.map((part) => part.name)).toEqual(location === ':memory:' ? ['db:__proto__'] : []);
 
     const envelope = JSON.stringify({
       version: 1,
@@ -917,7 +958,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
                 contentType: 'application/json',
                 body: new TextEncoder().encode(envelope),
               },
-              parts[1],
+              parts[0],
             ]);
             return {
               payload: encoded.data,

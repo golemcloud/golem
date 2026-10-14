@@ -20,6 +20,7 @@ use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
+use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
@@ -29,6 +30,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -235,6 +237,9 @@ pub struct RegistryServiceConfig {
     pub tracing: TracingConfig,
     pub environment: String,
     pub workspace: String,
+    /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
+    /// accepts both IPv6 and IPv4.
+    pub bind_address: IpAddr,
     pub http_port: u16,
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
@@ -262,6 +267,23 @@ pub struct RegistryServiceConfig {
     pub mcp_import: McpImportResolverConfig,
 }
 
+impl RegistryServiceConfig {
+    pub fn http_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.http_port)
+    }
+
+    pub fn grpc_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.bind_address, self.grpc.port)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.blob_storage.validate()?;
+        self.mcp_oauth.validate()?;
+        self.mcp_import.validate()?;
+        Ok(())
+    }
+}
+
 impl SafeDisplay for RegistryServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
@@ -269,6 +291,7 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
+        let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
         let _ = writeln!(
             &mut result,
@@ -400,7 +423,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
                 name: "Builtin Tool Owner".to_string(),
-                email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
+                email: AccountEmail::new(BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL),
                 token: None,
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
@@ -444,6 +467,7 @@ impl Default for RegistryServiceConfig {
             tracing: TracingConfig::local_dev("registry-service"),
             environment: "dev".to_string(),
             workspace: "release".to_string(),
+            bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8081,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
@@ -863,8 +887,45 @@ mod tests {
     };
 
     #[test]
+    fn config_accepts_separate_s3_snapshot_buckets() {
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::default_s3(),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn default_config_is_valid() {
+        RegistryServiceConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn config_rejects_shared_s3_snapshot_bucket() {
+        let config = RegistryServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    custom_data_bucket: "shared-bucket".to_string(),
+                    filesystem_snapshots_bucket: "shared-bucket".to_string(),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("filesystem_snapshots_bucket"), "{error}");
+        assert!(error.contains("custom_data_bucket"), "{error}");
+    }
+
+    #[test]
     pub fn config_is_loadable() {
-        make_config_loader().load().expect("Failed to load config");
+        make_config_loader()
+            .load()
+            .expect("Failed to load config")
+            .validate()
+            .expect("Invalid config");
     }
 
     #[test]
@@ -981,7 +1042,14 @@ mod tests {
             ..Default::default()
         });
         let mut tasks = tokio::task::JoinSet::new();
-        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("operation_timeout"));
         assert!(!database.exists());
         assert!(tasks.is_empty());
@@ -1053,7 +1121,14 @@ mod tests {
         });
         config.mcp_oauth.timeout = Duration::ZERO;
         let mut tasks = tokio::task::JoinSet::new();
-        let error = Services::new(&config, &mut tasks).await.err().unwrap();
+        let error = Services::new(
+            &config,
+            &mut tasks,
+            &crate::startup::StartupProgress::default(),
+        )
+        .await
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("invalid OAuth limits"));
         assert!(!database.exists());
         assert!(tasks.is_empty());

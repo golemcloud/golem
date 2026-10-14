@@ -1,4 +1,42 @@
 ///|
+test "direct wire UUID preserves bits and uses the UUID schema" {
+  for
+    value in [
+      @types.Uuid::{ high_bits: 0UL, low_bits: 0UL, },
+      @types.Uuid::{
+        high_bits: 18446744073709551615UL,
+        low_bits: 9223372036854775808UL,
+      },
+      @types.Uuid::{ high_bits: 42UL, low_bits: 19UL, },
+    ] {
+    let wire = @schema.into_wire(value)
+    assert_eq(wire.root, 0)
+    assert_eq(wire.value_nodes, [@types.UuidValue(value)])
+    let decoded : @types.Uuid = @schema.from_wire(wire)
+    assert_eq(decoded, value)
+    let nested : Array[@types.Uuid?] = [Some(value), None]
+    let decoded_nested : Array[@types.Uuid?] = @schema.from_wire(
+      @schema.into_wire(nested),
+    )
+    assert_eq(decoded_nested, nested)
+  }
+  let graph = @schema.wire_schema(
+    (@schema.type_tag() : @schema.TypeTag[@types.Uuid]),
+  )
+  assert_eq(graph.type_nodes.length(), 1)
+  assert_eq(graph.type_nodes[graph.root].body, @types.UuidType)
+  assert_true(graph.defs.is_empty())
+  try {
+    let _ : @types.Uuid = @schema.from_wire(@schema.into_wire("not a uuid"))
+  } catch {
+    @schema.WireError::Invalid("expected uuid value") => ()
+    @schema.WireError::Invalid(message) => fail("unexpected error: \{message}")
+  } noraise {
+    _ => fail("accepted string as uuid")
+  }
+}
+
+///|
 test "direct wire conversion handles nested lists, options, results, and tuples" {
   let value : Array[(String, Result[UInt64?, String])] = [
     ("first", Ok(Some(42UL))),
@@ -280,4 +318,44 @@ test "wire type pool reserves recursive named definitions before their body" {
   assert_eq(encoder.nodes[0].body, @types.RefType(0))
   assert_eq(encoder.nodes[1].body, @types.OptionType(0))
   assert_eq(encoder.nodes[root].body, @types.RefType(0))
+}
+
+///|
+test "wire resource identities include the resource kind" {
+  let secret = @model.GuestSecretHandle::new(@types.Secret::Secret(91))
+  let quota = @model.GuestQuotaTokenHandle::new(
+    @types.QuotaToken::QuotaToken(91),
+  )
+  let card = @model.GuestPermissionCardHandle::new(
+    @types.PermissionCard::PermissionCard(91),
+  )
+  let stream = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(91),
+  )
+  let value = @schema.into_wire((secret, quota, card, stream))
+  assert_eq(value.value_nodes.length(), 5)
+  assert_false(secret.is_present())
+  assert_false(quota.is_present())
+  assert_false(card.is_present())
+  assert_false(stream.is_present())
+}
+
+///|
+test "early and late wrapped endpoint aliases preserve every holder" {
+  for at in [1, 49] {
+    let handles = Array::makei(50, i => {
+      @model.GuestSchemaValueStreamHandle::from_wrapped(
+        @types.SchemaValueStream::SchemaValueStream(100 + i),
+      )
+    })
+    handles[at] = @model.GuestSchemaValueStreamHandle::from_wrapped(
+      @types.SchemaValueStream::SchemaValueStream(100),
+    )
+    try @schema.into_wire(handles) catch {
+      @schema.WireError::Invalid(_) => ()
+    } noraise {
+      _ => fail("accepted distinct holders of the same endpoint")
+    }
+    assert_true(handles.all(handle => handle.is_present()))
+  }
 }

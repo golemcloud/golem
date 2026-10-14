@@ -4707,7 +4707,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
-async fn synchronous_clock_does_not_wait_for_wallet_reconciliation(
+async fn synchronous_clock_overlaps_http_and_replays_offline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -4740,66 +4740,6 @@ async fn synchronous_clock_does_not_wait_for_wallet_reconciliation(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clocks", "synchronous-clock-wallet-contention");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "use_std_time_apis", data_value!())
-        .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let mut clock = executor.gate_next_wall_clock_now(&owner).await?;
-
-    let invoke = async {
-        executor
-            .invoke_and_await_agent(&component, &agent_id, "use_std_time_apis", data_value!())
-            .await
-    };
-    let control = async {
-        clock.entered().await;
-        let boundary = tokio::time::timeout(
-            Duration::from_secs(5),
-            executor.hold_invalidated_card_boundary(&owner),
-        )
-        .await
-        .map_err(|_| anyhow!("wallet boundary was already held when clock gate fired"))??;
-        let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        let clock_after = before.last().unwrap().oplog_index;
-        clock.release();
-        loop {
-            // ReadLocal completion appends without committing; expose the buffered records to
-            // the public oplog query without requiring another guest host call to make progress.
-            executor.commit_oplog(&worker_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            let clock_start = oplog.iter().find_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(start)
-                    if entry.oplog_index > clock_after
-                        && start.function_name == "wall_clock::now" =>
-                {
-                    Some(entry.oplog_index)
-                }
-                _ => None,
-            });
-            if clock_start.is_some_and(|start| {
-                oplog.iter().any(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
-                })
-            }) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        // The clock must record its value without acquiring the held wallet boundary.
-        drop(boundary);
-        Ok::<_, anyhow::Error>(())
-    };
-    let (_, ()) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::try_join!(invoke, control)
-    })
-    .await
-    .map_err(|_| anyhow!("P2 clock did not complete while the wallet boundary was held"))??;
-
-    // Also run the real accessor/exclusive overlap, without a gate that itself retains the Store.
     let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -5679,6 +5619,320 @@ async fn p3_resuming_sleep(
 }
 
 #[test]
+#[timeout("60s")]
+async fn p3_ready_timers_defer_delivery_before_direct_clock_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "ready-timers-before-direct-clock");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "pending_p3_timers_and_p2_clock",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(result.into_typed::<Vec<bool>>()?, vec![true, true]);
+    let before = executor.get_oplog(&worker, boundary.next()).await?;
+    let clocks: Vec<_> = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name.ends_with("wall_clock::now") => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    let delivered: Vec<_> = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CompletionDelivered(_) => Some(entry.oplog_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(clocks.len(), 2);
+    assert_eq!(delivered.len(), 2);
+    assert!(clocks[0] < delivered[0]);
+    assert!(clocks[1] < delivered[1]);
+    assert_internal_clock_calls_settled(&before);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let after = executor.get_oplog(&worker, boundary.next()).await?;
+    assert_eq!(
+        after
+            .iter()
+            .filter(
+                |entry| matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name.ends_with("wall_clock::now"))
+            )
+            .count(),
+        2,
+        "replay must reuse both direct clock reads"
+    );
+    assert_internal_clock_calls_settled(&after);
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn p3_wait_for_restart_preserves_recorded_deadline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage;
+
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.wait_suspend_grace = Duration::from_secs(300);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "recorded-p3-deadline");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let mut read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::AfterHostInternalTerminal,
+    );
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_p3", data_value!(8u64))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), read.entered()).await?;
+    executor.commit_oplog(&worker).await?;
+    let before = executor.get_oplog(&worker, boundary.next()).await?;
+    let clock = before
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::now") =>
+            {
+                Some((
+                    entry.oplog_index,
+                    start.parent_start_index.expect("wait owns clock read"),
+                ))
+            }
+            _ => None,
+        })
+        .expect("completed internal read");
+    assert!(before.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.0)
+    ));
+    assert!(!before.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.1)
+    ));
+    drop(executor);
+    drop(read);
+
+    // Let the original deadline expire while there is no executor. Starting a fresh eight-second
+    // timer during replay would violate the recorded deadline and exceed the recovery bound.
+    tokio::time::sleep(Duration::from_secs(9)).await;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    tokio::time::timeout(
+        Duration::from_secs(4),
+        executor.invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!()),
+    )
+    .await??;
+    let after = executor.get_oplog(&worker, boundary.next()).await?;
+    assert_eq!(
+        after
+            .iter()
+            .filter(
+                |entry| matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::now"))
+            )
+            .count(),
+        1,
+        "recovery must reuse the recorded clock read, not append a fresh one"
+    );
+    assert_eq!(after.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.1)).count(), 1);
+    assert_internal_clock_calls_settled(&after);
+    assert_eq!(
+        after
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn p3_wait_for_cancel_after_internal_end_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "cancel-after-internal-clock-end");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let mut read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::AfterHostInternalTerminal,
+    );
+    let mut first_read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::BeforeDeferredStart,
+    );
+    let mut winning_read = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::now",
+        ReplayAdmissionStage::BeforeDeferredStart,
+    );
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "race_p3_sleeps",
+        data_value!(vec![60u64, 0u64]),
+    );
+    let coordinate = async {
+        first_read.entered().await;
+        first_read.release();
+        winning_read.entered().await;
+        read.entered().await;
+        executor.commit_oplog(&worker).await?;
+        let entries = executor.get_oplog(&worker, boundary.next()).await?;
+        let clock = entries
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name.ends_with("monotonic-clock::now") =>
+                {
+                    Some((
+                        entry.oplog_index,
+                        start.parent_start_index.expect("wait owns clock read"),
+                    ))
+                }
+                _ => None,
+            })
+            .expect("internal read");
+        assert!(entries.iter().any(
+            |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.0)
+        ));
+        winning_read.release();
+        anyhow::Ok(clock)
+    };
+    let (result, clock) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(invocation, coordinate)
+    })
+    .await?;
+    let clock = clock?;
+    assert_eq!(result?.into_typed::<u64>()?, 0);
+    let entries = executor.get_oplog(&worker, boundary.next()).await?;
+    assert!(entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == clock.1)));
+    assert_internal_clock_calls_settled(&entries);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
+    drop(read);
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!()),
+    )
+    .await??;
+    assert_internal_clock_calls_settled(&executor.get_oplog(&worker, boundary.next()).await?);
+    Ok(())
+}
+
+fn assert_internal_clock_calls_settled(
+    entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    for entry in entries {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            assert!(
+                entries.iter().any(|terminal| match &terminal.entry {
+                    PublicOplogEntry::End(end) => end.start_index == entry.oplog_index,
+                    PublicOplogEntry::Cancelled(cancelled) =>
+                        cancelled.start_index == entry.oplog_index,
+                    _ => false,
+                }),
+                "unsettled Start at {}",
+                entry.oplog_index
+            );
+            if start.function_name.ends_with("monotonic-clock::now")
+                && start.parent_start_index.is_some()
+            {
+                assert!(
+                    entries.iter().all(|terminal| match &terminal.entry {
+                        PublicOplogEntry::CompletionDelivered(delivered) =>
+                            delivered.start_index != entry.oplog_index,
+                        PublicOplogEntry::CompletionDiscarded(discarded) =>
+                            discarded.start_index != entry.oplog_index,
+                        _ => true,
+                    }),
+                    "internal read must not have a guest delivery marker"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[tracing::instrument]
 async fn failing_worker(
     last_unique_id: &LastUniqueId,
@@ -6139,6 +6393,120 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     assert_eq!(times1, times2);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn filesystem_escaping_relative_symlink_is_a_guest_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::PromiseId;
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    for (case, target, link) in [
+        ("root", "../etc", "/esc"),
+        ("nested", "../../etc", "/d/esc"),
+    ] {
+        let agent_id = agent_id!("FileSystem", format!("escaping-symlink-{case}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+
+        let written = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "write_file",
+                data_value!("/control", "sandbox control"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(written, Ok(()));
+
+        let inside_link = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_sym_link",
+                data_value!("control", "/inside"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(inside_link, Ok(()));
+
+        let inside_read = executor
+            .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/inside"))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(inside_read, Ok("sandbox control".to_string()));
+
+        let directory = executor
+            .invoke_and_await_agent(&component, &agent_id, "create_directory", data_value!("/d"))
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(directory, Ok(()));
+
+        let escaping_link = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_sym_link",
+                data_value!(target, link),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(escaping_link, Ok(()), "creating {link} -> {target}");
+
+        let denied = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "read_file",
+                data_value!(format!("{link}/hosts")),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(
+            denied,
+            Err("Permission denied (os error 2)".to_string()),
+            "reading through {link} -> {target} must return guest EACCES"
+        );
+
+        let promise = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "create_release_promise",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<PromiseId>()?;
+        assert_eq!(promise.agent_id, worker_id);
+
+        let ordinary_read = executor
+            .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/control"))
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(ordinary_read, Ok("sandbox control".to_string()));
+
+        let metadata = executor
+            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
+            .await?;
+        assert_eq!(metadata.status, AgentStatus::Idle);
+    }
 
     Ok(())
 }

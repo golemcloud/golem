@@ -253,7 +253,7 @@
         "guestLanguage": {
           "description": "The guest language of the components built with this template. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. Components get it from their applied templates, and applied templates must not declare different languages.",
           "type": "string",
-          "enum": ["ts", "effect", "rust", "scala", "moonbit"]
+          "enum": ["ts", "effect", "rust", "scala", "moonbit", "go"]
         },
         "toolsMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
@@ -1044,7 +1044,17 @@
     "toolFilesystemAccess": { "enum": ["unset", "allowed", "denied"] },
     "environmentTools": {
       "type": "object",
-      "properties": { "middleware": { "type": "array", "items": { "$ref": "#/definitions/toolMiddlewareInstallation" } } },
+      "properties": {
+        "middleware": { "type": "array", "items": { "$ref": "#/definitions/toolMiddlewareInstallation" } },
+        "defaults": {
+          "oneOf": [
+            { "const": "*" },
+            { "type": "array", "items": { "type": "string", "not": { "const": "*" } } }
+          ],
+          "default": "*",
+          "description": "The default built-in tools that the CLI adds to every deployment of this environment and binds to every agent type: `\"*\"` for all of them, `[]` for none, or a list of their names. `bash`, with access to the agent's files, is the only default tool now. A binding with the name of a default tool in this object sets what that tool may read. A tool that the manifest declares under `tools` is never replaced."
+        }
+      },
       "additionalProperties": { "$ref": "#/definitions/environmentToolBinding" }
     },
     "secretKeyMergeMode": {
@@ -1294,7 +1304,7 @@
       "properties": {
         "routerAddr": {
           "type": "string",
-          "description": "Address where `golem server run` serves the built-in local preset's main API. Other `golem` commands targeting the preset connect to this address; `0.0.0.0` is translated to `127.0.0.1` when connecting. Must be an IPv4 address literal, such as `0.0.0.0` or `127.0.0.1`; host names are not supported."
+          "description": "Address where `golem server run` serves the built-in local preset's main API. Other `golem` commands targeting the preset connect to this address; `0.0.0.0` is translated to `127.0.0.1` when connecting. Must be an IPv4 address literal, such as `127.0.0.1` or `0.0.0.0`; host names are not supported. Defaults to `127.0.0.1`. The server refuses to bind an address that is not loopback while the configuration uses a well-known default secret, such as the local admin token."
         },
         "routerPort": {
           "type": "integer",
@@ -1325,7 +1335,7 @@
         "systemMemoryOverride": {
           "type": "string",
           "minLength": 1,
-          "description": "Positive system memory override for local agent admission and eviction, e.g. 2GiB or 500MB. Units are case-insensitive: MB means 1000000 bytes and MiB means 1048576 bytes. Overridden by GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE, then --system-memory-override. The executor reserves 20% for host overhead; this is not a hard process RSS limit. When unset, Golem detects the memory limit from the host or cgroup."
+          "description": "Positive system memory override for local agent admission and eviction, e.g. 2GiB or 500MB. Units are case-insensitive: MB means 1000000 bytes and MiB means 1048576 bytes. Overridden by worker_executor.memory.system_memory_override in the `golem server run --config` file, then by the GOLEM__WORKER_EXECUTOR__MEMORY__SYSTEM_MEMORY_OVERRIDE environment variable, then by --system-memory-override. The executor reserves 20% for host overhead; this is not a hard process RSS limit. When unset, Golem detects the memory limit from the host or cgroup."
         },
         "agentFilesystemRoot": {
           "type": "string",
@@ -1915,6 +1925,10 @@
         },
         "moonbit": {
           "description": "MoonBit SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
+        "go": {
+          "description": "Go SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
         }
       }

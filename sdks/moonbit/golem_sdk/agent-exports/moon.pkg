@@ -8,6 +8,7 @@ import {
   "golemcloud/golem_sdk/interface/wasi/cli/environment",
   "moonbitlang/core/debug",
   "moonbitlang/core/json",
+  "moonbitlang/core/encoding/utf8",
 }
 
 supported_targets = "+wasm"

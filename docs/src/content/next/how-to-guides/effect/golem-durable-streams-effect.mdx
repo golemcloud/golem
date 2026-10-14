@@ -101,7 +101,9 @@ operations and retain one uncertain producer tuple, exact encoded body, and clos
 may omit `nextOffset`. Scope exit releases the local writer without closing the remote stream.
 
 The SDK retries timeout, transport, rate-limit, and unavailable failures with bounded exponential
-backoff, durable timers, and `Retry-After`. Permanent protocol, fencing, conflict, gone, and size
+backoff, durable timers, and `Retry-After`. `maxRetries` defaults to 8 retries after the first
+attempt; the delay starts at `retryDelayMs` (default 100 ms) and doubles up to 30 s, and a longer
+`Retry-After` wins. `maxRetries: 0` disables retries. Permanent protocol, fencing, conflict, gone, and size
 errors remain typed `DurableStreamError`s. Replay reconstructs checkpoints, buffered items,
 producer state, pending data, and retry budgets without repeating completed HTTP effects. Do not
 add another durability or atomic wrapper.
@@ -109,7 +111,9 @@ add another durability or atomic wrapper.
 For authentication, declare `Schema.Redacted(Schema.String)` with `defineConfig`, yield the config
 service, then yield the field's `borrow` Effect. Pass that opaque host capability as `auth`; never
 evaluate `get`, unwrap a `Redacted`, log it, or put credentials in the URL. HTTPS is required except
-when the host is exactly `localhost` or a loopback IP. Redirects and URL credentials are rejected.
+when the host is `localhost`, a dot-delimited subdomain such as `app.localhost`, or a loopback IP.
+Localhost names are case-insensitive and may have one terminal DNS dot. The URL authority stays
+unchanged. Redirects and URL credentials are rejected.
 
 ```shell
 golem build

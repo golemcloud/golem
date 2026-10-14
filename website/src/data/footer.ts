@@ -22,7 +22,7 @@ export const footerSections: FooterSection[] = [
     title: "Developers",
     links: [
       { label: "Docs", href: "https://learn.golem.cloud" },
-      { label: "Downloads", href: "https://golem.cloud/developers#downloads" },
+      { label: "Downloads", href: "https://github.com/golemcloud/golem/releases" },
       { label: "Changelog", href: "https://github.com/golemcloud/golem/releases" },
     ],
   },
@@ -44,7 +44,8 @@ export const footerSections: FooterSection[] = [
   },
 ];
 
-export const footerTagline = "The durable agent runtime. Reliability and trust by construction.";
+export const footerTagline =
+  "Agents, tools, and artifacts — on one durable runtime. Reliability and trust by construction.";
 export const footerCopyright = "© 2026 Golem Cloud, Inc. All rights reserved.";
 
 export interface SocialLink {

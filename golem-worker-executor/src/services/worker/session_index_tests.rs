@@ -1116,7 +1116,9 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             append_session(
                 oplog.as_ref(),
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                    format_version: 1,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                    reobserves: None,
                     session_key: local_registration(&foreign_session),
                     reader_id: reader,
                     source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
@@ -1150,7 +1152,9 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             append_session(
                 oplog.as_ref(),
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                    format_version: 1,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                    reobserves: None,
                     session_key: local_registration(&local_session),
                     reader_id: reader,
                     source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
@@ -1237,7 +1241,10 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     let replacement = append_session(
         oplog.as_ref(),
         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-            format_version: 1,
+            format_version:
+                golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+            observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+            reobserves: None,
             session_key: local_registration(&local_session),
             reader_id: reader,
             source_offset: StreamOffset::new(OplogIndex::from_u64(260), 0),
@@ -1312,7 +1319,9 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             append_session(
                 oplog.as_ref(),
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                    format_version: 1,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                    reobserves: None,
                     session_key: local_registration(&session),
                     reader_id: reader,
                     source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
@@ -1351,7 +1360,9 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             append_session(
                 oplog.as_ref(),
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
-                    format_version: 1,
+                    format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                    reobserves: None,
                     session_key: local_registration(&session),
                     reader_id: reader,
                     source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
@@ -1740,7 +1751,9 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
                 oplog.as_ref(),
                 StreamSessionRecord::ConsumerItemValue(
                     golem_common::model::durable_stream::StreamConsumerItemValueRecord {
-                        format_version: 1,
+                        format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                        observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+                        reobserves: None,
                         session_key: remote_registration(&consumer_key),
                         reader_id: target,
                         source_offset: golem_common::model::durable_stream::StreamOffset::new(
@@ -2183,7 +2196,10 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
     append_session(
         oplog.as_ref(),
         StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
-            format_version: 1,
+            format_version:
+                golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+            observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
+            reobserves: None,
             session_key: StreamRegistrationInvocation::Remote(key.clone()),
             reader_id: readers[0],
             source_offset: StreamOffset::new(OplogIndex::from_u64(100), 0),

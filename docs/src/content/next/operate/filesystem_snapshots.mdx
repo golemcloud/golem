@@ -1,12 +1,14 @@
 import { Callout, Steps } from "nextra/components"
 
-# Filesystem Snapshots
+# Filesystem snapshots
 
 A filesystem snapshot is a copy of an agent's files that the worker executor keeps in blob storage. A snapshot record in the oplog of the agent names it. With filesystem snapshots, an agent keeps its files after a start from a snapshot record, after a manual update and after a snapshot-assisted automatic update. [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots) describes what agents see. This page describes how to enable and operate the feature.
 
-Filesystem snapshots are disabled by default. A disabled executor does not save agent files. It writes a snapshot record, without a filesystem snapshot name, only when the agent's files can come back with it: when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory. An agent whose files changed takes no automatic snapshot and recovers by a replay, and a snapshot-based manual update of it fails. See [Availability](/next/develop/snapshotting#availability). Ephemeral agents take no snapshots.
+Standalone executors and local servers on other platforms disable filesystem snapshots by default. The local server on macOS enables them with APFS. A disabled executor does not save agent files. It writes a snapshot record, without a filesystem snapshot name, only when the agent's files can come back with it: when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory. An agent whose files changed takes no automatic snapshot and recovers by a replay, and a snapshot-based manual update of it fails. See [Availability](/next/develop/snapshotting#availability). Ephemeral agents take no snapshots.
 
 ## Requirements
+
+These requirements apply to production. For local development and tests on macOS, see [Local development on macOS](#local-development-on-macos).
 
 - The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink: `ManagedXfs` (with project quotas) or `ReflinkXfs` (without project quotas). Each executor has its own XFS filesystem. See [Prepare XFS storage](#prepare-xfs-storage).
 - With `ManagedXfs`, the executor process must be able to change XFS project quotas. `ReflinkXfs` needs no capability.
@@ -14,7 +16,71 @@ Filesystem snapshots are disabled by default. A disabled executor does not save 
 - With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
 
+Choose the backend with `[filesystem_storage.mode]`:
+
+| Backend | Use | Filesystem snapshots |
+| --- | --- | --- |
+| `ManagedXfs` | Production on Linux, with XFS reflink and project quotas | Supported, with per-agent disk limits and filesystem metering |
+| `ReflinkXfs` | Production on Linux, with XFS reflink and no project quotas | Supported, without per-agent disk limits or filesystem metering |
+| `Apfs` | Local development and tests on macOS | Supported, without per-agent disk limits or filesystem metering |
+| `Directory` | Plain agent directories under a configured root | Not supported |
+| `Temporary` | A temporary directory for each agent, the standalone executor default | Not supported |
+
+## Local development on macOS
+
+The local `golem server run` command on macOS uses `Apfs` at `<data_dir>/agents` and sets `filesystem_snapshots` to `Enabled` by default. It uses local file system blob storage at `<data_dir>/blobs` and supplies the repository key. No TOML file or environment settings are needed:
+
+```shell
+golem server run --data-dir .golem/data
+```
+
+The `--agent-filesystem-root` option changes the default root. On other platforms, the local server keeps `Temporary` storage and disabled filesystem snapshots by default.
+
+Use `Apfs` for local development and tests only. It works on the Mac's existing APFS volume, whether the volume is case-sensitive or case-insensitive. It needs no special volume, disk image or privilege. Production still needs Linux 5.8 or later with XFS and reflink.
+
+The executor creates the root directory if it does not exist and refuses startup when native file cloning is unavailable. Do not run two executors with the same root.
+
+To override the local defaults, set the executor settings in the `worker_executor` section of the server configuration file, and pass the file with `--config`:
+
+```toml
+[worker_executor.filesystem_storage.mode]
+type = "Apfs"
+
+[worker_executor.filesystem_storage.mode.config]
+root = ".golem/agents"
+
+[worker_executor.filesystem_snapshots]
+type = "Enabled"
+```
+
+```shell
+golem server run --data-dir .golem/data --config golem-server.toml
+```
+
+The `GOLEM__WORKER_EXECUTOR__` environment variables override the file. You can use these variables instead of the file:
+
+```shell
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE=Apfs
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT="$PWD/.golem/agents"
+export GOLEM__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
+golem server run --data-dir .golem/data
+```
+
+The `--agent-filesystem-root` option overrides both. A storage mode that the file or an environment variable selects does not keep the root of the replaced mode, so set `root` together with `type`.
+
+There is no second switch for local filesystem snapshots. The macOS local server sets `filesystem_snapshots` to `Enabled` by default. A standalone executor must configure it. Setting `Enabled` requires a storage mode that makes copy-on-write copies. To use `Directory` or `Temporary` on the macOS local server, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting policy, as described in [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery).
+
+When no `repository_key` is configured, the local server generates a 64-byte repository key and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`. On Unix, it creates the file with permissions `0600`. It uses the retained repository key on later starts. A configured `repository_key` takes precedence over this file. Without a configured key, a corrupt file makes startup fail; the server does not replace it. Keep the retained repository key with the local data. Replacing or deleting it prevents the server from reading snapshots made with it.
+
+The snapshots use the executor's blob storage. On the local server, this is file system blob storage at `<data_dir>/blobs`. There is no separate destination for filesystem snapshots.
+
+APFS does not enforce per-agent disk limits or provide filesystem usage metering. Keep `[resource_usage_metering] filesystem = false`. Agents share the volume's free space, and an agent can fill the volume. Free-space checks and the byte targets in `[filesystem_storage.pressure]` use volume-wide observations. APFS volumes in one container share free bytes, so byte targets are approximate. APFS reports synthetic object counts, so configured object-count targets always pass.
+
+Both case-sensitive and case-insensitive APFS volumes use `Conservative` filename coordination. An entry edit waits for conflicting operations in the same parent directory; two observations can run together. APFS keeps the volume's native filename spelling and case-sensitive or case-insensitive lookup behavior. Users do not need to normalize names.
+
 ## Enable filesystem snapshots
+
+The steps below describe production on XFS. The key and snapshot settings also apply to a standalone executor on `Apfs`. The local server supplies its own key when none is configured.
 
 <Steps>
 
@@ -22,7 +88,7 @@ Filesystem snapshots are disabled by default. A disabled executor does not save 
 
 #### Choose the XFS storage mode
 
-Filesystem snapshots need storage that makes copy-on-write copies: a capture and a restore copy each file by reflink, so they take time for the number of files and not for their bytes. Two storage modes do that. Both use a dedicated XFS filesystem with reflink.
+Filesystem snapshots need storage that makes copy-on-write copies. Both production storage modes use a dedicated XFS filesystem with reflink.
 
 | | `ManagedXfs` | `ReflinkXfs` |
 | --- | --- | --- |
@@ -34,9 +100,7 @@ Filesystem snapshots need storage that makes copy-on-write copies: a capture and
 
 Use `ManagedXfs` when the executor must limit or meter the disk space of each agent. Use `ReflinkXfs` when per-agent disk limits are not needed or are enforced another way.
 
-The storage mode is one setting, `[filesystem_storage.mode]`. It also has the development modes `Temporary` (the default, a temporary directory for each agent) and `Directory` (plain directories under a root). The development modes do not make copy-on-write copies, and filesystem snapshots refuse them.
-
-#### Managed XFS storage (`ManagedXfs`)
+#### XFS storage with project quotas (`ManagedXfs`)
 
 Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
 
@@ -181,7 +245,7 @@ filesystem_snapshots_bucket = "filesystem-snapshots"
 The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`.
 
 <Callout type="warning">
-  Use a separate bucket for filesystem snapshots. Do not set `filesystem_snapshots_bucket` to the value of `custom_data_bucket`. If the two buckets are the same:
+  Use a separate bucket for filesystem snapshots. The executor and the registry service refuse to start if `filesystem_snapshots_bucket` equals `custom_data_bucket`, even when filesystem snapshots are disabled. The error names both settings. A shared bucket would cause these problems:
 
   - An agent can delete or overwrite the filesystem snapshots of other agents in its environment. The keys of both are below `<object_prefix>/<environment id>/`, so a `wasi:blobstore` container can have the same key prefix as the filesystem snapshots of an agent.
   - The blob storage quota of the account counts the filesystem snapshots.
@@ -199,11 +263,11 @@ The executor makes these S3 calls on the bucket. Give its credentials the permis
 
 With file system blob storage, the snapshots go below the `root` of the `[blob_storage.config]` section. The whole tree below `root` must be on one volume. With SQLite blob storage, they go into the same database as the other blobs. These backends need no extra setting. See [Where the snapshots are](#where-the-snapshots-are).
 
-### Set the type to `Managed`
+### Set the type to `Enabled`
 
 ```toml
 [filesystem_snapshots]
-type = "Managed"
+type = "Enabled"
 
 [filesystem_snapshots.config]
 repository_key = "<128 hex characters>"
@@ -212,7 +276,7 @@ repository_key = "<128 hex characters>"
 You can give the type and the key as environment variables instead:
 
 ```shell
-GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Managed
+GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Enabled
 GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY=<128 hex characters>
 ```
 
@@ -230,7 +294,7 @@ A snapshot record without a filesystem snapshot name means that the agent's file
 
 ### Check that it works
 
-- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `mode: reflink XFS at /var/lib/golem/agents`.
+- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `enabled:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `mode: reflink XFS at /var/lib/golem/agents`.
 - Make an agent that writes a file take snapshots. Without filesystem snapshots, such an agent takes no automatic snapshot. An agent that has only its untouched read-only initial files and no provisioned files, and that did not rename or hard link any file, and did not set a given modification time on a file or directory, uploads nothing, and its snapshot records have no filesystem snapshot name. Snapshots are off by default: the agent definition enables them with a snapshotting policy (see [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery)). An agent whose policy is `enabled` uses the executor setting `[oplog.default_snapshotting]`, which is `type = "Disabled"` by default.
 - After the agent takes a snapshot, `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` grows.
 - `golem agent oplog <agent_id>` shows a `SNAPSHOT` entry with a `filesystem:` name, and a `SNAPSHOT CONFIRMED` entry with the same name.
@@ -240,7 +304,7 @@ A snapshot record without a filesystem snapshot name means that the agent's file
 An executor that enables filesystem snapshots on storage without copy-on-write copies, `Temporary` or `Directory`, does not start. Its startup fails with this error:
 
 ```text
-filesystem snapshots require storage with copy-on-write copies (XFS with reflink)
+filesystem snapshots require storage with copy-on-write copies (XFS with reflink, or Apfs for local development)
 ```
 
 <Callout type="warning">
@@ -249,11 +313,11 @@ filesystem snapshots require storage with copy-on-write copies (XFS with reflink
 
 ## Configuration
 
-All settings except `type` are in the `[filesystem_snapshots.config]` section. The executor reads them only when `type = "Managed"`. This is the full set with the default values:
+All settings except `type` are in the `[filesystem_snapshots.config]` section. The executor reads them only when `type = "Enabled"`. This is the full set with the default values:
 
 ```toml
 [filesystem_snapshots]
-type = "Managed"
+type = "Enabled"
 
 [filesystem_snapshots.config]
 repository_key = "<128 hex characters>"
@@ -294,7 +358,7 @@ multiplier = 4.0
 
 Write each duration in the [humantime](https://docs.rs/humantime) format, for example `"500ms"`, `"60s"` or `"2m"`. Each count and each wait must be greater than zero. The executor refuses to start with an invalid value and names the setting in the error, for example `max_concurrent_restores must be greater than zero` or `repository_key must be 128 hex characters`.
 
-The default values of `max_concurrent_restores` and `restore_reader_threads` come from a benchmark on the AWS node type c8gd.4xlarge (16 vCPU, 32 GiB of memory). Another node type needs its own values. For example, on i8g.2xlarge (8 vCPU), the benchmark gave 4 restores with 4 reader threads each, because the CPU limited the restores before the disk did.
+Choose `max_concurrent_restores` and `restore_reader_threads` for the CPU and memory available to your executor. More parallel restore work requires more resources.
 
 ### Retries
 
@@ -335,7 +399,7 @@ At a snapshot boundary, the executor first admits the snapshot. It refuses the s
 
 For a manual update, the first two refusals fail the update at once. When an upload of the agent runs, the update waits for the run in flight, and then replaces the upload or waits for its end. All waits of the update end `confirmation_wait` after the update began. The update then fails.
 
-Then the capture stops the agent's file calls, waits for the open calls for at most `capture_wait`, and makes a reflink copy of the files into `.scratch`. The copy shares the data blocks of the files, so it uses no space when it is made. When the agent then writes to a shared block, that block gets its own copy. Deleted files also keep their blocks until the upload ends and the executor removes the capture.
+Then the capture stops the agent's file calls, waits for the open calls for at most `capture_wait`, and makes a copy-on-write copy of the files into `.scratch`. The copy shares the data blocks of the files, so it uses no space when it is made. When the agent then writes to a shared block, that block gets its own copy. Deleted files also keep their blocks until the upload ends and the executor removes the capture.
 
 A guest that returns from an invocation with an unflushed write to a WASI output stream keeps a file call open. Its captures stop after `capture_wait`, with the outcome `busy`.
 
@@ -398,14 +462,7 @@ To find what stays, list the locations in [Where the snapshots are](#where-the-s
 
 Each restore holds memory for each of its reader threads, and each upload holds memory while it saves. This memory is outside the memory that the executor gives to agents. `worker_memory_ratio` sets the share for agents, and its default is `0.8`. The rest must hold the executor itself and the uploads and restores.
 
-The benchmark setup on the node type c8gd.4xlarge (16 vCPU, 32 GiB of memory) used a pod limit of about 28 GiB and this share for agents:
-
-```toml
-[memory]
-worker_memory_ratio = 0.78
-```
-
-In that setup, 4 uploads and 8 restores with the default thread counts needed about 6 GiB outside the memory of the agents. Measure again for another node type or for other values of the settings.
+Reserve memory for the configured number of concurrent uploads and restores. Monitor executor memory use in your deployment and adjust `worker_memory_ratio` and concurrency settings as needed.
 
 ## Metrics
 

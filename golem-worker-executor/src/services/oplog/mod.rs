@@ -14,6 +14,7 @@
 
 use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::model::ExecutionStatus;
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageNamespace, ScanResume,
@@ -39,13 +40,13 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, DurableStreamEventSummary, FilesystemSnapshotName, HostRequest,
-    HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
+    DurableFunctionType, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
+    HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
     UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
+    DurableStreamSessionStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -1283,13 +1284,13 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
 ) -> Result<T, anyhow::Error> {
-    tokio::task::spawn_blocking(move || {
+    join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
         golem_common::serialization::try_deserialize(&bytes)
             .map_err(anyhow::Error::msg)?
             .ok_or_else(|| {
                 anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
             })
-    })
+    }))
     .await
     .map_err(anyhow::Error::new)?
 }
@@ -1528,6 +1529,7 @@ pub trait OplogOps: Oplog {
         response: &HostResponse,
         function_type: DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
@@ -1536,7 +1538,7 @@ pub trait OplogOps: Oplog {
             timestamp: now,
             parent_start_index,
             function_name,
-            invocation_id: None,
+            invocation_id,
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: function_type,
@@ -1591,8 +1593,39 @@ pub trait OplogOps: Oplog {
     ) -> Result<OplogEntry, String> {
         let (idempotency_key, invocation_payload, _) = invocation.into_parts();
         let payload = self.upload_payload_owned(invocation_payload).await?;
+        Ok(self.agent_invocation_started_entry_from_payload(
+            idempotency_key,
+            payload,
+            ctx,
+            wallet_pin,
+        ))
+    }
+
+    async fn add_agent_invocation_started_from_pending(
+        &self,
+        idempotency_key: IdempotencyKey,
+        payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
+        ctx: InvocationContextStack,
+        wallet_pin: InvocationWalletPin,
+    ) -> Result<OplogIndex, OplogError> {
+        let entry = self.agent_invocation_started_entry_from_payload(
+            idempotency_key,
+            payload,
+            ctx,
+            wallet_pin,
+        );
+        self.add(entry).await
+    }
+
+    fn agent_invocation_started_entry_from_payload(
+        &self,
+        idempotency_key: IdempotencyKey,
+        payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
+        ctx: InvocationContextStack,
+        wallet_pin: InvocationWalletPin,
+    ) -> OplogEntry {
         let invocation_context = ctx.to_oplog_data();
-        Ok(OplogEntry::AgentInvocationStarted {
+        OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             idempotency_key,
             payload,
@@ -1600,7 +1633,7 @@ pub trait OplogOps: Oplog {
             trace_states: ctx.trace_states,
             invocation_context,
             wallet_pin: Box::new(wallet_pin),
-        })
+        }
     }
 
     async fn add_agent_invocation_finished(

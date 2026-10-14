@@ -686,8 +686,16 @@ pub trait ToolStreamingCaller {
     async fn clock_races_through_tool_entity(&self) -> Vec<String>;
     async fn long_clock_through_tool_entity(&self) -> Vec<String>;
     async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String>;
+    async fn local_clocks_then_tool_clocks(&self, local_reads: u32, tool_calls: u32) -> u32;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
     async fn builtin_cli(&self, tool: String, cwd: String, args: Vec<String>) -> CliToolEvidence;
+    async fn cancel_git_clone(
+        &self,
+        cwd: String,
+        repository: String,
+        directory: String,
+        gate: golem_rust::PromiseId,
+    ) -> bool;
     async fn filesystem_policy_write_read(
         &self,
         path: String,
@@ -2734,6 +2742,22 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         vec![timer.to_string(), follow_up]
     }
 
+    async fn local_clocks_then_tool_clocks(&self, local_reads: u32, tool_calls: u32) -> u32 {
+        for _ in 0..local_reads {
+            let _ = golem_rust::wasip3::clocks::system_clock::now();
+        }
+        let client = ClockRaceClient::new();
+        let mut completed = 0;
+        for _ in 0..tool_calls {
+            client
+                .read_clocks()
+                .await
+                .expect("read clocks in tool body");
+            completed += 1;
+        }
+        completed
+    }
+
     async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String> {
         #[derive(IntoSchema)]
         struct Input {
@@ -3022,6 +3046,58 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             stdout,
             stderr,
         }
+    }
+
+    async fn cancel_git_clone(
+        &self,
+        cwd: String,
+        repository: String,
+        directory: String,
+        gate: golem_rust::PromiseId,
+    ) -> bool {
+        let tool = golem_rust::agentic::get_tool_type("git").expect("discover Git tool");
+        let definition = tool.definition();
+        let command_path = vec!["clone".to_string()];
+        let index = definition
+            .command_index_by_path(&command_path)
+            .expect("Git clone command");
+        let model = definition
+            .canonical_input_model(index)
+            .expect("Git clone input model");
+        let fields = model
+            .fields
+            .iter()
+            .map(|field| match field.name.as_str() {
+                "cwd" => SchemaValue::String("/".to_string()),
+                "working-directory" => SchemaValue::List {
+                    elements: vec![SchemaValue::String(cwd.clone())],
+                },
+                "repository" => SchemaValue::String(repository.clone()),
+                "directory" => SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String(directory.clone()))),
+                },
+                "origin" | "branch" | "depth" | "authentication" => {
+                    SchemaValue::Option { inner: None }
+                }
+                "single-branch" | "no-single-branch" | "no-checkout" | "tags" | "no-tags" => {
+                    SchemaValue::Bool(false)
+                }
+                name => panic!("unexpected Git clone field {name}"),
+            })
+            .collect();
+        let input = golem_rust::encode_typed_schema_value(&TypedSchemaValue::new(
+            model.record_schema,
+            SchemaValue::Record { fields },
+        ))
+        .expect("encode Git clone input");
+        let rpc = ToolRpc::create("git").expect("Git tool RPC creation");
+        let invocation = rpc.async_invoke_and_await(&command_path, input, None, None, None);
+        let cancel = async {
+            golem_rust::await_promise(&gate).await;
+            invocation.cancel();
+        };
+        let (result, ()) = (raw_result(&invocation), cancel).join().await;
+        matches!(result, Err(ToolRpcError::Cancelled))
     }
 
     async fn filesystem_policy_write_read(
@@ -4568,7 +4644,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .open("/reconstruction-custom-order.log")
                     .and_then(|mut file| file.write_all(b"C"))
                     .expect("append the first live custom effect after the reconstruction barrier");
-                wait_at_crash_checkpoint("reconstruction-custom-effect").await;
+                wait_at_unscoped_crash_checkpoint("reconstruction-custom-effect").await;
             })
             .await;
         };
@@ -4612,7 +4688,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .open("/reconstruction-custom-order.log")
                     .and_then(|mut file| file.write_all(b"C"))
                     .expect("append the first live custom effect after the reconstruction barrier");
-                wait_at_crash_checkpoint("reconstruction-custom-effect").await;
+                wait_at_unscoped_crash_checkpoint("reconstruction-custom-effect").await;
             })
             .await;
         };

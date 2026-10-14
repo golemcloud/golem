@@ -47,6 +47,7 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
+use golem_common::schema::tool::argv::{self, ParsedToolArguments};
 use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
@@ -89,6 +90,7 @@ use wasmtime::component::Component;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod gol40_k1_audit_acceptance;
+mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
 mod matrix_conformance;
 mod middleware_acceptance;
@@ -172,6 +174,14 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_effect_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_go_caller")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -1261,8 +1271,16 @@ async fn invoke_git_tool_success_with_key(
     principal: Principal,
     definition: &golem_common::schema::tool::Tool,
     command: &str,
-    fields: BTreeMap<&str, SchemaValue>,
+    mut fields: BTreeMap<&str, SchemaValue>,
 ) -> anyhow::Result<Option<SchemaValue>> {
+    fields
+        .entry("authentication")
+        .or_insert(SchemaValue::Option { inner: None });
+    if command == "config" {
+        for key in ["add", "get-all", "unset", "unset-all"] {
+            fields.entry(key).or_insert(SchemaValue::Bool(false));
+        }
+    }
     let command_path = vec![command.to_string()];
     let command_index = definition
         .command_index_by_path(&command_path)
@@ -1279,6 +1297,60 @@ async fn invoke_git_tool_success_with_key(
                 .ok_or_else(|| anyhow::anyhow!("missing canonical git field '{}'", field.name))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        idempotency_key,
+        principal,
+        command_path,
+        TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+    )
+    .await
+}
+
+/// Runs git from a command line, parsed the way the CLI and the bash tool parse it.
+async fn invoke_git_tool_argv_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    args: &[&str],
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command_line = args.join(" ");
+    let argv = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let parsed = argv::parse(definition, &argv)
+        .map_err(|error| anyhow::anyhow!("git {command_line} was rejected: {error}"))?;
+    let ParsedToolArguments::Invoke {
+        command_path,
+        input,
+    } = parsed
+    else {
+        anyhow::bail!("git {command_line} printed help instead of running");
+    };
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        IdempotencyKey::fresh(),
+        principal,
+        command_path,
+        *input,
+    )
+    .await
+}
+
+async fn invoke_git_tool_input(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    idempotency_key: IdempotencyKey,
+    principal: Principal,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command = command_path.join(" ");
     let output = executor
         .invoke_external_tool(
             worker_id,
@@ -1286,7 +1358,7 @@ async fn invoke_git_tool_success_with_key(
             idempotency_key,
             ToolName::try_from("git").unwrap(),
             command_path,
-            TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+            input,
             InvocationContextStack::fresh(),
             principal,
             None,
@@ -2620,6 +2692,9 @@ async fn wait_for_owner_replay_settling(
         loop {
             if executor.owner_replay_is_settling(agent_id).await? {
                 return Ok::<_, anyhow::Error>(());
+            }
+            if executor.owner_replay_is_live(agent_id).await? {
+                anyhow::bail!("owner published live before reconstruction validation");
             }
             tokio::task::yield_now().await;
         }
@@ -8789,7 +8864,8 @@ enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
     ExecutorShutdownDuringBodyValidation,
-    CrashReplaySupervisorWindow,
+    RestartDuringBodyValidation,
+    CrashReplayClaimWindow,
     EntityCustomRootCrashReplay,
 }
 
@@ -8887,23 +8963,6 @@ fn assert_replayed_reconstruction_invocation_settled(
     );
 }
 
-/// Waits until the replayed clock claim parks on the completed reconstruction whose supervisor the
-/// test holds: the clock `Start` was never recorded, and the body's entries are still at the
-/// cursor head.
-async fn wait_for_clock_claim_blocked_on_held_reconstruction(
-    executor: &TestWorkerExecutor,
-    owned_agent_id: &OwnedAgentId,
-) -> anyhow::Result<()> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        executor.wait_for_replay_claim_blocked_on_active_body(owned_agent_id),
-    )
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!("the replayed clock claim did not wait for the held reconstruction")
-    })?
-}
-
 async fn run_completed_reconstruction_exclusive_p2_case(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -8958,7 +9017,10 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
             "exclusive-p2-body-validation-shutdown"
         }
-        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+            "exclusive-p2-body-validation-restart"
+        }
+        CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             "exclusive-p2-crash-replay-window"
         }
         CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => {
@@ -8991,9 +9053,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     .map_err(|_| anyhow::anyhow!("timed out waiting for caller initialization"))??;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let mut original_success = executor.gate_next_agent_invocation_success(&worker_id);
-    executor
-        .skip_next_wall_clock_now_durability(&owned_agent_id)
-        .await?;
     let invocation =
         executor.invoke_and_await_agent(&caller_component, &agent_id, method, data_value!());
     tokio::pin!(invocation);
@@ -9008,6 +9067,17 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         let reconstruction_start =
             wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        if case == CompletedReconstructionExclusiveCase::RestartDuringBodyValidation {
+            let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let clock = golem_common::model::oplog::host_functions::HostFunctionName::WallClockNow
+                .to_string();
+            assert!(
+                recorded.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Start(start) if start.function_name == clock
+                )),
+                "the lifecycle test must keep normal wall-clock recording"
+            );
+        }
         if case == CompletedReconstructionExclusiveCase::Divergence {
             let updated_component = executor
                 .update_component(&caller_component.id, caller.wasm_name.as_str())
@@ -9025,20 +9095,18 @@ async fn run_completed_reconstruction_exclusive_p2_case(
 
         if matches!(
             case,
-            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+            CompletedReconstructionExclusiveCase::CrashReplayClaimWindow
                 | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay
         ) {
-            let mut supervisor = executor.gate_next_completed_reconstruction_supervisor(&worker_id);
+            let mut claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
             crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
-            let start =
-                tokio::time::timeout(std::time::Duration::from_secs(30), supervisor.entered())
-                    .await
-                    .map_err(|_| {
-                        anyhow::anyhow!("crash-replay reconstruction supervisor was not reached")
-                    })?;
+            let start = tokio::time::timeout(std::time::Duration::from_secs(30), claim.entered())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("crash-replay reconstruction claim was not reached")
+                })?;
             assert_eq!(start, reconstruction_start);
-            wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id).await?;
-            supervisor.release();
+            claim.release();
             return Ok::<_, anyhow::Error>(reconstruction_start);
         }
         let mut reconstruction_body =
@@ -9053,11 +9121,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .await
                 .map_err(|_| anyhow::anyhow!("replayed reconstruction claim was not reached"))?;
         assert_eq!(claimed_start, reconstruction_start);
-        let mut replayed_clock = executor.gate_next_wall_clock_now(&owned_agent_id).await?;
         replayed_claim.release();
-        tokio::time::timeout(std::time::Duration::from_secs(30), replayed_clock.entered())
-            .await
-            .map_err(|_| anyhow::anyhow!("replayed clock gate was not reached"))?;
         let mut replayed_success = (case == CompletedReconstructionExclusiveCase::Success)
             .then(|| executor.gate_next_agent_invocation_success(&worker_id));
 
@@ -9072,9 +9136,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .map_err(|_| {
                     anyhow::anyhow!("completed reconstruction did not reach body validation gate")
                 })?;
-                replayed_clock.release();
-                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
-                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
                 assert!(
                     tokio::time::timeout(
                         std::time::Duration::from_millis(250),
@@ -9082,7 +9143,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     )
                     .await
                     .is_err(),
-                    "exclusive P2 clock call finished before completed reconstruction validation"
+                    "owner invocation finished before completed reconstruction validation"
                 );
                 reconstruction_body.release();
                 tokio::time::timeout(
@@ -9102,9 +9163,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .map_err(|_| {
                     anyhow::anyhow!("divergent reconstruction did not reach body validation gate")
                 })?;
-                replayed_clock.release();
-                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
-                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
                 let settling_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
                 assert!(
                     settling_oplog
@@ -9118,11 +9176,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     futures::poll!(owner_failure.as_mut()),
                     std::task::Poll::Pending
                 ));
-                // The replay on the source revision that follows the failed update: hold the
-                // supervisor of its completed reconstruction after the claim and before it drains
-                // the recorded terminal, so the exclusive clock call claims in that window.
-                let mut source_claim =
-                    executor.gate_next_completed_reconstruction_supervisor(&worker_id);
+                let mut source_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
                 reconstruction_body.release();
                 let owner_failure =
                     tokio::time::timeout(std::time::Duration::from_secs(30), owner_failure)
@@ -9148,14 +9202,12 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 )
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!("source-revision reconstruction supervisor was not reached")
+                    anyhow::anyhow!("source-revision reconstruction claim was not reached")
                 })?;
                 assert_eq!(source_start, reconstruction_start);
-                wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id)
-                    .await?;
                 source_claim.release();
             }
-            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow
+            CompletedReconstructionExclusiveCase::CrashReplayClaimWindow
             | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay => unreachable!(),
             CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
                 tokio::time::timeout(
@@ -9166,8 +9218,35 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .map_err(|_| {
                     anyhow::anyhow!("completed reconstruction did not reach body validation gate")
                 })?;
-                replayed_clock.release();
                 executor.shutdown_and_wait_for_invocation_loops().await?;
+            }
+            CompletedReconstructionExclusiveCase::RestartDuringBodyValidation => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("completed reconstruction did not reach body validation gate")
+                })?;
+                let mut next_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+                eprintln!(
+                    "LIFECYCLE_PROBE restart while historical body {reconstruction_start} is held before validation"
+                );
+                // Normal lifecycle cancellation must destroy the blocked body's Store and
+                // settle its reconstruction ownership. Do not release its validation gate.
+                executor.simulated_crash(&worker_id).await?;
+                let next_start =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), next_claim.entered())
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "restart did not install a generation and reclaim the entity"
+                            )
+                        })?;
+                assert_eq!(next_start, reconstruction_start);
+                eprintln!("LIFECYCLE_PROBE next Store reclaimed historical body {next_start}");
+                next_claim.release();
             }
         }
         Ok::<_, anyhow::Error>(reconstruction_start)
@@ -9182,7 +9261,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
     match case {
         CompletedReconstructionExclusiveCase::Success
-        | CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
+        | CompletedReconstructionExclusiveCase::RestartDuringBodyValidation
+        | CompletedReconstructionExclusiveCase::CrashReplayClaimWindow => {
             invocation_result?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             assert_replayed_reconstruction_invocation_settled(&oplog, method, reconstruction_start);
@@ -9251,7 +9331,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn completed_reconstruction_settles_while_exclusive_p2_waits(
+async fn completed_reconstruction_validates_during_recorded_clock_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9271,7 +9351,7 @@ async fn completed_reconstruction_settles_while_exclusive_p2_waits(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn crash_replay_clock_claim_waits_for_entity_custom_root_reconstruction(
+async fn recorded_clock_replay_preserves_entity_custom_root_reconstruction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9291,7 +9371,7 @@ async fn crash_replay_clock_claim_waits_for_entity_custom_root_reconstruction(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn crash_replay_clock_claim_waits_for_completed_reconstruction_supervisor(
+async fn recorded_clock_replay_recovers_after_held_reconstruction_claim(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9303,7 +9383,7 @@ async fn crash_replay_clock_claim_waits_for_completed_reconstruction_supervisor(
         deps,
         provider,
         caller,
-        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow,
+        CompletedReconstructionExclusiveCase::CrashReplayClaimWindow,
     )
     .await
 }
@@ -9331,6 +9411,26 @@ async fn completed_reconstruction_divergence_fails_automatic_update_and_runs_on_
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
+async fn restart_cancels_completed_reconstruction_during_body_validation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::RestartDuringBodyValidation,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
 async fn executor_shutdown_cancels_completed_reconstruction_during_body_validation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -9351,7 +9451,7 @@ async fn executor_shutdown_cancels_completed_reconstruction_during_body_validati
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
+async fn completed_reconstruction_validates_before_delivering_result(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -9464,13 +9564,9 @@ async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
         )
         .await
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
-        let barrier = executor
-            .drain_terminal_clamp_then_reconstruction_barrier(&owned_agent_id, reconstruction_start)
-            .await?;
-        tokio::pin!(barrier);
-        assert!(
-            matches!(futures::poll!(barrier.as_mut()), std::task::Poll::Pending),
-            "the primary replay-to-live barrier ignored the atomically registered reconstruction claim"
+        assert_eq!(
+            reconstruction_start,
+            wait_for_completed_entity_terminal(&executor, &worker_id).await?
         );
 
         reconstruction_claim.release();
@@ -9481,13 +9577,10 @@ async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
         .await
         .map_err(|_| anyhow::anyhow!("completed reconstruction body did not settle"))?;
         assert!(
-            matches!(futures::poll!(barrier.as_mut()), std::task::Poll::Pending),
-            "the primary replay-to-live barrier was released before body validation"
+            caller_checkpoints.try_recv().is_err(),
+            "the tool result was delivered before completed reconstruction validation"
         );
         reconstruction_body.release();
-        tokio::time::timeout(std::time::Duration::from_secs(30), barrier)
-            .await
-            .map_err(|_| anyhow::anyhow!("validated reconstruction did not release the barrier"))?;
         let replayed_live = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             caller_checkpoints.recv(),
@@ -9667,9 +9760,6 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         .await
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
         assert_eq!(reconstruction_start, entity_start);
-        executor
-            .drain_reconstruction_terminal(&owned_agent_id, reconstruction_start)
-            .await?;
         reconstruction_claim.release();
         tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -9677,12 +9767,6 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         )
         .await
         .map_err(|_| anyhow::anyhow!("completed reconstruction body did not settle"))?;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            executor.clamp_after_claim(&owned_agent_id, custom_start),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("custom durability did not reach replay-to-live"))??;
         wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
         assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         assert!(
@@ -9694,6 +9778,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             .is_err(),
             "the incomplete custom invocation bypassed the primary reconstruction barrier"
         );
+        assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         reconstruction_body.release();
         let replayed_custom = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -9878,9 +9963,6 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         .await
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
         assert_eq!(reconstruction_start, entity_start);
-        executor
-            .drain_reconstruction_terminal(&owned_agent_id, reconstruction_start)
-            .await?;
         reconstruction_claim.release();
         if tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -9896,12 +9978,6 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
                 "completed reconstruction body did not settle"
             ));
         }
-        tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            executor.clamp_after_claim(&owned_agent_id, custom_start),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("custom durability did not reach replay-to-live"))??;
         wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
         assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         assert!(
@@ -9913,6 +9989,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
             .is_err(),
             "the incomplete custom invocation bypassed the primary reconstruction barrier"
         );
+        assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         reconstruction_body.release();
         let replayed_custom = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -13202,6 +13279,254 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
 }
 
 #[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_recursive_rm_removes_typescript_output(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let mut deployment: Option<ToolDeploymentState> = None;
+    for (provider, package) in [
+        (javascript_tools, "golem:javascript-tools"),
+        (typescript_tools, "golem:typescript-tools"),
+    ] {
+        let component = executor
+            .component_dep(&context.default_environment_id, provider)
+            .store()
+            .await?;
+        let metadata = extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", provider.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        let provider_deployment = deployment_state(
+            context.account_id,
+            component.id,
+            component.revision,
+            package,
+            "ToolStreamingCaller",
+            metadata.tools,
+        );
+        if let Some(deployment) = &mut deployment {
+            deployment
+                .registered_tools
+                .extend(provider_deployment.registered_tools);
+            for (owner, bindings) in provider_deployment.tool_bindings {
+                deployment
+                    .tool_bindings
+                    .entry(owner)
+                    .or_default()
+                    .extend(bindings);
+            }
+        } else {
+            deployment = Some(provider_deployment);
+        }
+    }
+    let mut deployment = deployment.unwrap();
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let mut failures = Vec::new();
+    for (agent_name, remove) in [
+        (
+            "recursive-rm-sync",
+            "fs.rmSync('candidate', { recursive: true, force: true }); verify();",
+        ),
+        (
+            "recursive-rm-promises",
+            "await require('node:fs/promises').rm('candidate', { recursive: true, force: true }); verify();",
+        ),
+    ] {
+        let setup = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec![
+                "-e",
+                "const fs = require('node:fs'); fs.mkdirSync('src/nested', { recursive: true }); fs.writeFileSync('src/main.ts', 'export const main: number = 17;\\n'); fs.writeFileSync('src/nested/value.ts', 'export const value: number = 42;\\n');",
+            ],
+        )
+        .await?;
+        assert_eq!(setup.exit_code, 0, "setup: {setup:?}");
+
+        let compilation = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "tsc",
+            "/workspace",
+            vec![
+                "--pretty",
+                "false",
+                "--target",
+                "es2022",
+                "--module",
+                "es2022",
+                "--rootDir",
+                "src",
+                "--outDir",
+                "candidate",
+                "--noEmitOnError",
+                "src/main.ts",
+                "src/nested/value.ts",
+            ],
+        )
+        .await?;
+        assert_eq!(compilation.exit_code, 0, "compilation: {compilation:?}");
+
+        let script = format!(
+            r#"
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+assert.equal(fs.readFileSync('candidate/main.js', 'utf8'), 'export const main = 17;\n');
+assert.equal(fs.readFileSync('candidate/nested/value.js', 'utf8'), 'export const value = 42;\n');
+console.log('compiled-output-readable');
+function verify() {{
+    assert.equal(fs.existsSync('candidate'), false);
+    assert.equal(fs.readFileSync('src/nested/value.ts', 'utf8'), 'export const value: number = 42;\n');
+    console.log('candidate-removed-source-preserved');
+}}
+{remove}
+"#
+        );
+        let removal = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec!["-e", &script],
+        )
+        .await?;
+        assert!(
+            removal.stdout.starts_with(b"compiled-output-readable\n"),
+            "output must be readable before removal: {removal:?}"
+        );
+        if removal.exit_code != 0
+            || removal.stdout != b"compiled-output-readable\ncandidate-removed-source-preserved\n"
+            || !removal.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{agent_name}: exit {}; stdout: {}; stderr: {}",
+                removal.exit_code,
+                String::from_utf8_lossy(&removal.stdout),
+                String::from_utf8_lossy(&removal.stderr),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn typescript_guest_recursive_rm_removes_tool_created_output(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_ts_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider = executor
+        .component_dep(&context.default_environment_id, typescript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", typescript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider.id,
+        provider.revision,
+        "golem:typescript-tools",
+        "TsToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let mut failures = Vec::new();
+    for promises in [false, true] {
+        let result = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id!("TsToolStreamingCaller", format!("guest-rm-{promises}")),
+                "recursiveRmToolOutput",
+                data_value!(promises),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        if result != Ok("removed-output-source-preserved-recompiled".to_string()) {
+            failures.push(format!("promises={promises}: {result:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
 #[ignore = "GOL-714: completed JavaScript tool calls do not reconstruct deterministically"]
 #[tracing::instrument]
 #[timeout("10m")]
@@ -13628,18 +13953,14 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     });
     let cwd = string_list(&["/workspace/repo"]);
 
-    invoke_git_tool_success(
+    // Optional arguments reach git from a command line both when given and when left out.
+    invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "init",
-        BTreeMap::from([
-            ("working-directory", string_list(&[])),
-            ("directory", optional_string(Some("workspace/repo"))),
-            ("initial-branch", optional_string(Some("main"))),
-        ]),
+        &["init", "-b", "main", "workspace/repo"],
     )
     .await?;
     for (key, value) in [
@@ -13655,6 +13976,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
             "config",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String(key.to_string())),
                 ("value", optional_string(Some(value))),
                 ("local", SchemaValue::Bool(true)),
@@ -13697,6 +14019,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["hello.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -13712,6 +14035,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "commit",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("message", string_list(&["initial"])),
             ("author", optional_string(None)),
             ("allow-empty", SchemaValue::Bool(false)),
@@ -13764,6 +14088,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["hello.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -13819,6 +14144,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "config",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("key", SchemaValue::String("user.name".to_string())),
             ("value", optional_string(None)),
             ("local", SchemaValue::Bool(true)),
@@ -13836,7 +14162,8 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         SchemaValue::String("user.name".to_string())
     );
     assert_eq!(config_fields[1], optional_string(Some("Integration Test")));
-    assert_eq!(config_fields[2], SchemaValue::Bool(false));
+    assert_eq!(config_fields[2], SchemaValue::Option { inner: None });
+    assert_eq!(config_fields[3], SchemaValue::Bool(false));
 
     let status = invoke_git_tool_success(
         &executor,
@@ -13847,6 +14174,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "status",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&[])),
             ("short", SchemaValue::Bool(false)),
             ("porcelain", SchemaValue::String("v1".to_string())),
@@ -13899,19 +14227,13 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         .into_typed()?;
     assert_eq!(branch_tip.trim(), commit_oid);
 
-    let log = invoke_git_tool_success(
+    let log = invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "log",
-        BTreeMap::from([
-            ("working-directory", cwd.clone()),
-            ("ref", optional_string(None)),
-            ("max-count", SchemaValue::F64(1.0)),
-            ("oneline", SchemaValue::Bool(true)),
-        ]),
+        &["-C", "/workspace/repo", "log", "-n", "1", "--oneline"],
     )
     .await?;
     let Some(SchemaValue::Record { fields: log_fields }) = log else {
@@ -13931,6 +14253,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "diff",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("from", optional_string(None)),
             ("to", optional_string(None)),
             ("paths", string_list(&["hello.txt"])),
@@ -13961,6 +14284,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "diff",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("from", optional_string(None)),
             ("to", optional_string(None)),
             ("paths", string_list(&["hello.txt"])),
@@ -13991,6 +14315,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(Some("persisted-state"))),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(None)),
@@ -14028,6 +14353,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(None)),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(None)),
@@ -14055,6 +14381,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         "checkout",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("new-branch", optional_string(None)),
             ("detach", SchemaValue::Bool(false)),
             ("ref", optional_string(Some("main"))),
@@ -14079,7 +14406,7 @@ struct GitToolHarness {
     context: TestContext,
     environment_state: Arc<TestEnvironmentStateService>,
     executor: TestWorkerExecutor,
-    caller_component_id: golem_common::model::component::ComponentId,
+    caller_component: golem_common::model::component::ComponentDto,
     worker_id: golem_common::model::AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
     principal: Principal,
@@ -14199,7 +14526,7 @@ async fn start_git_tool_harness(
         context,
         environment_state,
         executor,
-        caller_component_id: caller_component.id,
+        caller_component,
         worker_id,
         fingerprint,
         principal,
@@ -14218,6 +14545,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
         "init",
         BTreeMap::from([
             ("working-directory", string_list(&[])),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("directory", optional_string(Some("workspace/repo"))),
             ("initial-branch", optional_string(Some(branch))),
         ]),
@@ -14236,6 +14564,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
             "config",
             BTreeMap::from([
                 ("working-directory", string_list(&["/workspace/repo"])),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String(key.to_string())),
                 ("value", optional_string(Some(value))),
                 ("local", SchemaValue::Bool(true)),
@@ -14293,6 +14622,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             "status",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("paths", string_list(&[])),
                 ("short", SchemaValue::Bool(true)),
                 ("porcelain", SchemaValue::String("v1".to_string())),
@@ -14348,6 +14678,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
             "config",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("key", SchemaValue::String("user.name".to_string())),
                 ("value", optional_string(Some("Cancelled Name"))),
                 ("local", SchemaValue::Bool(true)),
@@ -14400,6 +14731,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         "config",
         BTreeMap::from([
             ("working-directory", cwd),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("key", SchemaValue::String("user.name".to_string())),
             ("value", optional_string(None)),
             ("local", SchemaValue::Bool(true)),
@@ -14446,6 +14778,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             "commit",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("message", string_list(&["baseline"])),
                 ("author", optional_string(None)),
                 ("allow-empty", SchemaValue::Bool(true)),
@@ -14488,6 +14821,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "add",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("paths", string_list(&["recovered.txt"])),
             ("all", SchemaValue::Bool(false)),
             ("update", SchemaValue::Bool(false)),
@@ -14510,6 +14844,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             "commit",
             BTreeMap::from([
                 ("working-directory", cwd.clone()),
+                ("cwd", SchemaValue::String("/".to_string())),
                 ("message", string_list(&["survives terminal crash"])),
                 ("author", optional_string(None)),
                 ("allow-empty", SchemaValue::Bool(false)),
@@ -14549,7 +14884,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         context,
         environment_state,
         executor,
-        caller_component_id,
+        caller_component,
         worker_id,
         fingerprint,
         principal,
@@ -14579,6 +14914,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
                 "commit",
                 BTreeMap::from([
                     ("working-directory", cwd.clone()),
+                    ("cwd", SchemaValue::String("/".to_string())),
                     ("message", string_list(&["survives terminal crash"])),
                     ("author", optional_string(None)),
                     ("allow-empty", SchemaValue::Bool(false)),
@@ -14611,6 +14947,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "log",
         BTreeMap::from([
             ("working-directory", cwd.clone()),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("ref", optional_string(None)),
             ("max-count", SchemaValue::F64(2.0)),
             ("oneline", SchemaValue::Bool(true)),
@@ -14638,7 +14975,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
 
     let isolated_id = agent_id!("ToolStreamingCaller", "git-tool-other-owner");
     let isolated_worker = executor
-        .start_agent(&caller_component_id, isolated_id)
+        .start_agent(&caller_component.id, isolated_id)
         .await?;
     let isolated_fingerprint = executor
         .get_worker_metadata(&isolated_worker)
@@ -14653,6 +14990,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         "init",
         BTreeMap::from([
             ("working-directory", string_list(&[])),
+            ("cwd", SchemaValue::String("/".to_string())),
             ("directory", optional_string(Some("workspace/repo"))),
             ("initial-branch", optional_string(Some("isolated"))),
         ]),
@@ -14700,7 +15038,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
 }
 
 #[test]
-fn builtin_git_tool_runtime_provides_wasi_http(
+async fn builtin_git_tool_runtime_provides_wasi_http(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
@@ -14720,51 +15058,65 @@ fn builtin_git_tool_runtime_provides_wasi_http(
         imports.iter().any(|name| name.starts_with("wasi:http/")),
         "Git tool must import wasi:http for all future network transport; imports: {imports:?}"
     );
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", git_tool.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definition = metadata
+        .tools
+        .iter()
+        .find(|definition| definition.name() == Some("git"))
+        .expect("git component exports the git tool");
+    let fetch = definition
+        .command_index_by_path(&["fetch".to_string()])
+        .expect("git exports fetch");
+    let annotations = definition.commands.nodes[fetch]
+        .body
+        .as_ref()
+        .expect("fetch has a body")
+        .annotations
+        .as_ref()
+        .expect("fetch has annotations");
+    assert!(
+        annotations.destructive,
+        "fetch can prune refs or forcibly replace branch and tag refs"
+    );
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn git_network_probe_uses_isomorphic_git_web_transport(
+async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("git_network_probe")] probe: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use base64::Engine as _;
+
+    #[derive(FromSchema)]
+    struct Prepared {
+        oid: String,
+        pack: String,
+    }
+    #[derive(FromSchema)]
+    struct Transferred {
+        oid: String,
+        contents: String,
+    }
+
     fn pkt_line(payload: &str) -> String {
         format!("{:04x}{payload}", payload.len() + 4)
     }
-
-    let oid = "0123456789abcdef0123456789abcdef01234567";
-    let advertisement = format!(
-        "{}0000{}0000",
-        pkt_line("# service=git-upload-pack\n"),
-        pkt_line(&format!(
-            "{oid} refs/heads/main\0symref=HEAD:refs/heads/main agent=golem-test\n"
-        ))
-    );
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let server = tokio::spawn(async move {
-        let route = Router::new().route(
-            "/repo.git/info/refs",
-            get(move |request: Request| {
-                let advertisement = advertisement.clone();
-                async move {
-                    assert_eq!(request.uri().query(), Some("service=git-upload-pack"));
-                    Response::builder()
-                        .header(
-                            "content-type",
-                            "application/x-git-upload-pack-advertisement",
-                        )
-                        .body(Body::from(advertisement))
-                        .unwrap()
-                }
-            }),
-        );
-        axum::serve(listener, route).await.unwrap();
-    });
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
@@ -14776,16 +15128,275 @@ async fn git_network_probe_uses_isomorphic_git_web_transport(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let refs: Vec<String> = executor
+    let prepared: Prepared = executor
+        .invoke_and_await_agent(&component, &agent_id, "prepare", data_value!())
+        .await?
+        .into_typed()?;
+    let oid = prepared.oid;
+    let mut transfer = pkt_line("NAK\n").into_bytes();
+    let pack = base64::engine::general_purpose::STANDARD.decode(prepared.pack)?;
+    transfer.extend(format!("{:04x}", pack.len() + 5).into_bytes());
+    transfer.push(1);
+    transfer.extend(pack);
+    transfer.extend(b"0000");
+    let advertisement = format!(
+        "{}0000{}{}0000",
+        pkt_line("# service=git-upload-pack\n"),
+        pkt_line(&format!(
+            "{oid} HEAD\0symref=HEAD:refs/heads/main side-band-64k agent=golem-test\n"
+        )),
+        pkt_line(&format!("{oid} refs/heads/main\n"))
+    );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let expected_want = format!("want {oid}");
+    let pushed = Arc::new(std::sync::Mutex::new(None::<(String, Vec<u8>)>));
+    let pushed_for_discovery = pushed.clone();
+    let pushed_for_download = pushed.clone();
+    let pushed_for_upload = pushed.clone();
+    let interrupted_push_requests = Arc::new(AtomicUsize::new(0));
+    let interrupted_push_requests_for_server = interrupted_push_requests.clone();
+    let recovery_downloads = Arc::new(AtomicUsize::new(0));
+    let recovery_downloads_for_server = recovery_downloads.clone();
+    let recovery_started = Arc::new(tokio::sync::Notify::new());
+    let recovery_started_for_server = recovery_started.clone();
+    let cancelled_started = Arc::new(tokio::sync::Notify::new());
+    let cancelled_started_for_server = cancelled_started.clone();
+    let recovery_disposed = tokio_util::sync::CancellationToken::new();
+    let recovery_disposed_for_server = recovery_disposed.clone();
+    let cancelled_disposed = tokio_util::sync::CancellationToken::new();
+    let cancelled_disposed_for_server = cancelled_disposed.clone();
+    let server = tokio::spawn(async move {
+        let route = Router::new()
+            .route(
+                "/{repository}/info/refs",
+                get(move |request: Request| {
+                    let advertisement = advertisement.clone();
+                    let pushed = pushed_for_discovery.clone();
+                    async move {
+                        let expected = request
+                            .uri()
+                            .path()
+                            .starts_with("/authenticated.git/")
+                            .then_some("Bearer transport-test-token");
+                        assert_eq!(
+                            request
+                                .headers()
+                                .get("authorization")
+                                .map(|value| value.to_str().unwrap()),
+                            expected
+                        );
+                        if request.uri().query() == Some("service=git-receive-pack") {
+                            let receive = format!(
+                                "{}0000{}0000",
+                                pkt_line("# service=git-receive-pack\n"),
+                                pkt_line(&format!(
+                                    "{} refs/heads/main\0report-status side-band-64k delete-refs atomic\n",
+                                    "0".repeat(40)
+                                )),
+                            );
+                            return Response::builder()
+                                .header(
+                                    "content-type",
+                                    "application/x-git-receive-pack-advertisement",
+                                )
+                                .body(Body::from(receive))
+                                .unwrap();
+                        }
+                        assert_eq!(request.uri().query(), Some("service=git-upload-pack"));
+                        let advertisement = if request.uri().path().starts_with("/pushed.git/") {
+                            let pushed = pushed.lock().unwrap();
+                            let (oid, _) = pushed.as_ref().expect("push must have uploaded a pack");
+                            format!(
+                                "{}0000{}{}0000",
+                                pkt_line("# service=git-upload-pack\n"),
+                                pkt_line(&format!(
+                                    "{oid} HEAD\0symref=HEAD:refs/heads/fresh side-band-64k\n"
+                                )),
+                                pkt_line(&format!("{oid} refs/heads/fresh\n")),
+                            )
+                        } else {
+                            advertisement
+                        };
+                        Response::builder()
+                            .header(
+                                "content-type",
+                                "application/x-git-upload-pack-advertisement",
+                            )
+                            .body(Body::from(advertisement))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/{repository}/git-upload-pack",
+                post(move |request: Request| {
+                    let transfer = transfer.clone();
+                    let expected_want = expected_want.clone();
+                    let pushed = pushed_for_download.clone();
+                    let recovery_downloads = recovery_downloads_for_server.clone();
+                    let recovery_started = recovery_started_for_server.clone();
+                    let cancelled_started = cancelled_started_for_server.clone();
+                    let recovery_disposed = recovery_disposed_for_server.clone();
+                    let cancelled_disposed = cancelled_disposed_for_server.clone();
+                    async move {
+                        let downloading_push = request.uri().path().starts_with("/pushed.git/");
+                        let recovering = request.uri().path().starts_with("/recover.git/");
+                        let cancelling = request.uri().path().starts_with("/cancelled.git/");
+                        let expected = request
+                            .uri()
+                            .path()
+                            .starts_with("/authenticated.git/")
+                            .then_some("Bearer transport-test-token");
+                        assert_eq!(
+                            request
+                                .headers()
+                                .get("authorization")
+                                .map(|value| value.to_str().unwrap()),
+                            expected
+                        );
+                        let request_body = axum::body::to_bytes(request.into_body(), 65536)
+                            .await
+                            .unwrap();
+                        let (transfer, expected_want) = if downloading_push {
+                            let pushed = pushed.lock().unwrap();
+                            let (oid, pack) = pushed.as_ref().unwrap();
+                            let mut transfer = pkt_line("NAK\n").into_bytes();
+                            transfer.extend(format!("{:04x}", pack.len() + 5).into_bytes());
+                            transfer.push(1);
+                            transfer.extend(pack);
+                            transfer.extend(b"0000");
+                            (transfer, format!("want {oid}"))
+                        } else {
+                            (transfer, expected_want)
+                        };
+                        assert!(String::from_utf8_lossy(&request_body).contains(&expected_want));
+                        assert!(String::from_utf8_lossy(&request_body).contains("side-band-64k"));
+                        if cancelling
+                            || (recovering
+                                && recovery_downloads.fetch_add(1, Ordering::SeqCst) == 0)
+                        {
+                            let (started, disposed) = if cancelling {
+                                (cancelled_started, cancelled_disposed)
+                            } else {
+                                (recovery_started, recovery_disposed)
+                            };
+                            let prefix = transfer[..transfer.len() / 2].to_vec();
+                            let stream = futures::stream::unfold(
+                                (Some(prefix), started, disposed.drop_guard()),
+                                |(prefix, started, guard)| async move {
+                                    if let Some(prefix) = prefix {
+                                        started.notify_one();
+                                        Some((
+                                            Ok::<_, std::io::Error>(prefix),
+                                            (None, started, guard),
+                                        ))
+                                    } else {
+                                        std::future::pending().await
+                                    }
+                                },
+                            );
+                            return Response::builder()
+                                .header("content-type", "application/x-git-upload-pack-result")
+                                .body(Body::from_stream(stream))
+                                .unwrap();
+                        }
+                        Response::builder()
+                            .header("content-type", "application/x-git-upload-pack-result")
+                            .body(Body::from(transfer))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/{repository}/git-receive-pack",
+                post(move |request: Request| {
+                    let pushed = pushed_for_upload.clone();
+                    let interrupted_push_requests = interrupted_push_requests_for_server.clone();
+                    async move {
+                        let interrupt_response =
+                            request.uri().path().starts_with("/interrupted.git/");
+                        assert_eq!(
+                            request.headers()["content-type"],
+                            "application/x-git-receive-pack-request"
+                        );
+                        let bytes = axum::body::to_bytes(request.into_body(), 65536)
+                            .await
+                            .unwrap();
+                        let line_len =
+                            usize::from_str_radix(std::str::from_utf8(&bytes[..4]).unwrap(), 16)
+                                .unwrap();
+                        let command = std::str::from_utf8(&bytes[4..line_len]).unwrap();
+                        let fields = command.split_whitespace().collect::<Vec<_>>();
+                        assert_eq!(fields[0], "0".repeat(40));
+                        let oid = fields[1].to_string();
+                        assert_eq!(fields[2].split('\0').next(), Some("refs/heads/fresh"));
+                        assert!(!command.contains("atomic"));
+                        let capabilities = command.split('\0').nth(1).unwrap();
+                        assert!(capabilities.split_whitespace().any(|cap| cap == "report-status"));
+                        assert!(capabilities.split_whitespace().any(|cap| cap == "side-band-64k"));
+                        assert_eq!(&bytes[line_len..line_len + 4], b"0000");
+                        let pack = bytes[line_len + 4..].to_vec();
+                        assert_eq!(&pack[..4], b"PACK");
+                        *pushed.lock().unwrap() = Some((oid, pack));
+                        if interrupt_response {
+                            interrupted_push_requests.fetch_add(1, Ordering::SeqCst);
+                            let stream = futures::stream::unfold(false, |sent| async move {
+                                if sent {
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    Some((
+                                        Err(std::io::Error::new(
+                                            std::io::ErrorKind::ConnectionReset,
+                                            "response interrupted after accepting push",
+                                        )),
+                                        true,
+                                    ))
+                                } else {
+                                    Some((
+                                        Ok(Bytes::from(pkt_line(&format!(
+                                            "\x01{}",
+                                            pkt_line("unpack ok\n")
+                                        )))),
+                                        true,
+                                    ))
+                                }
+                            });
+                            return Response::builder()
+                                .header("content-type", "application/x-git-receive-pack-result")
+                                .body(Body::from_stream(stream))
+                                .unwrap();
+                        }
+                        Response::builder()
+                            .header("content-type", "application/x-git-receive-pack-result")
+                            .body(Body::from(format!(
+                                "{}0000",
+                                pkt_line(&format!(
+                                    "\x01{}{}0000",
+                                    pkt_line("unpack ok\n"),
+                                    pkt_line("ok refs/heads/fresh\n")
+                                ))
+                            )))
+                            .unwrap()
+                    }
+                }),
+            );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let transferred: Transferred = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "discover",
-            data_value!(format!("http://localhost:{port}/repo.git")),
+            "transfer",
+            data_value!(
+                format!("http://localhost:{port}/authenticated.git"),
+                "transport-test-token"
+            ),
         )
         .await?
         .into_typed()?;
-    assert_eq!(refs, vec![format!("refs/heads/main {oid}")]);
+    assert_eq!(transferred.oid, oid);
+    assert_eq!(transferred.contents, "actual smart-HTTP pack transfer\n");
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     for function_name in ["http::client::send", "http::types::response::consume-body"] {
@@ -14795,15 +15406,763 @@ async fn git_network_probe_uses_isomorphic_git_web_transport(
                 matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == function_name)
             })
             .collect::<Vec<_>>();
-        assert_eq!(starts.len(), 1, "expected one durable {function_name} call");
-        assert!(oplog.iter().any(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == starts[0].oplog_index)
-        }));
+        assert_eq!(
+            starts.len(),
+            2,
+            "expected discovery and transfer {function_name} calls"
+        );
+        for start in starts {
+            assert!(oplog.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start.oplog_index)
+            }));
+        }
     }
     assert!(oplog.iter().all(|entry| {
         !matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.starts_with("sockets::"))
     }));
+
+    let harness = start_git_tool_harness(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        git_tool,
+        "git-tool-pack-transfer",
+    )
+    .await?;
+    initialize_git_harness(&harness, "main").await?;
+    let clone_fields = |url: String, directory: &str| {
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace"])),
+            ("repository", SchemaValue::String(url)),
+            ("directory", optional_string(Some(directory))),
+            ("origin", optional_string(None)),
+            ("branch", optional_string(None)),
+            ("depth", SchemaValue::Option { inner: None }),
+            ("single-branch", SchemaValue::Bool(false)),
+            ("no-single-branch", SchemaValue::Bool(false)),
+            ("no-checkout", SchemaValue::Bool(false)),
+            ("tags", SchemaValue::Bool(false)),
+            ("no-tags", SchemaValue::Bool(false)),
+        ])
+    };
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "clone",
+        clone_fields(format!("http://localhost:{port}/repo.git"), "clone"),
+    )
+    .await?;
+    for (file, expected) in [
+        ("file.txt", "actual smart-HTTP pack transfer\n".to_string()),
+        (".git/refs/heads/main", format!("{oid}\n")),
+        (".git/refs/remotes/origin/main", format!("{oid}\n")),
+        (
+            ".git/refs/remotes/origin/HEAD",
+            "ref: refs/remotes/origin/main\n".to_string(),
+        ),
+    ] {
+        assert_eq!(
+            harness
+                .executor
+                .get_file_contents(&harness.worker_id, &format!("/workspace/clone/{file}"))
+                .await?
+                .as_ref(),
+            expected.as_bytes(),
+            "cloned {file}"
+        );
+    }
+    let recovery_url = format!("http://localhost:{port}/recover.git");
+    {
+        let recovery = invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "clone",
+            clone_fields(recovery_url, "recovered"),
+        );
+        tokio::pin!(recovery);
+        tokio::select! {
+            result = &mut recovery => anyhow::bail!("clone settled before the partial download gate: {result:?}"),
+            started = tokio::time::timeout(Duration::from_secs(30), recovery_started.notified()) => { started?; }
+        }
+        harness.executor.simulated_crash(&harness.worker_id).await?;
+        let evidence = tokio::time::timeout(Duration::from_secs(30), &mut recovery)
+            .await
+            .context("clone did not recover from a partial download")??;
+        assert!(evidence.is_some());
+    }
+    tokio::time::timeout(Duration::from_secs(5), recovery_disposed.cancelled()).await?;
+    assert_eq!(recovery_downloads.load(Ordering::SeqCst), 2);
+    for (file, expected) in [
+        ("file.txt", "actual smart-HTTP pack transfer\n".to_string()),
+        (".git/refs/heads/main", format!("{oid}\n")),
+        (".git/refs/remotes/origin/main", format!("{oid}\n")),
+    ] {
+        assert_eq!(
+            harness
+                .executor
+                .get_file_contents(&harness.worker_id, &format!("/workspace/recovered/{file}"))
+                .await?
+                .as_ref(),
+            expected.as_bytes(),
+            "recovered {file}"
+        );
+    }
+
+    let caller_agent = agent_id!("ToolStreamingCaller", "git-tool-pack-transfer");
+    let gate = harness
+        .executor
+        .invoke_and_await_agent(
+            &harness.caller_component,
+            &caller_agent,
+            "native_veto_gate",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .expect("cancellation promise");
+    let SchemaValue::Record { fields } = &gate else {
+        anyhow::bail!("expected promise record");
+    };
+    let SchemaValue::U64(index) = fields[1] else {
+        anyhow::bail!("expected promise index");
+    };
+    {
+        let cancellation = harness.executor.invoke_and_await_agent(
+            &harness.caller_component,
+            &caller_agent,
+            "cancel_git_clone",
+            crate::raw_params(vec![
+                SchemaValue::String("/workspace".to_string()),
+                SchemaValue::String(format!("http://localhost:{port}/cancelled.git")),
+                SchemaValue::String("cancelled".to_string()),
+                gate,
+            ]),
+        );
+        tokio::pin!(cancellation);
+        tokio::select! {
+            result = &mut cancellation => anyhow::bail!("clone cancellation settled before the download gate: {result:?}"),
+            started = tokio::time::timeout(Duration::from_secs(30), cancelled_started.notified()) => { started?; }
+        }
+        harness
+            .executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: harness.worker_id.clone(),
+                    oplog_idx: OplogIndex::from_u64(index),
+                },
+                vec![],
+            )
+            .await?;
+        let cancelled: bool = tokio::time::timeout(Duration::from_secs(30), &mut cancellation)
+            .await
+            .context("active clone cancellation did not settle")??
+            .into_typed()?;
+        assert!(
+            cancelled,
+            "active tool cancellation must select the typed RPC Cancelled result"
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(5), cancelled_disposed.cancelled()).await?;
+    for path in ["refs/heads/main", "refs/remotes/origin/main"] {
+        assert!(
+            harness
+                .executor
+                .get_file_contents(
+                    &harness.worker_id,
+                    &format!("/workspace/cancelled/.git/{path}")
+                )
+                .await
+                .is_err(),
+            "a cancelled partial pack must not publish {path}"
+        );
+    }
+    let usable = invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "status",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/recovered"])),
+            ("paths", string_list(&[])),
+            ("short", SchemaValue::Bool(true)),
+            ("porcelain", SchemaValue::String("v1".to_string())),
+            ("null", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record { fields }) = usable else {
+        anyhow::bail!("expected status result after cancellation");
+    };
+    assert!(matches!(&fields[0], SchemaValue::List { elements } if elements.is_empty()));
+    invoke_filesystem_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.filesystem_definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/repo/file.txt".to_string()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("pushed over wasi-http\n".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "add",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/repo"])),
+            ("paths", string_list(&["file.txt"])),
+            ("all", SchemaValue::Bool(false)),
+            ("update", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let pushed_oid = git_commit_oid(
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "commit",
+            BTreeMap::from([
+                ("cwd", SchemaValue::String("/".to_string())),
+                ("working-directory", string_list(&["/workspace/repo"])),
+                ("message", string_list(&["push fixture"])),
+                ("author", optional_string(None)),
+                ("allow-empty", SchemaValue::Bool(false)),
+            ]),
+        )
+        .await?,
+    )?;
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "push",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/repo"])),
+            (
+                "remote",
+                optional_string(Some(&format!("http://localhost:{port}/repo.git"))),
+            ),
+            ("refspecs", string_list(&["main:refs/heads/fresh"])),
+            ("set-upstream", SchemaValue::Bool(false)),
+            ("delete", SchemaValue::Bool(false)),
+            ("tags", SchemaValue::Bool(false)),
+            ("all", SchemaValue::Bool(false)),
+            ("force", SchemaValue::Bool(false)),
+            ("force-with-lease", SchemaValue::Bool(false)),
+            ("lease", optional_string(None)),
+            ("atomic", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    assert_eq!(pushed.lock().unwrap().as_ref().unwrap().0, pushed_oid);
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "clone",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace"])),
+            (
+                "repository",
+                SchemaValue::String(format!("http://localhost:{port}/pushed.git")),
+            ),
+            ("directory", optional_string(Some("roundtrip"))),
+            ("origin", optional_string(None)),
+            ("branch", optional_string(None)),
+            ("depth", SchemaValue::Option { inner: None }),
+            ("single-branch", SchemaValue::Bool(false)),
+            ("no-single-branch", SchemaValue::Bool(false)),
+            ("no-checkout", SchemaValue::Bool(false)),
+            ("tags", SchemaValue::Bool(false)),
+            ("no-tags", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    for (file, expected) in [
+        ("file.txt", "pushed over wasi-http\n".to_string()),
+        (".git/refs/heads/fresh", format!("{pushed_oid}\n")),
+    ] {
+        assert_eq!(
+            harness
+                .executor
+                .get_file_contents(&harness.worker_id, &format!("/workspace/roundtrip/{file}"))
+                .await?
+                .as_ref(),
+            expected.as_bytes()
+        );
+    }
+    let interrupted_fields = BTreeMap::from([
+        ("cwd", SchemaValue::String("/".to_string())),
+        ("working-directory", string_list(&["/workspace/repo"])),
+        (
+            "remote",
+            optional_string(Some(&format!("http://localhost:{port}/interrupted.git"))),
+        ),
+        ("refspecs", string_list(&["main:refs/heads/fresh"])),
+        ("set-upstream", SchemaValue::Bool(false)),
+        ("delete", SchemaValue::Bool(false)),
+        ("tags", SchemaValue::Bool(false)),
+        ("all", SchemaValue::Bool(false)),
+        ("force", SchemaValue::Bool(false)),
+        ("force-with-lease", SchemaValue::Bool(false)),
+        ("lease", optional_string(None)),
+        ("atomic", SchemaValue::Bool(false)),
+        ("authentication", SchemaValue::Option { inner: None }),
+    ]);
+    let push_path = vec!["push".to_string()];
+    let push_model = harness.git_definition.canonical_input_model(
+        harness
+            .git_definition
+            .command_index_by_path(&push_path)
+            .unwrap(),
+    )?;
+    let push_input = TypedSchemaValue::new(
+        push_model.record_schema,
+        SchemaValue::Record {
+            fields: push_model
+                .fields
+                .iter()
+                .map(|field| interrupted_fields[field.name.as_str()].clone())
+                .collect(),
+        },
+    );
+    let interrupted_key = IdempotencyKey::fresh();
+    let interrupted = tokio::time::timeout(
+        Duration::from_secs(30),
+        harness.executor.invoke_external_tool(
+            &harness.worker_id,
+            harness.fingerprint,
+            interrupted_key.clone(),
+            ToolName::try_from("git").unwrap(),
+            push_path.clone(),
+            push_input.clone(),
+            InvocationContextStack::fresh(),
+            harness.principal.clone(),
+            None,
+        ),
+    )
+    .await
+    .context("interrupted push did not settle")??;
+    let AgentInvocationResult::ExternalTool {
+        result: Err(SerializableToolRpcError::RemoteToolError(error)),
+    } = &interrupted.result
+    else {
+        anyhow::bail!(
+            "expected a remote tool error for the lost push response, got {interrupted:?}"
+        );
+    };
+    assert!(
+        matches!(error.as_ref(), SerializableToolError::CustomError(error) if error.name == "git-error")
+    );
+    assert_eq!(pushed.lock().unwrap().as_ref().unwrap().0, pushed_oid);
+    assert_eq!(
+        interrupted_push_requests.load(Ordering::SeqCst),
+        1,
+        "an accepted receive-pack POST must not be blindly retried"
+    );
+    let status_fields = BTreeMap::from([
+        ("cwd", SchemaValue::String("/".to_string())),
+        ("working-directory", string_list(&["/workspace/repo"])),
+        ("paths", string_list(&[])),
+        ("short", SchemaValue::Bool(true)),
+        ("porcelain", SchemaValue::String("v1".to_string())),
+        ("null", SchemaValue::Bool(false)),
+    ]);
+    let status = tokio::time::timeout(
+        Duration::from_secs(30),
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "status",
+            status_fields.clone(),
+        ),
+    )
+    .await
+    .context("status after interrupted push did not settle")??;
+    let Some(SchemaValue::Record { fields }) = status else {
+        anyhow::bail!("expected status result");
+    };
+    assert!(matches!(&fields[0], SchemaValue::List { elements } if elements.is_empty()));
+    harness.executor.simulated_crash(&harness.worker_id).await?;
+    let replayed = tokio::time::timeout(
+        Duration::from_secs(30),
+        harness.executor.invoke_external_tool(
+            &harness.worker_id,
+            harness.fingerprint,
+            interrupted_key,
+            ToolName::try_from("git").unwrap(),
+            push_path,
+            push_input,
+            InvocationContextStack::fresh(),
+            harness.principal.clone(),
+            None,
+        ),
+    )
+    .await
+    .context("failed push lookup after restart did not settle")??;
+    assert_eq!(replayed.result, interrupted.result);
+    let status = tokio::time::timeout(
+        Duration::from_secs(30),
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "status",
+            status_fields,
+        ),
+    )
+    .await
+    .context("status after restart did not settle")??;
+    let Some(SchemaValue::Record { fields }) = status else {
+        anyhow::bail!("expected status after restart");
+    };
+    assert!(matches!(&fields[0], SchemaValue::List { elements } if elements.is_empty()));
+    assert_eq!(interrupted_push_requests.load(Ordering::SeqCst), 1);
+    let tool_oplog = harness
+        .executor
+        .get_oplog(&harness.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(tool_oplog.iter().any(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == "http::client::send")
+    }));
+    assert!(tool_oplog.iter().all(|entry| {
+        !matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.starts_with("sockets::"))
+    }));
     server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_git_remote_secrets_redirects_and_discovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent_secret::{
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    };
+    use golem_common::schema::SecretValuePayload;
+    use golem_service_base::model::agent_secret::AgentSecret;
+
+    fn stalled_body(
+        bytes: Vec<u8>,
+        disposed: &Arc<std::sync::Mutex<Vec<tokio_util::sync::CancellationToken>>>,
+    ) -> Body {
+        let token = tokio_util::sync::CancellationToken::new();
+        disposed.lock().unwrap().push(token.clone());
+        let stream = futures::stream::unfold(
+            (Some(bytes), token.drop_guard()),
+            |(bytes, guard)| async move {
+                if let Some(bytes) = bytes {
+                    Some((Ok::<_, std::io::Error>(bytes), (None, guard)))
+                } else {
+                    std::future::pending().await
+                }
+            },
+        );
+        Body::from_stream(stream)
+    }
+
+    let harness = start_git_tool_harness(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        git_tool,
+        "git-remote-auth",
+    )
+    .await?;
+    initialize_git_harness(&harness, "main").await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let base = format!("http://localhost:{port}");
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<(String, bool)>::new()));
+    let seen = requests.clone();
+    let disposed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let body_disposal = disposed.clone();
+    let oid = "1234567890123456789012345678901234567890";
+    let tag = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    let pkt = |payload: &str| format!("{:04x}{payload}", payload.len() + 4);
+    let advertisement = format!(
+        "{}0000{}{}{}{}0000",
+        pkt("# service=git-upload-pack\n"),
+        pkt(&format!("{oid} HEAD\0symref=HEAD:refs/heads/main\n")),
+        pkt(&format!("{oid} refs/heads/main\n")),
+        pkt(&format!("{tag} refs/tags/v1\n")),
+        pkt(&format!("{oid} refs/tags/v1^{{}}\n"))
+    );
+    let router = Router::new().route(
+        "/{repository}/info/refs",
+        get(move |Path(repository): Path<String>, request: Request| {
+            let seen = seen.clone();
+            let advertisement = advertisement.clone();
+            let disposed = body_disposal.clone();
+            async move {
+                let authorized = request.headers().get("authorization").is_some();
+                seen.lock().unwrap().push((repository.clone(), authorized));
+                let (status, location) = match repository.as_str() {
+                    "same" => (
+                        302,
+                        Some(format!(
+                            "http://localhost:{port}/repo/info/refs?service=git-upload-pack"
+                        )),
+                    ),
+                    "cross" => (
+                        302,
+                        Some(format!(
+                            "http://127.0.0.1:{port}/public/info/refs?service=git-upload-pack"
+                        )),
+                    ),
+                    "denied" => (401, None),
+                    "repo"
+                        if request
+                            .headers()
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok())
+                            != Some("Bearer transport-secret") =>
+                    {
+                        (401, None)
+                    }
+                    _ => (200, None),
+                };
+                let mut response = Response::builder().status(status).header(
+                    "content-type",
+                    "application/x-git-upload-pack-advertisement",
+                );
+                if let Some(location) = location {
+                    response = response.header("location", location);
+                }
+                let body = if repository == "invalid" {
+                    stalled_body(b"0011not a service".to_vec(), &disposed)
+                } else if repository == "partial" {
+                    let prefix = advertisement.split("refs/heads/main\n").next().unwrap();
+                    let prefix = format!("{prefix}refs/heads/main\n");
+                    let stream = futures::stream::iter([
+                        Ok(prefix.into_bytes()),
+                        Err(std::io::Error::other("injected body failure")),
+                    ]);
+                    Body::from_stream(stream)
+                } else if status == 200 {
+                    Body::from(advertisement)
+                } else {
+                    stalled_body(b"unused body remains open".to_vec(), &disposed)
+                };
+                response.body(body).unwrap()
+            }
+        }),
+    );
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    }));
+
+    let command_index = harness
+        .git_definition
+        .command_index_by_path(&["ls-remote".to_string()])
+        .unwrap();
+    let model = harness
+        .git_definition
+        .canonical_input_model(command_index)?;
+    let SchemaType::Option { inner, .. } = &model
+        .fields
+        .iter()
+        .find(|field| field.name == "authentication")
+        .unwrap()
+        .type_
+    else {
+        anyhow::bail!("expected optional authentication")
+    };
+    let SchemaType::Secret { spec, .. } = inner.as_ref() else {
+        anyhow::bail!("expected opaque authentication secret")
+    };
+    let secret_type = SchemaGraph {
+        defs: model.record_schema.defs.clone(),
+        root: *spec.inner.clone(),
+    };
+    let secret_id = AgentSecretId::new();
+    let secret_path = vec!["git-auth".to_string()];
+    let secret_value = golem_common::schema::render::from_json_value(
+        &secret_type,
+        &secret_type.root,
+        &serde_json::json!({"origin": base, "bearer": "transport-secret"}),
+    )?;
+    harness.environment_state.set_agent_secret(AgentSecret {
+        id: secret_id,
+        environment_id: harness.context.default_environment_id,
+        path: CanonicalAgentSecretPath(secret_path.clone()),
+        revision: AgentSecretRevision::INITIAL,
+        secret_type,
+        secret_value: Some(secret_value),
+    });
+    let secret = SchemaValue::Option {
+        inner: Some(Box::new(SchemaValue::Secret(SecretValuePayload {
+            secret_id: secret_id.0,
+            config_key: Some(secret_path),
+            version: 0,
+            resolved_at: chrono::Utc::now(),
+            category: None,
+        }))),
+    };
+    let invoke = |repository: &str, heads: bool, tags: bool, symref: bool| {
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "ls-remote",
+            BTreeMap::from([
+                ("cwd", SchemaValue::String("/".to_string())),
+                ("working-directory", string_list(&["/workspace/repo"])),
+                ("authentication", secret.clone()),
+                (
+                    "repository",
+                    optional_string(Some(&format!("{base}/{repository}"))),
+                ),
+                ("heads", SchemaValue::Bool(heads)),
+                ("tags", SchemaValue::Bool(tags)),
+                ("symref", SchemaValue::Bool(symref)),
+            ]),
+        )
+    };
+    for (repository, heads, tags, expected) in [
+        (
+            "same",
+            false,
+            false,
+            format!(
+                "ref: refs/heads/main\tHEAD\n{oid}\tHEAD\n{oid}\trefs/heads/main\n{tag}\trefs/tags/v1\n{oid}\trefs/tags/v1^{{}}\n"
+            ),
+        ),
+        ("cross", true, false, format!("{oid}\trefs/heads/main\n")),
+        (
+            "repo",
+            false,
+            true,
+            format!("{tag}\trefs/tags/v1\n{oid}\trefs/tags/v1^{{}}\n"),
+        ),
+    ] {
+        let Some(SchemaValue::Record { fields }) = invoke(repository, heads, tags, true).await?
+        else {
+            anyhow::bail!("expected discovery result")
+        };
+        assert_eq!(fields[1], SchemaValue::String(expected));
+    }
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .contains(&("repo".to_string(), true))
+    );
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .contains(&("public".to_string(), false))
+    );
+    let denied = invoke("denied", false, false, false)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(denied.contains("noninteractive credentials"));
+    assert!(!denied.contains("transport-secret"));
+    for repository in ["invalid", "partial"] {
+        assert!(invoke(repository, false, false, false).await.is_err());
+    }
+    let Some(SchemaValue::Record { fields }) = invoke("repo", true, false, false).await? else {
+        anyhow::bail!("expected successful discovery after failed response bodies")
+    };
+    assert_eq!(
+        fields[1],
+        SchemaValue::String(format!("{oid}\trefs/heads/main\n"))
+    );
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "config",
+        BTreeMap::from([
+            ("cwd", SchemaValue::String("/".to_string())),
+            ("working-directory", string_list(&["/workspace/repo"])),
+            ("local", SchemaValue::Bool(true)),
+            (
+                "key",
+                SchemaValue::String("http.followRedirects".to_string()),
+            ),
+            ("value", optional_string(Some("false"))),
+        ]),
+    )
+    .await?;
+    let before = requests.lock().unwrap().len();
+    assert!(
+        invoke("same", false, false, false)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("http.followRedirects")
+    );
+    assert_eq!(requests.lock().unwrap().len(), before + 1);
+    let bodies = disposed.lock().unwrap().clone();
+    assert!(bodies.len() >= 4);
+    for body in bodies {
+        tokio::time::timeout(Duration::from_secs(5), body.cancelled()).await?;
+    }
+    let oplog = harness
+        .executor
+        .get_oplog(&harness.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.starts_with("sockets::"))));
     Ok(())
 }
 
@@ -14919,6 +16278,103 @@ async fn clock_races_complete_through_tool_entity_without_suspending_owner(
             .filter(|entry| entry.oplog_index > boundary)
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
         "tool/entity clock-race interval unexpectedly contained a Suspend entry"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn tool_bodies_read_pending_card_events_without_scanning_the_invocation_oplog(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const LOCAL_READS: u32 = 500;
+    const TOOL_CALLS: u32 = 15;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent = agent_id!("ToolStreamingCaller", "card-boundary-tool-owner");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker).await?;
+    let entries_read_before = executor.oplog_entries_read(&worker);
+    let completed = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "local_clocks_then_tool_clocks",
+            data_value!(LOCAL_READS, TOOL_CALLS),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(completed, TOOL_CALLS);
+    let entries_read = executor.oplog_entries_read(&worker) - entries_read_before;
+
+    let interval = executor.get_oplog(&worker, boundary).await?;
+    let tool_bodies = interval
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    assert_eq!(tool_bodies, TOOL_CALLS as usize);
+    let invocation_entries = interval
+        .iter()
+        .filter(|entry| entry.oplog_index > boundary)
+        .count() as u64;
+    // Each tool body crosses the card event boundary in a new entity Store. Reading the
+    // pending card events must not depend on how many entries the invocation appended before.
+    assert!(
+        entries_read < invocation_entries,
+        "tool bodies read {entries_read} oplog entries during an invocation of \
+         {invocation_entries} entries"
     );
     Ok(())
 }

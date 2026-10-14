@@ -297,20 +297,46 @@ pub fn agent_worker_target(
 pub fn tool_target(
     owner: ToolOwnerPattern,
     command_path: &[&str],
-    args: Vec<ToolArgPattern>,
+    args: Vec<ToolArgPattern<ToolInvocationValue>>,
+    definition: Option<&golem_common::schema::tool::Tool>,
 ) -> Result<PermissionTarget, TargetError> {
-    let mut invocation =
+    let parsed =
         ToolInvocationPattern::from_command_and_args(command_path, &[]).map_err(|value| {
             TargetError::InvalidResource {
                 class: "tool",
                 value,
             }
         })?;
-    invocation.args = args;
+    let normalized =
+        parsed
+            .normalize(definition)
+            .map_err(|error| TargetError::InvalidResource {
+                class: "tool",
+                value: error.to_string(),
+            })?;
+    let mut invocation = ToolInvocation {
+        command_path: normalized.command_path,
+        flags: vec![],
+        positionals: vec![],
+    };
+    for arg in args {
+        match arg {
+            ToolArgPattern::LongFlag { name, value } => {
+                invocation.flags.push(CanonicalToolFlag { name, value })
+            }
+            ToolArgPattern::Positional(value) => invocation.positionals.push(value),
+            ToolArgPattern::ShortFlags { .. } => {
+                return Err(TargetError::InvalidResource {
+                    class: "tool",
+                    value: "invocation flags must use primary long names".into(),
+                });
+            }
+        }
+    }
     Ok(PermissionTarget::Tool(ClassPermissionTarget {
         verb: Some(ToolVerb::Invoke),
         owner,
-        resource: ToolResourcePattern::Invocation(invocation),
+        resource: ToolResourcePattern::Request(invocation),
     }))
 }
 
@@ -921,12 +947,14 @@ mod tests {
         let target = tool_target(
             tool("search"),
             &["documents", "find"],
-            ToolInvocationPattern::from_command_and_args(
-                &[],
-                &["--query=two words", "literal value", "-iv"],
-            )
-            .unwrap()
-            .args,
+            vec![
+                ToolArgPattern::LongFlag {
+                    name: ToolIdentifier("query".into()),
+                    value: Some(ToolInvocationValue::Literal("two words".into())),
+                },
+                ToolArgPattern::Positional(ToolInvocationValue::Literal("literal *".into())),
+            ],
+            None,
         )
         .unwrap();
 
@@ -934,31 +962,31 @@ mod tests {
             target,
             PermissionTarget::Tool(ClassPermissionTarget {
                 verb: Some(ToolVerb::Invoke),
-                resource: ToolResourcePattern::Invocation(ToolInvocationPattern {
-                    command_path: Some(path),
-                    args,
+                resource: ToolResourcePattern::Request(ToolInvocation {
+                    command_path: path,
+                    flags, positionals,
                 }),
                 ..
             }) if path == vec![ToolIdentifier("documents".into()), ToolIdentifier("find".into())]
-                && args == vec![
-                    ToolArgPattern::LongFlag {
+                && flags == vec![
+                    CanonicalToolFlag {
                         name: ToolIdentifier("query".into()),
-                        value: Some(ToolValuePattern::Literal(ToolValueLiteral("two words".into()))),
+                        value: Some(ToolInvocationValue::Literal("two words".into())),
                     },
-                    ToolArgPattern::Positional(ToolValuePattern::Literal(ToolValueLiteral("literal value".into()))),
-                    ToolArgPattern::ShortFlags { flags: vec!['i', 'v'], value: None },
                 ]
+                && positionals == vec![ToolInvocationValue::Literal("literal *".into())]
         ));
 
         assert!(
             tool_target(
                 tool("root"),
                 &[],
-                vec![ToolArgPattern::Positional(ToolValuePattern::Star)]
+                vec![ToolArgPattern::Positional(ToolInvocationValue::Opaque)],
+                None,
             )
             .is_ok()
         );
-        assert!(tool_target(tool("bad"), &["not.valid"], vec![]).is_err());
+        assert!(tool_target(tool("bad"), &["not.valid"], vec![], None).is_err());
     }
     #[test]
     fn paths_are_canonical_and_cannot_escape() {

@@ -36,9 +36,11 @@ This deploys the new component version **and** triggers an update for all existi
 |------|-------------|
 | `-u, --update-agents <MODE>` | Update existing agents with `auto` or `manual` mode |
 | `--redeploy-agents` | Delete and recreate all existing agents (loses state) |
-| `-r, --reset` | Delete agents and the environment, then deploy from scratch |
+| `-r, --reset` | Deploy, then delete existing agents of the deployed components; their state is lost, and the environment is retained |
 
 These flags are mutually exclusive â€” only one can be used at a time.
+
+`--reset` does not clear domains, HTTP and MCP deployments, secrets, retry policies, plugins, or component revision history. The deployment still reconciles the manifest and can update these resources, including replacement of incompatible agent secrets. Agents are created again on invocation rather than recreated by the command.
 
 ## Method 2: Explicit Agent Update Command
 
@@ -154,7 +156,7 @@ This is exposed in each SDK's host bindings. The function returns immediately â€
 4. Golem restores the agent's files from the filesystem snapshot of the selected record (a record without a name gives the initial files of the source revision). The target loads the application snapshot of the same record and replays the committed history after it with the source revision's configuration and initial files. The replay can extend beyond the request entry because source work may finish while execution is stopping.
 5. At the update point, Golem applies the initial files of the target revision, as a full replay does. A changed declaration of an initial file at a path that the agent wrote, changed or deleted fails the update.
 6. Success is recorded only after replay validation and before target live effects continue. The selected record then becomes the authoritative recovery baseline. Every later start from it restores the same filesystem snapshot, and retention keeps that snapshot.
-7. If the attempt fails, one failed outcome is recorded and the healthy source revision is reconstructed. In that attempt, Golem does not try an older snapshot or switch to full replay. A component service that does not answer, a temporary storage error, or no free memory on the executor writes no failed outcome: the start retries with the same record. A target revision that does not exist or that the component service refuses fails the update with a code (see below). While the start replays the history, the agent keeps the status that it had before the restart. An idle agent stays `Idle`, so an interrupt during that replay is ignored: no `Interrupted` entry and no failed outcome are written, and the update completes without a resume. When the agent moves to another executor during the replay, that executor runs the attempt again. One case fails the start instead of the update: a full replay whose authoritative baseline cannot be restored fails the start of the agent with a visible cause.
+7. If the attempt fails, one failed outcome is recorded and the healthy source revision is reconstructed. In that attempt, Golem does not try an older snapshot or switch to full replay. A component service that does not answer, a temporary storage error, or no free memory on the executor writes no failed outcome: the start retries with the same record. A target revision that does not exist or that the component service refuses, or an initial file of the target that the blob storage refuses, fails the update with a code (see below). While the start replays the history, the agent keeps the status that it had before the restart. An idle agent stays `Idle`, so an interrupt during that replay is ignored: no `Interrupted` entry and no failed outcome are written, and the update completes without a resume. When the agent moves to another executor during the replay, that executor runs the attempt again. One case fails the start instead of the update: a full replay whose authoritative baseline cannot be restored fails the start of the agent with a visible cause.
 
 `--await` waits for that terminal success or failure, including a repeated request for the same target. Reverting away an outcome while retaining the request makes the request pending and retryable again. Snapshot assistance bounds historical replay to the suffix after the selected snapshot; it does not guarantee a wall-clock update bound.
 
@@ -171,6 +173,7 @@ The details of a failed update start with a code for these causes. `golem agent 
 | `UPDATE_SNAPSHOT_UNAVAILABLE` | manual | The store lost the filesystem snapshot of the manual update | Request the manual update again; it takes a new snapshot |
 | `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` | auto, manual | The update needs a filesystem snapshot, and the executor has no filesystem snapshots | Run the update on an executor with filesystem snapshots |
 | `UPDATE_SNAPSHOT_RESTORE_FAILED` | auto, manual | The filesystem snapshot did not restore on this executor, or its local disk is full | Request the update again (after the disk has space) |
+| `UPDATE_BLOB_STORAGE_REFUSED` | auto, manual | At the update point, the blob storage refused the executor a read of an initial file of the target, for example access denied or a missing bucket; the text names the refusal | Fix the blob storage, then request the update again |
 | `UPDATE_TARGET_NOT_FOUND` | auto, manual | The target revision does not exist | Request an update to an existing revision |
 | `UPDATE_TARGET_REFUSED` | auto, manual | The component service refused the target revision; the text names the kind | Check the executor's access to the component service and the target revision, then request the update again |
 

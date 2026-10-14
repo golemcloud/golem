@@ -86,7 +86,7 @@ val receipt = writer.append(List("one", "two"), close = true)
 
 Use `DurableStreams.bytes` and `byteWriter` for byte streams. Byte and transport batch boundaries
 are not application boundaries. `DurableStreamReadOptions` configures opaque checkpoint/cursor,
-long-poll/SSE after catch-up, timeout, idle delay, and retry budget. Readers are ordinary affine
+long-poll/SSE after catch-up, timeout, idle delay, and retries. Readers are ordinary affine
 `AgentStream`s; call `close()` when stopping early.
 
 Writers preserve one immutable uncertain request and expose `append`, `close`, `retryPending`,
@@ -95,14 +95,17 @@ pending tuple/body. Resolve it before different data. Exact acknowledgement adva
 `nextOffset = None` remains valid. Disposal does not close or undo the remote stream.
 
 Only timeout, transport, rate-limit, and unavailable errors retry, using durable exponential
-backoff and retry-after within a bounded budget. Replay reconstructs checkpoints, buffered data,
-producer state, pending requests, and retry budget without repeating completed HTTP effects. Do
+backoff and retry-after. `DurableStreamRetry()` retries 8 times after the first attempt, with a
+delay that starts at 100 ms and doubles up to 30 s; a longer retry-after wins.
+`DurableStreamRetry(maxRetries = 0)` disables retries. Replay reconstructs checkpoints, buffered
+data, producer state, pending requests, and retry count without repeating completed HTTP effects. Do
 not wrap the calls in custom durability or atomic scopes.
 
 Pass configured `golem.config.Secret[String]` directly as `auth = Some(config.token)`. The SDK
 borrows the host capability and never reveals plaintext; do not call `get`. HTTPS is required
-except when the host is exactly `localhost` or a loopback IP; a name such as `app.localhost` is not
-exempt. Redirects and URL userinfo are rejected.
+except when the host is `localhost`, a dot-delimited subdomain such as `app.localhost`, or a
+loopback IP. Localhost names are case-insensitive and may have one terminal DNS dot. The URL
+authority stays unchanged. Redirects and URL userinfo are rejected.
 
 ```shell
 golem build

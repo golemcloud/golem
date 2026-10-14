@@ -86,6 +86,217 @@ fn obj(fields : Array[(String, Json)]) -> Json {
 // --- Encoding ------------------------------------------------------------
 
 ///|
+pub fn schema_value_render(value : SchemaValue) -> String {
+  let output = StringBuilder()
+  schema_value_write_json(value, output)
+  output.to_string()
+}
+
+///|
+fn schema_value_write_json(value : SchemaValue, output : StringBuilder) -> Unit {
+  fn string(value : String) {
+    output.write_string(Json::string(value).stringify())
+  }
+  fn node(kind : String, body : () -> Unit) {
+    output <+ "{\"kind\":\"\{kind}\",\"value\":"
+    body()
+    output.write_char('}')
+  }
+  fn children(kind : String, field : String, values : Array[SchemaValue]) {
+    node(kind, () => {
+      output <+ "{\"\{field}\":["
+      for index, value in values {
+        if index != 0 {
+          output.write_char(',')
+        }
+        schema_value_write_json(value, output)
+      }
+      output.write_string("]}")
+    })
+  }
+  fn optional(value : SchemaValue?) {
+    match value {
+      Some(value) => schema_value_write_json(value, output)
+      None => output.write_string("null")
+    }
+  }
+  match value {
+    BoolValue(v) => node("bool", () => output <+ "\{v}")
+    S8Value(v) => node("s8", () => output <+ "\{v}")
+    S16Value(v) => node("s16", () => output <+ "\{v}")
+    S32Value(v) => node("s32", () => output <+ "\{v}")
+    S64Value(v) => node("s64", () => string(v.to_string()))
+    U8Value(v) => node("u8", () => output <+ "\{v}")
+    U16Value(v) => node("u16", () => output <+ "\{v}")
+    U32Value(v) => node("u32", () => output <+ "\{v}")
+    U64Value(v) => node("u64", () => string(v.to_string()))
+    F32Value(v) =>
+      node("f32", () => output.write_string(json_float(v).stringify()))
+    F64Value(v) =>
+      node("f64", () => output.write_string(json_double(v).stringify()))
+    CharValue(v) =>
+      node("char", () => string(String::from_array([v.unsafe_to_char()])))
+    StringValue(v) => node("string", () => string(v))
+    UuidValue(v) => node("uuid", () => string(v))
+    RecordValue(v) => children("record", "fields", v)
+    TupleValue(v) => children("tuple", "elements", v)
+    ListValue(v) => children("list", "elements", v)
+    FixedListValue(v) => children("fixed-list", "elements", v)
+    VariantValue(index, payload) =>
+      node("variant", () => {
+        output <+ "{\"case\":\{index}"
+        match payload {
+          Some(value) => {
+            output.write_string(",\"payload\":")
+            schema_value_write_json(value, output)
+          }
+          None => ()
+        }
+        output.write_char('}')
+      })
+    EnumValue(index) => node("enum", () => output <+ "{\"case\":\{index}}")
+    FlagsValue(bits) =>
+      node("flags", () => {
+        output.write_string("{\"bits\":[")
+        for index, bit in bits {
+          if index != 0 {
+            output.write_char(',')
+          }
+          output <+ "\{bit}"
+        }
+        output.write_string("]}")
+      })
+    MapValue(entries) =>
+      node("map", () => {
+        output.write_string("{\"entries\":[")
+        for index, entry in entries {
+          if index != 0 {
+            output.write_char(',')
+          }
+          output.write_char('[')
+          schema_value_write_json(entry.key, output)
+          output.write_char(',')
+          schema_value_write_json(entry.value, output)
+          output.write_char(']')
+        }
+        output.write_string("]}")
+      })
+    OptionValue(inner) =>
+      node("option", () => {
+        output.write_string("{\"inner\":")
+        optional(inner)
+        output.write_char('}')
+      })
+    ResultValue(result) =>
+      node("result", () => {
+        let (tag, payload) = match result {
+          ResultOk(value) => ("ok", value)
+          ResultErr(value) => ("err", value)
+        }
+        output <+ "{\"tag\":\"\{tag}\",\"value\":"
+        optional(payload)
+        output.write_char('}')
+      })
+    TextValue(text, language) =>
+      node("text", () => {
+        output.write_char('{')
+        match language {
+          Some(language) => {
+            output.write_string("\"language\":")
+            string(language)
+            output.write_char(',')
+          }
+          None => ()
+        }
+        output.write_string("\"text\":")
+        string(text)
+        output.write_char('}')
+      })
+    BinaryValue(bytes, mime) =>
+      node("binary", () => {
+        output.write_string("{\"bytes\":[")
+        for index, byte in bytes {
+          if index != 0 {
+            output.write_char(',')
+          }
+          output <+ "\{byte.to_int()}"
+        }
+        output.write_char(']')
+        match mime {
+          Some(mime) => {
+            output.write_string(",\"mimeType\":")
+            string(mime)
+          }
+          None => ()
+        }
+        output.write_char('}')
+      })
+    PathValue(v) =>
+      node("path", () => {
+        output.write_string("{\"path\":")
+        string(v)
+        output.write_char('}')
+      })
+    UrlValue(v) =>
+      node("url", () => {
+        output.write_string("{\"url\":")
+        string(v)
+        output.write_char('}')
+      })
+    DatetimeValue(v) =>
+      node("datetime", () => {
+        output.write_string("{\"value\":")
+        string(v)
+        output.write_char('}')
+      })
+    DurationValue(v) =>
+      node("duration", () => {
+        output.write_string("{\"nanoseconds\":")
+        string(v.to_string())
+        output.write_char('}')
+      })
+    QuantityValue(mantissa, scale, unit) =>
+      node("quantity", () => {
+        output.write_string("{\"mantissa\":")
+        string(mantissa.to_string())
+        output <+ ",\"scale\":\{scale},\"unit\":"
+        string(unit)
+        output.write_char('}')
+      })
+    StreamReferenceValue(provisional, token) =>
+      node("stream", () => {
+        output.write_char('{')
+        match provisional {
+          Some(v) => {
+            output.write_string("\"provisionalRef\":")
+            string(v)
+          }
+          None => ()
+        }
+        match token {
+          Some(v) => {
+            if provisional is Some(_) {
+              output.write_char(',')
+            }
+            output.write_string("\"streamToken\":")
+            string(v)
+          }
+          None => ()
+        }
+        output.write_char('}')
+      })
+    UnionValue(tag, body) =>
+      node("union", () => {
+        output.write_string("{\"body\":")
+        schema_value_write_json(body, output)
+        output.write_string(",\"tag\":")
+        string(tag)
+        output.write_char('}')
+      })
+  }
+}
+
+///|
 /// Encodes a [SchemaValue] into the server's schema-native JSON wire form.
 pub fn schema_value_to_json(value : SchemaValue) -> Json {
   match value {

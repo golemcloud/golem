@@ -30,7 +30,7 @@ golem new . --template <template-name> --component-name my:component
 
 See [Defining components](/next/develop/defining-components) and the language-specific SDK pages for implementation guidance.
 
-<Cards num={2}>
+<Cards num={3}>
   <Cards.Card title="Tool authoring and lifecycle" href="/next/develop/tool-authoring" />
   <Cards.Card title="HTTP routers and files" href="/next/invoke/http-routers" />
   <Cards.Card title="External Durable Streams" href="/next/develop/durable-streams" />
@@ -69,7 +69,20 @@ Deployments reconcile the application manifest as one application-level operatio
 
 </Steps>
 
-See [Deployment](/next/cli/app-manifest#build-and-deploy) for environment selection and destructive post-deployment options.
+### Choose what happens to existing agents
+
+By default, `golem deploy` activates the new component revisions and leaves existing agents on their current revision with their current state. To change existing agents during a deployment, pass one of these mutually exclusive flags:
+
+| Flag | Effect on existing agents | Typical use |
+|------|---------------------------|-------------|
+| `--update-agents auto` | Updates agents in place. Golem starts from the latest eligible periodic snapshot, or replays retained history when none is available. State is preserved. | Compatible code changes in shared or production environments |
+| `--update-agents manual` | Updates agents in place through a snapshot-based migration that your code implements. State is preserved. | Breaking changes with a migration |
+| `--redeploy-agents` | Deletes every agent and recreates it with the same name, environment variables, and configuration on the new revision. State is lost. | Development, when the agent list matters but state does not |
+| `--reset` | Deploys, then deletes existing agents of the deployed components. Their state is lost, and agents are not recreated until invoked. The environment is retained. | Clear agent state in local development or CI |
+
+`--reset` does not clear domains, HTTP and MCP deployments, secrets, retry policies, or plugins. The deployment still reconciles the manifest and can update these resources. Reset also permits incompatible component configuration changes and replacement of incompatible agent secrets; it is not a new environment or a reset of component revision history.
+
+See [Deployment](/next/cli/app-manifest#build-and-deploy) for environment selection, [Updating agents](/next/develop/updating) for the update model, and the [Redeploying existing agents](/next/how-to-guides/common/golem-redeploy-agents) and [Updating running agents](/next/how-to-guides/common/golem-update-running-agents) guides.
 
 ## Expose an API
 
@@ -77,13 +90,27 @@ Define HTTP endpoints in agent code, then configure HTTP and MCP deployments in 
 
 Start with [Defining custom APIs](/next/invoke/making-custom-apis), then see the [application manifest reference](/next/app-manifest) for the deployment fields.
 
-Direct invocation remains available when an application does not need a public endpoint. See [Invoke](/next/invoke) and [Agent-to-agent communication](/next/concepts/agent-to-agent-communication).
+Direct invocation remains available when an application does not need a public endpoint. See [Invoke](/next/invoke) and [Agent communication](/next/concepts/communication).
 
 ## Next steps
 
+Topics most applications need after their first deployment:
+
+| Topic | Guide |
+|-------|-------|
+| Outgoing HTTP requests | [HTTP client](/next/develop/http) |
+| Durability controls | [Durability](/next/develop/durability) |
+| Retry policies | [Retries](/next/develop/retries) |
+| Atomic regions and compensation | [Transactions](/next/develop/transactions) |
+| Waiting for people and external events | [Promises](/next/develop/promises) and [Webhooks](/next/develop/webhooks) |
+| Calling other agents | [Agent to agent communication](/next/develop/rpc) |
+| Files and embedded databases | [Agent filesystem](/next/develop/agent-filesystem) and [Embedded databases](/next/develop/embedded-databases) |
+| Model providers | [Using AI providers](/next/develop/ai) |
+| Tools and their security model | [Tool authoring](/next/develop/tool-authoring) and [Tool security model](/next/develop/tool-security) |
+| Authority | [Cards reference](/next/develop/cards) and [Configuration and secrets](/next/develop/config-and-secrets) |
+| Parallel work | [Forking agents](/next/develop/forking) |
+
 <Cards num={2}>
   <Cards.Card title="Application manifest" href="/next/cli/app-manifest" />
-  <Cards.Card title="Agents" href="/next/concepts/agents" />
-  <Cards.Card title="Durability" href="/next/develop/durability" />
-  <Cards.Card title="Configuration and secrets" href="/next/develop/config-and-secrets" />
+  <Cards.Card title="Concepts: Agents" href="/next/concepts/agents" />
 </Cards>

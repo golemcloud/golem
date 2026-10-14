@@ -16,6 +16,7 @@ use crate::durable_host::authorization::targets::{agent_worker_target, oplog_tar
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable, ResolvedCall,
     drain_dropped_call_events_access, drain_queued_dropped_call_events,
+    reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::suspendable_wait::{
@@ -1298,9 +1299,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         revert_target: golem_api_1_x::host::RevertAgentTarget,
     ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
         let agent_id: AgentId = agent_id.into();
+        let is_self = agent_id == self.owned_agent_id.agent_id;
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-        let mut resolved_revert = if self.state.is_live() {
+        let mut resolved_revert = if self.state.is_live() && !is_self {
             match &target {
                 golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(_) => None,
                 golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) => {
@@ -1339,6 +1341,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
         let denied = self.state.is_live()
+            && !is_self
             && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource).await?;
 
         let mut handle =
@@ -1365,12 +1368,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if denied {
+            if is_self || denied {
                 break 'result handle
                     .complete(
                         self,
                         HostResponseGolemApiUnit {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                            result: Err(if is_self {
+                                "Self-revert is not supported; revert this agent through the external API or CLI"
+                                    .to_string()
+                            } else {
+                                AGENT_OPERATION_PERMISSION_DENIED.to_string()
+                            }),
                         },
                     )
                     .await?;
@@ -1673,6 +1681,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &target_agent_id,
                         oplog_index_cut_off,
                         copied_scope_start,
+                        handle.invocation_id(),
                         forked_phantom_id,
                         handle.agent_auth_ctx(),
                     )
@@ -1881,6 +1890,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
         accessor: &Accessor<U, Self>,
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Vec<u8>> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let resource_rep = resource.rep();
         let (entry, self_agent_id) = accessor.with(|mut access| {
             let ctx = access.get();

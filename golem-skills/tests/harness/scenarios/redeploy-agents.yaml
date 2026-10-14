@@ -17,6 +17,7 @@ steps:
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
+        go: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:
@@ -51,6 +52,7 @@ steps:
         ts: *get-counter-agent-args
         scala: *get-counter-agent-args
         moonbit: *get-counter-agent-args
+        go: *get-counter-agent-args
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -69,6 +71,7 @@ steps:
       ts: *change-increment-prompt
       scala: *change-increment-prompt
       moonbit: *change-increment-prompt
+      go: *change-increment-prompt
     verify:
       deploy: true
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{TestContext, cmd, flag, replace_string_in_file};
+use crate::app::{TestContext, cmd, flag};
 use crate::workspace_path;
 use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_cli::{fs, versions};
@@ -200,6 +200,16 @@ async fn invoke<T: FromSchema>(
 }
 
 async fn invoke_template<T: FromSchema>(ctx: &TestContext, method: &str, values: Vec<Value>) -> T {
+    invoke_template_raw(ctx, method, values.iter().map(Value::to_string).collect()).await
+}
+
+/// Invokes the template agent with arguments already written in its source
+/// language's syntax.
+async fn invoke_template_raw<T: FromSchema>(
+    ctx: &TestContext,
+    method: &str,
+    values: Vec<String>,
+) -> T {
     let mut args = vec![
         flag::YES.to_owned(),
         cmd::AGENT.to_owned(),
@@ -207,7 +217,7 @@ async fn invoke_template<T: FromSchema>(ctx: &TestContext, method: &str, values:
         "StreamingAgent(\"external\")".to_owned(),
         method.to_owned(),
     ];
-    args.extend(values.iter().map(Value::to_string));
+    args.extend(values);
     args.extend([
         "--no-stream".to_owned(),
         flag::FORMAT.to_owned(),
@@ -266,16 +276,22 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
     assert!(!readme.contains("ORIGIN=http://app-name.localhost:9006"));
     assert!(ctx.cli([flag::YES, cmd::BUILD]).await.success_or_dump());
     ctx.start_server().await;
-    replace_string_in_file(
-        ctx.cwd_path_join("golem.yaml"),
-        &format!("subdomain: {app_name}"),
-        &format!("domain: localhost:{}", ctx.custom_request_port()),
-    )
-    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["localServer"]["customRequestPort"] = ctx.custom_request_port().into();
+    fs::write_str(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
     assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let origin = format!("http://localhost:{}", ctx.custom_request_port());
+    let hostname = format!("{app_name}.localhost");
+    // Only the test-process setup client needs an address override. Guest calls
+    // below use the executor's production transport with the original authority.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .resolve(&hostname, "127.0.0.1:0".parse().unwrap())
+        .build()
+        .unwrap();
+    let origin = format!("http://{hostname}:{}", ctx.custom_request_port());
     let base = format!("{origin}/durable-stream-agents/protocol/echo/invocations/template-session");
     let source = format!("{base}/streams/input");
     assert_eq!(
@@ -329,29 +345,70 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
         [json!("echo:shared"), json!("echo:fork-only")]
     );
 
-    let server = ReferenceServer::start().await;
-    let external = server.create("/template", "application/json").await;
-    let append_args = vec![
-        json!(external),
-        json!("stable-template-producer"),
-        json!(["once"]),
-        json!(false),
-    ];
-    let first: Option<String> = invoke_template(&ctx, append, append_args.clone()).await;
-    assert!(first.is_some());
-    let duplicate: Option<String> = invoke_template(&ctx, append, append_args).await;
-    assert_eq!(duplicate, None);
-    let _: Option<String> = invoke_template(
+    // Arguments are written in the template's source language: Go spells a
+    // list `{…}`, the others as JSON.
+    let list = |items: &[&str]| {
+        if language == "go" {
+            let items: Vec<String> = items.iter().map(|item| json!(item).to_string()).collect();
+            format!("{{{}}}", items.join(", "))
+        } else {
+            json!(items).to_string()
+        }
+    };
+    let guest_base =
+        format!("{origin}/durable-stream-agents/protocol/echo/invocations/guest-local-session");
+    let guest_source = format!("{guest_base}/streams/input");
+    assert_eq!(
+        client.put(&guest_source).send().await.unwrap().status(),
+        reqwest::StatusCode::CREATED
+    );
+    // Closing the small batch before reading avoids the separate open-stream
+    // flag interoperability issue and keeps the entire payload in one batch.
+    let offset: Option<String> = invoke_template_raw(
         &ctx,
         append,
         vec![
-            json!(external),
-            json!("closer"),
-            json!(["tail"]),
-            json!(true),
+            json!(guest_source).to_string(),
+            json!("guest-local-producer").to_string(),
+            list(&["local-first", "local-tail"]),
+            true.to_string(),
         ],
     )
     .await;
+    assert!(offset.is_some());
+    let values: Vec<String> = invoke_template(&ctx, read, vec![json!(guest_source)]).await;
+    assert_eq!(values, ["local-first", "local-tail"]);
+    assert_eq!(
+        wait_for_closed_json(&client, &format!("{guest_base}/streams/$result")).await,
+        [json!("echo:local-first"), json!("echo:local-tail")]
+    );
+
+    let server = ReferenceServer::start().await;
+    let external = server.create("/template", "application/json").await;
+    let append_args = |producer: &str, item: &str, close: bool| {
+        vec![
+            json!(external).to_string(),
+            json!(producer).to_string(),
+            list(&[item]),
+            close.to_string(),
+        ]
+    };
+    let first: Option<String> = invoke_template_raw(
+        &ctx,
+        append,
+        append_args("stable-template-producer", "once", false),
+    )
+    .await;
+    assert!(first.is_some());
+    let duplicate: Option<String> = invoke_template_raw(
+        &ctx,
+        append,
+        append_args("stable-template-producer", "once", false),
+    )
+    .await;
+    assert_eq!(duplicate, None);
+    let _: Option<String> =
+        invoke_template_raw(&ctx, append, append_args("closer", "tail", true)).await;
     let values: Vec<String> = invoke_template(&ctx, read, vec![json!(external)]).await;
     assert_eq!(values, ["once", "tail"]);
     let requests = server.requests().await;
@@ -370,16 +427,367 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
 
 #[test]
 #[timeout("40 minutes")]
-async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
-    for (language, append, read) in [
-        ("rust", "append_external", "read_external"),
-        ("ts", "appendExternal", "readExternal"),
-        ("effect", "appendExternal", "readExternal"),
-        ("scala", "appendExternal", "readExternal"),
-        ("moonbit", "append_external", "read_external"),
-    ] {
-        streaming_template_walkthrough(language, append, read).await;
+async fn rust_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("rust", "append_external", "read_external").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn typescript_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("ts", "appendExternal", "readExternal").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn effect_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("effect", "appendExternal", "readExternal").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn scala_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("scala", "appendExternal", "readExternal").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn moonbit_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("moonbit", "append_external", "read_external").await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn go_streaming_template_durable_streams_walkthrough() {
+    streaming_template_walkthrough("go", "appendExternal", "readExternal").await;
+}
+
+/// A Go agent appends to and reads from an external Durable Stream, with its
+/// bearer token held as a config secret, as the streaming templates do.
+#[test]
+#[timeout("20 minutes")]
+async fn go_external_durable_streams_e2e() {
+    let mut ctx = TestContext::new();
+    fs::create_dir_all(ctx.cwd_path_join("go-durable-streams")).unwrap();
+    ctx.cd("go-durable-streams");
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go"])
+            .await
+            .success_or_dump()
+    );
+    let component = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .chain(std::iter::once(ctx.cwd_path().to_path_buf()))
+        .find(|path| path.join("go.mod").exists())
+        .expect("the Go component directory");
+    let module = fs::read_to_string(component.join("go.mod"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .unwrap();
+    fs::remove(component.join("agents")).unwrap();
+    fs::write_str(
+        component.join("streaming/streaming.go"),
+        include_str!("go_durable_streams.go"),
+    )
+    .unwrap();
+    fs::write_str(
+        component.join("main.go"),
+        format!("package main\n\nimport _ \"{module}/streaming\"\n\nfunc main() {{}}\n"),
+    )
+    .unwrap();
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let original = fs::read_to_string(&manifest).unwrap();
+    let body = original.split("\nhttpApi:").next().unwrap().to_string();
+    fs::write_str(
+        &manifest,
+        format!("{body}\nsecretDefaults:\n  local:\n    externalAuth: \"{TEST_TOKEN}\"\n"),
+    )
+    .unwrap();
+    ctx.start_server().await;
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let server = ReferenceServer::start().await;
+    let external = server.create("/go", "application/json").await;
+    // Go agents read their arguments in Go syntax: a list is `{…}`.
+    let url = json!(external).to_string();
+    let append_args = vec![
+        url.clone(),
+        r#""stable-go-producer""#.to_string(),
+        r#"{"once"}"#.to_string(),
+        "false".to_string(),
+    ];
+    let first: Option<String> =
+        invoke_template_raw(&ctx, "appendExternal", append_args.clone()).await;
+    assert!(first.is_some());
+    let duplicate: Option<String> = invoke_template_raw(&ctx, "appendExternal", append_args).await;
+    assert_eq!(duplicate, None);
+    let _: Option<String> = invoke_template_raw(
+        &ctx,
+        "appendExternal",
+        vec![
+            url.clone(),
+            r#""closer""#.to_string(),
+            r#"{"tail"}"#.to_string(),
+            "true".to_string(),
+        ],
+    )
+    .await;
+    let values: Vec<String> = invoke_template(&ctx, "readExternal", vec![json!(external)]).await;
+    assert_eq!(values, ["once", "tail"]);
+    let requests = server.requests().await;
+    assert!(
+        requests
+            .iter()
+            .any(|r| r["producerId"] == "stable-go-producer")
+    );
+    for method in ["GET", "POST"] {
+        assert!(requests.iter().any(|r| {
+            r["path"] == "/go" && r["method"] == method && r["authenticated"] == true
+        }));
     }
+    server.stop().await;
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn external_durable_streams_golem_gateway_e2e() {
+    let mut ctx = TestContext::new();
+    for name in ["external-durable-streams", "agent-sdk-rust"] {
+        let fixture = workspace_path().join(format!(
+            "test-components/golem_it_{}_release.wasm",
+            name.replace('-', "_")
+        ));
+        assert!(
+            fixture.is_file(),
+            "build test-components/{name} before running this test"
+        );
+        fs::copy(&fixture, ctx.cwd_path_join(format!("{name}.wasm"))).unwrap();
+    }
+    ctx.start_server().await;
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: external-durable-streams-gateway
+        environments:
+          local:
+            server: local
+        components:
+          golem-it:external-durable-streams:
+            componentWasm: external-durable-streams.wasm
+            outputWasm: external-durable-streams-final.wasm
+          golem-it:agent-sdk-rust:
+            componentWasm: agent-sdk-rust.wasm
+            outputWasm: agent-sdk-rust-final.wasm
+        httpApi:
+          deployments:
+            local:
+              - domain: localhost:{port}
+                agents:
+                  DurableStreamAgent: {{}}
+    "#, version = versions::sdk::MANIFEST, port = ctx.custom_request_port()},
+    )
+    .unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let origin = format!("http://localhost:{}", ctx.custom_request_port());
+
+    for transport in ["catch-up", "long-poll"] {
+        let session =
+            format!("{origin}/durable-stream-agents/{transport}/echo/invocations/session");
+        let input = format!("{session}/streams/input");
+        let output = format!("{session}/streams/output");
+        let created = client.put(&input).send().await.unwrap();
+        assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+        assert!(!created.headers().contains_key("stream-closed"));
+        for method in [reqwest::Method::HEAD, reqwest::Method::GET] {
+            let metadata = client
+                .request(method.clone(), &session)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(metadata.status(), reqwest::StatusCode::OK);
+            assert!(!metadata.headers().contains_key("stream-closed"));
+            if method == reqwest::Method::GET {
+                assert_eq!(metadata.json::<Value>().await.unwrap()["closed"], false);
+            }
+        }
+        let appended: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            &format!("writer-{transport}"),
+            "append_json",
+            vec![
+                json!(input),
+                json!("open-producer"),
+                json!(["\"open\""]),
+                json!(false),
+            ],
+        )
+        .await;
+        assert!(appended.unwrap()[0].is_some());
+        // A bounded guest read returns data before closure. Returning early as EOF
+        // would lose the item; waiting for EOF would time out this invocation.
+        let open: Result<Vec<String>, String> = invoke(
+            &ctx,
+            &format!("open-reader-{transport}"),
+            "consume_json",
+            vec![json!(input), json!("-1"), json!(transport), json!(1)],
+        )
+        .await;
+        assert_eq!(open.unwrap(), ["\"open\""]);
+        let head = client.head(&input).send().await.unwrap();
+        assert_eq!(head.status(), reqwest::StatusCode::OK);
+        assert!(!head.headers().contains_key("stream-closed"));
+        let offset = head.headers()["stream-next-offset"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        let closed: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            &format!("closer-{transport}"),
+            "append_json",
+            vec![
+                json!(input),
+                json!("close-producer"),
+                json!([]),
+                json!(true),
+            ],
+        )
+        .await;
+        assert!(closed.unwrap()[0].is_some());
+        // The limit exceeds the item count, so these calls must observe EOF.
+        let eof: Result<Vec<String>, String> = invoke(
+            &ctx,
+            &format!("eof-reader-{transport}"),
+            "consume_json",
+            vec![json!(input), json!(offset), json!(transport), json!(100)],
+        )
+        .await;
+        assert!(eof.unwrap().is_empty());
+        let echoed: Result<Vec<String>, String> = invoke(
+            &ctx,
+            &format!("output-reader-{transport}"),
+            "consume_json",
+            vec![json!(output), json!("-1"), json!(transport), json!(100)],
+        )
+        .await;
+        assert_eq!(echoed.unwrap(), ["\"open\""]);
+        let metadata = client.head(&session).send().await.unwrap();
+        assert_eq!(metadata.status(), reqwest::StatusCode::OK);
+        assert_eq!(metadata.headers()["stream-closed"], "true");
+        let manifest = client.get(&session).send().await.unwrap();
+        assert_eq!(manifest.headers()["stream-closed"], "true");
+        assert_eq!(manifest.json::<Value>().await.unwrap()["closed"], true);
+    }
+
+    // Forward real gateway responses unchanged. Observe a live request before
+    // appending, and its data response before closing, not the initial catch-up.
+    let (responses, mut observed) = tokio::sync::mpsc::unbounded_channel();
+    let gateway = origin.clone();
+    let forwarder = client.clone();
+    let proxy = axum::Router::new().fallback(move |request: axum::extract::Request| {
+        let responses = responses.clone();
+        let gateway = gateway.clone();
+        let forwarder = forwarder.clone();
+        async move {
+            let long_poll = request
+                .uri()
+                .query()
+                .is_some_and(|query| query.split('&').any(|part| part == "live=long-poll"));
+            if long_poll {
+                let _ = responses.send(None);
+            }
+            let mut headers = request.headers().clone();
+            headers.remove(reqwest::header::HOST);
+            let response = forwarder
+                .get(format!("{gateway}{}", request.uri()))
+                .headers(headers)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response.bytes().await.unwrap();
+            if long_poll && status.is_success() && !headers.contains_key("stream-closed") {
+                let _ = responses.send(Some((status, body.clone())));
+            }
+            let mut response = axum::response::Response::new(axum::body::Body::from(body));
+            *response.status_mut() = status;
+            *response.headers_mut() = headers;
+            response
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let proxy_task = tokio::spawn(async move { axum::serve(listener, proxy).await.unwrap() });
+    let path = "/durable-stream-agents/live/echo/invocations/session/streams/input";
+    let input = format!("{origin}{path}");
+    assert_eq!(
+        client.put(&input).send().await.unwrap().status(),
+        reqwest::StatusCode::CREATED
+    );
+    let proxy_input = format!("http://127.0.0.1:{port}{path}");
+    let read = invoke::<Result<Vec<String>, String>>(
+        &ctx,
+        "live-reader",
+        "consume_json",
+        vec![
+            json!(proxy_input),
+            json!("-1"),
+            json!("long-poll"),
+            json!(100),
+        ],
+    );
+    let write = async {
+        let started = tokio::time::timeout(Duration::from_secs(30), observed.recv())
+            .await
+            .expect("guest did not send a long-poll request")
+            .unwrap();
+        assert!(started.is_none());
+        let appended: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            "live-writer",
+            "append_json",
+            vec![
+                json!(input),
+                json!("live-producer"),
+                json!(["\"live\""]),
+                json!(false),
+            ],
+        )
+        .await;
+        assert!(appended.unwrap()[0].is_some());
+        let (status, body) = tokio::time::timeout(Duration::from_secs(30), observed.recv())
+            .await
+            .expect("guest did not read the append through long-poll while open")
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, reqwest::StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!(["live"])
+        );
+        let closed: Result<Vec<Option<String>>, String> = invoke(
+            &ctx,
+            "live-closer",
+            "append_json",
+            vec![
+                json!(input),
+                json!("live-close-producer"),
+                json!([]),
+                json!(true),
+            ],
+        )
+        .await;
+        assert!(closed.unwrap()[0].is_some());
+    };
+    let (read, ()) = tokio::join!(read, write);
+    assert_eq!(read.unwrap(), ["\"live\""]);
+    proxy_task.abort();
+    let _ = proxy_task.await;
 }
 
 #[test]

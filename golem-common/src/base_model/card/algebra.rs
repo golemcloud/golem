@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::card::owner::OwnerPattern;
 use crate::base_model::card::recipient::RecipientPattern;
-use crate::base_model::card::{Card, CardId, PermissionPattern, PermissionTarget};
+use crate::base_model::card::{
+    Card, CardId, PermissionPattern, PermissionTarget, ToolResourcePattern,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -21,6 +24,7 @@ use serde::{Deserialize, Serialize};
 pub enum CardAlgebraError {
     InvalidOwnerPath(String),
     InvalidRecipientPath(String),
+    ToolPattern(String),
     LowerBoundTooBroad {
         grant: Box<PermissionPattern>,
     },
@@ -38,25 +42,63 @@ pub struct GrantSurface {
 
 impl GrantSurface {
     pub fn allows(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
-        let granted = self.positive.iter().any(|grant| grant.subsumes(request));
+        let granted = matches_any(&self.positive, request, false)?;
         if !granted {
             return Ok(false);
         }
 
-        let denied = self.negative.iter().any(|grant| grant.subsumes(request));
+        let denied = matches_any(&self.negative, request, true)?;
         Ok(!denied)
     }
 
     pub fn allows_ceiling(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
-        let granted =
-            self.positive.is_empty() || self.positive.iter().any(|grant| grant.subsumes(request));
+        let granted = self.positive.is_empty() || matches_any(&self.positive, request, false)?;
         if !granted {
             return Ok(false);
         }
 
-        let denied = self.negative.iter().any(|grant| grant.subsumes(request));
+        let denied = matches_any(&self.negative, request, true)?;
         Ok(!denied)
     }
+}
+
+fn matches_any(
+    grants: &[PermissionTarget],
+    request: &PermissionTarget,
+    denial: bool,
+) -> Result<bool, CardAlgebraError> {
+    for grant in grants {
+        let matches = match (grant, request) {
+            (PermissionTarget::Tool(grant), PermissionTarget::Tool(request))
+                if matches!(request.resource, ToolResourcePattern::Request(_)) =>
+            {
+                if !grant.owner.subsumes(&request.owner)
+                    || (grant.verb.is_some() && grant.verb != request.verb)
+                {
+                    false
+                } else {
+                    match (&grant.resource, &request.resource) {
+                        (ToolResourcePattern::AnyInvocation, _) => true,
+                        (
+                            ToolResourcePattern::Invocation(pattern),
+                            ToolResourcePattern::Request(invocation),
+                        ) => if denial {
+                            pattern.possibly_matches(invocation)
+                        } else {
+                            pattern.definitely_matches(invocation)
+                        }
+                        .map_err(|e| CardAlgebraError::ToolPattern(e.to_string()))?,
+                        _ => false,
+                    }
+                }
+            }
+            _ => grant.subsumes(request),
+        };
+        if matches {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]

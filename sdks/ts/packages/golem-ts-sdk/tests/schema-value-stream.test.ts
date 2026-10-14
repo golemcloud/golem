@@ -131,12 +131,21 @@ describe('schema-native AgentStream', () => {
     const failingSource = Object.assign(emptyWireStream(), { failWrap: true });
     const first = new GuestSchemaValueStreamHandle({ kind: 'native', value: firstSource });
     const failing = new GuestSchemaValueStreamHandle({ kind: 'native', value: failingSource });
+    const later = nativeHandle();
 
     await expect(
-      schemaValueToWitAsync(v.tuple([v.stream(first), v.stream(failing)])),
+      schemaValueToWitAsync(
+        v.tuple([
+          v.list(Array.from({ length: 10000 }, (_, i) => v.u8((i * 37 + 19) % 256))),
+          v.option(v.stream(first)),
+          v.map([{ key: v.string('failed'), value: v.err(v.stream(failing)) }]),
+          v.stream(later),
+        ]),
+      ),
     ).rejects.toThrow('test schema value stream wrap failure');
     expect(disposed).toBe(1);
     expect(first.peek()).toBeUndefined();
+    expect(later.peek()).toBeDefined();
   });
 
   it('passes an unread wrapped stream through without replacing it', async () => {

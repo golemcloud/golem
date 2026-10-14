@@ -71,7 +71,7 @@ pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> 
 #[allow(clippy::large_enum_variant)]
 pub enum InvocationMode {
     /// The invocation is happening live and should write oplog markers.
-    Live(AgentInvocation),
+    Live(crate::worker::HydratedInvocation),
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
 }

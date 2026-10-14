@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::go_inputs;
+use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    InjectToPrebuiltQuickJsCommandMarkerHash, MoonInstallDepsMarkerHash, NpmInstallDepsMarkerHash,
-    PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
+    GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonInstallDepsMarkerHash,
+    NpmInstallDepsMarkerHash, PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
+    TaskResultMarker,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
@@ -26,6 +29,7 @@ use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
+use crate::model::language::GuestLanguage;
 use crate::process::{CommandExt, normalized_program_name, resolve_command_for_execution, which};
 use anyhow::{Context as AnyhowContext, anyhow};
 use camino::Utf8Path;
@@ -39,14 +43,12 @@ pub async fn execute_build_command(
     component_name: &ComponentName,
     command: &app_raw::BuildCommand,
 ) -> anyhow::Result<()> {
-    let base_build_dir = ctx
-        .application()
-        .component(component_name)
-        .component_dir()
-        .to_path_buf();
+    let component = ctx.application().component(component_name);
+    let base_build_dir = component.component_dir().to_path_buf();
+    let go_component = component.guest_language() == Some(GuestLanguage::Go);
     match command {
         app_raw::BuildCommand::External(external_command) => {
-            execute_external_command(ctx, &base_build_dir, external_command).await
+            execute_external_command(ctx, &base_build_dir, external_command, go_component).await
         }
         app_raw::BuildCommand::QuickJSCrate(command) => {
             execute_quickjs_create(ctx, &base_build_dir, command)
@@ -186,7 +188,7 @@ pub async fn execute_custom_command(
         let _indent = LogIndent::new();
 
         for step in &command.value {
-            if let Err(error) = execute_external_command(ctx, &command.source, step).await {
+            if let Err(error) = execute_external_command(ctx, &command.source, step, false).await {
                 return Err(CustomCommandError::CommandError { error });
             }
         }
@@ -206,8 +208,10 @@ pub async fn execute_custom_command(
             let _indent = LogIndent::new();
 
             for step in custom_command {
+                let go_component = component.guest_language() == Some(GuestLanguage::Go);
                 if let Err(error) =
-                    execute_external_command(ctx, component.component_dir(), step).await
+                    execute_external_command(ctx, component.component_dir(), step, go_component)
+                        .await
                 {
                     return Err(CustomCommandError::CommandError { error });
                 }
@@ -319,10 +323,14 @@ fn execute_quickjs_d_ts(
         )
 }
 
+/// Runs one external command. `go_component` says whether it belongs to a Go
+/// component: only then is `go` the managed toolchain and the component's
+/// `go.mod` tidied first; anywhere else `go` is whatever is on `PATH`.
 pub async fn execute_external_command(
     ctx: &BuildContext<'_>,
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
+    go_component: bool,
 ) -> anyhow::Result<()> {
     let app_root_dir = ctx.application().app_root_dir();
 
@@ -403,18 +411,47 @@ pub async fn execute_external_command(
                     return Err(anyhow!("Empty command!"));
                 }
 
-                ensure_common_deps_for_tool(ctx, command_tokens[0].as_str(), &build_dir).await?;
+                ensure_common_deps_for_tool(
+                    ctx,
+                    command_tokens[0].as_str(),
+                    &build_dir,
+                    go_component,
+                )
+                .await?;
 
-                let resolved_command =
-                    resolve_command_for_execution(command_tokens[0].as_str(), Some(&build_dir))?;
-                let mut process = Command::new(resolved_command.program);
+                // In a Go component `go` is the managed toolchain, not whatever is on PATH.
+                let go_toolchain = if go_component
+                    && normalized_program_name(command_tokens[0].as_str()) == "go"
+                {
+                    Some(ensure_go_toolchain(ctx.application_config()).await?)
+                } else {
+                    None
+                };
 
-                process
-                    .args(resolved_command.prefix_args)
-                    .args(command_tokens.iter().skip(1))
-                    .current_dir(&build_dir)
-                    .envs(&command.env);
+                let mut process = match &go_toolchain {
+                    Some(toolchain) => {
+                        let mut process = Command::new(&toolchain.go);
+                        process.args(command_tokens.iter().skip(1));
+                        process
+                    }
+                    None => {
+                        let resolved_command = resolve_command_for_execution(
+                            command_tokens[0].as_str(),
+                            Some(&build_dir),
+                        )?;
+                        let mut process = Command::new(resolved_command.program);
+                        process
+                            .args(resolved_command.prefix_args)
+                            .args(command_tokens.iter().skip(1));
+                        process
+                    }
+                };
 
+                process.current_dir(&build_dir).envs(&command.env);
+
+                if let Some(toolchain) = &go_toolchain {
+                    apply_go_toolchain_env(&mut process, toolchain)?;
+                }
                 configure_external_command_env(&mut process, command_tokens[0].as_str(), ctx);
 
                 process
@@ -444,6 +481,7 @@ pub async fn ensure_common_deps_for_tool(
     ctx: &BuildContext<'_>,
     tool: &str,
     build_dir: &Path,
+    go_component: bool,
 ) -> anyhow::Result<()> {
     let normalized = normalized_program_name(tool);
     match normalized.as_str() {
@@ -460,7 +498,12 @@ pub async fn ensure_common_deps_for_tool(
                 })
                 .await
         }
-        _ if normalized == "moon" || tool_lives_in_mooncakes(tool) => {
+        _ if normalized == "moon"
+            || tool_lives_in_mooncakes(tool)
+            || Path::new(tool)
+                .components()
+                .any(|component| component.as_os_str() == "__moonbin__") =>
+        {
             let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
             let build_dir = fs::absolute_lexical_path(build_dir)?;
             let Some(moon_module_root) = build_dir
@@ -476,6 +519,24 @@ pub async fn ensure_common_deps_for_tool(
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
                     ensure_moon_dependencies(ctx, &moon_module_root).await
+                })
+                .await
+        }
+        "go" => {
+            // Each Go component is its own module, rooted exactly at build_dir
+            // (the componentDir), so there is no ancestor walk like moon needs.
+            let go_mod_path = build_dir.join("go.mod");
+            if !go_component || !go_mod_path.exists() {
+                return Ok(());
+            }
+
+            let toolchain = ensure_go_toolchain(ctx.application_config()).await?;
+
+            let module_root = build_dir.to_path_buf();
+            let ensure_key = format!("go:{}", module_root.display());
+            ctx.tools_with_ensured_common_deps()
+                .ensure_common_deps_for_tool_once(&ensure_key, || async {
+                    ensure_go_dependencies(ctx, &module_root, &toolchain).await
                 })
                 .await
         }
@@ -610,6 +671,101 @@ async fn run_moon_install(app_root_dir: &Path) -> anyhow::Result<()> {
         .current_dir(app_root_dir)
         .stream_and_run("moon")
         .await
+}
+
+async fn ensure_go_dependencies(
+    ctx: &BuildContext<'_>,
+    module_root: &Path,
+    toolchain: &GoToolchain,
+) -> anyhow::Result<()> {
+    let go_sum_path = module_root.join("go.sum");
+    let marker_dir = ctx.application().task_result_marker_dir();
+
+    // `go mod tidy` rewrites go.mod (indirect requires, block form) and writes
+    // go.sum, so the marker is checked against the CURRENT state but recorded
+    // against the POST-tidy state — otherwise every build would see a changed
+    // go.mod and re-run tidy forever. Tidy resolves requirements from the
+    // sources too, so any change to them also invalidates it (see go_inputs).
+    let go_mod_deps_marker = |root: &Path| -> anyhow::Result<TaskResultMarker> {
+        let inputs_hash = go_inputs::tidy_inputs_hash(root);
+        let go_mod_hash = blake3::hash(&std::fs::read(root.join("go.mod"))?)
+            .to_hex()
+            .to_string();
+        let go_sum_hash = if root.join("go.sum").exists() {
+            Some(
+                blake3::hash(&std::fs::read(root.join("go.sum"))?)
+                    .to_hex()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        TaskResultMarker::new(
+            &marker_dir,
+            GoModDepsMarkerHash {
+                go_module_root: root,
+                go_mod_hash: &go_mod_hash,
+                go_sum_hash: go_sum_hash.as_deref(),
+                inputs_hash: &inputs_hash,
+            },
+        )
+    };
+
+    // Up to date only if go.sum exists too: componentize-go refuses to build
+    // without it.
+    if go_mod_deps_marker(module_root)?.is_up_to_date() && go_sum_path.exists() {
+        return Ok(());
+    }
+
+    if go_sum_path.exists() {
+        log_warn_action(
+            "Detected",
+            format!(
+                "dependency changes, executing {}",
+                "go mod tidy".log_color_highlight()
+            ),
+        );
+    } else {
+        log_warn_action(
+            "Detected",
+            format!(
+                "missing {}, executing {}",
+                "go.sum".log_color_highlight(),
+                "go mod tidy".log_color_highlight()
+            ),
+        );
+    }
+
+    run_go_mod_tidy(module_root, toolchain).await?;
+
+    // Record success against the post-tidy go.mod/go.sum so the next build skips.
+    go_mod_deps_marker(module_root)?.result(Ok(()))
+}
+
+async fn run_go_mod_tidy(module_root: &Path, toolchain: &GoToolchain) -> anyhow::Result<()> {
+    let mut command = Command::new(&toolchain.go);
+    command.args(["mod", "tidy"]).current_dir(module_root);
+    apply_go_toolchain_env(&mut command, toolchain)?;
+    command.stream_and_run("go").await
+}
+
+/// Makes the managed toolchain the `go` that a command and everything it spawns
+/// use: componentize-go looks up `go` on PATH, and `GOTOOLCHAIN=local` keeps Go
+/// from switching to an unpatched release named by a `toolchain` directive.
+fn apply_go_toolchain_env(command: &mut Command, toolchain: &GoToolchain) -> anyhow::Result<()> {
+    let path = match std::env::var_os("PATH") {
+        Some(path) => {
+            let mut dirs = vec![toolchain.bin_dir.clone()];
+            dirs.extend(std::env::split_paths(&path));
+            std::env::join_paths(dirs)?
+        }
+        None => toolchain.bin_dir.clone().into_os_string(),
+    };
+    command.env("PATH", path);
+    if std::env::var_os("GOTOOLCHAIN").is_none() {
+        command.env("GOTOOLCHAIN", "local");
+    }
+    Ok(())
 }
 
 fn configure_external_command_env(command: &mut Command, executable: &str, ctx: &BuildContext<'_>) {

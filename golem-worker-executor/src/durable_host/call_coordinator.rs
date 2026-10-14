@@ -29,6 +29,7 @@ use wasmtime::component::{Accessor, HasData};
 pub(crate) struct DurableCallAdmission<'a> {
     function_type: &'a DurableFunctionType,
     host_function: &'a str,
+    invocation_id: Option<DurableInvocationId>,
 }
 
 impl<'a> DurableCallAdmission<'a> {
@@ -36,6 +37,35 @@ impl<'a> DurableCallAdmission<'a> {
         Self {
             function_type,
             host_function,
+            invocation_id: None,
+        }
+    }
+
+    /// The invocation id of the call, recorded in the durable scope `Start` the call opens.
+    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<DurableInvocationId>) -> Self {
+        self.invocation_id = invocation_id;
+        self
+    }
+
+    fn wallet_admission(
+        self,
+        runtime: &OwnerRuntime,
+        snapshotting: bool,
+        durable_call_is_live: bool,
+        automatic_update_unsettled: bool,
+    ) -> WalletAdmission {
+        if self.is_wallet_independent_value_read()
+            && *runtime == OwnerRuntime::Agent
+            && !snapshotting
+            && durable_call_is_live
+        {
+            if automatic_update_unsettled {
+                WalletAdmission::FinalizeUpdate
+            } else {
+                WalletAdmission::Independent
+            }
+        } else {
+            WalletAdmission::Synchronize
         }
     }
 
@@ -63,6 +93,13 @@ impl<'a> DurableCallAdmission<'a> {
                 | HostFunctionName::P3RandomInsecureSeedGetInsecureSeed
         )
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WalletAdmission {
+    Independent,
+    FinalizeUpdate,
+    Synchronize,
 }
 
 /// The result of successful admission and durable-scope recovery for a host call.
@@ -105,15 +142,17 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         admission: DurableCallAdmission<'_>,
     ) -> Result<DurableCallBoundary, WorkerExecutorError> {
         self.check_allowed(admission)?;
-        if admission.is_wallet_independent_value_read()
-            && self.ctx.runtime == OwnerRuntime::Agent
-            && !self.ctx.state.snapshotting_mode
-            && self.ctx.state.durable_call_is_live()
-        {
+        match admission.wallet_admission(
+            &self.ctx.runtime,
+            self.ctx.state.snapshotting_mode,
+            self.ctx.state.durable_call_is_live(),
+            self.ctx.state.automatic_update_unsettled,
+        ) {
             // A fresh clock/random value needs no authority. Waiting for an accessor's wallet
             // reconciliation here can deadlock: this call owns the Store that accessor needs.
             // Automatic updates still fence target-only history until success is committed.
-            if self.ctx.state.automatic_update_unsettled {
+            WalletAdmission::Independent => {}
+            WalletAdmission::FinalizeUpdate => {
                 let _boundary = self.ctx.lock_synchronized_card_event_boundary().await?;
                 if self.ctx.state.automatic_update_unsettled {
                     return Err(WorkerExecutorError::runtime(
@@ -121,10 +160,14 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                     ));
                 }
             }
-        } else {
-            self.ctx.synchronize_agent_wallet_at_boundary().await?;
+            WalletAdmission::Synchronize => {
+                self.ctx.synchronize_agent_wallet_at_boundary().await?;
+            }
         }
-        let begin_index = self.ctx.begin_function(admission.function_type).await?;
+        let begin_index = self
+            .ctx
+            .begin_function(admission.function_type, admission.invocation_id)
+            .await?;
         Ok(DurableCallBoundary::from_begin_index(begin_index))
     }
 
@@ -138,7 +181,11 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         self.ctx.synchronize_agent_wallet_at_boundary().await?;
         let (begin_index, recorded) = self
             .ctx
-            .begin_function_with_span(admission.function_type, span_started)
+            .begin_function_with_span(
+                admission.function_type,
+                span_started,
+                admission.invocation_id,
+            )
             .await?;
         Ok((DurableCallBoundary::from_begin_index(begin_index), recorded))
     }
@@ -161,7 +208,10 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
             .ctx
             .capture_live_agent_authority_at_boundary(&mut capture)
             .await?;
-        let begin_index = self.ctx.begin_function(admission.function_type).await?;
+        let begin_index = self
+            .ctx
+            .begin_function(admission.function_type, admission.invocation_id)
+            .await?;
         if captured.is_none() {
             if self.ctx.state.snapshotting_mode && self.ctx.state.is_replay() {
                 // Snapshot loading executes guest code without durable host-call records while
@@ -463,22 +513,7 @@ where
                 continue;
             }
         }
-        let has_pending_source_transfer = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_scan
-                .as_ref()
-                .is_some_and(|scan| {
-                    scan.pending.iter().any(|pending| {
-                        matches!(&pending.event, QueuedCardEvent::TransferStarted(_))
-                    })
-                })
-        });
-        let retries = if has_pending_source_transfer {
-            prepare_pending_source_card_transfers_access(store, get_ctx).await?
-        } else {
-            Vec::new()
-        };
+        let retries = prepare_pending_source_card_transfers_access(store, get_ctx).await?;
         if retries.is_empty() {
             return Ok(Some(boundary_guard));
         }
@@ -518,7 +553,7 @@ where
 
     loop {
         let pending_events = crate::durable_host::next_drainable_card_events(
-            pending_card_events_at_boundary_access(store, get_ctx).await?,
+            pending_card_events_at_boundary_access(store, get_ctx).await,
         );
         let Some(pending_event) = pending_events.first() else {
             break;
@@ -595,66 +630,63 @@ where
         entity_parent_start_index,
         expired_scope_root_ids,
     )
-    .await
+    .await?;
+    synchronize_owner_authority_access(store, get_ctx).await
 }
 
-async fn pending_card_events_at_boundary_access<T, D, Ctx>(
+/// Accessor form of `DurableWorkerCtx::synchronize_owner_authority`.
+async fn synchronize_owner_authority_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<Vec<golem_common::model::PendingCardEventRef>, WorkerExecutorError>
+) -> Result<(), WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (worker, oplog) = store.with(|mut access| {
+    let Some((worker, card_service, unchecked_root_ids)) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
-        (ctx.public_state.worker().clone(), ctx.state.oplog.clone())
-    });
-    let status = worker.get_last_known_status().await;
-    let current_idx = oplog.current_oplog_index().await;
-    let unread_range = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        match &mut ctx.state.card_event_boundary_scan {
-            Some(scan) => {
-                scan.synchronize(status.oplog_idx, &status.pending_card_events, current_idx)
-            }
-            None => {
-                ctx.state.card_event_boundary_scan =
-                    Some(crate::durable_host::CardEventBoundaryScan::new(
-                        status.oplog_idx,
-                        status.pending_card_events.clone(),
-                    ));
-            }
-        }
-        ctx.state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .unread_range(current_idx)
-    });
+        ctx.state.is_live().then(|| {
+            (
+                ctx.public_state.worker().clone(),
+                ctx.state.card_service.clone(),
+                ctx.state
+                    .inherited_invocation_scope
+                    .as_ref()
+                    .and_then(crate::durable_host::InheritedInvocationScope::unchecked_root_ids),
+            )
+        })
+    }) else {
+        return Ok(());
+    };
+    let revoked =
+        crate::durable_host::owner_revoked_card_ids(&*worker.get_last_known_status().await);
+    let root_states = match unchecked_root_ids {
+        Some(root_ids) => Some(card_service.check_cards(root_ids).await?),
+        None => None,
+    };
+    store.with(|mut access| {
+        get_ctx(access.data_mut()).apply_owner_authority_synchronization(revoked, root_states)
+    })
+}
 
-    if let Some((start, count)) = unread_range {
-        let entries = oplog.read_exact(start, count).await;
-        store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_scan
-                .as_mut()
-                .expect("card event boundary scan must be initialized")
-                .fold_through(current_idx, &entries);
-        });
-    }
-
-    Ok(store.with(|mut access| {
-        get_ctx(access.data_mut())
-            .state
-            .card_event_boundary_scan
-            .as_ref()
-            .expect("card event boundary scan must be initialized")
-            .pending
-            .clone()
-    }))
+/// Accessor form of `DurableWorkerCtx::pending_card_events_at_boundary`: the published agent
+/// status is the only source of queued card events.
+async fn pending_card_events_at_boundary_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Vec<golem_common::model::PendingCardEventRef>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let worker = store.with(|mut access| get_ctx(access.data_mut()).public_state.worker().clone());
+    worker
+        .get_last_known_status()
+        .await
+        .pending_card_events
+        .clone()
 }
 
 async fn admit_card_to_wallet_access<T, D, Ctx>(
@@ -1137,7 +1169,7 @@ where
         return Ok(Vec::new());
     }
 
-    let pending_events = pending_card_events_at_boundary_access(store, get_ctx).await?;
+    let pending_events = pending_card_events_at_boundary_access(store, get_ctx).await;
     let mut retries = Vec::new();
     let mut first_error = None;
     for pending in pending_events {
@@ -1545,4 +1577,47 @@ where
         )
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DurableCallAdmission, DurableFunctionType, OwnerRuntime, WalletAdmission};
+    use golem_common::model::entity::{AgentEntity, ToolMiddlewareName};
+    use test_r::test;
+
+    #[test]
+    fn wallet_independent_reads_still_fence_updates_and_replay() {
+        let clock = DurableCallAdmission::new(&DurableFunctionType::ReadLocal, "wall_clock::now");
+        assert_eq!(
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            WalletAdmission::Independent
+        );
+        assert_eq!(
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, true),
+            WalletAdmission::FinalizeUpdate
+        );
+        let entity = OwnerRuntime::Entity(AgentEntity::ToolMiddleware(
+            ToolMiddlewareName::try_from("middleware").unwrap(),
+        ));
+        for (runtime, snapshotting, live) in [
+            (OwnerRuntime::Agent, false, false),
+            (OwnerRuntime::Agent, true, true),
+            (entity, false, true),
+        ] {
+            for unsettled in [false, true] {
+                assert_eq!(
+                    clock.wallet_admission(&runtime, snapshotting, live, unsettled),
+                    WalletAdmission::Synchronize
+                );
+            }
+        }
+        let environment = DurableCallAdmission::new(
+            &DurableFunctionType::ReadLocal,
+            "cli::environment::get_environment",
+        );
+        assert_eq!(
+            environment.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            WalletAdmission::Synchronize
+        );
+    }
 }

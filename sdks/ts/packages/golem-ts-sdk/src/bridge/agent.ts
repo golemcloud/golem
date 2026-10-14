@@ -18,6 +18,7 @@ import {
   schemaValueToWitAsync,
   typedSchemaValueFromWit,
   typedSchemaValueToWit,
+  preflightWitValueTree,
   type SchemaValue,
   type TypedSchemaValue,
 } from '../internal/schema-model';
@@ -226,6 +227,15 @@ export interface RemoteAgentHandle<Value = SchemaValue> {
   ): CancelableScheduledInvocationReceipt;
 }
 
+const wireRemotes = new WeakMap<RemoteAgentHandle, RemoteAgentHandle<SchemaValueTree>>();
+
+/** Internal companion transport for prepared, capability-free invocation codecs. */
+export function wireRemoteAgent(
+  remote: RemoteAgentHandle,
+): RemoteAgentHandle<SchemaValueTree> | undefined {
+  return wireRemotes.get(remote);
+}
+
 export function resolveRemoteAgent(
   agentTypeName: string,
   constructorValue: SchemaValue,
@@ -285,7 +295,7 @@ function resolveRemoteAgentWith(
     })),
     agentId,
   );
-  return remoteTransport(
+  const remote = remoteTransport(
     rpc,
     agentId,
     schemaValueToWit,
@@ -293,6 +303,27 @@ function resolveRemoteAgentWith(
     schemaValueFromWit,
     remoteCallError,
   );
+  wireRemotes.set(
+    remote,
+    remoteTransport(
+      rpc,
+      agentId,
+      (value) => value,
+      async (value) => value,
+      (value) => {
+        try {
+          preflightWitValueTree(value.valueNodes, value.root);
+        } catch (error) {
+          // Preserve the ordinary failed-preflight resource cleanup.
+          schemaValueFromWit(value);
+          throw error;
+        }
+        return value;
+      },
+      remoteCallError,
+    ),
+  );
+  return remote;
 }
 
 function remoteTransport<Value>(

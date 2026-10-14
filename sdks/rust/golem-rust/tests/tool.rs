@@ -69,6 +69,90 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_tool_error_wire_preflight_preserves_resources() {
+        use golem_rust::schema::wit::{GuestSecretHandle, direct, wire};
+        #[derive(ToolError)]
+        enum Failure {
+            #[tool_error(kind = "runtime-error", exit_code = 1)]
+            Resources(Vec<GuestSecretHandle>),
+        }
+        let secret = GuestSecretHandle::new(unsafe { wire::Secret::from_handle(71) });
+        let failure = Failure::Resources(vec![secret.clone(), secret.clone()]);
+        assert!(matches!(
+            direct::encode(&failure),
+            Err(direct::WireError::AliasedResource("secret"))
+        ));
+        assert!(secret.is_present());
+        assert_eq!(secret.take().unwrap().take_handle(), 71);
+        assert!(matches!(
+            direct::encode(&failure),
+            Err(direct::WireError::ConsumedResource("secret"))
+        ));
+    }
+
+    #[test]
+    fn ordinary_tool_error_wire_matches_schema() {
+        use golem_rust::schema::wit::{decode_graph, decode_value, direct};
+        use std::io::Result;
+        enum Local {
+            Some,
+            None,
+        }
+        use Local::{None, Some};
+        let _: Result<()> = std::result::Result::Ok(());
+        let _ = (Some, None);
+
+        #[derive(Debug, PartialEq, ToolError)]
+        enum EmptyFailure {
+            #[tool_error(kind = "usage-error", exit_code = 2)]
+            BadInput,
+            #[tool_error(kind = "runtime-error", exit_code = 1)]
+            Tuple(),
+            #[tool_error(kind = "runtime-error", exit_code = 1)]
+            Named {},
+        }
+        #[derive(Debug, PartialEq, ToolError)]
+        enum Failure {
+            #[tool_error(kind = "usage-error", exit_code = 2)]
+            BadInput(String),
+            #[tool_error(kind = "runtime-error", exit_code = 1)]
+            Named { detail: Option<Vec<u32>> },
+            #[tool_error(kind = "runtime-error", exit_code = 1)]
+            Empty,
+        }
+        fn check<T: IntoSchema + FromWire + IntoWire + WireSchema + PartialEq + std::fmt::Debug>(
+            values: Vec<T>,
+        ) {
+            let graph = decode_graph(&direct::schema::<T>()).unwrap();
+            assert_eq!(
+                graph,
+                golem_rust::schema::conversion::try_into_schema_graph::<T>().unwrap()
+            );
+            for value in values {
+                let encoded = direct::encode(&value).unwrap();
+                assert_eq!(
+                    decode_value(direct::encode(&value).unwrap()).unwrap(),
+                    value.to_value()
+                );
+                assert_eq!(direct::decode::<T>(encoded).unwrap(), value);
+            }
+        }
+        check(vec![
+            EmptyFailure::BadInput,
+            EmptyFailure::Tuple(),
+            EmptyFailure::Named {},
+        ]);
+        check(vec![
+            Failure::BadInput("bad".into()),
+            Failure::Named {
+                detail: std::option::Option::Some(vec![1, 2]),
+            },
+            Failure::Empty,
+        ]);
+        assert!(direct::decode::<EmptyFailure>(direct::encode(&0u32).unwrap()).is_err());
+    }
+
+    #[test]
     async fn direct_error_metadata_and_decoding_do_not_call_model_codecs() {
         use golem_rust::agentic::DirectToolError;
         use golem_rust::schema::wit::{direct, wire};
@@ -141,6 +225,9 @@ mod tests {
             notes: vec![Some(Err(true)), None, Some(Ok("retry".into()))],
         };
         let failure = Failure::Delayed { details: payload };
+        let ordinary = direct::encode(&failure).unwrap();
+        assert_eq!(direct::decode::<Failure>(ordinary).unwrap(), failure);
+        assert_eq!(direct::schema::<Failure>().defs.len(), 2);
         let (name, encoded) = failure.direct_error_payload().await.unwrap();
         assert_eq!(name, "delayed");
         assert_eq!(encoded.graph.defs.len(), 1);

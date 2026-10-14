@@ -103,12 +103,15 @@ or undoing a remote append.
 
 Only timeout, transport, rate-limit, and unavailable failures retry with bounded exponential
 backoff, durable timers, and Retry-After. Protocol, fencing, conflict, gone, and size failures do
-not. Replay rebuilds checkpoints, buffered positions, pending data, producer progress, and retry
+not. `max_retries` defaults to 8 retries after the first attempt; the delay starts at 100 ms and
+doubles up to 30 s, and a longer Retry-After wins. `max_retries=0` disables retries. Replay rebuilds checkpoints, buffered positions, pending data, producer progress, and retry
 budgets and does not repeat completed HTTP effects. Do not add custom durability/atomic wrappers.
 
 Pass a raw `@types.Secret` capability as `auth`; the host pins it and sends the Bearer token. Never
-reveal it or place credentials in the URL. HTTPS is required except when the host is exactly
-`localhost` or a loopback IP; a name such as `app.localhost` is not exempt. Redirects are rejected.
+reveal it or place credentials in the URL. HTTPS is required except when the host is `localhost`,
+a dot-delimited subdomain such as `app.localhost`, or a loopback IP. Localhost names are
+case-insensitive and may have one terminal DNS dot. The URL authority stays unchanged. Redirects
+are rejected.
 
 ```shell
 golem build

@@ -20,11 +20,31 @@ below for what that leaves behind.
 | Before `Start` is appended | nothing | Guest replays to this point and issues the call live for the first time | Guest determinism reaches the same call |
 | After `Start`, before the live effect | `Start` only | `Incomplete`: re-executable types (`ReadLocal`/`ReadRemote`/`WriteLocal`, `WriteRemote` while idempotence mode is on) run the action under the existing `Start`; non-idempotent / batched / transactional writes hard-error into durable-scope recovery (`ScopeReplayRecovery`) | `DurableFunctionType` chosen at the call site |
 | After the effect, before `End` | `Start` only | Same as above. For external peers this is the ambiguous window: the effect may have happened; the peer must be idempotent | Peer-side idempotency, not Golem |
-| After `End`, before guest observation | `Start`, `End` | `Delivered`/`AtReplayTail`: result withheld until the cursor drains, then delivered live-armed; no re-execution | `End` payload |
+| After `End`, before guest observation (including a Store unload or executor shutdown that tears the armed delivery token or terminal guard) | `Start`, `End` | `Delivered`/`AtReplayTail`: result withheld until the cursor drains, then delivered live-armed; no re-execution. The tear must not record `CompletionDiscarded` (`TeardownProbe`) | `End` payload |
 | After `CompletionDelivered` | `Start`, `End`, marker | `Delivered`: result released at the recorded boundary | Marker position |
 | Guest dropped the future before completion | `Start`, `Cancelled { partial }` | `partial: Some` → `Delivered`/`Immediate`; `partial: None` → `Undelivered` (parked for the guest's deterministic drop) | `Cancelled` entry |
 | Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: parked, the guest drops at the same point | Marker |
 | Guest trapped mid-call | `Start` only | Same as "after Start" — trap is never `Cancelled` | `abandon_for_trap` |
+
+Native guest stream reads append one existing `ConsumerItemValue` or `ConsumerTerminal` record
+when Wasmtime's per-read observer confirms consumption. The observer reserves its oplog position
+synchronously. No extra Start/End or delivery marker is recorded. Guest records remain hints and
+satisfy no claim, but reserve their replay position until the observer acknowledges consumption.
+Host projections keep take-time journaling and ordinary hint skipping; the consumer discriminant
+distinguishes the two uses because source bindings alone do not identify the consuming operation.
+
+| Native read replay window | Oplog shape | Reconstruction behaviour | Durable fact |
+|---|---|---|---|
+| Host takes an item before guest consumption | No consumer journal record for that read | Re-read the durable source at the offset after the last observed item | The producer journal retains the unobserved item |
+| Guest consumes an item or terminal | One guest `ConsumerItemValue` or `ConsumerTerminal` | Retain the reconstructed value until its journal position; only the per-read observer releases the cursor | The journal position is the guest boundary |
+| Guest consumes part of a packed byte batch | One guest `ConsumerItemValue` covering only the delivered bytes | Recover the unconsumed remainder by source offset; later reads record their own portions | No take-time batch plus separate marker |
+| Guest cancels a pending native read with zero progress | No consumer record for the cancelled transfer | The resident producer retains its receive and prepared observation for the next read; Store loss reconstructs from the last consumed source offset | Native read cancellation does not cancel the durable source |
+| Guest cancels a read whose recorded delivery replay cannot retain | Guest consumer observation | Fail with `UnexpectedOplogEntry` and poison the shared cursor; do not discard the recorded value or remain parked | A recorded guest delivery cannot become an unread cancellation |
+| Atomic rollback deletes the physical guest-read boundary, then the region reads again | Original consumer record, `Jump`, one consumer record with `reobserves` pointing to the original | Validate identical logical content, replay the replacement boundary; do not advance progress twice or introduce nested readers again | Ordinal, source offset and nested identities retain the original logical input |
+
+Native read cancellation does not reconstruct whether the canonical cancellation returned
+inline or blocked. Successful cancellation replay across those different return dispositions
+is not supported. Cancellation keeps the canonical policy; it is not forced to return blocked.
 
 ## Owner lifecycle handoff (`worker/mod.rs`, `worker/invocation_loop.rs`, `services/active_agents/mod.rs`)
 
@@ -83,9 +103,10 @@ concurrent-agent permit.
 | Automatic snapshot load fails, or its replay suffix diverges, with no pending update | Reject that exact index, return `RetryDecision::Immediate`, and select again: the other usable record, the authoritative baseline, or a full replay; never replay pre-migration history | Fingerprint-scoped set of rejected indexes, merged into storage only after successful preparation and before readiness |
 | Automatic snapshot payload download fails, or its filesystem snapshot does not restore | Retry while skipping that record for this startup attempt; successful preparation clears the skip | In-memory unavailable set; no persistent rejection |
 | After a `Snapshot` record with a filesystem snapshot name, before its `SnapshotConfirmed` | The record is not usable; the start confirms it when the store holds the whole snapshot, else it uses the previous usable record. A loaded agent that restarts in place for an automatic update without a strategy confirms it the same way before its generation ends | `Snapshot` and `SnapshotConfirmed` hints, the store |
-| The initial-file rule finds a conflict at the update point of an automatic update, plain or snapshot-assisted | `FailedUpdate` appended through `start_outcome::decide`, old revision reconstructed; another filesystem error at the update point retries the start | `FailedUpdate` |
+| The initial-file rule finds a conflict at the update point of an automatic update, plain or snapshot-assisted | `FailedUpdate` appended through `start_outcome::decide`, old revision reconstructed; a refused initial-file source (`InitialFileRefused`, below) fails the update too; another filesystem error at the update point retries the start | `FailedUpdate` |
 | The initial-file rule finds a conflict at the start of a pending manual update | `start_outcome::decide` gives `FailUpdate` with the message of the conflict, and the start writes it and restarts on the current revision; on a lost shard it writes nothing, and the update stays pending for the new owner; a write of `FailedUpdate` that fails ends the start with its error (a fenced write has already retired the agent) | `FailedUpdate` |
 | Manual-update snapshot load fails at the update | `FailedUpdate` appended, old revision reconstructed | `FailedUpdate` |
+| The blob storage refuses an initial-file source of the target at the update point (`InitialFileRefused`) | `FailedUpdate` with `UPDATE_BLOB_STORAGE_REFUSED`, no snapshot fault, no record rejected; old revision reconstructed. A transient blob error retries as a recovery with no `FailedUpdate` | The install changed no file before the failed load |
 | The filesystem snapshot of a pending manual update is lost, does not restore, or needs filesystem snapshots on this executor | `FailedUpdate` with `UPDATE_SNAPSHOT_UNAVAILABLE`, `UPDATE_SNAPSHOT_RESTORE_FAILED` or `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS`; old revision reconstructed | `FailedUpdate` |
 | The authoritative baseline (promoted manual or snapshot-assisted record) cannot be restored or loaded at a later start | Resume terminates and reports the failure with its underlying cause; a transient cause retries | The authoritative baseline cannot be skipped |
 | Replay under the new component diverges | `FailedUpdate` appended, `RetryDecision::Immediate`, old revision reconstructed | `FailedUpdate` |
@@ -123,7 +144,7 @@ concurrent-agent permit.
 |---|---|---|---|
 | Producer after committing `StreamItems`, before bus publication | producer: `StreamItems` | Items are already durable; consumers catch up by offset from producer segments | Commit precedes `publish_committed` |
 | Producer between guest write and `StreamItems` commit | producer: previous items only | Producer replays and the guest re-drives the write; sequence continues from the last committed `first_sequence` | Guest determinism + committed sequence |
-| Consumer after `ConsumerItemValue`, before the guest observed it | consumer: journal record | Journal replays by `consumer_read_ordinal`; the item is delivered once from the journal, not refetched | `consumer_read_ordinal` / `source_offset` |
+| Host projection after `ConsumerItemValue`, before downstream observation | consumer: host journal record | Journal replays by `consumer_read_ordinal`; the item is delivered once from the journal, not refetched | `consumer_read_ordinal` / `source_offset` |
 | Consumer bus reader closed (socket, executor loss) | consumer journal up to last offset | Resubscribe samples high-water under the publication lock; overlap discarded by offset; gap filled from producer segments | Offsets, not connection state |
 | Producer deleted and recreated with same `AgentId` | new producer has a new `AgentFingerprint` | Fingerprint checks (`validate_forwarded_mapping`, producer-side `CorruptHistory`) reject the session; the consumer never sees a spliced stream | Fingerprint pinned at registration |
 | Caller RPC `End` recorded, stream still draining | caller: `Start`, `End`; journals partial | Recorded RPC result returned; stream resumes by offset from the journals | Result completed stripped of streams |
@@ -141,7 +162,7 @@ concurrent-agent permit.
 | MCP returns `-32602`, presence read incomplete or quota-suspended | committed MCP call + incomplete `ReadRemote` presence `Start` | Repair the forced exact-source presence read without resending `tools/call`; ordinary atomic rollback remains able to roll both calls back | Separate durable presence observation |
 | Live attachment memory exhausted during incomplete replay | rejection persisted | The rejection is durable; later replays do not retry admission | `incomplete_tool_replay_persists_attachment_upgrade_rejection` |
 | Body traps | no entity terminal | Owner invocation fails; owner group drains; siblings blocked on the lane are fenced | `guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group` |
-| Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `completed_reconstruction_claim_blocks_concurrent_replay_to_live` |
+| Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `primary_publication_requires_completed_reconstruction_validation`, `incomplete_custom_durability_waits_for_completed_reconstruction` |
 
 ## Resharding and the oplog epoch fence (`worker/mod.rs::interrupt_and_retire`, `services/oplog/primary.rs`)
 
@@ -179,6 +200,13 @@ stages do not.
 | Effect | Ambiguous window | What Golem provides | What the application must provide |
 |---|---|---|---|
 | HTTP request | Between send and `End` | Re-execution policy via `DurableFunctionType`; atomic regions to group calls; an `idempotency-key` header derived from the call's durable position (`http/policy.rs`, on unless the guest set one) or minted via `golem:api/host.generate-idempotency-key` | A peer that deduplicates on the key; otherwise a safe-to-retry design |
-| TCP / WebSocket connection | Any crash | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
+| TCP connection | Any reconstruction | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
+| WebSocket connection | Suspend, restart, or crash | Recorded outcomes replay unchanged; optional third connect parameter defaults to `reconnect-automatically`, or `report-connection-loss` terminalizes a reconstructed successful handle with `SessionLost` at live access without a handshake | Reconnect / resume protocol, or supervise a new guest session generation with explicit connect and initialization; loss is not proof an earlier send was undelivered |
 | Filesystem, stdio | Any crash | Recorded stream chunks replay; live tail continues | Nothing for replay; effects outside the worker filesystem are the app's problem |
 | Key-value / blob store | Between write and `End` | Same as HTTP; writes are re-executable when idempotent by construction | Value-level idempotency for non-idempotent writes |
+
+WebSocket reconstruction policy does not change ordinary live disconnect retries. `close` on a
+lost handle returns loss without reconnecting, and drop only releases the resource. Incomplete
+non-idempotent scopes trap through the central recovery guard before either policy; an `End`
+entry alone does not complete an unfinished scope. Atomic rollback can remove the recorded
+connect and legitimately execute a fresh handshake.

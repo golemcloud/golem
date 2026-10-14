@@ -3,21 +3,22 @@
 // Editing notes:
 //   - Plain strings are rendered as-is.
 //   - HTML strings (paragraphs in cards, hero expander, etc.) are rendered via
-//     `set:html` in the components. Use <strong>, <em>, <code>, and the marker
-//     span for 1.6 asterisks:  <span class="marker">*</span>
-//   - The marker is the rose-pink * that links visually to the 1.6 footnote.
-//   - When 1.6 ships: search-and-delete <span class="marker">*</span> instances
-//     across this file, then remove the footnote section from the page.
+//     `set:html` in the components. Use <strong>, <em>, and <code>.
 
 // =============================================================================
-// SECTION 1 — Hero (LOCKED)
+// SECTION 1 — Hero
 // =============================================================================
 
 export const hero = {
+  // Small release line above the headline. Update with each major release.
+  eyebrow: {
+    label: "Golem 1.6 · Agents, Tools, and Artifacts",
+    href: "/blog/golem-1-6-agents-tools-and-artifacts",
+  },
   // headingLines render as <br>-separated lines inside the same <h1>.
   headingLines: ["Agents that never fail.", "Policies that never bend."],
-  // expander is HTML (uses <strong>, <br>, <span class="closer">).
-  expanderHtml: `The durable agent runtime that <strong>automatically persists state</strong>, <strong>executes every tool call exactly once</strong>, and <strong>enforces every policy</strong>.<br class="break-on-md" /> <span class="closer">Reliability and trust by construction.</span>`,
+  // expander is HTML (uses <strong>, <br>).
+  expanderHtml: `Deploy <strong>agents, their tools, and their artifacts</strong> to one durable runtime. State persists automatically, every tool call executes exactly once, and the host enforces every policy — whoever, or whatever, wrote the code.`,
   ctas: {
     primary: { label: "Get started →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
@@ -34,23 +35,31 @@ export const hero = {
 export const codeSection = {
   eyebrow: "Code-first",
   heading: "Agents are code, not prompts.",
-  lead: "Typed agents in TypeScript, Rust, Scala, or MoonBit. State survives crashes and redeploys. Tool calls never fire twice. Your code — not the LLM — decides what's allowed.",
+  lead: "Typed agents in TypeScript, Effect, Rust, Go, Scala, or MoonBit. State survives crashes and redeploys. Tool calls never fire twice. Your code — and the host — decide what's allowed.",
   defaultLang: "typescript" as const,
   tabs: [
     { id: "typescript", label: "TypeScript", filename: "orders-agent.ts", lang: "typescript" },
+    { id: "effect", label: "Effect", filename: "orders-agent.ts", lang: "typescript" },
     { id: "rust", label: "Rust", filename: "orders_agent.rs", lang: "rust" },
+    { id: "go", label: "Go", filename: "orders.go", lang: "go" },
     { id: "scala", label: "Scala", filename: "OrdersAgent.scala", lang: "scala" },
     { id: "moonbit", label: "MoonBit", filename: "orders_agent.mbt", lang: "moonbit" },
   ],
   snippets: {
-    typescript: `const Orders = agentDefinition('orders')
-  .id({ customerId: z.string() })
-  .config(z.object({ systemPrompt: z.string() }))
-  .method('handle', m => m
-    .input(z.object({ request: z.string(), orderId: z.string() }))
-    .returns(z.object({ resolved: z.boolean() })))
+    typescript: `export const Orders = defineAgent({
+  name: 'Orders',
+  id: { customerId: z.string() },
+  http: http.mount('/orders/{customerId}'),
+  config: { systemPrompt: z.string() },
+  methods: {
+    handle: method({
+      input: { request: z.string(), orderId: z.string() },
+      returns: z.object({ resolved: z.boolean() }),
+    }),
+  },
+})
 
-export default Orders.implement({
+export const OrdersImpl = Orders.implement({
   init: () => ({ history: [] as Message[] }),
   methods: {
     async handle({ request, orderId }) {
@@ -67,7 +76,9 @@ export default Orders.implement({
       // Refunds aren't in the LLM's toolset — agent code gates them via HITL
       if (outcome.needsRefund) {
         // This await can sit for days at zero cost — no queue, no cron, no state table
-        const { approved } = await webhooks.awaitApproval(outcome)
+        const webhook = createWebhook()
+        await notifyApprover(webhook.getUrl(), outcome)
+        const { approved } = (await webhook).json()
         if (approved) {
           // Crash, retry, restart — still one charge. No silent double-charges.
           const result = await refundOrder({ orderId, amount: outcome.refundAmount })
@@ -79,11 +90,60 @@ export default Orders.implement({
   },
 })`,
 
+    effect: `class OrdersConfig extends defineConfig("Orders.Config", {
+  systemPrompt: Schema.String,
+}) {}
+
+export const Orders = defineAgent({
+  name: "Orders",
+  id: { customerId: Schema.String },
+  http: Http.mount("/orders/{customerId}"),
+  config: OrdersConfig,
+  methods: {
+    handle: method({
+      input: { request: Schema.String, orderId: Schema.String },
+      success: Schema.Struct({ resolved: Schema.Boolean }),
+    }),
+  },
+}).implement<Ref.Ref<Message[]>>({
+  init: () => Ref.make<Message[]>([]),
+  methods: (history) => ({
+    handle: ({ request, orderId }) =>
+      Effect.gen(function* () {
+        // No DB writes — this update survives crashes, deploys, host migrations
+        yield* Ref.update(history, (h) => [...h, { role: "user", content: request }])
+
+        // LLM sees full conversation; system prompt comes from typed config
+        const config = yield* OrdersConfig
+        const outcome = yield* llm.run({
+          prompt: yield* config.systemPrompt, history: yield* Ref.get(history),
+          tools: [cancelOrder, changeAddress], context: { orderId },
+        })
+        yield* Ref.update(history, (h) => [...h, { role: "assistant", content: outcome.message }])
+
+        // Refunds aren't in the LLM's toolset — agent code gates them via HITL
+        if (outcome.needsRefund) {
+          // This await can sit for days at zero cost — no queue, no cron, no state table
+          const webhook = yield* Webhook.create
+          yield* notifyApprover(webhook.url, outcome)
+          const { approved } = yield* (yield* webhook.await).decode(Approval)
+          if (approved) {
+            // Crash, retry, restart — still one charge. No silent double-charges.
+            const result = yield* refundOrder({ orderId, amount: outcome.refundAmount })
+            yield* Ref.update(history, (h) => [...h, { role: "tool", content: JSON.stringify(result) }])
+          }
+        }
+        return { resolved: true }
+      }),
+  }),
+})`,
+
     rust: `#[derive(ConfigSchema)]
 pub struct OrdersConfig { pub system_prompt: String }
 
-#[agent_definition]
+#[agent_definition(mount = "/orders/{customer_id}")]
 pub trait Orders {
+    fn new(customer_id: String, #[agent_config] config: Config<OrdersConfig>) -> Self;
     async fn handle(&mut self, request: String, order_id: String) -> bool;
 }
 
@@ -91,13 +151,18 @@ struct OrdersImpl { config: Config<OrdersConfig>, history: Vec<Message> }
 
 #[agent_implementation]
 impl Orders for OrdersImpl {
+    fn new(_customer_id: String, #[agent_config] config: Config<OrdersConfig>) -> Self {
+        Self { config, history: Vec::new() }
+    }
+
     async fn handle(&mut self, request: String, order_id: String) -> bool {
         // No DB writes — this push survives crashes, deploys, host migrations
         self.history.push(Message::user(request));
 
         // LLM sees full conversation; system prompt comes from typed config
+        let system_prompt = self.config.get().expect("config").system_prompt;
         let outcome = llm::run(
-            &self.config.get().system_prompt, &self.history,
+            &system_prompt, &self.history,
             vec![cancel_order(), change_address()], order_id.clone(),
         ).await;
         self.history.push(Message::assistant(outcome.message.clone()));
@@ -105,7 +170,9 @@ impl Orders for OrdersImpl {
         // Refunds aren't in the LLM's toolset — agent code gates them via HITL
         if outcome.needs_refund {
             // This await can sit for days at zero cost — no queue, no cron, no state table
-            let approval = create_webhook().await.json::<Approval>();
+            let webhook = create_webhook().expect("webhook");
+            notify_approver(webhook.url(), &outcome).await;
+            let approval: Approval = webhook.await.json().expect("approval");
             if approval.approved {
                 // Crash, retry, restart — still one charge. No silent double-charges.
                 let result = refund_order(order_id, outcome.refund_amount).await;
@@ -116,52 +183,107 @@ impl Orders for OrdersImpl {
     }
 }`,
 
-    scala: `final case class OrdersConfig(systemPrompt: String)
+    go: `type ID struct{ Customer string }
+type Config struct{ SystemPrompt string }
+type HandleIn struct{ Request, OrderID string }
 
-@agentDefinition()
+var Orders = golem.DefineConfiguredAgent[ID, Config](golem.Spec{
+	Name: "Orders",
+	HTTP: &golem.Mount{Path: "/orders/{customer}"},
+})
+
+var Handle = Orders.Method[HandleIn, bool]("handle")
+
+type state struct{ history []Message }
+
+func (s *state) add(role, content string) {
+	s.history = append(s.history, Message{role, content})
+}
+
+var agent = Orders.Implement(func(ID) *state { return &state{} })
+
+func init() {
+	agent.Handle(Handle, func(ctx *golem.Context[state], in HandleIn) bool {
+		// No DB writes — this append survives crashes, deploys, host migrations
+		ctx.State.add("user", in.Request)
+
+		// LLM sees full conversation; system prompt comes from typed config
+		outcome := llm.Run(ctx.Config(Orders).SystemPrompt, ctx.State.history,
+			[]Tool{cancelOrder, changeAddress}, in.OrderID)
+		ctx.State.add("assistant", outcome.Message)
+
+		// Refunds aren't in the LLM's toolset — agent code gates them via HITL
+		if outcome.NeedsRefund {
+			// This await can sit for days at zero cost — no queue, no cron, no state table
+			webhook := golem.NewWebhook[Approval]()
+			notifyApprover(webhook.URL(), outcome)
+			if webhook.MustAwait().Approved {
+				// Crash, retry, restart — still one charge. No silent double-charges.
+				result := refundOrder(in.OrderID, outcome.RefundAmount)
+				ctx.State.add("tool", result.String())
+			}
+		}
+		return true
+	})
+}`,
+
+    scala: `final case class OrdersConfig(systemPrompt: String) derives Schema
+
+@agentDefinition(mount = "/orders/{customerId}")
 trait Orders extends BaseAgent with AgentConfig[OrdersConfig]:
+  class Id(val customerId: String)
   def handle(request: String, orderId: String): Future[Boolean]
 
 @agentImplementation()
 final class OrdersImpl(customerId: String, config: Config[OrdersConfig]) extends Orders:
   private var history: Vector[Message] = Vector.empty
 
-  override def handle(request: String, orderId: String): Future[Boolean] = Future:
-    // No DB writes — this push survives crashes, deploys, host migrations
+  override def handle(request: String, orderId: String): Future[Boolean] =
+    // No DB writes — this append survives crashes, deploys, host migrations
     history = history :+ Message("user", request)
 
-    // LLM sees full conversation; system prompt comes from typed config
-    val outcome = llm.run(
-      prompt = config.value.systemPrompt, history = history,
-      tools = Seq(cancelOrder, changeAddress), context = Map("orderId" -> orderId)).await
-    history = history :+ Message("assistant", outcome.message)
+    for
+      // LLM sees full conversation; system prompt comes from typed config
+      outcome <- llm.run(
+        prompt = config.value.systemPrompt, history = history,
+        tools = Seq(cancelOrder, changeAddress), context = Map("orderId" -> orderId))
+      _ = history = history :+ Message("assistant", outcome.message)
 
-    // Refunds aren't in the LLM's toolset — agent code gates them via HITL
-    if outcome.needsRefund then
+      // Refunds aren't in the LLM's toolset — agent code gates them via HITL.
       // This await can sit for days at zero cost — no queue, no cron, no state table
-      val approval = HostApi.createWebhook().await.json[Approval]()
-      if approval.approved then
-        // Crash, retry, restart — still one charge. No silent double-charges.
-        val result = refundOrder(orderId, outcome.refundAmount).await
-        history = history :+ Message("tool", result.toString)
-    true`,
+      approved <-
+        if outcome.needsRefund then awaitApproval(HostApi.createWebhook(), outcome)
+        else Future.successful(false)
+
+      // Crash, retry, restart — still one charge. No silent double-charges.
+      _ <-
+        if approved then refundOrder(orderId, outcome.refundAmount)
+          .map(result => history = history :+ Message("tool", result.toString))
+        else Future.unit
+    yield true`,
 
     moonbit: `#derive.config
 pub(all) struct OrdersConfig { system_prompt : String }
 
 #derive.agent
+#derive.mount("/orders/{customer_id}")
 struct Orders {
   config : @config.Config[OrdersConfig]
   mut history : Array[Message]
 }
 
-pub fn Orders::handle(self : Self, request : String, order_id : String) -> Bool {
+fn Orders::new(customer_id : String, config : @config.Config[OrdersConfig]) -> Orders {
+  let _ = customer_id
+  { config, history: [] }
+}
+
+pub async fn Orders::handle(self : Self, request : String, order_id : String) -> Bool {
   // No DB writes — this push survives crashes, deploys, host migrations
   self.history.push({ role: "user", content: request })
 
   // LLM sees full conversation; system prompt comes from typed config
   let outcome = @llm.run(
-    prompt = self.config.value().system_prompt, history = self.history,
+    prompt = self.config.value.system_prompt, history = self.history,
     tools = [cancel_order(), change_address()], context = { "order_id": order_id },
   )
   self.history.push({ role: "assistant", content: outcome.message })
@@ -169,8 +291,9 @@ pub fn Orders::handle(self : Self, request : String, order_id : String) -> Bool 
   // Refunds aren't in the LLM's toolset — agent code gates them via HITL
   if outcome.needs_refund {
     // This await can sit for days at zero cost — no queue, no cron, no state table
-    let approval : Approval = @webhook.create().wait().json()
-    if approval.approved {
+    let webhook = @webhook.create()
+    notify_approver(webhook.url(), outcome)
+    if webhook.wait().text() == "approved" {
       // Crash, retry, restart — still one charge. No silent double-charges.
       let result = refund_order(order_id, outcome.refund_amount)
       self.history.push({ role: "tool", content: result.to_json().stringify() })
@@ -179,6 +302,115 @@ pub fn Orders::handle(self : Self, request : String, order_id : String) -> Bool 
   true
 }`,
   } as Record<string, string>,
+};
+
+// =============================================================================
+// SECTION 2.5 — One runtime: agents, tools, artifacts
+// =============================================================================
+
+export interface TriadPillar {
+  id: "agents" | "tools" | "artifacts";
+  title: string;
+  bodyHtml: string;
+}
+
+export const triad = {
+  eyebrow: "One runtime",
+  heading: "Deploy agents, their tools, and their artifacts.",
+  pillars: [
+    {
+      id: "agents",
+      title: "Agents",
+      bodyHtml: `Typed, durable agents in six SDKs. Streaming methods, read-only methods, reflection, and state that survives anything.`,
+    },
+    {
+      id: "tools",
+      title: "Tools",
+      bodyHtml: `Typed tools with host-enforced middleware, a built-in toolkit — shell, files, git, Node, npm, TypeScript, web fetch — and MCP in both directions.`,
+    },
+    {
+      id: "artifacts",
+      title: "Artifacts",
+      bodyHtml: `The apps, pages, and files agents ship to people — served by Golem, backed by the agent, with login and resumable streams built in.`,
+    },
+  ] as TriadPillar[],
+  closerHtml: `The harness chooses what an agent does. <strong>The runtime decides what it can do.</strong>`,
+};
+
+// =============================================================================
+// SECTION 2.7 — Business coding agents
+// =============================================================================
+
+export const codingAgent = {
+  eyebrow: "Business coding agents",
+  heading: "A coding agent, entirely in Golem.",
+  paragraphsHtml: [
+    `The coding agents that matter most are the ones business users never see: the support bot that writes a script to reconcile an account, the assistant that builds the report from three systems.`,
+    `On Golem, the shell, files, git, Node, npm, and TypeScript run inside the sandbox as isolated tool calls — under a path policy the agent can't bypass and a permission card that names the only hosts it may reach. No Linux VM to boot, sync, or pay for. Kill the server mid-task and the agent picks up where it stopped.`,
+  ],
+  toolkitLabel: "Built-in toolkit",
+  toolkit: [
+    "bash",
+    "read-file",
+    "write-file",
+    "edit-file",
+    "ls",
+    "grep",
+    "git",
+    "node",
+    "npm",
+    "npx",
+    "tsc",
+    "web-fetch",
+    "path-policy",
+  ],
+  terminal: {
+    label: "golem ssh",
+    lines: [
+      { kind: "cmd", text: `golem ssh 'ReportAgent("q3")'` },
+      { kind: "prompt", text: "npm install csv-parse" },
+      { kind: "out", text: "added 1 package in 2s" },
+      { kind: "prompt", text: "node build-report.js && ls reports" },
+      { kind: "out", text: "q3-summary.html" },
+    ],
+  },
+  noteHtml: `Harness inside or outside the sandbox — your choice. The guarantees come from the host, not from where the loop runs.`,
+  cta: { label: "Read the 1.6 announcement →", href: "/blog/golem-1-6-agents-tools-and-artifacts" },
+};
+
+// =============================================================================
+// SECTION 4.2 — Artifacts
+// =============================================================================
+
+export const artifacts = {
+  eyebrow: "Artifacts",
+  heading: "Agents ship things people use.",
+  leadHtml: `Front-ends, reports, live output — served by the same runtime that runs the agent, from the same deployment, under the same authority, with the same audit trail.`,
+  points: [
+    { title: "HTTP routers", body: "Mount any Fetch-compatible framework, and publish OpenAPI." },
+    {
+      title: "Static assets",
+      body: "Versioned with the deployment, served without waking an agent.",
+    },
+    { title: "Live files", body: "Agents publish what they write — reports, builds, workspaces." },
+    {
+      title: "Front-end login",
+      body: "OAuth2 with PKCE for single-page apps, tokens issued by Golem.",
+    },
+    {
+      title: "Durable Streams",
+      body: "Stream to the browser; a reload picks up where it left off.",
+    },
+    {
+      title: "Subdomains",
+      body: "A real URL from the first golem deploy, locally and in the cloud.",
+    },
+  ],
+  filename: "router.ts",
+  snippet: `export const AppRouter =
+  defineHttpRouter('AppRouter')
+    .mount('/app')
+    .implement((req) => app.fetch(req))`,
 };
 
 // =============================================================================
@@ -249,7 +481,7 @@ export const commitments: Commitment[] = [
     icon: "shield",
     title: "Enforces every policy.",
     paragraphsHtml: [
-      `Every agent runs in its own WASM sandbox — its own filesystem, database, and env vars, millisecond startup. Tools, network, and files are explicit grants<span class="marker">*</span>; prompt injection can't escalate, quotas runtime-enforced, every grant journaled.`,
+      `Every agent and every tool call runs in its own WebAssembly instance — its own memory, no system calls. Authority comes from <strong>permission cards</strong> the runtime mints: they narrow, never widen, and revocation cascades. Tool middleware runs in the host on every call, secrets are opaque handles, and every decision is journaled.`,
     ],
     closer: "Turn policies into guarantees.",
   },
@@ -260,7 +492,7 @@ export const commitments: Commitment[] = [
 // =============================================================================
 
 export interface ComparisonRow {
-  icon: "cells" | "stack" | "cycle" | "bounded" | "brackets";
+  icon: "cells" | "stack" | "cycle" | "bounded" | "gate" | "brackets";
   framework: string;
   golem: string;
   why: string;
@@ -280,7 +512,7 @@ export const frameworkVsRuntime = {
       icon: "cells",
       framework:
         "Agents share host resources; tenant isolation depends on developer-enforced discipline",
-      golem: "Each agent owns its own filesystem, SQLite database, and environment",
+      golem: "Each agent owns its own memory, filesystem, and environment",
       why: "Cross-tenant leaks become structurally impossible",
     },
     {
@@ -288,7 +520,7 @@ export const frameworkVsRuntime = {
       framework:
         "Durability is opt-in and coarse — recovery restarts from last boundary, losing in-flight state",
       golem:
-        "Every state change captured automatically; in-flight state survives any failure or suspension",
+        "No checkpoints, steps, or annotations — the whole agent resumes mid-execution, after any failure or suspension",
       why: "No state is ever lost to failure or suspension",
     },
     {
@@ -303,8 +535,15 @@ export const frameworkVsRuntime = {
       icon: "bounded",
       framework:
         "Authority enforced by developer-written code and LLM prompts; both fail when their authors do",
-      golem: "Capabilities bounded by the runtime — code can only do what it's granted",
+      golem:
+        "Authority carried by permission cards the runtime mints — code can only do what its cards and imports allow",
       why: "Buggy or malicious code can't exceed what it was granted",
+    },
+    {
+      icon: "gate",
+      framework: "Guardrails run in-process; generated code can route around them",
+      golem: "Tool middleware enforced by the host on every call",
+      why: "Policies hold even for code the model wrote",
     },
     {
       icon: "brackets",
@@ -339,7 +578,7 @@ export const bringStack = {
   heading: "Your libraries. Our runtime.",
   paragraphsHtml: [
     `Bring your favorite LLM SDKs, your tool libraries, your utilities — anything that's just code. They run on Golem, and your agent logic and tool primitives inherit the runtime's guarantees, without modification.`,
-    `Use Golem's lightweight SDKs only when you want runtime-specific features: durability hooks, forking, rollbacks, agent and tool discovery. Frameworks that bring their own runtime aren't officially supported today.`,
+    `Use Golem's lightweight SDKs only when you want runtime-specific features: durability hooks, forking, rollbacks, agent and tool discovery. MCP servers you import inherit the same durability and middleware. Frameworks that bring their own runtime aren't officially supported today.`,
   ],
 };
 
@@ -348,6 +587,7 @@ export const frameworks: string[] = [
   "Vercel AI SDK",
   "TanStack AI",
   "Effect AI",
+  "Zod, Valibot, ArkType",
   "Many other libraries & frameworks",
 ];
 
@@ -359,12 +599,12 @@ export const frameworksNote = "Subject to WASM compatibility per language.";
 // =============================================================================
 
 export const openSource = {
-  eyebrow: "Source-available. Your cloud. Your language.",
+  eyebrow: "Open source. Your cloud. Your language.",
   heading: "Run it where you want. Write it how you like.",
   blocks: [
     {
-      title: "BUSL-1.1 → Apache-2.0",
-      body: "The runtime source is auditable, the WASM components are inspectable, and the license transitions to Apache-2.0 — staying out of your way today, fully permissive tomorrow.",
+      title: "BUSL‑1.1 → Apache‑2.0",
+      body: "The runtime source is auditable, the WASM components are inspectable, and the license transitions to Apache‑2.0 — staying out of your way today, fully permissive tomorrow.",
     },
     {
       title: "Your cloud.",
@@ -380,15 +620,17 @@ export const openSource = {
 
 export const languages = [
   { name: "TypeScript", note: "Strongest surface" },
+  { name: "Effect", note: "Effect-native TypeScript" },
   { name: "Rust", note: "Substrate-credible" },
+  { name: "Go", note: "Idiomatic, generics-first" },
   { name: "Scala", note: "Effects-friendly" },
   { name: "MoonBit", note: "Small WASM" },
 ];
 
 export const deployments = [
-  { icon: "▸", label: "Laptop", note: "Local dev — byte-identical to prod" },
-  { icon: "◇", label: "Docker", note: "Single binary, single config" },
-  { icon: "⬢", label: "Kubernetes", note: "Helm chart, scale horizontally" },
+  { icon: "▸", label: "Laptop", note: "golem server run — the whole platform in one process" },
+  { icon: "◇", label: "Docker", note: "Compose stacks, Postgres-backed" },
+  { icon: "⬢", label: "Kubernetes", note: "Published service images, etcd-backed HA" },
   { icon: "☁", label: "Any cloud", note: "AWS, GCP, Azure, on-prem" },
   { icon: "★", label: "Golem Cloud", note: "Managed — when you want it" },
 ];
@@ -401,7 +643,6 @@ export interface TableStakeItem {
   icon: string;
   label: string;
   note: string;
-  future?: boolean; // true ⇒ render with 1.6 marker asterisk
 }
 
 export const tableStakes = {
@@ -409,67 +650,77 @@ export const tableStakes = {
   heading: "Bundled into the runtime.",
   items: [
     {
-      icon: "▭",
-      label: "OpenTelemetry built-in",
-      note: "Every step traced, every metric auto-emitted",
+      icon: "⌘",
+      label: "MCP, both directions",
+      note: "Export agents and tools; import any MCP server durably",
     },
     {
-      icon: "⌘",
-      label: "MCP server, automatic",
-      note: "Your agents are MCP servers out of the box",
+      icon: "⌥",
+      label: "Built-in toolkit",
+      note: "Shell, files, git, Node, npm, TypeScript, web fetch — in the sandbox",
     },
-    { icon: "⇆", label: "Model-agnostic", note: "Any model via HTTP — routing stays in your code" },
-    { icon: "◷", label: "Scheduled execution", note: "Cron-native, with durability across runs" },
+    {
+      icon: "⛨",
+      label: "Tool middleware",
+      note: "Policies and guardrails, enforced by the host on every call",
+    },
+    {
+      icon: "⚷",
+      label: "Permission cards",
+      note: "Runtime-minted authority that narrows, never widens",
+    },
+    {
+      icon: "⚿",
+      label: "First-class secrets",
+      note: "Opaque handles; reveal only where granted, always journaled",
+    },
+    {
+      icon: "◰",
+      label: "Artifact hosting",
+      note: "HTTP routers, static and live files, PKCE login",
+    },
+    {
+      icon: "∿",
+      label: "Durable Streams",
+      note: "Resumable streams to any client, protocol-compatible URLs",
+    },
+    {
+      icon: "◎",
+      label: "Read-only methods",
+      note: "Enforced at runtime, cached at the HTTP edge",
+    },
+    { icon: "⇄", label: "Tool-calling protocols", note: "MCP, HTTP, RPC — all exactly-once" },
     {
       icon: "⇶",
       label: "Webhook primitives",
       note: "Incoming events like HITL become awaitable promises",
     },
-    { icon: "⇄", label: "Tool-calling protocols", note: "MCP, HTTP, RPC — all exactly-once" },
     {
-      icon: "⌬",
-      label: "Sandboxed by construction",
-      note: "Every component runs in a WASM sandbox at instance cost",
-    },
-    {
-      icon: "∿",
-      label: "Streaming, durably",
-      note: "WebSocket and SSE flows resume across deploys",
+      icon: "◷",
+      label: "Scheduled execution",
+      note: "Durable timers and scheduled invocations at zero idle cost",
     },
     {
       icon: "⊟",
-      label: "First-class quotas",
-      note: "Rate, capacity, concurrency, GPU — one mechanism",
+      label: "User-defined quotas",
+      note: "Rate, capacity, concurrency — throttle, reject, or terminate",
+    },
+    {
+      icon: "▭",
+      label: "OpenTelemetry built-in",
+      note: "Every step traced, every metric auto-emitted",
     },
     {
       icon: "⊜",
       label: "Complete audit log",
-      note: "Every action recorded and replayable — debug, eval, fine-tune on real data",
+      note: "Every action and authorization decision, recorded and replayable",
     },
     {
-      icon: "⤧",
-      label: "A2A protocol interop",
-      note: "Peer agents across runtime boundaries",
-      future: true,
+      icon: "⌬",
+      label: "Sandboxed by construction",
+      note: "Every agent and tool call runs in its own WebAssembly instance",
     },
-    {
-      icon: "⛨",
-      label: "Tool middleware",
-      note: "Policies and guardrails with ironclad guarantees",
-      future: true,
-    },
-    {
-      icon: "⚿",
-      label: "First-class secrets",
-      note: "Opaque handles, capability-gated reveal",
-      future: true,
-    },
-    {
-      icon: "⚷",
-      label: "Per-tool capabilities",
-      note: "Each tool call carries its own bounded authority",
-      future: true,
-    },
+    { icon: "⇆", label: "Model-agnostic", note: "Any model via HTTP — routing stays in your code" },
   ] as TableStakeItem[],
 };
 
@@ -554,6 +805,7 @@ export const quickstart = {
   headingLines: ["Crash your first agent in five minutes.", "Watch it come back."],
   lead: "Scaffold a durable agent, run it locally, kill the process at any line, and watch it resume exactly where it stopped.",
   installCommand: `# Install: download from github.com/golemcloud/golem/releases
+# Templates: ts | effect | rust | go | scala | moonbit
 golem new --template ts --component-name example:counter --yes my-agent
 cd my-agent && golem build
 golem repl`,

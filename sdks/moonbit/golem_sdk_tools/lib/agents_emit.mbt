@@ -224,6 +224,7 @@ fn emit_constructed_agent(
   buf : StringBuilder,
   indent : String,
   snapshot_format : String?,
+  multipart? : Bool = false,
 ) -> Unit {
   let (snapshottable, format) = match snapshot_format {
     None => ("None", "None")
@@ -233,7 +234,7 @@ fn emit_constructed_agent(
   // formatter crashes when a call's sole trailing argument is a qualified
   // struct-constructor literal.
   buf.write_string(
-    "\{indent}let constructed = @agents.ConstructedAgent::{ raw: agent, snapshottable: \{snapshottable}, snapshot_format: \{format} }\n",
+    "\{indent}let constructed = @agents.ConstructedAgent::{ raw: agent, snapshottable: \{snapshottable}, snapshot_format: \{format}, multipart_snapshottable: \{if multipart { "Some(agent)" } else { "None" }} }\n",
   )
   buf.write_string("\{indent}Ok(constructed)\n")
 }
@@ -270,6 +271,7 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   buf.write_string("          let agent = \{agent.name}::new(\{args})\n")
   let use_auto_json = agent.has_json_derives &&
     !agent.has_snapshottable &&
+    !agent.has_multipart_snapshottable &&
     !agent.is_http_router()
   let format = if agent.has_snapshottable {
     Some("Binary")
@@ -278,7 +280,12 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   } else {
     None
   }
-  emit_constructed_agent(buf, "          ", format)
+  emit_constructed_agent(
+    buf,
+    "          ",
+    format,
+    multipart=agent.has_multipart_snapshottable,
+  )
   buf.write_string("        } catch {\n")
   for
     variant in [
@@ -298,13 +305,27 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
 fn emit_load_snapshot(buf : StringBuilder, agent : AgentInfo) -> Unit {
   let use_auto_json = agent.has_json_derives &&
     !agent.has_snapshottable &&
+    !agent.has_multipart_snapshottable &&
     !agent.is_http_router()
-  if !agent.has_snapshottable && !use_auto_json {
+  if !agent.has_snapshottable &&
+    !agent.has_multipart_snapshottable &&
+    !use_auto_json {
     buf.write_string("      load_snapshot: None,\n")
     return
   }
-  buf.write_string("      load_snapshot: Some(async fn(bytes, context) {\n")
-  if agent.has_snapshottable {
+  buf.write_string("      load_snapshot: Some(async fn(snapshot, context) {\n")
+  if agent.has_multipart_snapshottable {
+    buf.write_string(
+      "        guard snapshot is @agents.SnapshotData::Multipart(parts) else { return Err(\"Expected multipart snapshot\") }\n",
+    )
+    buf.write_string(
+      "        let agent = match \{agent.name}::load_snapshot_parts(parts, context) {\n          Ok(agent) => agent\n          Err(e) => return Err(e)\n        }\n",
+    )
+    emit_constructed_agent(buf, "        ", None, multipart=true)
+  } else if agent.has_snapshottable {
+    buf.write_string(
+      "        guard snapshot is @agents.SnapshotData::Binary(bytes) else { return Err(\"Expected binary snapshot\") }\n",
+    )
     buf.write_string(
       "        let agent = match \{agent.name}::load_snapshot(bytes, context) {\n",
     )
@@ -313,6 +334,9 @@ fn emit_load_snapshot(buf : StringBuilder, agent : AgentInfo) -> Unit {
     buf.write_string("        }\n")
     emit_constructed_agent(buf, "        ", Some("Binary"))
   } else {
+    buf.write_string(
+      "        guard snapshot is @agents.SnapshotData::Json(bytes) else { return Err(\"Expected JSON snapshot\") }\n",
+    )
     buf.write_string("        let _ = context\n")
     buf.write_string("        let json_str = @utf8.decode_lossy(bytes[:])\n")
     buf.write_string("        let json = @json.parse(json_str) catch {\n")
@@ -437,6 +461,7 @@ fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
 fn emit_snapshottable(buf : StringBuilder, agent : AgentInfo) -> Unit {
   if !agent.has_json_derives ||
     agent.has_snapshottable ||
+    agent.has_multipart_snapshottable ||
     agent.is_http_router() {
     return
   }

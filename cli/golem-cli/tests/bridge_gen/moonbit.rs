@@ -2842,6 +2842,72 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
     pkg.test_native();
 }
 
+#[test]
+#[test_r::timeout("120s")]
+async fn accepted_streaming_invocation_recovers_with_takeover() {
+    use std::io::BufRead;
+    let pkg = GeneratedPackage::new(agent(
+        "RecoveryAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "run",
+            vec![],
+            Some(SchemaType::stream(Some(SchemaType::u8()))),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    for (mode, expected_error) in [
+        ("success", ""),
+        ("resume-retryable", ""),
+        ("initial", "terminal rejection"),
+        ("other", "terminal rejection"),
+        (
+            "mismatch",
+            "attempt-conflict: rejection attempt does not match",
+        ),
+        ("second", "terminal rejection"),
+        ("second-retryable", "terminal rejection"),
+        (
+            "takeover-mismatch",
+            "attempt-conflict: rejection attempt does not match",
+        ),
+    ] {
+        let mut server = std::process::Command::new("python3")
+            .arg("-u")
+            .arg(
+                workspace_root()
+                    .unwrap()
+                    .join("cli/golem-cli/tests/bridge_gen/moonbit_recovery.py"),
+            )
+            .arg(mode)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut port = String::new();
+        std::io::BufReader::new(server.stdout.take().unwrap())
+            .read_line(&mut port)
+            .unwrap();
+        std::fs::write(
+            pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
+            include_str!("moonbit_recovery.mbt")
+                .replace("__PORT__", port.trim())
+                .replace("__ERROR__", expected_error),
+        )
+        .unwrap();
+        let result = std::panic::catch_unwind(|| pkg.test_native());
+        if result.is_err() {
+            let _ = server.kill();
+        }
+        let status = server.wait().unwrap();
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+        assert!(status.success(), "WebSocket recovery assertions failed");
+    }
+}
+
 // GOL-100 requires input ownership to move into an invocation, so a stream
 // already consumed directly must not subsequently be registered as an input.
 #[test]

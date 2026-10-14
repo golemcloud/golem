@@ -19,7 +19,9 @@ use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::host_functions::P3HttpSpanCleanup;
-use golem_common::model::oplog::{HostRequestP3HttpSpanCleanup, HostResponseGolemApiUnit};
+use golem_common::model::oplog::{
+    DurableInvocationId, HostRequestP3HttpSpanCleanup, HostResponseGolemApiUnit,
+};
 
 /// Store-independent inputs captured before a synchronous HTTP resource/terminal drop.
 #[derive(Clone, Debug)]
@@ -31,6 +33,8 @@ pub(crate) struct HttpSpanCleanupRecorder {
     parent: Option<OplogIndex>,
     owner: Option<OplogIndex>,
     send_start_index: OplogIndex,
+    /// The invocation id of the send; the cleanup `Start` carries it.
+    invocation_id: Option<DurableInvocationId>,
     sink: UnboundedSender<DropEvent>,
     tail_work: TailWorkTracker,
 }
@@ -41,6 +45,7 @@ impl HttpSpanCleanupRecorder {
         send_start_index: OplogIndex,
         owner: Option<OplogIndex>,
         persisted: bool,
+        invocation_id: Option<DurableInvocationId>,
     ) -> Self {
         Self {
             oplog: ctx.state.oplog.clone(),
@@ -51,6 +56,7 @@ impl HttpSpanCleanupRecorder {
                 .child_parent_start_index(&DurableFunctionType::ReadLocal, OplogIndex::INITIAL),
             owner,
             send_start_index,
+            invocation_id,
             sink: ctx
                 .state
                 .dropped_call_event_sender()
@@ -137,7 +143,7 @@ impl HttpSpanCleanupRecorder {
                 timestamp,
                 parent_start_index: self.parent,
                 function_name: P3HttpSpanCleanup::HOST_FUNCTION_NAME,
-                invocation_id: None,
+                invocation_id: self.invocation_id,
                 observational_owner: self.owner,
                 request: Some(OplogPayload::Inline(Box::new(
                     HostRequestP3HttpSpanCleanup {
@@ -183,24 +189,19 @@ impl HttpSpanCleanupRecorder {
         {
             return Ok(HttpSpanCleanupProgress::Complete);
         }
-        let request = HostRequestP3HttpSpanCleanup {
-            send_start_index: self.send_start_index,
-        }
-        .into();
         let claim = match self.parent {
-            Some(parent) => StartClaim::owned_matching_request(
+            Some(parent) => StartClaim::owned(
                 &P3HttpSpanCleanup::HOST_FUNCTION_NAME,
                 &DurableFunctionType::ReadLocal,
                 parent,
-                &request,
             ),
-            None => StartClaim::unowned_matching_request(
+            None => StartClaim::unowned(
                 &P3HttpSpanCleanup::HOST_FUNCTION_NAME,
                 &DurableFunctionType::ReadLocal,
-                &request,
             ),
         }
-        .with_observational_owner(self.owner);
+        .with_observational_owner(self.owner)
+        .with_invocation_id(self.invocation_id);
         let (handle, timestamp) = match self.replay.claim_start_or_replay_end(claim).await? {
             ReplayStartClaimOutcome::Claimed { handle, entry } => (handle, entry.timestamp()),
             ReplayStartClaimOutcome::ReplayEnded => {
@@ -304,10 +305,6 @@ pub struct DroppedCall {
     pub(super) request_upload: PendingUpload,
     pub(super) span_finished: Option<golem_common::model::oplog::SpanFinished>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
-    /// Shared signal for process-equivalent executor teardown. An unfinished call dropped after
-    /// this signal is intentionally left incomplete for replay rather than treated as guest
-    /// cancellation or a host-call programming error.
-    pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     /// The dropped call's atomic-region ownership lease, shared with every other holder (the
     /// originating handle, terminal guards). Released — store-free and idempotently — once the
     /// call's terminal is recorded.
@@ -348,10 +345,6 @@ impl DroppedCall {
 
     pub fn request_upload(&self) -> &PendingUpload {
         &self.request_upload
-    }
-
-    pub(super) fn is_executor_shutting_down(&self) -> bool {
-        self.executor_shutdown.is_cancelled()
     }
 
     /// The atomic region currently owning the dropped call, read through its lease.
@@ -1214,6 +1207,7 @@ pub(super) mod tests {
                 parent: None,
                 owner: None,
                 send_start_index: OplogIndex::from_u64(17),
+                invocation_id: None,
                 sink,
                 tail_work: TailWorkTracker::new(),
             },

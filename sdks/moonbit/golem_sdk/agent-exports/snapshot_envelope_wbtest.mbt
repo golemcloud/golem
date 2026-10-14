@@ -54,7 +54,7 @@ test "JSON snapshot envelope preserves version 1 state" {
     #|{"version":1,"principal":{"tag":"anonymous"},"state":{"value":42}}
   let (principal, state) = parse_snapshot_envelope(json_snapshot(envelope))
   debug_inspect(principal, content="Anonymous")
-  assert_eq(state, b"{\"value\":42}")
+  assert_eq(state, @agents.SnapshotData::Json(b"{\"value\":42}"))
 }
 
 ///|
@@ -86,7 +86,7 @@ test "binary snapshot envelope preserves versions 1 and 2" {
     binary_snapshot([b'\x01', b'\x2a']),
   )
   debug_inspect(legacy_principal, content="Anonymous")
-  assert_eq(legacy_state, b"*")
+  assert_eq(legacy_state, @agents.SnapshotData::Binary(b"*"))
   let principal =
     #|{"tag":"anonymous"}
   let principal_bytes = principal
@@ -103,5 +103,5 @@ test "binary snapshot envelope preserves versions 1 and 2" {
     binary_snapshot(payload),
   )
   debug_inspect(restored_principal, content="Anonymous")
-  assert_eq(restored_state, b"*")
+  assert_eq(restored_state, @agents.SnapshotData::Binary(b"*"))
 }

@@ -6,6 +6,19 @@ import type { TagObject } from "isomorphic-git";
 import { GitIndexManager } from "isomorphic-git/managers";
 import { FileSystem } from "isomorphic-git/models";
 import { formatPatch, structuredPatch } from "diff";
+import { configKey, configValue } from "./remote.ts";
+import { publishRefs, recoverFetch } from "./transfer.ts";
+import {
+  commitRebaseResolution,
+  rebaseInProgress,
+  recoverRebase,
+} from "./rebase.ts";
+import {
+  continueMerge,
+  discardMerge,
+  mergeInProgress,
+  recoverMerge,
+} from "./integration.ts";
 
 export const MAX_DIFF_BYTES = 2 * 1024 * 1024;
 export const MAX_DIFF_INPUT_BYTES = 8 * 1024 * 1024;
@@ -30,15 +43,40 @@ export type LogEntry = {
 export type BranchEntry = { name: string; current: boolean; oid: string };
 export type MutationResult = { summary: string; paths: string[] };
 
-export function effectiveCwd(directories: readonly string[]): string {
-  return directories.reduce((cwd, value) => path.resolve(cwd, value), "/");
+export async function initializeRepository(
+  dir: string,
+  defaultBranch: string,
+): Promise<void> {
+  const existing = await lstat(path.join(dir, ".git/config")).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  await git.init({ fs, dir, defaultBranch });
+  if (existing) return;
+  await git.setConfig({ fs, dir, path: "core.symlinks", value: true });
+  await git.setConfig({ fs, dir, path: "core.ignorecase", value: false });
+}
+
+// `start` is where the caller is; each `-C` directory resolves from the one before it,
+// and the first one from `start`.
+export function effectiveCwd(
+  directories: readonly string[],
+  start = "/",
+): string {
+  return directories.reduce(
+    (cwd, value) => path.resolve(cwd, value),
+    path.resolve("/", start),
+  );
 }
 
 export async function validatedCwd(
   directories: readonly string[],
+  start = "/",
 ): Promise<string> {
-  let cwd = "/";
-  for (const value of directories) {
+  // As in Git, the caller's directory is only entered when nothing replaces it: an absolute
+  // `-C` works even if that directory is gone.
+  let cwd = path.resolve("/", start);
+  for (const value of directories.length ? directories : ["."]) {
     const next = path.resolve(cwd, value);
     let metadata;
     try {
@@ -56,8 +94,9 @@ export async function validatedCwd(
 
 export async function repository(
   directories: readonly string[],
+  start = "/",
 ): Promise<Repository> {
-  const cwd = await validatedCwd(directories);
+  const cwd = await validatedCwd(directories, start);
   const dir = await git.findRoot({ fs, filepath: cwd });
   const gitdir = path.join(dir, ".git");
   const metadata = await lstat(gitdir);
@@ -66,7 +105,11 @@ export async function repository(
       "only repositories with a regular .git directory are supported",
     );
   }
-  return { cwd, dir, gitdir };
+  const repo = { cwd, dir, gitdir };
+  await recoverFetch(repo);
+  await recoverMerge(repo);
+  await recoverRebase(repo);
+  return repo;
 }
 
 export function relativePaths(
@@ -106,8 +149,24 @@ export async function statusEntries(
       : new Map<string, Snapshot>(),
     indexSnapshotMap(repo),
   ]);
+  const conflicts = await conflictEntries(repo);
   const rowsWithEntries = await Promise.all(
     rows.map(async ([filepath, head, worktree, stage]) => {
+      const conflict = conflicts.get(filepath);
+      if (conflict) {
+        const mask = [1, 2, 3].reduce(
+          (mask, stage) => mask | (conflict.has(stage) ? 1 << (stage - 1) : 0),
+          0,
+        );
+        return [
+          {
+            path: filepath,
+            index: "unmerged",
+            worktree: "unmerged",
+            code: ["DD", "DD", "AU", "UD", "UA", "DU", "AA", "UU"][mask]!,
+          },
+        ];
+      }
       const headSnapshot = head ? (headSnapshots.get(filepath) ?? {}) : {};
       const index = stage ? (indexSnapshots.get(filepath) ?? {}) : {};
       const worktreeSnapshotValue = worktree
@@ -200,8 +259,7 @@ export function formatStatus(
           (entry) =>
             `${entry.code} ${zeroTerminated ? entry.path : quoteGitPath(entry.path)}`,
         )
-        .join(separator) +
-        separator
+        .join(separator) + separator
     : "";
 }
 
@@ -263,10 +321,60 @@ type IndexEntry = { path: string; oid: string; mode: number };
 
 async function indexEntries(repo: Repository): Promise<IndexEntry[]> {
   return GitIndexManager.acquire(
-    { fs: gitFs, gitdir: repo.gitdir, cache: {}, allowUnmerged: false },
+    { fs: gitFs, gitdir: repo.gitdir, cache: {}, allowUnmerged: true },
     (index) =>
       index.entries.map(
         (entry: { path: string; oid: string; mode: number }) => ({ ...entry }),
+      ),
+  );
+}
+
+// Prepare or inspect an index through the released manager without changing the live index.
+export async function withIndex<T>(
+  repo: Repository,
+  bytes: Uint8Array | undefined,
+  action: (
+    index: Parameters<Parameters<typeof GitIndexManager.acquire>[1]>[0],
+  ) => T | Promise<T>,
+): Promise<T> {
+  const gitdir = await fs.promises.mkdtemp(
+    path.join(repo.gitdir, "golem-index-"),
+  );
+  try {
+    if (bytes) await fs.promises.writeFile(path.join(gitdir, "index"), bytes);
+    return await GitIndexManager.acquire(
+      { fs: gitFs, gitdir, cache: {}, allowUnmerged: true },
+      action,
+    );
+  } finally {
+    await fs.promises.rm(gitdir, { recursive: true, force: true });
+  }
+}
+
+export async function conflictEntries(
+  repo: Repository,
+): Promise<Map<string, Map<number, Snapshot>>> {
+  return GitIndexManager.acquire(
+    { fs: gitFs, gitdir: repo.gitdir, cache: {}, allowUnmerged: true },
+    (index) =>
+      new Map(
+        index.unmergedPaths.map((file: string) => [
+          file,
+          new Map(
+            index.entriesFlat
+              .filter(
+                (entry: { path: string; flags: { stage: number } }) =>
+                  entry.path === file && entry.flags.stage !== 0,
+              )
+              .map(
+                (entry: {
+                  flags: { stage: number };
+                  oid: string;
+                  mode: number;
+                }) => [entry.flags.stage, { oid: entry.oid, mode: entry.mode }],
+              ),
+          ),
+        ]),
       ),
   );
 }
@@ -438,6 +546,7 @@ export async function stage(
     }
   }
   const actions: { path: string; remove: boolean }[] = [];
+  const conflicts = await conflictEntries(repo);
   for (const [filepath, , worktree, staged] of rows) {
     if (filepath === ".git" || filepath.startsWith(".git/")) continue;
     const tracked = staged !== 0;
@@ -466,6 +575,7 @@ export async function stage(
         );
       }
       if (
+        conflicts.has(filepath) ||
         !sameSnapshot(
           staged ? (indexSnapshots.get(filepath) ?? {}) : {},
           await worktreeSnapshot(repo, filepath),
@@ -541,19 +651,9 @@ export async function localConfig(
   key: string,
   value: string | undefined,
 ): Promise<string> {
-  if (key !== "user.name" && key !== "user.email")
-    throw new Error("only user.name and user.email are supported");
+  configKey(key);
   if (value !== undefined) {
-    if (
-      value.trim() !== value ||
-      value.includes('"') ||
-      /[\0\r\n\u2028\u2029]/.test(value) ||
-      (/[#;]/.test(value) && value.endsWith("\\"))
-    ) {
-      throw new Error(
-        "configuration value cannot be represented safely in the local Git config",
-      );
-    }
+    configValue(key, value);
     await git.setConfig({
       fs,
       dir: repo.dir,
@@ -580,18 +680,36 @@ export async function createCommit(
   allowEmpty: boolean,
 ): Promise<string> {
   await assertSupportedModes(repo);
+  const message = commitMessage(messages);
+  if (await rebaseInProgress(repo))
+    return commitRebaseResolution(
+      repo,
+      message,
+      author ? parseIdentity(author) : undefined,
+      allowEmpty,
+    );
+  if (await mergeInProgress(repo))
+    return continueMerge(
+      repo,
+      [message],
+      author ? parseIdentity(author) : undefined,
+    );
   const committer = await localIdentity(repo);
-  return git.commit({
+  const oid = await git.commit({
     fs,
     dir: repo.dir,
     gitdir: repo.gitdir,
-    message: commitMessage(messages),
+    message,
     author: author ? parseIdentity(author) : committer,
     committer,
-    noUpdateBranch: false,
+    noUpdateBranch: true,
     dryRun: false,
     disallowEmpty: !allowEmpty,
   });
+  const ref =
+    (await git.currentBranch({ fs, ...repo, fullname: true })) ?? "HEAD";
+  await publishRefs(repo, { writes: [[ref, `${oid}\n`]], deletions: [] });
+  return oid;
 }
 
 export async function branchCommand(
@@ -611,7 +729,9 @@ export async function branchCommand(
     if (!name || startPoint)
       throw new Error("branch -d requires exactly one branch name");
     if (name === current)
-      throw new Error(`cannot delete branch '${name}' checked out at '${repo.dir}'`);
+      throw new Error(
+        `cannot delete branch '${name}' checked out at '${repo.dir}'`,
+      );
     const names = await git.listBranches({
       fs,
       dir: repo.dir,
@@ -687,7 +807,7 @@ async function unbornHeadBranch(repo: Repository): Promise<string | undefined> {
   }
 }
 
-async function resolveCommitRef(
+export async function resolveCommitRef(
   repo: Repository,
   ref: string,
 ): Promise<string> {
@@ -776,7 +896,9 @@ async function preservedCheckoutState(
     }),
   ]);
   assertNoStructuralTreeTransition(headSnapshots, targetSnapshots);
-  const indexEntriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const indexEntriesByPath = new Map(
+    entries.map((entry) => [entry.path, entry]),
+  );
   const indexSnapshots = new Map(
     entries.map((entry) => [
       entry.path,
@@ -799,13 +921,14 @@ async function preservedCheckoutState(
     let worktreeDirectory = false;
     try {
       const metadata = await lstat(path.join(repo.dir, filepath));
-      worktreeDirectory =
-        metadata.isDirectory() && !metadata.isSymbolicLink();
+      worktreeDirectory = metadata.isDirectory() && !metadata.isSymbolicLink();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    const trackedDirectory = [...headSnapshots.keys(), ...indexSnapshots.keys()]
-      .some((candidate) => candidate.startsWith(`${filepath}/`));
+    const trackedDirectory = [
+      ...headSnapshots.keys(),
+      ...indexSnapshots.keys(),
+    ].some((candidate) => candidate.startsWith(`${filepath}/`));
     const locallyChanged =
       (worktreeDirectory && !trackedDirectory) ||
       !sameSnapshot(head, index) ||
@@ -1032,6 +1155,8 @@ export async function checkoutCommand(
   paths: readonly string[],
 ): Promise<MutationResult> {
   await assertSupportedModes(repo);
+  if ((await conflictEntries(repo)).size)
+    throw new Error("resolve the unmerged index before checkout");
   if (paths.length) {
     if (newBranch || detach || ref)
       throw new Error("path checkout cannot be combined with branch switching");
@@ -1104,6 +1229,7 @@ export async function checkoutCommand(
       });
       throw error;
     }
+    await discardMerge(repo);
     return {
       summary: `switched to a new branch '${newBranch}'`,
       paths: [],
@@ -1146,8 +1272,12 @@ export async function checkoutCommand(
     throw error;
   }
   if (detach) {
-    await fs.promises.writeFile(path.join(repo.gitdir, "HEAD"), `${targetOid}\n`);
+    await fs.promises.writeFile(
+      path.join(repo.gitdir, "HEAD"),
+      `${targetOid}\n`,
+    );
   }
+  await discardMerge(repo);
   const current = await git.currentBranch({
     fs,
     dir: repo.dir,
@@ -1173,10 +1303,18 @@ export async function resolveDocumentedRef(
   ) {
     throw new Error(`unsupported revision expression: ${ref}`);
   }
+  if (ref === "FETCH_HEAD") {
+    const oid = (await readFile(path.join(repo.gitdir, ref), "utf8")).split(
+      /[\t\n]/,
+    )[0]!;
+    if (!/^[0-9a-f]{40}$/.test(oid))
+      throw new Error("invalid FETCH_HEAD object ID");
+    return oid;
+  }
   return git.resolveRef({ fs, dir: repo.dir, gitdir: repo.gitdir, ref });
 }
 
-type Snapshot = { oid?: string; mode?: number; bytes?: Uint8Array };
+export type Snapshot = { oid?: string; mode?: number; bytes?: Uint8Array };
 
 async function indexSnapshotMap(
   repo: Repository,
@@ -1189,7 +1327,7 @@ async function indexSnapshotMap(
   );
 }
 
-async function snapshotWithBytes(
+export async function snapshotWithBytes(
   repo: Repository,
   snapshot: Snapshot | undefined,
 ): Promise<Snapshot> {
@@ -1203,7 +1341,7 @@ async function snapshotWithBytes(
   return { ...snapshot, bytes: object.blob };
 }
 
-async function worktreeSnapshot(
+export async function worktreeSnapshot(
   repo: Repository,
   filepath: string,
 ): Promise<Snapshot> {
@@ -1244,11 +1382,11 @@ async function worktreeSnapshot(
   }
 }
 
-function sameSnapshot(left: Snapshot, right: Snapshot): boolean {
+export function sameSnapshot(left: Snapshot, right: Snapshot): boolean {
   return left.oid === right.oid && left.mode === right.mode;
 }
 
-async function treeSnapshotMap(
+export async function treeSnapshotMap(
   repo: Repository,
   ref: string,
 ): Promise<Map<string, Snapshot>> {
@@ -1274,7 +1412,7 @@ async function treeSnapshotMap(
   return new Map(entries);
 }
 
-function binary(bytes: Uint8Array | undefined): boolean {
+export function binary(bytes: Uint8Array | undefined): boolean {
   if (!bytes) return false;
   if (bytes.includes(0)) return true;
   try {
@@ -1285,7 +1423,7 @@ function binary(bytes: Uint8Array | undefined): boolean {
   }
 }
 
-function text(bytes: Uint8Array | undefined): string {
+export function text(bytes: Uint8Array | undefined): string {
   return bytes
     ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
     : "";
@@ -1338,6 +1476,10 @@ export async function diff(
   }
   const rightRef = refs[1];
   const indexSnapshots = await indexSnapshotMap(repo);
+  const conflicts =
+    cached || (!leftRef && !rightRef)
+      ? await conflictEntries(repo)
+      : new Map<string, Map<number, Snapshot>>();
   const leftSnapshots = emptyLeft
     ? new Map<string, Snapshot>()
     : leftRef
@@ -1367,7 +1509,20 @@ export async function diff(
       )
     )
       continue;
-    const leftMetadata = leftSnapshots.get(filepath) ?? {};
+    const conflict = conflicts.get(filepath);
+    if (conflict) {
+      changed.push(filepath);
+      if (nameOnly) continue;
+      patch += `* Unmerged path ${quoteGitPath(filepath)}\n`;
+      if (cached) {
+        stats.push({ path: filepath, insertions: 0, deletions: 0 });
+        continue;
+      }
+      patch += `# Unmerged worktree compared with stage 2 (ours)\n`;
+    }
+    const leftMetadata = conflict
+      ? (conflict.get(2) ?? {})
+      : (leftSnapshots.get(filepath) ?? {});
     const rightMetadata = rightSnapshots?.get(filepath);
     const right = rightSnapshots
       ? await snapshotWithBytes(repo, rightMetadata)
@@ -1376,7 +1531,7 @@ export async function diff(
     if (sameSnapshot(leftMetadata, right)) continue;
     const left = await snapshotWithBytes(repo, leftMetadata);
     if (!left.bytes && !right.bytes) continue;
-    changed.push(filepath);
+    if (!conflict) changed.push(filepath);
     if (nameOnly) continue;
     const leftPath = left.bytes ? quoteGitPath(`a/${filepath}`) : "/dev/null";
     const rightPath = right.bytes ? quoteGitPath(`b/${filepath}`) : "/dev/null";
@@ -1441,9 +1596,7 @@ export async function diff(
       });
       filePatch = statOnly
         ? ""
-        : header +
-          modeChange +
-          formatPatch(structured).replace(/^=+\n/, "");
+        : header + modeChange + formatPatch(structured).replace(/^=+\n/, "");
     }
     if (!statOnly) {
       patch += filePatch;

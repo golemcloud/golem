@@ -4861,6 +4861,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             &HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -5069,6 +5070,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
             DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::INITIAL)),
             Some(OplogIndex::INITIAL),
+            None,
         )
         .await;
 
@@ -5086,6 +5088,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
             DurableFunctionType::WriteRemoteBatched(Some(parent)),
             Some(parent),
+            None,
         )
         .await
         .unwrap();
@@ -5278,6 +5281,151 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
 }
 
 #[test]
+async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing) {
+    for inline_limit in [1, 1_000_000] {
+        let blob_storage = Arc::new(ReadCountingBlobStorage::new());
+        let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+        let service = PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            100,
+            1,
+            inline_limit,
+            RetryConfig::default(),
+        )
+        .await;
+        let account_id = AccountId::new();
+        let environment_id = EnvironmentId::new();
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: format!("shared-{inline_limit}"),
+        };
+        let owned = OwnedAgentId::new(environment_id, &agent_id);
+        let metadata = make_agent_metadata(agent_id, account_id, environment_id);
+        let oplog = service
+            .open(
+                &mut service.lock_lifecycle(&owned.agent_id).await,
+                &owned,
+                AgentMode::Durable,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await;
+        let key = IdempotencyKey::new("shared-payload".to_string());
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::List {
+                elements: (0..10_000)
+                    .map(|i| SchemaValue::U8((i % 251) as u8))
+                    .collect(),
+            }],
+        };
+        let payload_value = AgentInvocationPayload::AgentMethod {
+            method_name: "large-input".to_string(),
+            input,
+            principal: Principal::anonymous(),
+            scope_card: None,
+        };
+        let payload = oplog
+            .upload_payload_owned(payload_value.clone())
+            .await
+            .unwrap();
+        let uploads = blob_storage.puts.load(Ordering::Relaxed);
+        assert_eq!(uploads, usize::from(inline_limit == 1));
+        let pending_context = InvocationContextStack::fresh_rounded();
+        let pending_spans = pending_context.to_oplog_data();
+        let pending = oplog
+            .add(OplogEntry::pending_agent_invocation(
+                key.clone(),
+                payload,
+                pending_context.trace_id,
+                pending_context.trace_states,
+                pending_spans,
+            ))
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        // Read persisted entries, not the resident oplog buffer or typed payload cache.
+        let OplogEntry::PendingAgentInvocation { payload, .. } = service
+            .read_exact(&owned, AgentMode::Durable, pending, 1)
+            .await
+            .remove(&pending)
+            .unwrap()
+        else {
+            panic!("missing committed Pending")
+        };
+        assert_eq!(
+            oplog.download_payload(payload.clone()).await.unwrap(),
+            payload_value
+        );
+        let executing_context = InvocationContextStack::fresh_rounded();
+        let pin = invocation_wallet_pin();
+        let started = oplog
+            .add_agent_invocation_started_from_pending(
+                key.clone(),
+                payload.clone(),
+                executing_context.clone(),
+                pin.clone(),
+            )
+            .await
+            .unwrap();
+        indexed_storage
+            .inject_append_many_failures([InjectedAppendFailure::CommitThenIndeterminate]);
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
+
+        let OplogEntry::AgentInvocationStarted {
+            idempotency_key,
+            payload: recorded,
+            trace_id,
+            wallet_pin,
+            ..
+        } = service
+            .read_exact(&owned, AgentMode::Durable, started, 1)
+            .await
+            .remove(&started)
+            .unwrap()
+        else {
+            panic!("missing committed Started")
+        };
+        assert_eq!(recorded, payload);
+        assert_eq!(idempotency_key, key);
+        assert_eq!(trace_id, executing_context.trace_id);
+        assert_eq!(*wallet_pin, pin);
+        assert_eq!(
+            oplog.download_payload(recorded.clone()).await.unwrap(),
+            payload_value
+        );
+        oplog
+            .add_agent_invocation_started_from_pending(
+                key,
+                recorded.clone(),
+                executing_context,
+                invocation_wallet_pin(),
+            )
+            .await
+            .unwrap();
+        indexed_storage.inject_append_many_failures([InjectedAppendFailure::Fenced]);
+        assert!(matches!(
+            oplog.commit(CommitLevel::Always).await,
+            Err(OplogError::Fenced(_))
+        ));
+        assert_eq!(
+            service.get_last_index(&owned, AgentMode::Durable).await,
+            started
+        );
+        assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
+        assert_eq!(
+            oplog.download_payload(recorded).await.unwrap(),
+            payload_value
+        );
+    }
+}
+
+#[test]
 async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -5322,6 +5470,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
             &HostResponse::Custom(large_payload1.clone().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
+            None,
             None,
         )
         .await
@@ -13251,4 +13400,86 @@ async fn an_older_ephemeral_handle_stays_fenced_after_a_newer_owner_archives(_tr
         assert!(matches!(refused, Err(OplogError::Fenced(_))), "{backend}");
         assert_fenced_by(backend, older.fence(), 5, Some(6));
     }
+}
+
+/// A read whose deserialization is handed to the blocking pool after the runtime began shutting it
+/// down is cancelled by that shutdown, not by a storage failure. It parks until the runtime drops
+/// it instead of panicking, while corrupt stored entries still fail the read.
+#[test]
+fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "read-outlives-blocking-pool".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+    let namespace = IndexedStorageNamespace::OpLog {
+        agent_id: agent_id.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let key = agent_id.to_redis_key();
+    let entry = OplogEntry::exited().rounded();
+
+    let service = runtime.block_on(async {
+        for (idx, value) in [(1, serialize(&entry).unwrap()), (2, vec![0xff, 0xff, 0xff])] {
+            indexed_storage
+                .append(
+                    "oplog",
+                    "append",
+                    "entry",
+                    namespace.clone(),
+                    &key,
+                    idx,
+                    value,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await
+    });
+
+    let read = |idx: u64| {
+        service.read_source(
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::from_u64(idx),
+            1,
+        )
+    };
+
+    let live = runtime.block_on(read(1));
+    assert_eq!(live.get(&OplogIndex::from_u64(1)), Some(&entry));
+    let corrupt = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(read(2))));
+    assert!(
+        corrupt.is_err(),
+        "a corrupt stored entry must still fail the read"
+    );
+
+    let handle = runtime.handle().clone();
+    drop(runtime);
+    let _entered = handle.enter();
+    let refused = tokio::task::spawn_blocking(|| ()).now_or_never();
+    assert!(
+        matches!(&refused, Some(Err(error)) if error.is_cancelled()),
+        "the blocking pool of a shut down runtime cancels new work"
+    );
+
+    let after_shutdown = std::panic::catch_unwind(AssertUnwindSafe(|| read(1).now_or_never()));
+    assert!(
+        matches!(after_shutdown, Ok(None)),
+        "a read cancelled by the runtime shutdown must park, not panic"
+    );
 }

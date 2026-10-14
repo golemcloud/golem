@@ -99,6 +99,7 @@ const WS_TAGS = new Set<WsClient.Error["tag"]>([
   "send-failure",
   "receive-failure",
   "protocol-error",
+  "session-lost",
   "closed",
   "other",
 ])
@@ -196,6 +197,8 @@ const mapToSocketError = (
       case "protocol-error":
       case "other":
         return errorForCallSite(fallback, tagged.val)
+      case "session-lost":
+        return errorForCallSite(fallback === "open" ? "receive" : fallback, { _tag: "SessionLost" })
       case "closed": {
         const info = tagged.val as { code?: number; reason?: string } | undefined
         return new Socket.SocketError({
@@ -216,6 +219,52 @@ const mapToSocketError = (
 // ---------------------------------------------------------------------------
 
 /**
+ * Payloadless reconstruction-loss marker.
+ * @since 1.6.0
+ * @category models
+ */
+export interface SessionLost {
+  readonly _tag: "SessionLost"
+}
+
+/**
+ * Recognize reconstruction loss in a socket error, including decoded errors.
+ * @since 1.6.0
+ * @category guards
+ */
+export const isSessionLost = (
+  error: unknown,
+): error is {
+  readonly _tag: "SocketError"
+  readonly reason: {
+    readonly _tag: "SocketReadError" | "SocketWriteError"
+    readonly cause: SessionLost
+  }
+} => {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("_tag" in error) ||
+    error._tag !== "SocketError" ||
+    !("reason" in error)
+  )
+    return false
+  const reason = error.reason
+  if (
+    typeof reason !== "object" ||
+    reason === null ||
+    !("_tag" in reason) ||
+    (reason._tag !== "SocketReadError" && reason._tag !== "SocketWriteError") ||
+    !("cause" in reason)
+  )
+    return false
+  const cause = reason.cause
+  return (
+    typeof cause === "object" && cause !== null && "_tag" in cause && cause._tag === "SessionLost"
+  )
+}
+
+/**
  * Options for {@link connect}, {@link layer}, {@link makeChannel}.
  *
  * - `headers` is forwarded verbatim to the host's
@@ -231,6 +280,12 @@ const mapToSocketError = (
  * @category models
  */
 export interface ConnectOptions {
+  /**
+   * Reconstruction behavior after recovery. Absence uses the host default.
+   * @since 1.6.0
+   * @category models
+   */
+  readonly reconstructionPolicy?: WsClient.ReconstructionPolicy | undefined
   readonly headers?: ReadonlyArray<readonly [string, string]> | undefined
   readonly closeCodeIsError?: ((code: number) => boolean) | undefined
   readonly openTimeout?: Duration.Input | undefined
@@ -332,7 +387,7 @@ export const fromConnection = <RO>(
         Effect.suspend(() => {
           const ws = currentWS!
           if (Socket.isCloseEvent(chunk)) {
-            // Best-effort close on the host side. Don't rely on the
+            // Propagate host close failures to both sides. Don't rely on the
             // host to surface a synthetic `error::closed` to wake
             // the read loop — instead, fail the read fiber's
             // deferred ourselves so a pending pull returns promptly even
@@ -340,8 +395,14 @@ export const fromConnection = <RO>(
             // local close.
             try {
               ws.close(chunk.code, chunk.reason)
-            } catch {
-              // swallow — the read loop is the source of truth
+            } catch (cause) {
+              const error = mapToSocketError(cause, "send")
+              if (isSessionLost(error)) {
+                const close = currentClose
+                return close === undefined
+                  ? Effect.fail(error)
+                  : Deferred.fail(close, error).pipe(Effect.andThen(Effect.fail(error)))
+              }
             }
             const closeError = new Socket.SocketError({
               reason: new Socket.SocketCloseError({
@@ -434,7 +495,12 @@ export const connect = (
     // await. Failure surfaces here as `SocketError(SocketOpenError)`.
     const ws = yield* Effect.acquireRelease(
       Effect.try({
-        try: () => client.connect(url, toHostHeaders(options?.headers)),
+        try: () =>
+          client.connect(
+            url,
+            toHostHeaders(options?.headers),
+            options?.reconstructionPolicy ?? undefined,
+          ),
         catch: (cause) => mapToSocketError(cause, "open"),
       }),
       (ws) =>

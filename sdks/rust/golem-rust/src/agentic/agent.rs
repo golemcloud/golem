@@ -203,9 +203,13 @@ impl WriteAgentParameter for &AgentArgument<'_, Principal> {
 }
 
 #[derive(Debug)]
-pub struct SnapshotData {
-    pub data: Vec<u8>,
-    pub mime_type: String,
+pub enum SnapshotData {
+    Json(Vec<u8>),
+    Bytes(Vec<u8>),
+    Multipart {
+        state: Vec<u8>,
+        parts: std::collections::BTreeMap<String, super::SnapshotPart>,
+    },
 }
 
 #[derive(Debug)]

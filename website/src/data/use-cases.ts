@@ -38,13 +38,13 @@ export interface ClassicDE {
 export const meta = {
   title: "Use Cases — What you build with Golem",
   description:
-    "From per-user AI agents to multi-step business workflows, here's what Golem is built to run — and the architectural reasons why.",
+    "From business coding agents to phone support to per-user fleets, here's what Golem is built to run — and the architectural reasons why.",
 };
 
 export const hero = {
   eyebrow: "Use cases",
   heading: "What you build with Golem",
-  lede: "Golem is the durable agent runtime. From per-user AI agents to multi-step business workflows, here's what it's built to run — and the architectural reasons why.",
+  lede: "Golem is the durable runtime for agents, their tools, and their artifacts. From business coding agents to phone support to per-user fleets, here's what it's built to run — and why.",
 };
 
 // =============================================================================
@@ -68,6 +68,64 @@ export const classicSection = {
 
 export const featured: FeaturedUseCase[] = [
   {
+    title: "Business coding agents",
+    intro:
+      "Agents that write and run small programs for people who never see the code — support, operations, analysis — running entirely inside Golem.",
+    examples: [
+      "Support bot that writes a script to reconcile a customer's account",
+      "Analyst assistant that assembles a report from three systems",
+      "Ops agent that cleans and transforms the same spreadsheet every week",
+      "Prompt-to-app builder that ships a working front-end and backend",
+    ],
+    fits: [
+      {
+        title: "Runs entirely in Golem",
+        body: "Shell, files, git, Node, npm, and TypeScript run inside the sandbox as isolated tool calls — no VM to sync.",
+      },
+      {
+        title: "Guardrails it can't bypass",
+        body: "A path policy and tool middleware, enforced by the host on every call, whoever wrote the code.",
+      },
+      {
+        title: "Authority it can't widen",
+        body: "A permission card names the only hosts it may reach; derivation narrows, revocation cascades.",
+      },
+      {
+        title: "Ships its own UI",
+        body: "Its artifact — a report, a dashboard, an app — is served live from the agent's own files.",
+      },
+    ],
+  },
+  {
+    title: "Phone & voice agents",
+    intro:
+      "Agents that answer the phone and stay on the line — voice to text to LLM to voice — with every call a durable agent that keeps its place.",
+    examples: [
+      "AI receptionist answering inbound calls 24/7 for service businesses",
+      "Phone support agent that looks up orders and hands off to humans",
+      "In-product voice copilots streaming audio turn by turn",
+      "Slack and Discord bots with multi-turn memory across days",
+    ],
+    fits: [
+      {
+        title: "One agent per call",
+        body: "Each call is a single, durable, addressable agent keyed by call ID — no session store, no router.",
+      },
+      {
+        title: "Audio over Durable Streams",
+        body: "Idempotent appends in, resumable reads out — a dropped connection loses nothing.",
+      },
+      {
+        title: "Speech services, durably",
+        body: "Speech-to-text, LLM, and text-to-speech calls are journaled and never repeat on recovery.",
+      },
+      {
+        title: "Calls survive deploys",
+        body: "Transcripts, context, and completed tool calls survive crashes, deploys, and host drains.",
+      },
+    ],
+  },
+  {
     title: "Customer support agents",
     intro:
       "A durable agent per conversation that survives crashes, redeploys, and migrations — held open for hours or days across chat, email, voice, and ticketing.",
@@ -83,8 +141,8 @@ export const featured: FeaturedUseCase[] = [
         body: "Every conversation ID has exactly one live agent instance — no router, no registry, no orchestrator code.",
       },
       {
-        title: "Every action recorded",
-        body: "Every state change, every effect, every tool call — all replayable across crashes, redeploys, and migrations.",
+        title: "Tools behind middleware",
+        body: "Refunds and cancellations run through host-enforced approval gates the agent can't skip.",
       },
       {
         title: "Zero-cost idle",
@@ -93,35 +151,6 @@ export const featured: FeaturedUseCase[] = [
       {
         title: "Wait for humans, no timeouts",
         body: "Conversations pause indefinitely for human approval — hours-long escalations and multi-day reviews are first-class.",
-      },
-    ],
-  },
-  {
-    title: "Coding & dev agents",
-    intro:
-      "Agents that read, write, test, and ship code — running for hours, executing untrusted AI output, pausing and replaying without losing plan state.",
-    examples: [
-      "Autonomous PR agent that reviews code and proposes fixes",
-      "Prompt-to-application builder spinning up backend and frontend together",
-      "Legacy-code modernization across COBOL, ABAP, and APEX targets",
-      "CI/CD remediation agent that diagnoses failures and proposes patches",
-    ],
-    fits: [
-      {
-        title: "Runs for hours, days, or weeks",
-        body: "Multi-hour, multi-day workflows are the default — no serverless timeout to design around, no manual checkpointing.",
-      },
-      {
-        title: "Every agent in its own sandbox",
-        body: "AI code runs inside WebAssembly — isolation at instance cost, no separate sandbox service to wire up.",
-      },
-      {
-        title: "Pause, branch, rewind, replay",
-        body: "Every action recorded — pause, branch, rewind hours of work, or replay the whole session for debugging.",
-      },
-      {
-        title: "Built for coding agents",
-        body: "Golem 1.5 ships agent-skills, AGENTS.md, and weekly benchmarks against real coding workloads.",
       },
     ],
   },
@@ -141,16 +170,16 @@ export const featured: FeaturedUseCase[] = [
         body: "Fan out millions of document parses, resume from step N after a crash, with exactly-once embedding writes.",
       },
       {
-        title: "Per-user agents + permissions",
-        body: "Each user gets their own agent, with permissions in the identity — no cross-user leaks, ever.",
+        title: "Per-user agents + permission cards",
+        body: "Each user gets their own agent and a permission card scoped to their data — no cross-user leaks.",
       },
       {
-        title: "Multi-hour, zero idle cost",
-        body: "Analyst loops run for hours over remote APIs; agents suspend on each call and consume no compute when idle.",
+        title: "Read-only lookups, cached",
+        body: "Read-only methods can't write or call out, and their results are cached at the executor and the HTTP edge.",
       },
       {
         title: "Audit trail, automatic",
-        body: "Every query, retrieval, and tool call is logged automatically — that same history drives replay.",
+        body: "Every query, retrieval, tool call, and authorization decision is logged automatically — that same history drives replay.",
       },
     ],
   },
@@ -174,8 +203,8 @@ export const featured: FeaturedUseCase[] = [
         body: "Agents use megabytes, not gigabytes — millions on commodity hardware become viable economics.",
       },
       {
-        title: "Isolation between every agent",
-        body: "No shared memory, no shared filesystem, no shared anything between agents — at megabyte cost, not gigabyte.",
+        title: "Each with its own artifact",
+        body: "A per-user dashboard or portal, served live from the agent's own files, behind PKCE login.",
       },
       {
         title: "Migrates without losing state",
@@ -190,13 +219,13 @@ export const featured: FeaturedUseCase[] = [
     examples: [
       "Healthcare claim review and medical-necessity decisioning agents",
       "Mortgage underwriting workflow with policy checks and human adjudication",
-      "Financial-crime investigation across multi-agent A2A workflows",
-      "FedRAMP-, HIPAA-, GDPR-compliant document processing on customer infra",
+      "Financial-crime investigation across cooperating agents with a full audit trail",
+      "Document processing inside your VPC for HIPAA- and GDPR-regulated workloads",
     ],
     fits: [
       {
-        title: "Same software, your cloud",
-        body: "Golem Cloud On-Prem ships our managed-Cloud operations stack inside your AWS, GCP, Azure, or Kubernetes.",
+        title: "Your infrastructure",
+        body: "Run the full open-source platform in your own AWS, GCP, Azure, or Kubernetes environment.",
       },
       {
         title: "Audit log, automatic",
@@ -204,40 +233,11 @@ export const featured: FeaturedUseCase[] = [
       },
       {
         title: "WebAssembly isolation",
-        body: "WebAssembly isolation between agents — stronger than containers, no escape vectors, no runtime tradeoff.",
+        body: "Each agent has its own memory and filesystem, no system calls, and only the authority its cards grant.",
       },
       {
         title: "Multi-language by default",
-        body: 'Rust, TypeScript, Scala, MoonBit, Python (planned) — no "rewrite in our framework" tax for enterprise stacks.',
-      },
-    ],
-  },
-  {
-    title: "Voice & chat agents",
-    intro:
-      "Agents inside real-time channels — voice, chat, and in-product copilots — streaming turn-by-turn while conversations persist across days and redeploys.",
-    examples: [
-      "AI receptionist taking inbound calls 24/7 for service businesses",
-      "Slack and Discord bots with multi-turn memory across days",
-      "In-product voice copilots streaming over WebRTC with low latency",
-      "WhatsApp-based booking and customer-engagement agents for SMBs",
-    ],
-    fits: [
-      {
-        title: "One agent per channel",
-        body: "Each call or thread is a single, durable, addressable agent — no orchestrator routing messages.",
-      },
-      {
-        title: "Wakes where it left off",
-        body: "Agents suspend between turns at zero compute, zero memory, and wake exactly where they left off on the next event.",
-      },
-      {
-        title: "History recorded automatically",
-        body: "Every turn appears in the agent's durable state automatically — no separate conversation store, no syncing logic.",
-      },
-      {
-        title: "Calls survive deploys",
-        body: "Active calls survive new deploys and host drains — the agent migrates with all its state and in-flight tool calls.",
+        body: 'TypeScript, Effect, Rust, Go, Scala, MoonBit — no "rewrite in our framework" tax for enterprise stacks.',
       },
     ],
   },

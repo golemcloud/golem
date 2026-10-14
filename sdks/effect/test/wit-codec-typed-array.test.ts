@@ -1,6 +1,7 @@
 import { describe, it, expect } from "@effect/vitest"
 import { Effect, Schema } from "effect"
-import { toWitCodec } from "../src/WitCodec.js"
+import { compile, toWitCodec } from "../src/WitCodec.js"
+import { schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import {
   BigInt64ArraySchema,
   BigUint64ArraySchema,
@@ -9,6 +10,7 @@ import {
   Int8ArraySchema,
   Int16ArraySchema,
   Int32ArraySchema,
+  Uint8,
   Uint8ArraySchema,
   Uint16ArraySchema,
   Uint32ArraySchema,
@@ -127,9 +129,58 @@ describe("typed-array schemas → list<primN>", () => {
         expect(Array.from(r.back as Iterable<unknown>)).toEqual(
           Array.from(c.value as unknown as Iterable<unknown>),
         )
+        const wire = yield* compile(c.schema as Schema.Codec<any, any, never, never>)
+        const expected = schemaValueToWit(r.sv)
+        expect(yield* wire.encode(c.value)).toEqual(expected)
+        expect(yield* wire.encodeAsync(c.value)).toEqual(expected)
+        const decoded = yield* wire.decode(expected)
+        expect(decoded).toBeInstanceOf(c.ctor)
+        expect(decoded).toEqual(c.value)
       }),
     )
   }
+
+  for (const length of [0, 1, 255, 256, 10000]) {
+    it.effect(`preserves bytes and full-width wire indices at length ${length}`, () =>
+      Effect.gen(function* () {
+        const schema = Schema.Struct({ prefix: Schema.Array(Uint8), bytes: Uint8ArraySchema })
+        const wire = yield* compile(schema)
+        const value = {
+          prefix: Array.from({ length: 300 }, (_, i) => i % 256),
+          bytes: Uint8Array.from({ length }, (_, i) => (i * 37 + 19) % 256),
+        }
+        const model = yield* toWitCodec(schema)
+        const expected = schemaValueToWit(yield* Schema.encodeEffect(model.codec)(value))
+        const encoded = yield* wire.encodeAsync(value)
+        expect(encoded).toEqual(expected)
+        expect(yield* wire.decode(encoded)).toEqual(value)
+      }),
+    )
+  }
+
+  it.effect("rejects wrong array kinds and malformed wire scalars", () =>
+    Effect.gen(function* () {
+      const wire = yield* compile(Uint8ArraySchema)
+      for (const input of [[1, 2], new Int8Array([1, 2]), "abc"]) {
+        expect(
+          yield* Effect.result(wire.encodeAsync(input as unknown as Uint8Array)),
+        ).toMatchObject({
+          _tag: "Failure",
+        })
+      }
+      expect(
+        yield* Effect.result(
+          wire.decode({
+            valueNodes: [
+              { tag: "u8-value", val: 256 },
+              { tag: "list-value", val: [0] },
+            ],
+            root: 1,
+          }),
+        ),
+      ).toMatchObject({ _tag: "Failure" })
+    }),
+  )
 
   it.effect("typed array nested inside a struct round-trips", () =>
     Effect.gen(function* () {

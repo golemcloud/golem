@@ -103,6 +103,10 @@ pub struct StreamWriteAdmission {
 }
 
 impl StreamWriteAdmission {
+    pub(super) fn producer(&self) -> Arc<DurableStreamStore> {
+        self.producer.clone()
+    }
+
     /// Gives output mutations their own suspension charge before admission waits. The scoped
     /// source is not inherited by spawned tasks; each output drain installs its own source.
     pub(crate) async fn account_output_mutations<T>(

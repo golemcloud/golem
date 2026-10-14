@@ -163,31 +163,13 @@ Manual markers do not trap or pair themselves on failure. Never put `endOperatio
 unconditional finalizer: closing the marker after failure commits the region instead of leaving it
 open for recovery.
 
-## Persistence Level
+## Custom Durable Functions
 
-Persistence-level controls are primarily for Golem-specific libraries implementing custom durable
-behavior, not ordinary application optimization. Prefer the scoped combinator, which restores the
-previous level when the Effect exits:
-
-```typescript
-const result = Durability.withPersistenceLevel(
-  Durability.PersistenceLevel.persistNothing,
-  customDurabilityEffect,
-);
-```
-
-Available values are:
-
-| Value                                                  | Meaning                                                  |
-| ------------------------------------------------------ | -------------------------------------------------------- |
-| `Durability.PersistenceLevel.smart`                    | Default host-managed durable behavior                    |
-| `Durability.PersistenceLevel.persistRemoteSideEffects` | Persist remote side effects for replay                   |
-| `Durability.PersistenceLevel.persistNothing`           | No replay or state-restoration guarantee for the section |
-
-`persistNothing` is not an oplog-size switch. Code using it must implement the required live/replay
-behavior itself. For low-level integration work, `Durability.getPersistenceLevel` is an Effect
-value and `Durability.setPersistenceLevel(level)` changes the host mode directly; ordinary code
-should use `withPersistenceLevel` so restoration is scoped.
+Golem 1.6 has no persistence levels: a durable agent cannot switch off oplog recording for part of
+its execution. Libraries that perform an effect Golem does not already record use
+`Durability.wrap` (or `Durability.wrapInfallible`), which records the schema-encoded result on a
+live run and returns it on replay without re-running the body. See
+[`golem-configure-durability-effect`](/next/how-to-guides/effect/golem-configure-durability-effect) for an example.
 
 ## Idempotence Mode
 
