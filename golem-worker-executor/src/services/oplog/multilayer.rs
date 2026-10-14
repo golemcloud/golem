@@ -140,12 +140,6 @@ impl From<OplogReadError> for OplogArchiveError {
     }
 }
 
-impl From<OplogArchiveError> for String {
-    fn from(error: OplogArchiveError) -> Self {
-        error.to_string()
-    }
-}
-
 pub type OplogArchiveResult<T> = Result<T, OplogArchiveError>;
 type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
 type ArchiveFailures = Arc<Mutex<HashMap<(OwnedAgentId, ArchiveSource), ArchiveFailureState>>>;
@@ -529,7 +523,7 @@ impl MultiLayerOplogService {
                 if lower_layer
                     .exists(&id, agent_mode)
                     .await
-                    .map_err(WorkerExecutorError::runtime)?
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
                 {
                     exists_in_lower = true;
                     break;
@@ -1112,7 +1106,10 @@ impl OplogService for MultiLayerOplogService {
             .await?;
         if result == OplogIndex::NONE {
             for layer in &self.lower {
-                let idx = layer.get_last_index(owned_agent_id, agent_mode).await?;
+                let idx = layer
+                    .get_last_index(owned_agent_id, agent_mode)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 if idx != OplogIndex::NONE {
                     result = idx;
                     break;
@@ -1263,7 +1260,11 @@ impl OplogService for MultiLayerOplogService {
             if agent_mode == AgentMode::Ephemeral {
                 crate::metrics::ephemeral::record_lower_oplog_existence_read();
             }
-            if layer.exists(owned_agent_id, agent_mode).await? {
+            if layer
+                .exists(owned_agent_id, agent_mode)
+                .await
+                .map_err(|error| error.to_string())?
+            {
                 return Ok(true);
             }
         }
@@ -1698,7 +1699,12 @@ impl MultiLayerOplog {
         } else {
             let mut first_non_empty = None;
             for n in 0..this.lower.len().get().saturating_sub(1) {
-                if this.lower[n].length().await? > 0 {
+                if this.lower[n]
+                    .length()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    > 0
+                {
                     first_non_empty = Some(n);
                     break;
                 }
@@ -1706,8 +1712,10 @@ impl MultiLayerOplog {
 
             if let Some(first_non_empty) = first_non_empty {
                 // transferring the whole non-empty lower layer to the next layer
-                let last_transferred_idx =
-                    this.lower[first_non_empty].current_oplog_index().await?;
+                let last_transferred_idx = this.lower[first_non_empty]
+                    .current_oplog_index()
+                    .await
+                    .map_err(|error| error.to_string())?;
                 if !this.multi_layer_oplog_service.begin_archive_attempt(
                     &this.owned_agent_id,
                     ArchiveSource::Lower(first_non_empty),
@@ -1978,7 +1986,7 @@ impl Oplog for MultiLayerOplog {
     async fn try_length(&self) -> Result<u64, String> {
         let mut total_length = self.primary.try_length().await?;
         for layer in &self.lower {
-            total_length += layer.length().await?;
+            total_length += layer.length().await.map_err(|error| error.to_string())?;
         }
         Ok(total_length)
     }
@@ -2273,7 +2281,7 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
             .first()
             .verify_persisted(entries)
             .await
-            .map_err(String::from)
+            .map_err(|error| error.to_string())
     }
 
     /// The primary latches a refused trim itself and reports it typed on the next write through
@@ -2344,7 +2352,7 @@ impl BackgroundTransfer for BackgroundTransferBetweenLowers {
         self.target_layer
             .verify_persisted(entries)
             .await
-            .map_err(String::from)
+            .map_err(|error| error.to_string())
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError> {
