@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::domain_registration::Domain;
 use http::header::{CONNECTION, CONTENT_LENGTH, EXPECT, HOST, TRANSFER_ENCODING};
 use http::uri::Authority;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use std::collections::HashSet;
-use std::net::{Ipv4Addr, Ipv6Addr};
 
 pub(super) type RawHeaders = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -331,77 +331,11 @@ fn normalize_authority(value: &[u8]) -> Result<String, EnvelopeError> {
     if authority.as_str().contains('@') || authority.host().is_empty() {
         return Err(EnvelopeError::InvalidOrigin);
     }
-    let (host, port) = if let Some(rest) = value.strip_prefix('[') {
-        let close = rest.find(']').ok_or(EnvelopeError::InvalidOrigin)?;
-        let literal = &rest[..close];
-        literal
-            .parse::<Ipv6Addr>()
-            .map_err(|_| EnvelopeError::InvalidOrigin)?;
-        let suffix = &rest[close + 1..];
-        let port = if suffix.is_empty() {
-            None
-        } else {
-            Some(
-                suffix
-                    .strip_prefix(':')
-                    .ok_or(EnvelopeError::InvalidOrigin)?,
-            )
-        };
-        (format!("[{literal}]").to_ascii_lowercase(), port)
-    } else {
-        let (host, port) = match value.split_once(':') {
-            Some((host, port)) if !port.contains(':') => (host, Some(port)),
-            Some(_) => return Err(EnvelopeError::InvalidOrigin),
-            None => (value, None),
-        };
-        validate_origin_host(host)?;
-        // A trailing dot names the same DNS host; domains are registered without it.
-        (
-            host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase(),
-            port,
-        )
-    };
-    if let Some(port) = port {
-        if port.is_empty()
-            || !port.bytes().all(|byte| byte.is_ascii_digit())
-            || port.parse::<u16>().is_err()
-        {
-            return Err(EnvelopeError::InvalidOrigin);
-        }
-        Ok(format!("{host}:{port}"))
-    } else {
-        Ok(host)
-    }
-}
-
-fn validate_origin_host(host: &str) -> Result<(), EnvelopeError> {
-    if host.is_empty() || !host.is_ascii() {
-        return Err(EnvelopeError::InvalidOrigin);
-    }
-    if host
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || byte == b'.')
-    {
-        host.parse::<Ipv4Addr>()
-            .map_err(|_| EnvelopeError::InvalidOrigin)?;
-        return Ok(());
-    }
-    let dns = host.strip_suffix('.').unwrap_or(host);
-    if dns.is_empty()
-        || host.len() > 254
-        || dns.split('.').any(|label| {
-            label.is_empty()
-                || label.len() > 63
-                || label.starts_with('-')
-                || label.ends_with('-')
-                || !label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-    {
-        return Err(EnvelopeError::InvalidOrigin);
-    }
-    Ok(())
+    // Requests are routed by the same canonical spelling that domains are registered in.
+    Domain(value.to_owned())
+        .canonical()
+        .map(|domain| domain.0)
+        .map_err(|_| EnvelopeError::InvalidOrigin)
 }
 
 fn singleton_noncomma<'a>(

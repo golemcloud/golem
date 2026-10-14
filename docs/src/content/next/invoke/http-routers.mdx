@@ -1066,7 +1066,8 @@ the deployment by the request's host:
 
 A domain holds either an HTTP API deployment or an MCP deployment, not both; the registry
 rejects the second one. Domains are registered in their canonical spelling: a lowercase host
-without a trailing dot, with an optional port. Requests are matched against that spelling, so
+without a trailing dot (an IPv6 literal in its compressed form, such as `[::1]`), with an
+optional port without leading zeros. Requests are matched against that spelling, so
 `Host: Shop.Example.com.` reaches `shop.example.com`. The MCP port (`mcp_port`, 9007 by default) still serves MCP
 deployments only, so an ingress can keep routing MCP domains to it.
 

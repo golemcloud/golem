@@ -43,17 +43,9 @@ impl Domain {
     pub fn host(&self) -> String {
         let authority = self.0.trim();
         let host = if authority.starts_with('[') {
-            let literal = authority
+            authority
                 .find(']')
-                .map_or(authority, |close| &authority[..=close]);
-            if let Some(Ok(address)) = literal
-                .strip_prefix('[')
-                .and_then(|literal| literal.strip_suffix(']'))
-                .map(str::parse::<std::net::Ipv6Addr>)
-            {
-                return format!("[{address}]");
-            }
-            literal
+                .map_or(authority, |close| &authority[..=close])
         } else {
             match authority.rsplit_once(':') {
                 Some((host, port))
@@ -64,7 +56,7 @@ impl Domain {
                 _ => authority,
             }
         };
-        host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase()
+        canonical_host(host)
     }
 
     /// Parses a configured host name, such as a reserved domain or the management host, and
@@ -75,15 +67,36 @@ impl Domain {
         Ok(Domain(host.to_string()).host())
     }
 
-    /// The canonical spelling of the domain: the host lowercased and without a trailing dot, and
-    /// the port, if any, unchanged. Requests are routed by this spelling, so a domain is only
-    /// registered in it.
+    /// The canonical spelling of the domain: the host lowercased and without a trailing dot, an
+    /// IPv6 literal in its compressed form, and the port, if any, without leading zeros. Requests
+    /// are routed by this spelling, so a domain is only registered in it.
     pub fn canonical(&self) -> Result<Domain, String> {
         let (host, port) =
             split_authority(&self.0).ok_or_else(|| format!("Invalid domain: {:?}", self.0))?;
-        let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
-        Ok(Domain(format!("{host}{port}")))
+        let host = canonical_host(host);
+        match port.strip_prefix(':') {
+            Some(port) => {
+                let port: u16 = port
+                    .parse()
+                    .map_err(|_| format!("Invalid domain: {:?}", self.0))?;
+                Ok(Domain(format!("{host}:{port}")))
+            }
+            None => Ok(Domain(host)),
+        }
     }
+}
+
+/// The canonical spelling of a host: a bracketed IPv6 literal rendered from its address
+/// (compressed, lowercase), any other host lowercased and without a trailing dot.
+fn canonical_host(host: &str) -> String {
+    if let Some(Ok(address)) = host
+        .strip_prefix('[')
+        .and_then(|literal| literal.strip_suffix(']'))
+        .map(str::parse::<std::net::Ipv6Addr>)
+    {
+        return format!("[{address}]");
+    }
+    host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase()
 }
 
 /// Splits a valid authority into its host and its port suffix (empty or `:<port>`).
@@ -180,7 +193,17 @@ mod tests {
             ("Api.Example.Com.:9006", "api.example.com:9006"),
             ("api.example.com:443", "api.example.com:443"),
             ("localhost:9006", "localhost:9006"),
+            ("api.example.com:09006", "api.example.com:9006"),
             ("[::1]:9006", "[::1]:9006"),
+            ("[0:0::1]:9006", "[::1]:9006"),
+            ("[0:0:0:0:0:0:0:1]:09006", "[::1]:9006"),
+            ("[2001:DB8::1]", "[2001:db8::1]"),
+            ("[2001:db8:0:0:1:0:0:1]", "[2001:db8::1:0:0:1]"),
+            ("[2001:db8:0:1:1:1:1:1]", "[2001:db8:0:1:1:1:1:1]"),
+            ("[::ffff:10.0.0.5]", "[::ffff:10.0.0.5]"),
+            ("[::FFFF:A00:5]", "[::ffff:10.0.0.5]"),
+            ("[::1.2.3.4]", "[::102:304]"),
+            ("1.2.3.4.", "1.2.3.4"),
         ] {
             assert_eq!(
                 Domain(value.to_string()).canonical().unwrap(),
@@ -193,8 +216,15 @@ mod tests {
             "https://api.example.com",
             "api..example.com",
             "api.example.com:",
+            "[fe80::1%25eth0]",
+            "[fe80::1%eth0]",
+            "[v1.a]",
         ] {
             assert!(Domain(value.to_string()).canonical().is_err(), "{value}");
+        }
+        for value in ["API.Example.com.:09006", "[0:0::1]:9006", "[::FFFF:A00:5]"] {
+            let once = Domain(value.to_string()).canonical().unwrap();
+            assert_eq!(once.canonical().unwrap(), once, "{value}");
         }
     }
 

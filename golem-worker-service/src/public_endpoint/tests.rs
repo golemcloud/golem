@@ -38,6 +38,11 @@ use test_r::test;
 
 const SHOP: &str = "shop.example.com";
 const TOOLS: &str = "tools.example.com";
+/// An HTTP API deployment on an IPv6 literal, in the canonical spelling it is registered in.
+const IPV6_SHOP: &str = "[::1]:9006";
+/// The same address spelled differently. The registry refuses this spelling; the fake MCP
+/// lookup knows it to show that no request can reach a deployment under it.
+const IPV6_ALIAS: &str = "[0:0::1]:9006";
 const BROKEN: &str = "broken.example.com";
 /// An MCP domain whose HTTP API lookup fails.
 const FLAKY_TOOLS: &str = "flaky-tools.example.com";
@@ -56,7 +61,7 @@ impl HttpApiDefinitionsLookup for HttpApiDomains {
             FLAKY_TOOLS => Err(ApiDefinitionLookupError::InternalError(anyhow::anyhow!(
                 "registry unavailable"
             ))),
-            SHOP => Ok(CompiledRoutes {
+            SHOP | IPV6_SHOP => Ok(CompiledRoutes {
                 account_id: AccountId::new(),
                 account_email: AccountEmail::new("owner@example.com"),
                 environment_id: EnvironmentId::new(),
@@ -79,7 +84,7 @@ impl McpCapabilityLookup for McpDomains {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError> {
         self.lookups.lock().unwrap().push(domain.clone());
         match domain.0.as_str() {
-            TOOLS | FLAKY_TOOLS => Ok(compiled_mcp(domain)),
+            TOOLS | FLAKY_TOOLS | IPV6_ALIAS => Ok(compiled_mcp(domain)),
             BROKEN => Err(McpCapabilitiesLookupError::InternalError(anyhow::anyhow!(
                 "registry unavailable"
             ))),
@@ -448,4 +453,19 @@ async fn mcp_domain_is_served_when_its_http_api_lookup_fails() {
     let body = served(&endpoint, request("10.0.0.2", FLAKY_TOOLS, "/mcp").finish()).await;
     assert_eq!(body["endpoint"], "mcp");
     assert_eq!(body["mcp"]["deployment"], FLAKY_TOOLS);
+}
+
+#[test]
+async fn equivalent_ipv6_spellings_reach_the_canonical_deployment() {
+    let (endpoint, mcp_domains) = dispatcher(recording_endpoint("mcp"));
+    for host in [
+        "[0:0::1]:9006",
+        "[0:0:0:0:0:0:0:1]:9006",
+        "[::1]:09006",
+        IPV6_SHOP,
+    ] {
+        let body = served(&endpoint, request("10.0.0.2", host, "/mcp").finish()).await;
+        assert_eq!(body["endpoint"], "custom", "{host}");
+    }
+    assert!(mcp_domains.lookups.lock().unwrap().is_empty());
 }

@@ -377,10 +377,23 @@ async fn domain_must_be_registered_in_its_canonical_spelling(
     let client = deps.registry_service().client(&user.token).await;
 
     let canonical = format!("{}.golem.cloud", env.id);
-    for (domain, code) in [
-        (canonical.to_uppercase(), "DOMAIN_NOT_CANONICAL"),
-        (format!("{canonical}."), "DOMAIN_NOT_CANONICAL"),
-        (format!("https://{canonical}"), "INVALID_DOMAIN"),
+    for (domain, code, suggested) in [
+        (
+            canonical.to_uppercase(),
+            "DOMAIN_NOT_CANONICAL",
+            Some(canonical.clone()),
+        ),
+        (
+            format!("{canonical}."),
+            "DOMAIN_NOT_CANONICAL",
+            Some(canonical.clone()),
+        ),
+        (
+            "[0:0::1]:9006".to_string(),
+            "DOMAIN_NOT_CANONICAL",
+            Some("[::1]:9006".to_string()),
+        ),
+        (format!("https://{canonical}"), "INVALID_DOMAIN", None),
     ] {
         let error = client
             .create_domain_registration(
@@ -397,6 +410,15 @@ async fn domain_must_be_registered_in_its_canonical_spelling(
             panic!("expected {code} for {domain}, got {error:?}")
         };
         assert_eq!(body.code, code, "{domain}");
+        if let Some(suggested) = suggested {
+            assert!(
+                body.errors
+                    .iter()
+                    .any(|error| error.ends_with(&format!(": {suggested}"))),
+                "{domain}: {:?}",
+                body.errors
+            );
+        }
     }
 
     client

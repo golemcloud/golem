@@ -1767,6 +1767,26 @@ pub(super) mod tests {
                 Ok(("https", "public.example:443")),
             ),
             (
+                "equivalent-ipv6-host",
+                untrusted,
+                vec![("host", "[0:0::1]:8080")],
+                http::Version::HTTP_11,
+                "/",
+                Ok(("http", "[::1]:8080")),
+            ),
+            (
+                "trusted-forwarding-equivalent-ipv6-host",
+                trusted,
+                vec![
+                    ("host", "internal"),
+                    ("x-forwarded-proto", "https"),
+                    ("x-forwarded-host", "[2001:DB8:0::1]"),
+                ],
+                http::Version::HTTP_11,
+                "/",
+                Ok(("https", "[2001:db8::1]")),
+            ),
+            (
                 "trusted-forwarding-through-dual-stack-listener",
                 std::net::IpAddr::V6(std::net::Ipv4Addr::new(10, 0, 0, 1).to_ipv6_mapped()),
                 vec![

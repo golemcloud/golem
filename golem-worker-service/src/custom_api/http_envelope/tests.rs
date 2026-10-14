@@ -320,6 +320,61 @@ fn all_bodyless_responses_defer_commit_and_dispose() {
 }
 
 #[test]
+fn authorities_are_normalized_to_the_canonical_domain_spelling() {
+    for (value, normalized) in [
+        ("[0:0::1]:9006", "[::1]:9006"),
+        ("[0:0:0:0:0:0:0:1]:09006", "[::1]:9006"),
+        ("[2001:DB8::1]", "[2001:db8::1]"),
+        ("[::FFFF:A00:5]:80", "[::ffff:10.0.0.5]:80"),
+        ("Shop.Example.COM.:09006", "shop.example.com:9006"),
+        ("1.2.3.4.", "1.2.3.4"),
+    ] {
+        assert_eq!(
+            normalize_authority(value.as_bytes()).unwrap(),
+            normalized,
+            "{value}"
+        );
+        assert_eq!(
+            Domain(value.to_string()).canonical().unwrap().0,
+            normalized,
+            "{value}"
+        );
+    }
+    for value in [
+        "[fe80::1%25eth0]",
+        "[fe80::1%eth0]",
+        "[v1.a]",
+        "user@example.com",
+    ] {
+        assert_eq!(
+            normalize_authority(value.as_bytes()).unwrap_err(),
+            EnvelopeError::InvalidOrigin,
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn http2_host_and_authority_may_spell_the_same_address_differently() {
+    for (host, authority) in [
+        ("[0:0::1]:9006", "[::1]:9006"),
+        ("example.com:09006", "example.com:9006"),
+    ] {
+        let headers = vec![(b"host".to_vec(), host.as_bytes().to_vec())];
+        assert!(
+            process_request_head("GET", "/", &headers, HttpVersion::Http2, Some(authority)).is_ok(),
+            "{host} {authority}"
+        );
+    }
+    let headers = vec![(b"host".to_vec(), b"[::2]:9006".to_vec())];
+    assert_eq!(
+        process_request_head("GET", "/", &headers, HttpVersion::Http2, Some("[::1]:9006"))
+            .unwrap_err(),
+        EnvelopeError::InvalidOrigin
+    );
+}
+
+#[test]
 fn origin_connection_and_length_boundaries() {
     assert_eq!(
         derive_origin("https", "[2001:DB8::1]:443", &vec![], false)
@@ -344,7 +399,7 @@ fn origin_connection_and_length_boundaries() {
         derive_origin("http", "internal", &trusted, true).unwrap(),
         Origin {
             scheme: "https".to_owned(),
-            authority: "example.com:00443".to_owned(),
+            authority: "example.com:443".to_owned(),
         }
     );
     for authority in [
