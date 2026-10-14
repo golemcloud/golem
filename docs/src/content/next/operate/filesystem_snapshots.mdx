@@ -231,7 +231,7 @@ root = "/var/lib/golem/agents"
 xfs_quotad_socket = "/run/golem-quota/xfs-quotad.sock"
 ```
 
-The environment variable is `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET`. On connect, the executor checks that `xfs-quotad` is of the same Golem release and serves the same filesystem as its root. Each call has a deadline of five seconds. The executor connects when it starts, and stops when `xfs-quotad` does not answer, so `xfs-quotad` must listen before the executor starts.
+The environment variable is `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET`. On connect, the executor checks that `xfs-quotad` speaks the same version of the protocol and serves the same filesystem as its root. Each call, with a connection that it makes, has a deadline of five seconds. When the connection breaks, the executor connects again and sends the call once more. `xfs-quotad` changes limits only on the newest connection, so a call on an old connection that `xfs-quotad` reads late cannot undo a later change. The executor connects when it starts, and stops when `xfs-quotad` does not answer, so `xfs-quotad` must listen before the executor starts.
 
 In Kubernetes, run `xfs-quotad` as a native sidecar, an init container with `restartPolicy: Always` and a startup probe on the socket, so that the executor starts only after it listens. Kubernetes requires `allowPrivilegeEscalation: true` for a container that adds `SYS_ADMIN`.
 
@@ -297,6 +297,10 @@ services:
     volumes:
       - /var/lib/golem/agents:/var/lib/golem/agents
       - quota-socket:/run/golem-quota
+    healthcheck:
+      test: [CMD, test, -S, /run/golem-quota/xfs-quotad.sock]
+      interval: 1s
+      retries: 30
   golem-worker-executor:
     # ...
     cap_drop: [ALL]
@@ -308,28 +312,36 @@ services:
     volumes:
       - /var/lib/golem/agents:/var/lib/golem/agents
       - quota-socket:/run/golem-quota
-    depends_on: [golem-xfs-quotad]
+    depends_on:
+      golem-xfs-quotad:
+        condition: service_healthy
 volumes:
   quota-socket:
 ```
 
-Without containers, run `xfs-quotad` and the executor as two systemd services of the same user, and give `xfs-quotad` the capability as an ambient capability:
+The image owns `/run/golem-quota` by uid 65534, so a new volume mounted there lets `xfs-quotad` create its socket.
+
+Without containers, run `xfs-quotad` and the executor as two systemd services of the same user, and give `xfs-quotad` the capability as an ambient capability. `xfs-quotad` does not notify systemd when it listens, so its unit waits for the socket in `ExecStartPost`, and systemd starts the executor only after that:
 
 ```ini
 # golem-xfs-quotad.service
 [Service]
 User=golem
 ExecStart=/usr/local/bin/golem-xfs-quotad --root /var/lib/golem/agents --listen /run/golem-quota/xfs-quotad.sock
+ExecStartPost=/bin/sh -c 'until test -S /run/golem-quota/xfs-quotad.sock; do sleep 0.1; done'
+TimeoutStartSec=30
 AmbientCapabilities=CAP_SYS_ADMIN
 CapabilityBoundingSet=CAP_SYS_ADMIN
 NoNewPrivileges=yes
 RuntimeDirectory=golem-quota
 
 # golem-worker-executor.service
-[Service]
-User=golem
+[Unit]
 After=golem-xfs-quotad.service
 Requires=golem-xfs-quotad.service
+
+[Service]
+User=golem
 CapabilityBoundingSet=
 NoNewPrivileges=yes
 ```
