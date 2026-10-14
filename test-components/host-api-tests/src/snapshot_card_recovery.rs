@@ -138,6 +138,8 @@ pub trait ScopeCardAgent {
 
     fn persistent_scope_is_denied(&self, target: String) -> bool;
 
+    async fn persistent_async_scope_is_denied(&self, target: String) -> bool;
+
     fn schedule_scope(&self, target: String);
 
     fn schedule_cancelable_scope(&self, target: String);
@@ -177,7 +179,7 @@ pub trait ScopeCardAgent {
         release: PromiseId,
     ) -> Vec<String>;
 
-    fn derive_from_wallet_is_denied(&self) -> bool;
+    fn derive_from_wallet_denial(&self) -> Option<String>;
 
     fn wallet_card_count(&self) -> u32;
 
@@ -340,6 +342,16 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         )
     }
 
+    async fn persistent_async_scope_is_denied(&self, target: String) -> bool {
+        let parent = parent_card();
+        let invocation = scope_card_rpc(target).async_invoke_and_await(
+            "inspect_scope",
+            encode_parameters(vec![]),
+            Some(&parent),
+        );
+        matches!(invocation.future.get().await, Err(RpcError::Denied(_)))
+    }
+
     fn schedule_scope(&self, target: String) {
         let scope_card = derive_scope_card();
         scope_card_rpc(target)
@@ -479,7 +491,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         resources
     }
 
-    fn derive_from_wallet_is_denied(&self) -> bool {
+    fn derive_from_wallet_denial(&self) -> Option<String> {
         let grant = types::PatternGrant {
             class: "card".to_string(),
             owner: "*".to_string(),
@@ -487,7 +499,9 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             verb: "inspect".to_string(),
             resource_id: "*".to_string(),
         };
-        derive::derive_from_wallet(&[grant], &[], &[], &[], None).is_err()
+        derive::derive_from_wallet(&[grant], &[], &[], &[], None)
+            .err()
+            .map(|error| format!("{error:?}"))
     }
 
     fn wallet_card_count(&self) -> u32 {

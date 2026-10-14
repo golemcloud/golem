@@ -1165,14 +1165,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         scope_card: Option<Resource<PermissionCardHandleRep>>,
     ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         let scope_card = match scope_card {
-            Some(handle) => match resolve_invocation_scope_card(self, &handle) {
-                Ok(card) => Some(card),
-                Err(details) => {
-                    discard_owned_rpc_input(input, self);
-                    return Err(anyhow::anyhow!("not permitted: {details}"));
-                }
-            },
-            None => None,
+            Some(handle) => resolve_invocation_scope_card(self, &handle).map(Some),
+            None => Ok(None),
         };
         // Trap immediately if the invocation is restricted to read-only side effects.
         self.check_read_only_allows("golem::rpc::wasm-rpc::async-invoke-and-await")
@@ -1201,6 +1195,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 config,
                 payload.ephemeral_logical_agent_id.clone(),
             )
+        };
+        let scope_card = match scope_card {
+            Ok(scope_card) => scope_card,
+            Err(details) => {
+                discard_owned_rpc_input(input, self);
+                return persist_async_invoke_denial(
+                    self,
+                    &this,
+                    logical_remote_agent_id,
+                    method_name,
+                    RpcError::Denied(details),
+                )
+                .await;
+            }
         };
 
         if ephemeral_logical_agent_id.is_none() && logical_remote_agent_id == own_agent_id {

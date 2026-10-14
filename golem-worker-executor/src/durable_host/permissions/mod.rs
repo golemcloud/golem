@@ -57,7 +57,7 @@ use golem_common::model::card::{
     EffectiveSurface, PermissionPattern, PermissionTarget, PolymorphicCard,
     PolymorphicPermissionPattern, RenderedPermissionFields, ScopeCard, StoredCard,
     WalletDerivationParent, agent_delegation_surface_from_wallet, card_matches_agent_recipient,
-    delegation_parent_for_agent, instantiate_polymorphic_card_for_agent, parse_permission_fields,
+    instantiate_polymorphic_card_for_agent, monomorphize_card_for_agent, parse_permission_fields,
     permission_class_metadata,
 };
 use golem_common::model::oplog::host_functions::{
@@ -341,6 +341,16 @@ async fn resolve_permission_card<Ctx: WorkerCtx>(
             "invalid permission-card handle: {error}"
         ))
     })?;
+    if ctx
+        .state
+        .revoked_card_ids
+        .contains(&CardId(snapshot.card_id))
+    {
+        return Err(permissions_types::PermissionError::CardRevoked(format!(
+            "permission card {} is revoked",
+            snapshot.card_id
+        )));
+    }
 
     if let Some(card) = permission_card_cached_card(ctx, handle).map_err(|error| {
         permissions_types::PermissionError::NotPermitted(format!(
@@ -825,7 +835,7 @@ fn persistent_scope_parent_from_wallet(
 }
 
 /// Resolves a persistent parent that must be in the caller's active wallet. Template cards are
-/// resolved against the caller's holder identity, keeping only the grants addressed to the caller.
+/// resolved against the caller's holder identity.
 fn wallet_parent_for_agent(
     wallet: &[StoredCard],
     resolved: &StoredCard,
@@ -846,7 +856,7 @@ fn wallet_parent_for_agent(
             resolved.card_id()
         )));
     }
-    Ok(delegation_parent_for_agent(wallet_card, context))
+    Ok(monomorphize_card_for_agent(wallet_card, context))
 }
 
 async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
@@ -919,7 +929,7 @@ fn select_wallet_derivation_parent(
         .iter()
         .find(|card| card.card_id() == parent_id)
         .expect("wallet derivation selector returned a card outside the wallet");
-    Ok(delegation_parent_for_agent(parent, context))
+    Ok(monomorphize_card_for_agent(parent, context))
 }
 
 async fn durable_now<Ctx: WorkerCtx>(
@@ -2623,8 +2633,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                     );
                     Ok::<_, permissions_types::PermissionError>((wallet, context))
                 })
-                .await
-                .map_err(worker_error_to_permission_error)?;
+                .await?;
             let (wallet, context) = match authorized {
                 Ok(authorized) => authorized,
                 Err(error) => return Ok(Err(error)),
@@ -2709,8 +2718,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                     );
                     Ok::<_, permissions_types::PermissionError>((wallet, context))
                 })
-                .await
-                .map_err(worker_error_to_permission_error)?;
+                .await?;
             let (wallet, context) = match authorized {
                 Ok(authorized) => authorized,
                 Err(error) => return Ok(Err(error)),
@@ -2755,21 +2763,20 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         {
             return Ok(Err(error));
         }
+        let authorized = self
+            .with_agent_authority_at_boundary(|ctx| {
+                ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
+                let wallet = ctx.agent_wallet_cards_snapshot();
+                let invocation_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
+                    permissions_types::PermissionError::NotPermitted(
+                        "derive-scope requires an active invocation".to_string(),
+                    )
+                })?;
+                Ok::<_, permissions_types::PermissionError>((wallet, invocation_key))
+            })
+            .await?;
         let result = async {
-            let (wallet, invocation_key) = self
-                .with_agent_authority_at_boundary(|ctx| {
-                    ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
-                    let wallet = ctx.agent_wallet_cards_snapshot();
-                    let invocation_key =
-                        ctx.state.get_current_idempotency_key().ok_or_else(|| {
-                            permissions_types::PermissionError::NotPermitted(
-                                "derive-scope requires an active invocation".to_string(),
-                            )
-                        })?;
-                    Ok::<_, permissions_types::PermissionError>((wallet, invocation_key))
-                })
-                .await
-                .map_err(worker_error_to_permission_error)??;
+            let (wallet, invocation_key) = authorized?;
             let parents =
                 resolve_scope_derivation_parents(self, &wallet, &parents, &invocation_key).await?;
             let grants = parse_derived_grant_sets(
@@ -3037,7 +3044,6 @@ mod tests {
     use golem_common::model::card::{
         AccountCardHolder, AgentPermissionMonomorphizationContext, ApplicationCardHolder,
         PolymorphicCard, PolymorphicClassPermissionPattern, card_matches_agent_recipient,
-        monomorphize_card_for_agent,
     };
     use golem_common::model::component::ComponentName;
     use golem_common::model::environment::EnvironmentName;
@@ -3881,21 +3887,25 @@ mod tests {
 
     #[test]
     fn explicit_derivation_resolves_a_wallet_template_parent_for_the_caller() {
+        let template_grant =
+            |grant: &str| golem_common::model::card::parse_polymorphic_permission(grant).unwrap();
+        let staging_write = template_grant(
+            "filesystem(?agent) @ alice@example.com/shop/staging/cart-svc/CartAgent : write : /**",
+        );
         let template = StoredCard::Polymorphic(PolymorphicCard {
             card_id: CardId(Uuid::from_u128(7)),
             parent_ids: Vec::new(),
             lower_positive: vec![
-                golem_common::model::card::parse_polymorphic_permission(
+                template_grant(
                     "filesystem(?agent) @ alice@example.com/shop/prod/cart-svc/CartAgent : read : /data/**",
-                )
-                .unwrap(),
-                golem_common::model::card::parse_polymorphic_permission(
-                    "filesystem(?agent) @ alice@example.com/shop/staging/cart-svc/CartAgent : write : /**",
-                )
-                .unwrap(),
+                ),
+                staging_write.clone(),
+                template_grant(
+                    "secret(?env) @ alice@example.com/shop/prod/*/* : reveal : billing.*",
+                ),
             ],
             lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
+            upper_positive: vec![staging_write],
             upper_negative: Vec::new(),
             created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             expires_at: None,
@@ -3906,22 +3916,51 @@ mod tests {
         let parent =
             wallet_parent_for_agent(&wallet, &template, &wallet_derivation_context()).unwrap();
         assert_eq!(parent.card_id, template.card_id());
+        let resolved = parent
+            .lower_positive
+            .iter()
+            .map(|grant| concrete_pattern_grant(grant).unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(
-            parent.lower_positive.len(),
-            1,
-            "grants addressed to other recipients must not be resolved against the caller"
+            resolved.len(),
+            2,
+            "a grant for other holders must not be resolved against the caller: {resolved:?}"
         );
-        let resolved = concrete_pattern_grant(&parent.lower_positive[0]).unwrap();
-        assert!(!resolved.owner.contains('?'));
-        assert!(resolved.owner.contains("cart-1"));
+        assert!(resolved.iter().all(|grant| grant.verb != "write"));
+        assert!(resolved.iter().any(|grant| grant.class == "secret"));
+        assert_eq!(parent.upper_positive.len(), 1, "ceilings must be kept");
 
-        assert!(derive_grant_sets(&parent, std::slice::from_ref(&resolved), &[], &[], &[]).is_ok());
-
-        let sibling = permissions_types::PatternGrant {
-            owner: resolved.owner.replace("cart-1", "cart-2"),
-            ..resolved.clone()
+        let StoredCard::Polymorphic(polymorphic) = &template else {
+            unreachable!()
         };
-        assert!(derive_grant_sets(&parent, &[sibling], &[], &[], &[]).is_err());
+        let installed = instantiate_polymorphic_card_for_agent(
+            polymorphic,
+            &wallet_derivation_context(),
+            CardId(Uuid::from_u128(8)),
+            DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+        );
+        assert_eq!(
+            installed.lower_positive.len(),
+            2,
+            "installing a template must not resolve grants for other holders against the target"
+        );
+
+        let own_read = resolved
+            .iter()
+            .find(|grant| grant.class == "filesystem")
+            .unwrap()
+            .clone();
+        assert!(!own_read.owner.contains('?'));
+        assert!(own_read.owner.contains("cart-1"));
+        let ceiling = concrete_pattern_grants(&parent.upper_positive).unwrap();
+        assert!(
+            derive_grant_sets(&parent, std::slice::from_ref(&own_read), &[], &ceiling, &[]).is_ok()
+        );
+        let sibling = permissions_types::PatternGrant {
+            owner: own_read.owner.replace("cart-1", "cart-2"),
+            ..own_read.clone()
+        };
+        assert!(derive_grant_sets(&parent, &[sibling], &[], &ceiling, &[]).is_err());
 
         assert!(matches!(
             wallet_parent_for_agent(&[], &template, &wallet_derivation_context()),

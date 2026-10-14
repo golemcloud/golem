@@ -72,35 +72,7 @@ pub fn agent_delegation_surface_from_wallet<'a>(
     context: &AgentPermissionMonomorphizationContext,
     wallet_cards: impl IntoIterator<Item = &'a StoredCard>,
 ) -> DelegationSurface {
-    let cards = wallet_cards
-        .into_iter()
-        .map(|card| delegation_parent_for_agent(card, context))
-        .collect::<Vec<_>>();
-    DelegationSurface::from_cards(&cards)
-}
-
-/// Resolves a wallet card into the parent surface that the agent may derive from.
-///
-/// A template card's slots name the holder that uses each grant. Resolving them against the
-/// deriving agent is only meaningful for grants addressed to that agent, so positive grants
-/// whose recipient does not cover the agent are dropped. Denials are kept, which can only
-/// narrow the parent. Concrete cards are returned unchanged.
-pub fn delegation_parent_for_agent(
-    card: &StoredCard,
-    context: &AgentPermissionMonomorphizationContext,
-) -> Card {
-    match card {
-        StoredCard::Concrete(card) => card.clone(),
-        StoredCard::Polymorphic(_) => {
-            let holder = agent_recipient_pattern(context);
-            let mut card = monomorphize_card_for_agent(card, context);
-            card.lower_positive
-                .retain(|grant| grant.recipient().subsumes(&holder));
-            card.upper_positive
-                .retain(|grant| grant.recipient().subsumes(&holder));
-            card
-        }
-    }
+    DelegationSurface::from_cards(&monomorphize_wallet_cards(context, wallet_cards))
 }
 
 fn monomorphize_wallet_cards<'a>(
@@ -167,7 +139,7 @@ fn monomorphize_polymorphic_card_for_agent(
     Card {
         card_id: card.card_id,
         parent_ids: card.parent_ids.clone(),
-        lower_positive: resolve_permissions_for_agent_context(&card.lower_positive, context),
+        lower_positive: resolve_lower_positives_for_agent_context(&card.lower_positive, context),
         lower_negative: resolve_permissions_for_agent_context(&card.lower_negative, context),
         upper_positive: resolve_permissions_for_agent_context(&card.upper_positive, context),
         upper_negative: resolve_permissions_for_agent_context(&card.upper_negative, context),
@@ -198,6 +170,37 @@ pub(crate) fn resolve_permissions_for_agent_context(
     permissions
         .iter()
         .map(|permission| monomorphize_permission(permission, context))
+        .collect()
+}
+
+/// Resolves a template's lower-bound grants for one holder.
+///
+/// Slots name the holder that uses a grant, and template validation only proves the envelope of
+/// each grant over its own recipients. A grant whose recipients cover the holder is always kept.
+/// A grant addressed to other holders is kept only when its resolution for `context` stays inside
+/// that envelope, so a holder cannot derive or install authority the template never granted to
+/// anyone. Ceilings and denials are resolved unchanged, because they can only narrow.
+fn resolve_lower_positives_for_agent_context(
+    permissions: &[PolymorphicPermissionPattern],
+    context: &AgentPermissionMonomorphizationContext,
+) -> Vec<PermissionPattern> {
+    let holder = agent_recipient_pattern(context);
+    permissions
+        .iter()
+        .filter_map(|permission| {
+            let resolved = monomorphize_permission(permission, context);
+            if permission.recipient().subsumes(&holder) {
+                return Some(resolved);
+            }
+            let envelopes = super::envelope::permission_envelopes_for_recipient_patterns(
+                std::slice::from_ref(permission),
+            )
+            .ok()?;
+            envelopes
+                .iter()
+                .any(|envelope| envelope.subsumes(&resolved))
+                .then_some(resolved)
+        })
         .collect()
 }
 

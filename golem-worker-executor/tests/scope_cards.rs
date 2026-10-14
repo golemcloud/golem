@@ -508,6 +508,20 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
         "a persistent card must not be accepted as the scope-card argument"
     );
 
+    let persistent_async_denied = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "persistent_async_scope_is_denied",
+            data_value!("rejection-target"),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        persistent_async_denied,
+        "async-invoke-and-await must deny a persistent scope-card argument without trapping"
+    );
+
     for (method, caller_name) in [
         ("schedule_scope", "schedule-caller"),
         ("schedule_cancelable_scope", "cancelable-schedule-caller"),
@@ -931,16 +945,17 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
 
-    assert!(
-        !executor
+    assert_eq!(
+        executor
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "derive_from_wallet_is_denied",
+                "derive_from_wallet_denial",
                 data_value!(),
             )
             .await?
-            .into_typed::<bool>()?,
+            .into_typed::<Option<String>>()?,
+        None,
         "the cached surface must initially authorize wallet derivation"
     );
 
@@ -949,17 +964,19 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         .queue_card_revocation(&caller_worker, root_card_id)
         .await?;
 
+    let denial = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "derive_from_wallet_denial",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Option<String>>()?
+        .expect("the queued revocation must deny wallet derivation");
     assert!(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &caller,
-                "derive_from_wallet_is_denied",
-                data_value!(),
-            )
-            .await?
-            .into_typed::<bool>()?,
-        "the queued revocation must deny wallet derivation"
+        denial.contains("NotPermitted") && denial.contains("card:derive is not permitted"),
+        "unexpected wallet derivation denial: {denial}"
     );
 
     let oplog = executor
@@ -1394,17 +1411,19 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
         1,
         "replay must not query registry liveness; only the replay-to-live transition may do so"
     );
+    let denial = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "derive_from_wallet_denial",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Option<String>>()?
+        .expect("the revoked card must stop authorizing new live invocations");
     assert!(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &caller,
-                "derive_from_wallet_is_denied",
-                data_value!(),
-            )
-            .await?
-            .into_typed::<bool>()?,
-        "the revoked card must stop authorizing new live invocations"
+        denial.contains("NotPermitted") && denial.contains("card:derive is not permitted"),
+        "unexpected wallet derivation denial: {denial}"
     );
     Ok(())
 }
