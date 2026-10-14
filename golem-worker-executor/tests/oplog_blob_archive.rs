@@ -845,6 +845,7 @@ async fn durable_entries(
             count,
         )
         .await
+        .unwrap()
         .into_values()
         .map(|entry| match entry {
             OplogEntry::Log { message, .. } => message,
@@ -890,12 +891,14 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
     first
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
+        .unwrap()
         .append(&[(OplogIndex::INITIAL, log("first"))])
         .await
         .unwrap();
     second
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
+        .unwrap()
         .append(&[
             (OplogIndex::INITIAL, log("second")),
             (OplogIndex::from_u64(2), log("other")),
@@ -914,7 +917,10 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
     let after_delete = (
         durable_entries(&first, &owned_agent_id, 1).await,
         durable_entries(&second, &owned_agent_id, 2).await,
-        second.exists(&owned_agent_id, AgentMode::Durable).await,
+        second
+            .exists(&owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap(),
     );
 
     assert_eq!(
