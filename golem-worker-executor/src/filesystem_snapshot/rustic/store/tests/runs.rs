@@ -744,57 +744,10 @@ async fn marked_dedup() -> (
         )
         .await
         .unwrap();
-    let before = blobs(&*inner, &scope.0, "snapshots/").await;
-    saving
-        .delete(
-            &scope,
-            &[name("p-1")],
-            &crate::filesystem_snapshot::Unlimited,
-        )
-        .await
-        .unwrap();
-    let hidden = blobs(&*inner, &scope.0, "snapshots/").await;
-    let hidden_path = hidden.first().cloned().unwrap();
-    let hidden_bytes = inner
-        .get_raw("test", "test", (*scope.0).clone(), Path::new(&hidden_path))
-        .await
-        .unwrap()
-        .unwrap();
-    inner
-        .delete("test", "test", (*scope.0).clone(), Path::new(&hidden_path))
-        .await
-        .unwrap();
-    let marking = backend_of(inner.clone(), &scope, LONG_DEADLINE);
-    let report = super::super::super::run_blocking(move || {
-        super::super::super::prune(
-            marking,
-            &key(),
-            &PruneSettings {
-                fast_repack: true,
-                keep_delete: Duration::from_secs(3600),
-            },
-        )
-    })
-    .await
-    .unwrap();
-    inner
-        .put_raw(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            Path::new(&hidden_path),
-            &hidden_bytes,
-        )
-        .await
-        .unwrap();
+    let (before, unused) =
+        mark_the_packs_of_a_hidden_snapshot(inner.clone(), &scope, Duration::from_secs(3600)).await;
 
-    (
-        inner,
-        scope,
-        tree,
-        before,
-        report.is_some_and(|report| report.packs_unused > 0),
-    )
+    (inner, scope, tree, before, unused)
 }
 
 #[test]

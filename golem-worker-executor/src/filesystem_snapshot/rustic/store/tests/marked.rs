@@ -327,51 +327,8 @@ async fn hide_while_marked(
     tree: &Path,
 ) {
     save_tree(store, scope, &name("p-2"), tree).await.unwrap();
-    let before = blobs(&**storage, &scope.0, "snapshots/").await;
-    let no_prune = RusticSnapshotStore::with_policy(
-        storage.clone(),
-        key(),
-        policy(LONG_DEADLINE, NEVER, GRACE),
-        Arc::new(SystemClock),
-    );
-    delete_name(&no_prune, scope, &name("p-1")).await.unwrap();
-    no_prune.shut_down().await;
-    let hidden = blobs(&**storage, &scope.0, "snapshots/").await;
-    assert_eq!(hidden.len() + 1, before.len());
-    let hidden_path = Path::new(&hidden[0]).to_path_buf();
-    let hidden_bytes = storage
-        .get_raw("test", "test", (*scope.0).clone(), &hidden_path)
-        .await
-        .unwrap()
-        .unwrap();
-    storage
-        .delete("test", "test", (*scope.0).clone(), &hidden_path)
-        .await
-        .unwrap();
-    let marking = backend_of(storage.clone(), scope, LONG_DEADLINE);
-    let report = super::super::super::run_blocking(move || {
-        super::super::super::prune(
-            marking,
-            &key(),
-            &PruneSettings {
-                fast_repack: true,
-                keep_delete: GRACE,
-            },
-        )
-    })
-    .await
-    .unwrap();
-    assert!(report.is_some_and(|report| report.packs_unused > 0));
-    storage
-        .put_raw(
-            "test",
-            "test",
-            (*scope.0).clone(),
-            &hidden_path,
-            &hidden_bytes,
-        )
-        .await
-        .unwrap();
+    let (_, unused) = mark_the_packs_of_a_hidden_snapshot(storage.clone(), scope, GRACE).await;
+    assert!(unused);
 }
 
 /// Checks the rule of a marked pack after the race: a restore of `p-2` gives the whole tree in
