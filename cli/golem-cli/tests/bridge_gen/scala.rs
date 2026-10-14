@@ -1310,6 +1310,8 @@ fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
                         vec![
                             field("card", SchemaType::permission_card(Default::default())),
                             field("__scopeCard", SchemaType::u32()),
+                            field("__await", SchemaType::u32()),
+                            field("__cancelable", SchemaType::u32()),
                         ],
                         Some(ref_to("golem-scope-card-call")),
                     ),
@@ -1319,6 +1321,9 @@ fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
                         Some(SchemaType::u32()),
                     ),
                     method("withoutDefaultScopeCard", vec![], None),
+                    method("bindRemote", vec![], None),
+                    method("resolved", vec![], None),
+                    method("__defaultScopeCard", vec![], None),
                 ],
                 vec![def(
                     "golem-scope-card-call",
@@ -1347,22 +1352,57 @@ fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
         )));
         assert!(source.contains("AgentClientRuntime.awaitedValueInput(__scopeCard)"));
         assert!(source.contains("__input.call(resolved."));
-        // A user parameter named like the internal scope-card parameter is renamed.
-        assert!(source.contains("__scopeCard_2: _root_.golem.UInt"));
-        // The agent methods named like the client members are renamed, and the
-        // user record named like the scoped-call class is referenced by its
+        // User parameters named like internal parameters are renamed.
+        for param in ["__scopeCard", "__await", "__cancelable"] {
+            assert!(
+                source.contains(&format!("{param}_2: _root_.golem.UInt")),
+                "{param} is not renamed"
+            );
+        }
+        // Agent methods named like members of the remote trait or names in
+        // scope in `bindRemote` are renamed.
+        for name in [
+            "withDefaultScopeCard",
+            "withoutDefaultScopeCard",
+            "bindRemote",
+            "resolved",
+            "__defaultScopeCard",
+        ] {
+            assert!(
+                source.contains(&format!("val {name}_2: ")),
+                "{name} is not renamed"
+            );
+            assert!(
+                !source.contains(&format!("val {name}: ")),
+                "{name} is not renamed"
+            );
+        }
+        // The user record named like the scoped-call class is referenced by its
         // rooted name.
-        assert_eq!(source.matches("def withDefaultScopeCard(").count(), 2);
-        assert_eq!(source.matches("def withoutDefaultScopeCard:").count(), 2);
         assert!(source.contains("_root_.golem.bridge.client.scoped_agent.GolemScopeCardCall"));
         assert!(source.contains("final case class GolemScopeCardCall("));
-        for line in source.lines().filter(|line| {
-            line.contains("resolved.invoke")
-                || line.contains("resolved.schedule")
-                || line.contains("def trigger(")
-                || line.contains("def scheduleAt(")
-        }) {
+        // Fire-and-forget and scheduled calls take no scope card.
+        let unscoped: Vec<&str> = source
+            .lines()
+            .filter(|line| {
+                line.contains("resolved.invoke")
+                    || line.contains("resolved.schedule")
+                    || line.contains("def trigger(")
+                    || line.contains("def scheduleAt(")
+                    || line.contains("def scheduleCancelableAt(")
+            })
+            .collect();
+        // One trigger per agent method.
+        assert_eq!(
+            unscoped
+                .iter()
+                .filter(|line| line.contains("def trigger("))
+                .count(),
+            6
+        );
+        for line in unscoped {
             assert!(!line.contains("__scopeCard)"), "{line}");
+            assert!(!line.contains("__scopeCard:"), "{line}");
             assert!(!line.contains("PermissionsApi.ScopeCard"), "{line}");
         }
 

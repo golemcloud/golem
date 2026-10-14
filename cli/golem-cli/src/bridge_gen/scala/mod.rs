@@ -234,6 +234,8 @@ const GUEST_RESERVED_PARAM_NAMES: &[&str] = &[
     "__scopeCard",
     "__defaultScopeCard",
     "__attachedScopeCard",
+    "__await",
+    "__cancelable",
 ];
 
 /// Member names a generated named type cannot use for a case-class field or a
@@ -878,6 +880,10 @@ impl ScalaBridgeGenerator {
             "!=",
             "eq",
             "ne",
+            // Names in scope in the anonymous remote built by `bindRemote`.
+            "bindRemote",
+            "resolved",
+            "__defaultScopeCard",
         ];
         if self.agent_type.mode == AgentMode::Durable {
             reserved_method_names.push("agentId");

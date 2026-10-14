@@ -104,8 +104,8 @@ object AgentClientRuntime {
     }
 
   /**
-   * The input of an awaited call from a wire tree, for generated bridge
-   * clients: the scope card is checked before encoding and again with
+   * The input of an awaited call from a wire tree, used by every awaited client
+   * path: the scope card is checked before encoding and again with
    * [[AwaitedInput.call]].
    */
   private[golem] def awaitedWireInput(scopeCard: Option[ScopeCard])(
@@ -128,11 +128,7 @@ object AgentClientRuntime {
     value: A,
     scopeCard: Option[ScopeCard]
   ): Future[AwaitedInput] =
-    awaitedInput(scopeCard) {
-      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      val wit         = codec.encodeValue(value)
-      SchemaWireInterop.ownedValueTreeToJsAsync(wit).map(lowered => (wit, lowered))
-    }
+    awaitedWireInput(scopeCard)(codec.encodeValue(value))
 
   private def decodeWire[A](codec: Option[ConcreteCodec[A]], value: Option[JsSchemaValueTree]): A =
     codec match {
@@ -203,7 +199,7 @@ object AgentClientRuntime {
     input: In,
     scopeCard: Option[ScopeCard]
   ): Future[AwaitedInput] =
-    awaitedInput(scopeCard)(golem.runtime.autowire.SchemaPayload.encodeWithWireAsync(input)(inputCodec))
+    awaitedValueInput(scopeCard)(inputCodec.toValue(input))
 
   private def decodeOutputAsync[Out](outputCodec: OutputCodec[Out], result: Option[JsSchemaValueTree]): Future[Out] =
     outputCodec.metadata match {
