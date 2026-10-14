@@ -17,7 +17,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -624,10 +624,44 @@ fn open_root(root: &Path) -> anyhow::Result<File> {
     Ok(file)
 }
 
-/// Listens on `socket`, in place of a file that an earlier server left there. Any process may
-/// open the socket: xfs-quotad checks the uid of each connection itself, and the operator keeps
-/// the socket in a directory that only xfs-quotad and the executor share.
-fn bind(socket: &Path) -> anyhow::Result<UnixListener> {
+/// The socket of xfs-quotad, with the lock that makes this process its only server.
+struct Listener {
+    listener: UnixListener,
+    /// The exclusive lock on the lock file of the socket, held while the process serves it.
+    _lock: File,
+}
+
+/// Listens on `socket`. First it takes an exclusive lock on the file `<socket>.lock`, and fails
+/// when another process holds it: a second server would take the socket path from the first one,
+/// while the clients of the first one stay connected to it. Each server fences only its own
+/// connections, so a late change on the first server could then undo a newer change on the second
+/// one. With the lock, a socket file at `socket` is the file of a server that stopped, and
+/// xfs-quotad replaces it.
+///
+/// Any process may open the socket: xfs-quotad checks the uid of each connection itself, and the
+/// operator keeps the socket in a directory that only xfs-quotad and the executor share.
+fn bind(socket: &Path) -> anyhow::Result<Listener> {
+    let mut lock_path = socket.as_os_str().to_owned();
+    lock_path.push(".lock");
+    let lock_path = PathBuf::from(lock_path);
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+    match rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::WOULDBLOCK) => bail!(
+            "another xfs-quotad serves {}: it holds the lock {}",
+            socket.display(),
+            lock_path.display()
+        ),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to lock {}", lock_path.display()));
+        }
+    }
     match std::fs::remove_file(socket) {
         Err(error) if error.kind() != ErrorKind::NotFound => {
             return Err(error).with_context(|| format!("failed to remove {}", socket.display()));
@@ -638,20 +672,23 @@ fn bind(socket: &Path) -> anyhow::Result<UnixListener> {
         .with_context(|| format!("failed to listen on {}", socket.display()))?;
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o666))
         .with_context(|| format!("failed to open {} to the executor", socket.display()))?;
-    Ok(listener)
+    Ok(Listener {
+        listener,
+        _lock: lock,
+    })
 }
 
 /// Accepts connections on `listener` from processes of the uid `allowed_uid` only, and serves each
 /// on its own thread. While [`MAX_CONNECTIONS`] connections are served, it refuses more.
 fn serve_connections(
-    listener: UnixListener,
+    listener: Listener,
     root: Arc<File>,
     device: u64,
     allowed_uid: rustix::process::Uid,
 ) {
     let served = Arc::new(AtomicUsize::new(0));
     let fence = Arc::new(Fence::default());
-    for stream in listener.incoming() {
+    for stream in listener.listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         if stream.set_write_timeout(Some(CALL_DEADLINE)).is_err() {
             continue;
@@ -1380,6 +1417,28 @@ mod tests {
         // The root is not on XFS: an errno of the kernel, and not the fence, fails the change.
         let_assert!(Err(error) = fenced.set_project_quota_record(7, &limit_change(7)));
         assert!(error.raw_os_error().is_some());
+    }
+
+    #[test]
+    fn a_second_server_on_the_same_socket_refuses_to_start() {
+        let (_directory, socket, device) = start_listening(rustix::process::geteuid());
+        let_assert!(Ok(client) = XfsQuotadClient::connect(&socket, device));
+        let_assert!(Err(error) = bind(&socket));
+        assert!(error.to_string().contains("another xfs-quotad serves"));
+        // The first server keeps the socket path: a change of the connected client and a new
+        // connection both reach it. The root is not on XFS, so the kernel refuses the change.
+        let_assert!(Err(error) = client.set_project_quota_record(7, &limit_change(7)));
+        assert!(error.raw_os_error().is_some());
+        let_assert!(Ok(_) = XfsQuotadClient::connect(&socket, device));
+    }
+
+    #[test]
+    fn a_server_replaces_the_socket_of_a_server_that_stopped() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("xfs-quotad.sock");
+        drop(bind(&socket).unwrap());
+        assert!(socket.exists());
+        let_assert!(Ok(_) = bind(&socket));
     }
 
     #[test]
