@@ -1018,6 +1018,15 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
 - `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
+- `UPDATE_BLOB_STORAGE_REFUSED`: at the update point, the blob storage refused the executor a read
+  of an initial-file source of the target (`FilesystemError::InitialFileRefused`, from
+  `BlobFailure::Refused` of a `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other
+  than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
+  loads every source before its first change, so the agent runs on its source revision. The text
+  names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
+  update and retries as a recovery; outside the update point a refused source is a
+  reconstruction error. The guest blob store maps the same refusal to a permanent
+  `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with
 `services/component.rs::component_support_error`. Admission uses the same support policy.

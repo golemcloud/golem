@@ -21,7 +21,9 @@
 
 use super::prune::SNAPSHOTS_PATH;
 use super::runs::RunEnd;
-use golem_service_base::storage::blob::{BlobMissingError, BlobNameError, BlobRangeError};
+use golem_service_base::storage::blob::{
+    BlobFailure, BlobMissingError, BlobNameError, BlobRangeError,
+};
 use rustic_core::FileType;
 use rustic_core::Id;
 use std::error::Error;
@@ -160,7 +162,7 @@ pub(crate) enum CallFailure {
     /// The lease of the prune ran out.
     LeaseExpired,
     /// The storage gave an answer that no try can change: a name or a range that breaks a rule, a
-    /// permission that the storage refuses, or a blob that is not there.
+    /// request that the storage refuses, or a blob that is not there.
     Permanent,
     /// The try got no answer within the time left of the window of the call.
     TimedOut,
@@ -175,7 +177,7 @@ pub(super) fn call_failure(error: &anyhow::Error) -> CallFailure {
         CallFailure::Cancelled
     } else if in_chain(|error| error.is::<LeaseExpired>()) {
         CallFailure::LeaseExpired
-    } else if in_chain(is_permanent) {
+    } else if in_chain(is_permanent) || is_refused(error) {
         CallFailure::Permanent
     } else if in_chain(|error| error.is::<tokio::time::error::Elapsed>()) {
         CallFailure::TimedOut
@@ -184,14 +186,24 @@ pub(super) fn call_failure(error: &anyhow::Error) -> CallFailure {
     }
 }
 
-/// Tells whether an error is an answer of the storage that no try can change.
+/// Tells whether an error is an answer of the storage that no try can change. A refused request
+/// gets the same answer until an operator fixes the storage.
 fn is_permanent(error: &(dyn Error + 'static)) -> bool {
     error.is::<BlobNameError>()
         || error.is::<BlobRangeError>()
         || error.is::<BlobMissingError>()
         || error
+            .downcast_ref::<BlobCallFailed>()
+            .is_some_and(|failed| is_refused(&failed.failure))
+        || error
             .downcast_ref::<std::io::Error>()
             .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
+/// Tells whether the storage refused the request. A backend attaches the [`BlobRefusedError`] as a
+/// context, so only the `anyhow` error finds it, and not the chain of sources.
+fn is_refused(error: &anyhow::Error) -> bool {
+    matches!(BlobFailure::of(error), BlobFailure::Refused(_))
 }
 
 /// Tells whether a write whose try failed with `failure` can still land: every failure but one that
@@ -247,23 +259,6 @@ pub(super) fn missing_file_path<'a>(error: &'a (dyn Error + 'static)) -> Option<
 /// Tells whether an error in the chain is [`FileMissing`] for a pack.
 fn is_pack_missing(error: &(dyn Error + 'static)) -> bool {
     missing_file_path(error).is_some_and(|path| path.starts_with(FileType::Pack.dirname()))
-}
-
-/// Gives the start of the hex id of the blob that a lookup in the index did not find, from a "not
-/// found in index" error of rustic. rustic keeps the id as the context of the error, and gives the
-/// context only in the text of the error, as the text between the backticks before `not found in
-/// index`. rustic writes an id there with its short display, the first 8 hex digits, so the text
-/// holds the start of the id and not the whole id.
-pub(super) fn missing_blob(error: &(dyn Error + 'static)) -> Option<Box<str>> {
-    chain(error).find_map(|error| {
-        let text = error.to_string();
-        let before = &text[..text.find("` not found in index")?];
-        let start = &before[before.rfind('`')? + 1..];
-        (!start.is_empty()
-            && start.len() <= 64
-            && start.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then(|| Box::from(start.to_ascii_lowercase()))
-    })
 }
 
 /// The text with which rustic begins an error of the kind `InputOutput`.
@@ -408,13 +403,15 @@ fn chain<'a>(error: &'a (dyn Error + 'static)) -> impl Iterator<Item = &'a (dyn 
 mod tests {
     use super::{
         BlobCallFailed, CallFailure, ConfigExists, FileMissing, LeaseExpired, OperationCancelled,
-        call_failure, is_config_exists, is_index_missing, is_pack_missing, may_land, missing_blob,
+        call_failure, is_config_exists, is_index_missing, is_pack_missing, may_land,
         missing_file_path, run_end, rustic_storage_end, storage_end,
     };
     use crate::filesystem_snapshot::rustic::runs::RunEnd;
-    use golem_service_base::storage::blob::{BlobMissingError, BlobNameError, BlobRangeError};
+    use golem_service_base::storage::blob::{
+        BlobMissingError, BlobNameError, BlobRangeError, BlobRefusal, BlobRefusedError,
+    };
     use pretty_assertions::assert_eq;
-    use rustic_core::{ErrorKind, Id, RusticError};
+    use rustic_core::{ErrorKind, RusticError};
     use std::io;
     use std::path::Path;
     use test_r::test;
@@ -466,6 +463,9 @@ mod tests {
                 call_failure(&anyhow::Error::new(io::Error::from(
                     io::ErrorKind::PermissionDenied
                 ))),
+                call_failure(&anyhow::anyhow!("403 Forbidden").context(BlobRefusedError {
+                    refusal: BlobRefusal::AccessDenied
+                })),
                 call_failure(&elapsed().await),
                 call_failure(&anyhow::anyhow!("the bucket is gone")),
                 call_failure(&anyhow::Error::new(io::Error::from(
@@ -475,6 +475,7 @@ mod tests {
             [
                 CallFailure::Cancelled,
                 CallFailure::LeaseExpired,
+                CallFailure::Permanent,
                 CallFailure::Permanent,
                 CallFailure::Permanent,
                 CallFailure::Permanent,
@@ -542,12 +543,18 @@ mod tests {
                 rustic_storage_end(&failed_call(anyhow::Error::new(BlobNameError::NoName {
                     path: std::path::PathBuf::new(),
                 }))),
+                rustic_storage_end(&failed_call(anyhow::anyhow!("NoSuchBucket").context(
+                    BlobRefusedError {
+                        refusal: BlobRefusal::NoSuchBucket,
+                    }
+                ))),
                 rustic_storage_end(&rustic(io::Error::from(io::ErrorKind::PermissionDenied))),
                 rustic_storage_end(&missing("index/ab12")),
             ],
             [
                 Some(RunEnd::CallFailed),
                 Some(RunEnd::Cancelled),
+                Some(RunEnd::Permanent),
                 Some(RunEnd::Permanent),
                 None,
                 None,
@@ -579,73 +586,6 @@ mod tests {
                 true,
                 None,
             )
-        );
-    }
-
-    #[test]
-    fn missing_blob_reads_the_start_of_the_id_of_the_forks_not_found_errors() {
-        let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            .parse::<Id>()
-            .unwrap();
-        // The errors as the fork makes them: `get_index_entry` for a data blob, and the tree
-        // load of the node streamer for a tree blob. The fork writes the context with the short
-        // display of the id.
-        let data = anyhow::Error::new(
-            RusticError::new(
-                ErrorKind::Internal,
-                "Blob ID `{id}` not found in index, but should be there.",
-            )
-            .attach_context("id", id.to_string()),
-        );
-        let tree = anyhow::Error::new(
-            RusticError::new(
-                ErrorKind::Internal,
-                "Tree ID `{tree_id}` not found in index",
-            )
-            .attach_context("tree_id", id.to_string()),
-        )
-        .context("ls the snapshot");
-        let other = anyhow::Error::new(RusticError::new(
-            ErrorKind::Internal,
-            "the data failed its check",
-        ));
-
-        assert_eq!(
-            [
-                missing_blob(data.as_ref()),
-                missing_blob(tree.as_ref()),
-                missing_blob(other.as_ref()),
-            ],
-            [
-                Some(Box::from("01234567")),
-                Some(Box::from("01234567")),
-                None
-            ]
-        );
-    }
-
-    #[test]
-    fn missing_blob_reads_only_a_hex_start_of_one_to_64_digits() {
-        let not_found = |id: &str| anyhow::anyhow!("Blob ID `{id}` not found in index");
-
-        assert_eq!(
-            [
-                "",
-                "xyz",
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "ABCD",
-            ]
-            .map(|id| missing_blob(not_found(id).as_ref())),
-            [
-                None,
-                None,
-                None,
-                Some(Box::from(
-                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                )),
-                Some(Box::from("abcd")),
-            ]
         );
     }
 

@@ -36,7 +36,7 @@ pub(crate) use host_directory::{HostDirectories, HostDirectory, HostPath};
 pub(crate) use tree_copy::TreeExclusions;
 
 #[cfg(target_os = "linux")]
-mod xfs;
+pub(crate) mod xfs;
 
 static FILESYSTEM_LEASES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     OnceLock::new();
@@ -371,6 +371,9 @@ enum FilesystemVolumeMode {
     CopyOnWrite {
         root: Arc<File>,
         identity: FilesystemIdentity,
+        /// The quota helper of a managed XFS volume.
+        #[cfg(target_os = "linux")]
+        project_quotas: Option<Arc<golem_xfs_quotad::XfsQuotadClient>>,
     },
 }
 
@@ -389,7 +392,29 @@ impl FilesystemVolume {
     #[cfg(target_os = "linux")]
     fn copy_on_write(root: Arc<File>, identity: FilesystemIdentity) -> Self {
         Self {
-            mode: FilesystemVolumeMode::CopyOnWrite { root, identity },
+            mode: FilesystemVolumeMode::CopyOnWrite {
+                root,
+                identity,
+                #[cfg(target_os = "linux")]
+                project_quotas: None,
+            },
+        }
+    }
+
+    /// The volume with the quota helper `quotas`, which serves its project quotas.
+    #[cfg(target_os = "linux")]
+    fn with_project_quotas(mut self, quotas: Arc<golem_xfs_quotad::XfsQuotadClient>) -> Self {
+        if let FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } = &mut self.mode {
+            *project_quotas = Some(quotas);
+        }
+        self
+    }
+
+    #[cfg(target_os = "linux")]
+    fn project_quotas(&self) -> Option<&golem_xfs_quotad::XfsQuotadClient> {
+        match &self.mode {
+            FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } => project_quotas.as_deref(),
+            FilesystemVolumeMode::UnmanagedDevelopment => None,
         }
     }
 
@@ -878,7 +903,10 @@ impl SandboxFilesystemProvisioning {
             FilesystemStorageMode::Directory { root } => {
                 development(Some(Arc::from(&**root)), cleanup_retry)
             }
-            FilesystemStorageMode::ManagedXfs { root } => configured_managed(root, &cleanup_retry)?,
+            FilesystemStorageMode::ManagedXfs {
+                root,
+                xfs_quotad_socket,
+            } => configured_managed(root, xfs_quotad_socket, &cleanup_retry)?,
             FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry)?,
         };
         let (accounting, host_directory_check) = storage_facts(storage);
@@ -959,9 +987,11 @@ fn development(
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
+    xfs_quotad_socket: &Path,
     cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
-    let managed = xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, cleanup_retry)?;
+    let managed =
+        xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, xfs_quotad_socket, cleanup_retry)?;
     let volume = managed.volume().clone();
     Ok((
         volume,
@@ -984,6 +1014,7 @@ fn configured_reflink(
 #[cfg(not(target_os = "linux"))]
 fn configured_managed(
     root: &Path,
+    _xfs_quotad_socket: &Path,
     _cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
@@ -1207,7 +1238,7 @@ pub(crate) async fn observe_space(
 ) -> Result<FilesystemSpace, FilesystemStorageError> {
     match &volume.mode {
         FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
-        FilesystemVolumeMode::CopyOnWrite { root, identity } => {
+        FilesystemVolumeMode::CopyOnWrite { root, identity, .. } => {
             #[cfg(target_os = "linux")]
             {
                 let root = Arc::clone(root);
@@ -1247,7 +1278,7 @@ pub(crate) fn observe_space_blocking(
 ) -> Result<FilesystemSpace, FilesystemStorageError> {
     match &volume.mode {
         FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
-        FilesystemVolumeMode::CopyOnWrite { root, identity } => {
+        FilesystemVolumeMode::CopyOnWrite { root, identity, .. } => {
             #[cfg(target_os = "linux")]
             {
                 xfs::observe_space(root, *identity).map_err(|error| {
@@ -1719,7 +1750,10 @@ mod tests {
             [
                 FilesystemStorageMode::Temporary,
                 FilesystemStorageMode::Directory { root: root.clone() },
-                FilesystemStorageMode::ManagedXfs { root: root.clone() },
+                FilesystemStorageMode::ManagedXfs {
+                    root: root.clone(),
+                    xfs_quotad_socket: root.clone(),
+                },
                 FilesystemStorageMode::ReflinkXfs { root },
             ]
             .iter()

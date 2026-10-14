@@ -2203,7 +2203,13 @@ pub enum FilesystemStorageMode {
     Directory { root: Box<Path> },
     /// XFS with project quotas, at the root of a dedicated XFS filesystem. Each agent filesystem
     /// is a project, which enforces its disk limits and measures its usage. Copies are reflinks.
-    ManagedXfs { root: Box<Path> },
+    ///
+    /// The quota calls go to `xfs-quotad`, which listens on `xfs_quotad_socket`: a separate
+    /// process that holds `CAP_SYS_ADMIN`, so that the executor needs no capability.
+    ManagedXfs {
+        root: Box<Path>,
+        xfs_quotad_socket: Box<Path>,
+    },
     /// XFS with reflink and without project quotas, at the root of a dedicated XFS filesystem.
     /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
     /// per-agent usage.
@@ -2215,7 +2221,14 @@ impl SafeDisplay for FilesystemStorageMode {
         match self {
             Self::Temporary => "temporary directories".to_string(),
             Self::Directory { root } => format!("directory at {}", root.display()),
-            Self::ManagedXfs { root } => format!("managed XFS at {}", root.display()),
+            Self::ManagedXfs {
+                root,
+                xfs_quotad_socket: socket,
+            } => format!(
+                "managed XFS at {}, with xfs-quotad at {}",
+                root.display(),
+                socket.display()
+            ),
             Self::ReflinkXfs { root } => format!("reflink XFS at {}", root.display()),
         }
     }
@@ -3282,14 +3295,20 @@ mod tests {
             [
                 super::FilesystemStorageMode::Temporary,
                 super::FilesystemStorageMode::Directory { root: root() },
-                super::FilesystemStorageMode::ManagedXfs { root: root() },
+                super::FilesystemStorageMode::ManagedXfs {
+                    root: root(),
+                    xfs_quotad_socket: Box::from(std::path::Path::new(
+                        "/run/golem-quota/xfs-quotad.sock"
+                    )),
+                },
                 super::FilesystemStorageMode::ReflinkXfs { root: root() },
             ]
             .map(|storage| storage.to_safe_string()),
             [
                 "temporary directories",
                 "directory at /var/lib/golem/agents",
-                "managed XFS at /var/lib/golem/agents",
+                "managed XFS at /var/lib/golem/agents, with xfs-quotad at \
+                 /run/golem-quota/xfs-quotad.sock",
                 "reflink XFS at /var/lib/golem/agents",
             ]
         );

@@ -185,9 +185,14 @@ fn unopened(backend: Arc<BlobBackend>) -> RusticResult<RusticRepository<()>> {
     )
 }
 
-/// The options of each repository: no rustic cache.
+/// The options of each repository: no rustic cache, and an index for a restore that also holds the
+/// blobs of the packs that a prune marked for deletion. A save can reuse a blob of a pack that a
+/// prune marks at the same time, because the prune did not see the new snapshot; the next prune
+/// sees the snapshot and keeps the pack.
 fn repository_options() -> RepositoryOptions {
-    RepositoryOptions::default().no_cache(true)
+    RepositoryOptions::default()
+        .no_cache(true)
+        .index_marked_packs(true)
 }
 
 /// The chunker of a new repository. It cuts files into content-defined chunks, so an insert moves

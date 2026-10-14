@@ -4541,6 +4541,7 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "golem-worker-executor-test-utils",
+ "golem-xfs-quotad",
  "governor",
  "half",
  "heck",
@@ -4631,6 +4632,7 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "golem-worker-executor",
+ "golem-xfs-quotad",
  "prometheus",
  "regex",
  "rustls",
@@ -4739,6 +4741,18 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "golem-xfs-quotad"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert2",
+ "libc",
+ "rustix 1.1.4",
+ "tempfile",
+ "test-r",
 ]
 
 [[package]]
@@ -8823,7 +8837,7 @@ checksum = "fbcebf2228827bc4b61cb54dfd84cf43aacf06ca2dfe4c014b136a0e32b876e2"
 [[package]]
 name = "rustic_core"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/rustic_core?rev=b1f72158c3b07c2efb8c546aa9d2aaff0819ea95#b1f72158c3b07c2efb8c546aa9d2aaff0819ea95"
+source = "git+https://github.com/golemcloud/rustic_core?rev=2269cbb0b2b89dc55cd4dca0172ead894b7b43fd#2269cbb0b2b89dc55cd4dca0172ead894b7b43fd"
 dependencies = [
  "aes256ctr_poly1305aes",
  "backon",
