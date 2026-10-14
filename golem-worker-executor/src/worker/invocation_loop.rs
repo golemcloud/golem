@@ -3275,13 +3275,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &result,
         ) {
             self.parent.record_recovery_failure(error).await;
-            if infrastructure_failure_stops_the_agent(self.parent.retired_for_lost_shard(), error) {
-                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-            }
-            return CommandOutcome::BreakInnerLoopForRecovery {
-                decision: RetryDecision::Delayed(self.parent.next_infrastructure_recovery_delay()),
-                error: error.clone(),
-            };
+            return infrastructure_failure_outcome(
+                self.parent.retired_for_lost_shard(),
+                error,
+                || self.parent.next_infrastructure_recovery_delay(),
+            );
         }
         let trap_type = match owner_failure {
             Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
@@ -3950,13 +3948,25 @@ fn selected_infrastructure_recovery_error<'a>(
     }
 }
 
-/// Whether an infrastructure failure of an invocation stops the agent instead of reconstructing
-/// it: the shard is lost, or the oplog failed, so a reconstruction would fail again.
-fn infrastructure_failure_stops_the_agent(
+/// What the loop does after an infrastructure failure of an invocation. A lost shard stops the
+/// agent: its waiters are sent to the new owner. An oplog that failed for good stops the agent too,
+/// because a reconstruction would fail again, and the stop gives the waiters that error, with its
+/// cause. Any other failure reconstructs the agent after `delay`.
+fn infrastructure_failure_outcome(
     retired_for_lost_shard: bool,
     error: &WorkerExecutorError,
-) -> bool {
-    retired_for_lost_shard || matches!(error, WorkerExecutorError::OplogFailed { .. })
+    delay: impl FnOnce() -> Duration,
+) -> CommandOutcome {
+    if retired_for_lost_shard {
+        CommandOutcome::BreakInnerLoop(RetryDecision::None)
+    } else if matches!(error, WorkerExecutorError::OplogFailed { .. }) {
+        CommandOutcome::BreakOuterLoop(Some(error.clone()))
+    } else {
+        CommandOutcome::BreakInnerLoopForRecovery {
+            decision: RetryDecision::Delayed(delay()),
+            error: error.clone(),
+        }
+    }
 }
 
 fn is_recovery_required_error(error: &WorkerExecutorError) -> bool {
@@ -4096,11 +4106,15 @@ async fn measured_check<Ctx: WorkerCtx>(
 
 /// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
 /// was not made skips the snapshot. A refused write means the shard has a new owner, and a failed
-/// archive write and an oplog that does not read repeat on every later write, so the loop stops;
-/// any other failed write retries.
+/// archive write is latched, so every later write fails the same way: the loop stops. An oplog
+/// that does not read for good also stops the loop. Any other failed write, and an oplog whose
+/// storage did not answer, retries.
 fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
     match failure {
         PeriodicFailure::Entry(_) => CommandOutcome::Continue,
+        PeriodicFailure::Write(OplogError::Unreadable(unreadable)) if unreadable.is_transient() => {
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+        }
         PeriodicFailure::Write(
             OplogError::Fenced(_) | OplogError::ArchiveWrite { .. } | OplogError::Unreadable(_),
         ) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
@@ -4281,7 +4295,7 @@ mod tests {
         apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
         close_usage_before_delete, coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload,
-        infrastructure_failure_stops_the_agent, measured_capture, periodic_failure_outcome,
+        infrastructure_failure_outcome, measured_capture, periodic_failure_outcome,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
         selected_infrastructure_recovery_error, snapshot_action_at, snapshot_baseline_timestamp,
         spawn_module_owned_unload, successful_agent_invocation_outcome,
@@ -5349,6 +5363,41 @@ mod tests {
         assert_eq!(drops.load(Ordering::Acquire), 2);
     }
 
+    /// A periodic snapshot record that did not reach the oplog because its storage did not answer
+    /// retries; an oplog that does not read for good stops the loop.
+    #[test]
+    fn a_periodic_record_over_an_unavailable_oplog_retries() {
+        use crate::services::oplog::{
+            OplogError, OplogReadError, OplogReadSource, UnreadableOplog,
+        };
+        let agent_id = golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "periodic".to_string(),
+        };
+        let unreadable = |error| {
+            PeriodicFailure::Write(OplogError::Unreadable(UnreadableOplog::new(
+                &agent_id, error,
+            )))
+        };
+        assert_eq!(
+            periodic_failure_outcome(&unreadable(OplogReadError::source_unavailable(
+                OplogReadSource::Archive(1),
+                "outage",
+            ))),
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+        );
+        assert_eq!(
+            periodic_failure_outcome(&unreadable(OplogReadError::corruption(
+                OplogReadSource::Archive(1),
+                "bad chunk",
+            ))),
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        );
+    }
+
+    /// An oplog that failed for good stops the agent and carries the error to the stop, which
+    /// gives it to the waiting callers. A lost shard stops without it, and a failure that a later
+    /// attempt can pass reconstructs the agent after the delay.
     #[test]
     fn an_unreadable_oplog_stops_the_agent_on_a_shard_it_still_owns() {
         let unreadable = WorkerExecutorError::oplog_failed(
@@ -5359,9 +5408,22 @@ mod tests {
             "corrupt oplog data from archive layer 1",
         );
         let recovery = WorkerExecutorError::recovery_required("payload backend unavailable");
-        assert!(infrastructure_failure_stops_the_agent(false, &unreadable));
-        assert!(infrastructure_failure_stops_the_agent(true, &recovery));
-        assert!(!infrastructure_failure_stops_the_agent(false, &recovery));
+        let delay = || Duration::from_secs(3);
+        assert_eq!(
+            infrastructure_failure_outcome(false, &unreadable, delay),
+            CommandOutcome::BreakOuterLoop(Some(unreadable.clone()))
+        );
+        assert_eq!(
+            infrastructure_failure_outcome(true, &recovery, delay),
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        );
+        assert_eq!(
+            infrastructure_failure_outcome(false, &recovery, delay),
+            CommandOutcome::BreakInnerLoopForRecovery {
+                decision: RetryDecision::Delayed(Duration::from_secs(3)),
+                error: recovery.clone(),
+            }
+        );
     }
 
     #[test]
