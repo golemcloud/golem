@@ -4581,13 +4581,13 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
         },
     )
     .await;
-    let service = DefaultWorkerService::new(
+    let service = Arc::new(DefaultWorkerService::new(
         Arc::new(InMemoryKeyValueStorage::new()),
         Arc::new(ShardServiceDefault::new()),
-        oplog,
+        oplog.clone(),
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
-    );
+    ));
 
     let error = service
         .lookup_durable_stream_producer_metadata(
@@ -4611,5 +4611,43 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
                 if details.contains("archive layer 1") && details.contains("ending at 3")
         ),
         "{error}"
+    );
+
+    // The producer load of the agent start reaches the same rebuild and reports it as the failure
+    // of that agent, which the start and the shard-assignment recovery skip.
+    let metadata = agent_metadata_with_identity(&id, AgentMode::Durable, test_fingerprint());
+    let opened = oplog
+        .open(
+            &mut oplog.lock_lifecycle(&id.agent_id).await,
+            &id,
+            AgentMode::Durable,
+            None,
+            metadata,
+            stale_status(),
+            suspended_status(),
+            None,
+        )
+        .await
+        .expect("the open reads only the last index");
+    let commit: crate::durable_host::durable_stream::DurableStreamCommit =
+        Arc::new(|_| Box::pin(async {}));
+    let producer =
+        crate::durable_host::durable_stream::DurableStreamStore::load_indexed_with_commit(
+            opened,
+            id.clone(),
+            test_fingerprint(),
+            None,
+            commit,
+            service,
+            AgentMode::Durable,
+        )
+        .await
+        .err()
+        .expect("the producer load over an undecodable chunk must fail")
+        .into_worker_executor_error(WorkerExecutorError::runtime);
+    assert!(
+        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, details }
+            if agent_id == &id.agent_id && details.contains("archive layer 1")),
+        "{producer:?}"
     );
 }

@@ -9635,6 +9635,11 @@ fn an_unreadable_oplog_keeps_its_type_through_stream_and_session_errors() {
     let session = SessionError::from(StreamStoreError::from(SessionError::from(
         StreamStoreError::from(unreadable.clone()),
     )));
+    assert_eq!(
+        StreamStoreError::from(unreadable.clone())
+            .into_worker_executor_error(WorkerExecutorError::runtime),
+        expected
+    );
     assert_eq!(session, SessionError::Unreadable(unreadable));
     assert_eq!(
         session

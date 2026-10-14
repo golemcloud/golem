@@ -599,14 +599,16 @@ impl std::fmt::Display for SessionError {
 impl std::error::Error for SessionError {}
 
 impl StreamStoreError {
-    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
-    /// other error is rendered through `otherwise`, which says how that boundary classifies it.
+    /// Converts at a boundary that reports `WorkerExecutorError`: a fence and an unreadable oplog
+    /// keep their types, and every other error is rendered through `otherwise`, which says how that
+    /// boundary classifies it.
     pub(crate) fn into_worker_executor_error(
         self,
         otherwise: impl FnOnce(String) -> WorkerExecutorError,
     ) -> WorkerExecutorError {
         match self {
             Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            Self::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
             error => otherwise(error.to_string()),
         }
     }
