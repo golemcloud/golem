@@ -71,7 +71,7 @@ object AgentClientRuntime {
    * argument cards, tokens and secrets; [[call]] gives them back when the scope
    * card is gone, so a failure before the host call never loses an argument.
    */
-  private final class AwaitedInput(
+  private[golem] final class AwaitedInput(
     wit: WitSchemaValueTree,
     lowered: JsSchemaValueTree,
     scopeCard: Option[ScopeCard]
@@ -91,7 +91,7 @@ object AgentClientRuntime {
    * Checks the scope card before encoding, so a moved card never consumes an
    * argument.
    */
-  private def awaitedInput(scopeCard: Option[ScopeCard])(
+  private[golem] def awaitedInput(scopeCard: Option[ScopeCard])(
     encode: => Future[(WitSchemaValueTree, JsSchemaValueTree)]
   ): Future[AwaitedInput] =
     if (scopeCard.exists(!_.isPresent)) Future.failed(new IllegalStateException(ScopeCardMoved))
@@ -102,6 +102,26 @@ object AgentClientRuntime {
         new AwaitedInput(wit, lowered, scopeCard)
       }
     }
+
+  /**
+   * The input of an awaited call from a wire tree, for generated bridge
+   * clients: the scope card is checked before encoding and again with
+   * [[AwaitedInput.call]].
+   */
+  private[golem] def awaitedWireInput(scopeCard: Option[ScopeCard])(
+    wit: => WitSchemaValueTree
+  ): Future[AwaitedInput] =
+    awaitedInput(scopeCard) {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      val tree        = wit
+      SchemaWireInterop.ownedValueTreeToJsAsync(tree).map(lowered => (tree, lowered))
+    }
+
+  /** Like [[awaitedWireInput]], from a schema value. */
+  private[golem] def awaitedValueInput(scopeCard: Option[ScopeCard])(
+    value: => golem.schema.SchemaValue
+  ): Future[AwaitedInput] =
+    awaitedInput(scopeCard)(golem.runtime.autowire.SchemaPayload.encodeValueWithWireAsync(value))
 
   private def encodeWireAsync[A](
     codec: ConcreteCodec[A],

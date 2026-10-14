@@ -105,6 +105,10 @@ object SchemaPayload {
   ): Future[(WitSchemaValueTree, JsSchemaValueTree)] =
     encodePreparedValueWithWireAsync(ev.toValue(value))(Future.successful)
 
+  /** Like [[encodeValueAsync]], and also returns the wire tree. */
+  private[golem] def encodeValueWithWireAsync(value: => SchemaValue): Future[(WitSchemaValueTree, JsSchemaValueTree)] =
+    encodePreparedValueWithWireAsync(value)(Future.successful)
+
   private def encodePreparedValueWithWireAsync(value: => SchemaValue)(
     prepare: SchemaValue => Future[SchemaValue]
   ): Future[(WitSchemaValueTree, JsSchemaValueTree)] = {

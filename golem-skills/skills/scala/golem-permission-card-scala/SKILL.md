@@ -105,7 +105,9 @@ dropped), and stream arguments are closed. The reflection clients report this ca
 
 Only the awaited calls (`apply` and `cancelable`) carry a scope card. `trigger`, `scheduleAt` and
 `scheduleCancelableAt` never carry one. The reflection clients take an optional `scopeCard` on
-their awaited `invoke`, `invokeJson` and `invokeValue`. Tool clients have no scope-card option.
+their awaited `invoke`, `invokeJson` and `invokeValue`. Bridge clients that `golem` generates for
+Scala guests offer the same `withScopeCard` and `withDefaultScopeCard` members and take
+`PermissionCard` parameters and results. Tool clients have no scope-card option.
 Agent methods cannot be named `withDefaultScopeCard` or `withoutDefaultScopeCard`, and their
 signatures cannot use a bare type named `GolemScopeCardCall`, because the generated client uses
 these names; refer to such a type by its qualified name.

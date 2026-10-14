@@ -1138,11 +1138,15 @@ fn guest_direct_clients_use_prepared_concrete_codecs_for_recursive_values() {
         assert!(source.contains(
             "__outputCodec.decode(_root_.golem.host.SchemaWireInterop.valueTreeFromJs(__tree))"
         ));
-        assert!(source.contains("ownedValueTreeToJsAsync(methodParameters("));
+        assert!(
+            source.contains("AgentClientRuntime.awaitedWireInput(__scopeCard)(methodParameters(")
+        );
         assert!(source.contains(
             "__inputCodec_2: _root_.scala.collection.immutable.List[_root_.golem.UByte]"
         ));
-        assert!(source.contains("SchemaRpcCodec.encodeValueAsync(methodParameters(bytes))"));
+        assert!(source.contains(
+            "AgentClientRuntime.awaitedValueInput(__scopeCard)(methodParameters(bytes))"
+        ));
         compile_guest_if_enabled(pkg.package_dir().as_path());
     }
 }
@@ -1206,7 +1210,8 @@ fn guest_recursive_stream_matrix_compiles() {
         assert_eq!(source.matches("def trigger(").count(), 1);
         assert_eq!(source.matches("def scheduleAt(").count(), 1);
         assert_eq!(source.matches("def scheduleCancelableAt(").count(), 1);
-        assert_eq!(source.matches("def cancelable(").count(), 8);
+        // Each method has a cancelable call and a scoped cancelable call.
+        assert_eq!(source.matches("def cancelable(").count(), 16);
         compile_guest_if_enabled(dir.as_path());
     }
 }
@@ -1286,6 +1291,83 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(dir.join("project/plugins.sbt").exists());
 
     compile_guest_if_enabled(dir.as_path());
+}
+
+/// Awaited guest calls take a borrowed scope card per call or as a client
+/// default; fire-and-forget and scheduled calls never carry one, and agent
+/// members cannot shadow the new client members.
+#[test]
+fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let pkg = GeneratedPackage::new_with_mode(
+            agent(
+                "ScopedAgent",
+                "scala",
+                vec![field("name", SchemaType::string())],
+                vec![
+                    method(
+                        "send",
+                        vec![
+                            field("card", SchemaType::permission_card(Default::default())),
+                            field("__scopeCard", SchemaType::u32()),
+                        ],
+                        Some(ref_to("golem-scope-card-call")),
+                    ),
+                    method(
+                        "withDefaultScopeCard",
+                        vec![field("amount", SchemaType::u32())],
+                        Some(SchemaType::u32()),
+                    ),
+                    method("withoutDefaultScopeCard", vec![], None),
+                ],
+                vec![def(
+                    "golem-scope-card-call",
+                    SchemaType::record(vec![named_field("value", SchemaType::string())]),
+                )],
+                mode,
+            ),
+            ScalaBridgeMode::GuestWasmRpc,
+        );
+        let dir = pkg.package_dir();
+        let source = std::fs::read_to_string(
+            dir.join("src/main/scala/golem/bridge/client/scoped_agent/ScopedAgentClient.scala"),
+        )
+        .unwrap();
+        let scope_card = "_root_.golem.host.PermissionsApi.ScopeCard";
+
+        assert!(source.contains(&format!(
+            "def withDefaultScopeCard(card: {scope_card}): ScopedAgentRemote\n"
+        )));
+        assert!(source.contains("def withoutDefaultScopeCard: ScopedAgentRemote\n"));
+        assert!(source.contains(&format!(
+            "def withScopeCard(card: {scope_card}): GolemScopeCardCall = new GolemScopeCardCall(card)"
+        )));
+        assert!(source.contains(&format!(
+            "final class GolemScopeCardCall private[SendRemoteMethod] (__attachedScopeCard: {scope_card})"
+        )));
+        assert!(source.contains("AgentClientRuntime.awaitedValueInput(__scopeCard)"));
+        assert!(source.contains("__input.call(resolved."));
+        // A user parameter named like the internal scope-card parameter is renamed.
+        assert!(source.contains("__scopeCard_2: _root_.golem.UInt"));
+        // The agent methods named like the client members are renamed, and the
+        // user record named like the scoped-call class is referenced by its
+        // rooted name.
+        assert_eq!(source.matches("def withDefaultScopeCard(").count(), 2);
+        assert_eq!(source.matches("def withoutDefaultScopeCard:").count(), 2);
+        assert!(source.contains("_root_.golem.bridge.client.scoped_agent.GolemScopeCardCall"));
+        assert!(source.contains("final case class GolemScopeCardCall("));
+        for line in source.lines().filter(|line| {
+            line.contains("resolved.invoke")
+                || line.contains("resolved.schedule")
+                || line.contains("def trigger(")
+                || line.contains("def scheduleAt(")
+        }) {
+            assert!(!line.contains("__scopeCard)"), "{line}");
+            assert!(!line.contains("PermissionsApi.ScopeCard"), "{line}");
+        }
+
+        compile_guest_if_enabled(dir.as_path());
+    }
 }
 
 /// Ephemeral guest agents expose a local metadata-bearing proxy without a fixed
@@ -1422,10 +1504,14 @@ fn guest_generation_compiles_nested_named_and_multimodal_host_managed_capabiliti
 
     assert!(source.contains("_root_.golem.schema.GuestSecretHandle"));
     assert!(source.contains("_root_.golem.host.QuotaApi.QuotaToken"));
-    assert!(source.contains("_root_.golem.schema.GuestPermissionCardHandle"));
+    assert!(!source.contains("GuestPermissionCardHandle"));
+    assert!(source.contains("_root_.golem.host.PermissionsApi.PermissionCard"));
     assert!(source.contains("_root_.golem.schema.SchemaValue.SecretValue("));
     assert!(source.contains("_root_.golem.schema.SchemaValue.QuotaTokenHandle("));
-    assert!(source.contains("_root_.golem.schema.SchemaValue.PermissionCardHandle("));
+    assert!(source.contains("_root_.golem.host.PermissionsApi.PermissionCard.intoSchema.toValue("));
+    assert!(
+        source.contains("_root_.golem.host.PermissionsApi.PermissionCard.fromSchema.fromValue(")
+    );
     assert!(source.contains("final case class CapabilityEnvelope("));
     assert!(source.contains("sealed trait Multimodal0"));
 
