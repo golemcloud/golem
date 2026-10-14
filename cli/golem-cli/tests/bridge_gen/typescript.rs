@@ -954,7 +954,7 @@ fn guest_generation_compiles_host_managed_capability_methods() {
     for capability_type in [
         "base.SecretHandle",
         "base.QuotaToken",
-        "base.PermissionCardHandle",
+        "base.PermissionCard",
     ] {
         assert!(
             source.contains(capability_type),
@@ -966,14 +966,95 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         "base.secretHandleFromSchemaValue(",
         "base.quotaTokenToSchemaValue(",
         "base.quotaTokenFromSchemaValue(",
-        "base.permissionCardHandleToSchemaValue(",
-        "base.permissionCardHandleFromSchemaValue(",
+        "base.permissionCardToSchemaValue(",
+        "base.permissionCardFromSchemaValue(",
     ] {
         assert!(
             source.contains(codec),
             "missing generated capability codec {codec}:\n{source}"
         );
     }
+}
+
+#[test]
+fn guest_scope_card_options_are_generated_reserved_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "ScopedAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "run",
+                vec![field("value", SchemaType::string())],
+                Some(SchemaType::string()),
+            ),
+            method("withScopeCard", vec![], None),
+            method("scopeCard", vec![], Some(SchemaType::u32())),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("scoped-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("readonly scopeCard: base.ScopeCard | undefined;"));
+    assert!(source.contains("withScopeCard(scopeCard: base.ScopeCard | undefined): ScopedAgent"));
+    assert!(source.contains("return new ScopedAgent(this.resolved, scopeCard);"));
+    // The plain and abortable calls use the client default; the per-call option maps `null` to
+    // no scope card instead of falling back to the default.
+    assert!(source.contains("__await(undefined, this.scopeCard, ...__args)"));
+    assert!(source.contains("__await(signal, this.scopeCard, ...__args)"));
+    assert!(
+        source.contains("=> __await(undefined, scopeCard ?? undefined, ...__args)")
+            && source.contains("withScopeCard: (scopeCard: base.ScopeCard | null, ...__args: ["),
+        "missing per-call scope-card option:\n{source}"
+    );
+    assert!(source.contains("__encode(__args), signal, scopeCard)"));
+    // Agent methods named like the new members are renamed instead of shadowing them.
+    assert!(source.contains("readonly withScopeCard1: {"));
+    assert!(source.contains("readonly scopeCard1: {"));
+
+    let test_path = package_dir.join("test.ts");
+    let mut test = std::fs::read_to_string(&test_path).unwrap_or_default();
+    test.push_str(
+        r#"
+import { ScopedAgent as ScopedAgentClient } from './scoped-agent-guest-client';
+import type { bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+
+export async function scopeCardUsage(
+  scope: sdkBridge.ScopeCard,
+  card: sdkBridge.PermissionCard,
+): Promise<void> {
+  const client = ScopedAgentClient.get().withScopeCard(scope);
+  const viaDefault: string = await client.run('x');
+  const withoutScope: string = await client.run.withScopeCard(null, 'x');
+  const withScope: string = await client.run.withScopeCard(scope, 'x');
+  const cleared: ScopedAgentClient = client.withScopeCard(undefined);
+  await cleared.withScopeCard1();
+  const count: number = await cleared.scopeCard1();
+  // @ts-expect-error a persistent permission card is not a scope card
+  await client.run.withScopeCard(card, 'x');
+  // @ts-expect-error the client default must be a scope card
+  client.withScopeCard(card);
+  void [viaDefault, withoutScope, withScope, count];
+}
+"#,
+    );
+    std::fs::write(&test_path, test).unwrap();
+    install_and_build(&package_dir);
 }
 
 #[test]

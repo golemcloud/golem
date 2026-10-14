@@ -54,13 +54,13 @@ import {
   releaseGuestQuotaTokenHandle,
 } from '../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
-import {
-  adoptGuestPermissionCardHandle,
-  GuestPermissionCardHandle,
-  permissionCardHandleWasLiftedFromWire,
-  releaseGuestPermissionCardHandle,
-} from '../internal/schema-model/permissionCardHandle';
+import { GuestPermissionCardHandle } from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
+import {
+  PermissionCard,
+  permissionCardFromSchemaHandleInternal,
+  permissionCardToSchemaValueInternal,
+} from '../host/permissions';
 import type {
   BinaryRestrictions,
   TextRestrictions,
@@ -70,7 +70,6 @@ import type {
   QuantityValue,
   Secret as RawSecret,
   QuotaToken as RawQuotaToken,
-  PermissionCard as RawPermissionCard,
 } from 'golem:core/types@2.0.0';
 import { SchemaCodec } from './codec';
 import { buildResultCodec } from './result';
@@ -833,21 +832,15 @@ export interface PermissionCardOptions {
   polymorphic: boolean;
 }
 
-function permissionCardMarker(
-  options: PermissionCardOptions,
-): MarkerSchema<GuestPermissionCardHandle> {
-  const validate: Validator<GuestPermissionCardHandle> = (value) =>
-    value !== null && typeof value === 'object'
-      ? ok(value as GuestPermissionCardHandle)
-      : fail('Expected an opaque permission-card handle for WIT permission-card');
+function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<PermissionCard> {
+  const validate: Validator<PermissionCard> = (value) =>
+    value instanceof PermissionCard
+      ? ok(value)
+      : fail('Expected a PermissionCard for WIT permission-card');
   const descriptor: MarkerDescriptor = () => ({
     graph: { defs: new Map(), root: t.permissionCard(options) },
     toValue: (value) =>
-      v.permissionCard(
-        value instanceof GuestPermissionCardHandle
-          ? value
-          : adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
-      ),
+      permissionCardToSchemaValueInternal(PERMISSION_CARD_INTERNAL, value as PermissionCard),
     fromValue: (sv) => {
       const handle = (
         sv as {
@@ -855,10 +848,7 @@ function permissionCardMarker(
           handle: GuestPermissionCardHandle;
         }
       ).handle;
-      if (permissionCardHandleWasLiftedFromWire(PERMISSION_CARD_INTERNAL, handle)) return handle;
-      const raw = releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle);
-      if (raw === undefined) throw new Error('permission-card handle was already consumed');
-      return raw;
+      return permissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle);
     },
   });
   return marker(validate, descriptor);

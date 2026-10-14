@@ -39,8 +39,14 @@ import {
   typedSchemaValueToWit,
   v,
 } from '../src/internal/schema-model';
-import { createGuestPermissionCardHandle } from '../src/internal/schema-model/permissionCardHandle';
-import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
+import { PermissionCard } from '../src/host/permissions';
+import {
+  fakeRawCard,
+  permissionCardFromRaw,
+  rawOfPermissionCard,
+  rawOfScopeCard,
+  scopeCardFromRaw,
+} from './permissionCardTestSupport';
 
 function remoteClientTypeChecks(): void {
   const def = defineAgent({
@@ -404,9 +410,16 @@ describe('schema markers', () => {
       spec: { polymorphic: true },
     });
 
-    const raw = { id: 'opaque-permission-card' } as never;
-    const handle = createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw);
-    expect(codec.fromValue(codec.toValue(handle))).toBe(raw);
+    const raw = fakeRawCard({ id: 'opaque-permission-card' }) as never;
+    const card = permissionCardFromRaw(raw);
+    // A local decode of the card's own value would alias it into a second card.
+    expect(() => codec.fromValue(codec.toValue(card))).toThrow(/already held by another card/);
+    expect(card.isMoved()).toBe(false);
+    const decoded = codec.fromValue(schemaValueFromWit(schemaValueToWit(codec.toValue(card))));
+    expect(decoded).toBeInstanceOf(PermissionCard);
+    expect(rawOfPermissionCard(decoded)).toBe(raw);
+    expect(card.isMoved()).toBe(true);
+    expect(() => codec.toValue({ id: 'raw-host-resource' })).toThrow();
   });
 
   it('maps unstructuredText to a role-tagged variant and round-trips', () => {
@@ -603,6 +616,52 @@ describe('RPC client', () => {
 
     expect(client.ping).toBeTypeOf('function');
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toHaveLength(1);
+  });
+
+  it('borrows the client default or per-call scope card for awaited calls only', async () => {
+    const def = defineAgent({
+      name: 'ScopeCardClientAgent',
+      id: { name: z.string() },
+      methods: {
+        touch: method({ input: {}, returns: z.void() }),
+        echo: method({ input: { text: z.string() }, returns: z.string() }),
+      },
+    });
+    const defaultCard = scopeCardFromRaw({ id: 'default-scope' });
+    const callCard = scopeCardFromRaw({ id: 'call-scope' });
+    const client = def.client.get({ name: 'scoped' }, undefined, { scopeCard: defaultCard });
+    const rpc = latestRpc();
+    const scopeOfLastAwait = () => rpc.asyncInvokeAndAwait.mock.calls.at(-1)![2];
+    rpc.invoke.mockReturnValue({ agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' });
+    rpc.asyncInvokeAndAwait.mockImplementation(() => ({
+      metadata: { agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' },
+      future: {
+        get: vi
+          .fn()
+          .mockResolvedValue({ valueNodes: [{ tag: 'string-value', val: 'hi' }], root: 0 }),
+        cancel: vi.fn(),
+      },
+    }));
+
+    await expect(client.echo({ text: 'a' })).resolves.toBe('hi');
+    expect(scopeOfLastAwait()).toBe(rawOfScopeCard(defaultCard));
+    await expect(client.echo({ text: 'b' }, { scopeCard: callCard })).resolves.toBe('hi');
+    expect(scopeOfLastAwait()).toBe(rawOfScopeCard(callCard));
+    rpc.asyncInvokeAndAwait.mockImplementation(() => ({
+      metadata: { agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' },
+      future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
+    }));
+    await client.touch({ scopeCard: null });
+    expect(scopeOfLastAwait()).toBeUndefined();
+    client.touch.trigger();
+    expect(rpc.invoke.mock.calls.at(-1)![2]).toBeUndefined();
+    expect(defaultCard.isMoved()).toBe(false);
+    expect(callCard.isMoved()).toBe(false);
+
+    const awaited = rpc.asyncInvokeAndAwait.mock.calls.length;
+    defaultCard.release();
+    await expect(client.touch()).rejects.toThrow(/already been released/);
+    expect(rpc.asyncInvokeAndAwait.mock.calls.length).toBe(awaited);
   });
 
   it('builds a client-only definition from Standard Schema libraries without registration', () => {
