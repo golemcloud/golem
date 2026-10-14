@@ -22,6 +22,16 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 fn main() -> ExitCode {
+    if let Some(result) = golem_worker_executor::xfs_quota_helper::run_if_requested() {
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("{err:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Some(flag) = std::env::args_os()
         .nth(1)
         .and_then(|flag| flag.into_string().ok())

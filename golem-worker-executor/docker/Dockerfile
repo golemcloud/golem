@@ -15,10 +15,11 @@ LABEL cloud.golem.cpu.target="aarch64"
 LABEL cloud.golem.cpu.features="neon,crc,lse,aes,sha2,dotprod"
 
 # Gives the executor binary the file capability cap_sys_admin+p: permitted, not effective. The
-# kernel grants it only when the container's bounding set holds SYS_ADMIN and no_new_privs is off,
-# and the executor raises it to effective only for ManagedXfs storage. With the effective bit, the
-# kernel would refuse to run the binary in a container without SYS_ADMIN. A separate stage keeps
-# the binary in one layer of the final image: setcap in the final stage would copy it again.
+# kernel grants it only when the container's bounding set holds SYS_ADMIN and no_new_privs is off.
+# Only the XFS quota helper uses it: for ManagedXfs storage the executor starts the helper from
+# this binary, and then drops the capability itself. With the effective bit, the kernel would
+# refuse to run the binary in a container without SYS_ADMIN. A separate stage keeps the binary in
+# one layer of the final image: setcap in the final stage would copy it again.
 FROM platform-${TARGETARCH} AS capability
 
 RUN apt-get update && apt-get install -y libcap2-bin

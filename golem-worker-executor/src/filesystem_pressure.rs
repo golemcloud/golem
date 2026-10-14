@@ -1156,6 +1156,7 @@ mod tests {
         let provisioning = SandboxFilesystemProvisioning::new(
             &FilesystemStorageMode::ManagedXfs {
                 root: root.clone().into(),
+                quota_helper_socket: None,
             },
             golem_common::model::RetryConfig::default(),
         )

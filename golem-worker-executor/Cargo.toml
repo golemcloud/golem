@@ -134,7 +134,7 @@ rustix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-raw-sys = { workspace = true }
-rustix = { workspace = true, features = ["thread"] }
+rustix = { workspace = true, features = ["net", "process", "thread"] }
 
 [[bench]]
 name = "invocation_lowering"

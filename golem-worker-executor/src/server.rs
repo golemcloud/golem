@@ -19,18 +19,26 @@ use golem_worker_executor::metrics;
 use golem_worker_executor::process_capabilities;
 use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loader};
 use golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
+use golem_worker_executor::xfs_quota_helper;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> Result<(), anyhow::Error> {
+    if let Some(result) = xfs_quota_helper::run_if_requested() {
+        return result;
+    }
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
             config.validate()?;
-            let sys_admin = process_capabilities::apply(config.filesystem_storage.mode.kind())?;
+            // Both run before any thread starts: the helper gets CAP_SYS_ADMIN from the binary as
+            // this process did, and the restriction applies to every later thread.
+            let quota_helper =
+                xfs_quota_helper::start_for_storage(&config.filesystem_storage.mode)?;
+            let sys_admin = process_capabilities::restrict_executor()?;
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .expect("Failed to install crypto provider");
@@ -40,8 +48,19 @@ fn main() -> Result<(), anyhow::Error> {
             info!("Using configuration:\n{}", config.to_safe_string_indented());
             info!(
                 sys_admin = ?sys_admin,
-                "Set CAP_SYS_ADMIN of the executor process for its filesystem storage"
+                quota_helper = quota_helper.is_some(),
+                "Restricted the capabilities of the executor process"
             );
+            if let Some(quota_helper) = quota_helper {
+                // The executor cannot change project quotas without its helper, so it stops with it.
+                std::thread::Builder::new()
+                    .name("xfs-quota-helper-watch".to_string())
+                    .spawn(move || {
+                        let ended = quota_helper.wait();
+                        error!(ended, "The XFS quota helper stopped; stopping the executor");
+                        std::process::exit(1);
+                    })?;
+            }
 
             let prometheus = metrics::register_all();
 

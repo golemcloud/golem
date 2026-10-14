@@ -1265,6 +1265,7 @@ async fn filesystem_workload_benchmark() {
             SandboxFilesystemProvisioning::new(
                 &FilesystemStorageMode::ManagedXfs {
                     root: managed_root.into(),
+                    quota_helper_socket: None,
                 },
                 RetryConfig::default(),
             )
@@ -1279,6 +1280,7 @@ async fn filesystem_workload_benchmark() {
             SandboxFilesystemProvisioning::new(
                 &FilesystemStorageMode::ManagedXfs {
                     root: managed_root.into(),
+                    quota_helper_socket: None,
                 },
                 RetryConfig::default(),
             )
