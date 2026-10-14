@@ -48,6 +48,11 @@ RUN if user=$(getent passwd 65534); then userdel "${user%%:*}"; fi \
     && useradd --uid 65534 --gid 65534 --home-dir /home/golem --create-home \
         --shell /usr/sbin/nologin golem \
     && install --directory --owner 65534 --group 65534 --mode 0750 /data /data/blob_storage
+
+# No program in the image gains privileges when it runs: the image clears every setuid and setgid
+# bit, so a process in the container cannot become root through a program of the base image.
+RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} +
+
 ENV HOME=/home/golem
 USER 65534:65534
 
