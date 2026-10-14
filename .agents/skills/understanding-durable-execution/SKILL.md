@@ -303,14 +303,26 @@ An oplog read that does not give the requested entries (an archive chunk that do
 blob or indexed storage failure of an archive level, a gap) is never treated as absent data. It
 returns `UnreadableOplog` (`services/oplog/reader.rs`: the agent id and the `OplogReadError` with
 its source, such as `archive layer 1`), and the read paths of replay, status folding and recovery
-carry it up as `WorkerExecutorError::OplogUnreadable`. It fails that agent only, fail-stop: the
-start ends through `StartProblem::OplogUnreadable`, which passes the error in every column of the
+carry it up as `WorkerExecutorError::OplogFailed`. It fails that agent only, fail-stop: the
+start ends through `StartProblem::OplogFailed`, which passes the error in every column of the
 outcome table (no skipped or rejected record, no failed update), and the recovery path records it
 as a terminal `Error` entry, so the agent is `Failed` with the cause. Shard-assignment recovery
-(`get_running_workers_in_shards`, `recovered_status`) logs and skips an agent whose oplog does not
-read instead of failing the assignment, so the other agents recover. Nothing deletes or rewrites
-the unreadable data. The `try_*` reads of `Oplog` and `OplogService` stay the maintenance reads:
-they return every storage failure as text for the transfer and the sweep to retry.
+(`get_running_workers_in_shards`, `recovered_status`, `recovered_restart`) logs and skips an agent
+whose oplog failed instead of failing the assignment, so the other agents recover. Nothing deletes
+or rewrites the unreadable data. The `try_*` reads of `Oplog` and `OplogService` stay the
+maintenance reads: they return every storage failure as text for the transfer and the sweep to
+retry.
+
+Opening an oplog can fail (`OplogService::open`/`create`, `OplogConstructor::create_oplog`): an
+archive level whose last index does not read, or whose owning-epoch record fails after its
+retries, fails the open with `OplogFailed`, and the open-oplog cache keeps nothing. A stream
+session index rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
+type up to `OplogFailed`. An ephemeral oplog whose writer task cannot store a batch in the first
+archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
+refused, so the agent stops. Entries committed with `CommitLevel::Deferred` before the failure
+were already acknowledged and are missing from the archived history; an ephemeral agent is never
+resumed from that history, so the agent stops instead of the process. The storage failures of the
+primary oplog are outside this rule and still stop the executor.
 A write the shard-epoch fence refuses is not a storage failure: it ends the transfer as
 `OplogError::Fenced`, latches the oplog's fence and is never retried, because the oplog now
 belongs to the shard's new owner (see "Resharding, revocation and the oplog epoch fence").
