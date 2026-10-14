@@ -37,13 +37,22 @@ try {
     readFileSync(join(installed, 'wasm/agent_guest.wasm')).subarray(0, 4).toString('hex'),
     '0061736d',
   );
+  const nodeTypesRange = manifest.peerDependencies['@types/node'];
+  assert.equal(nodeTypesRange, manifest.devDependencies['@types/node']);
+  assert.match(nodeTypesRange, /^\^\d+\.\d+\.\d+$/);
+  const minimumNodeTypes = nodeTypesRange.slice(1);
   npm([
     'install',
     '--ignore-scripts',
     '--no-save',
     `typescript@${manifest.devDependencies.typescript}`,
-    `@types/node@${manifest.devDependencies['@types/node']}`,
+    `@types/node@${minimumNodeTypes}`,
   ]);
+  assert.equal(
+    JSON.parse(readFileSync(join(directory, 'node_modules/@types/node/package.json'), 'utf8'))
+      .version,
+    minimumNodeTypes,
+  );
   const publicComponentExports = Object.entries(manifest.exports).filter(
     ([, target]) => target && typeof target === 'object' && typeof target.import === 'string',
   );
@@ -153,7 +162,15 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
   writeFileSync(
     join(directory, 'consumer.ts'),
     `
-    import { compileFileMappings, type HttpRequest, type HttpResponse } from '@golemcloud/golem-ts-sdk/http-router';
+    import { createServer } from 'node:http';
+    import { DatabaseSync, SQLTagStore } from 'node:sqlite';
+    import { defineHttpRouter, nodeHttpHandler, compileFileMappings, type HttpRequest, type HttpResponse } from '@golemcloud/golem-ts-sdk/http-router';
+    const server = createServer((_req, res) => res.end('Hello from Golem'));
+    defineHttpRouter('Web').mount('/').implementRaw(nodeHttpHandler(server));
+    const store = new SQLTagStore(new DatabaseSync(':memory:'));
+    const size: number = store.size;
+    // @ts-expect-error SQLTagStore.size is a numeric getter, not a method.
+    store.size();
     const response: HttpResponse<Uint8Array> = { status: 200, headers: [], body: new Uint8Array() };
     const request: HttpRequest<Uint8Array> = {
       method: 'GET', scheme: 'http', authority: 'example.test', path: '/', query: '', headers: [], body: response.body
@@ -167,7 +184,6 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
       join(directory, 'node_modules/typescript/bin/tsc'),
       '--noEmit',
       '--strict',
-      '--skipLibCheck',
       '--module',
       'NodeNext',
       '--moduleResolution',
