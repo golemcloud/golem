@@ -69,6 +69,7 @@ use std::fmt::Display;
 
 mod access;
 mod call;
+mod context;
 mod delivery;
 mod demand_stream;
 mod drop_events;
@@ -89,6 +90,7 @@ pub use call::*;
 use call::{
     BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost, unregistered_atomic_lease,
 };
+pub(in crate::durable_host) use context::{AccessorContext, DurableContext};
 pub use delivery::*;
 pub(crate) use demand_stream::*;
 #[cfg(test)]

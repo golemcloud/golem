@@ -493,6 +493,12 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    publish_incomplete_replay_tail(&mut AccessorContext::new(store, get_ctx)).await
+}
+
+async fn publish_incomplete_replay_tail<Ctx: WorkerCtx>(
+    access: &mut impl DurableContext<Ctx>,
+) -> Result<FinishReplayToLive, WorkerExecutorError> {
     let (
         replay_state,
         linear_memory,
@@ -502,8 +508,7 @@ where
         tool_entity,
         tool_operation,
         public_state,
-    ) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
+    ) = access.with_ctx(|ctx| {
         (
             ctx.state.replay_state.clone(),
             ctx.linear_memory.clone(),
@@ -546,14 +551,9 @@ where
         // Publishing live and committing the replay-finalization records form one boundary for
         // primary accessors. Live durable-call Starts take the same lock, so a sibling cannot
         // expose target-only effects before an automatic update has succeeded or failed.
-        let boundary_lock = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .state
-                .card_event_boundary_lock
-                .clone()
-        });
+        let boundary_lock = access.with_ctx(|ctx| ctx.state.card_event_boundary_lock.clone());
         let _boundary_guard = boundary_lock.lock_owned().await;
-        process_pending_replay_events_access(store, get_ctx).await?;
+        access.process_replay_events_locked().await?;
     }
     Ok(outcome)
 }
@@ -3864,7 +3864,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// the real guest-facing boundary (`delivered` / `suppress` / `discarded`), and a torn future
     /// in between records the `CompletionDiscarded` marker via the token's drop.
     pub async fn complete_access_deferred<T, D, Ctx>(
-        mut self,
+        self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
@@ -3874,14 +3874,27 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        self.complete_deferred(&mut AccessorContext::new(store, get_ctx), response)
+            .await
+    }
+
+    /// Completes a call without publishing its response to the caller. Native callers prepare
+    /// the delivery token and consume it at the Rust return, with no intervening await.
+    pub(in crate::durable_host) async fn complete_deferred<Ctx: WorkerCtx>(
+        mut self,
+        access: &mut impl DurableContext<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError> {
         let context = self.trap_context();
-        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+        if let Err(err) = access.drain().await {
             self.abandon_for_trap();
             return Err(err);
         }
-        self.complete_access_impl(store, get_ctx, response)
+        let (response, mut guard) = self
+            .complete_terminal(access, response, None, AccessResultDestination::Guest)
             .await
-            .map_err(|source| TerminalCallError::new(source, context))
+            .map_err(|source| TerminalCallError::new(source, context))?;
+        Ok((response, guard.take_completion_delivery()))
     }
 
     /// Prepares the End before calling `accept`. The caller must hold its local effect lock
@@ -3896,7 +3909,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// worker retirement retain the coordinator until cleanup completes.
     /// Replay uses the ordinary deferred replay interface; this callback is live-only.
     pub async fn complete_access_deferred_with_effect<T, D, Ctx, R, A, F, E, EF>(
-        mut self,
+        self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
@@ -3914,8 +3927,35 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         E: FnOnce(WorkerExecutorError) -> EF + Send + 'static,
         EF: Future<Output = ()> + Send + 'static,
     {
+        self.complete_deferred_with_effect(
+            &mut AccessorContext::new(store, get_ctx),
+            response,
+            accept,
+            publish,
+            failed,
+        )
+        .await
+    }
+
+    /// Shared commit-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
+    pub(in crate::durable_host) async fn complete_deferred_with_effect<Ctx, R, A, F, E, EF>(
+        mut self,
+        access: &mut impl DurableContext<Ctx>,
+        response: Pair::Resp,
+        accept: A,
+        publish: F,
+        failed: E,
+    ) -> Result<Result<(Pair::Resp, CompletionDelivery), (Self, Pair::Resp)>, TerminalCallError>
+    where
+        Ctx: WorkerCtx,
+        R: Send + 'static,
+        A: FnOnce(&Pair::Resp, Box<dyn FnOnce(R) + '_>),
+        F: FnOnce(R, OplogIndex) + Send + 'static,
+        E: FnOnce(WorkerExecutorError) -> EF + Send + 'static,
+        EF: Future<Output = ()> + Send + 'static,
+    {
         let context = self.trap_context();
-        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+        if let Err(err) = access.drain().await {
             self.abandon_for_trap();
             return Err(err);
         }
@@ -3929,8 +3969,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 context,
             ));
         }
-        let (oplog, recorder, worker) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
+        let (oplog, recorder, worker) = access.with_ctx(|ctx| {
             (
                 ctx.state.oplog.clone(),
                 ctx.state.completion_marker_recorder(),
@@ -4012,7 +4051,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             guard.disarm();
             return Err(TerminalCallError::new(err, context));
         }
-        self.finish_access_terminal_scope(store, get_ctx, &mut guard)
+        self.finish_terminal_scope(access, &mut guard)
             .await
             .map_err(|err| TerminalCallError::new(err, context))?;
         Ok(Ok((response, guard.take_completion_delivery())))
@@ -4080,7 +4119,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     async fn complete_access_terminal<T, D, Ctx>(
-        mut self,
+        self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
@@ -4092,6 +4131,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        self.complete_terminal(
+            &mut AccessorContext::new(store, get_ctx),
+            response,
+            span_finished,
+            destination,
+        )
+        .await
+    }
+
+    async fn complete_terminal<Ctx: WorkerCtx>(
+        mut self,
+        access: &mut impl DurableContext<Ctx>,
+        response: Pair::Resp,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
+        destination: AccessResultDestination,
+    ) -> Result<(Pair::Resp, AccessTerminalGuard<P>), WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("complete_access")?;
         if !self.is_live {
             return Err(WorkerExecutorError::runtime(
@@ -4099,8 +4154,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             ));
         }
         {
-            let (oplog, completion_marker_recorder) = store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
+            let (oplog, completion_marker_recorder) = access.with_ctx(|ctx| {
                 (
                     ctx.state.oplog.clone(),
                     (destination == AccessResultDestination::Guest)
@@ -4136,39 +4190,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     return Err(err);
                 }
             };
-            self.finish_access_terminal_scope(store, get_ctx, &mut guard)
-                .await?;
+            self.finish_terminal_scope(access, &mut guard).await?;
             Ok((response, guard))
         }
     }
 
-    async fn finish_access_terminal_scope<T, D, Ctx>(
+    async fn finish_terminal_scope<Ctx: WorkerCtx>(
         &mut self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        access: &mut impl DurableContext<Ctx>,
         guard: &mut AccessTerminalGuard<P>,
-    ) -> Result<(), WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
+    ) -> Result<(), WorkerExecutorError> {
         let result = async {
             // Consult the current lease owner: a region may have transferred this call
             // while its terminal was being persisted.
-            store.with(|mut access| {
-                guard.finish_atomic_region(
-                    &mut get_ctx(access.data_mut()).state.active_atomic_regions,
-                )
-            })?;
-            end_durable_function_access(
-                store,
-                get_ctx,
-                self.retry.function_type().clone(),
-                self.begin_index(),
-                false,
-            )
-            .await
+            access
+                .with_ctx(|ctx| guard.finish_atomic_region(&mut ctx.state.active_atomic_regions))?;
+            access
+                .finish_scope(self.retry.function_type().clone(), self.begin_index())
+                .await
         }
         .await;
         if result.is_err() {
@@ -4673,7 +4712,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// was armed — and the *caller* parks at its own delivery boundary after performing its
     /// deterministic post-`End` continuation (e.g. restoring resource state).
     pub async fn replay_access_deferred<T, D, Ctx>(
-        mut self,
+        self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError>
@@ -4682,11 +4721,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        self.replay_deferred(&mut AccessorContext::new(store, get_ctx))
+            .await
+    }
+
+    /// Resolves the recorded terminal while retaining the actual caller-delivery boundary.
+    /// Callers map errors with the session's trap context, as on the accessor path.
+    pub(in crate::durable_host) async fn replay_deferred<Ctx: WorkerCtx>(
+        mut self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
         let function_type = self.retry.function_type().clone();
         let begin_index = self.begin_index();
-        let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
+        let (replay_state, oplog, completion_marker_recorder) = access.with_ctx(|ctx| {
             (
                 ctx.state.replay_state.clone(),
                 ctx.state.oplog.clone(),
@@ -4707,8 +4755,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                access.finish_scope(function_type, begin_index).await?;
                 // The delivery token is constructed only after the fallible decode / scope close
                 // succeeded: a token dropped on the error path would log a spurious
                 // unconsumed-token warning.
@@ -4746,8 +4793,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                access.finish_scope(function_type, begin_index).await?;
                 // As above, the token is constructed only after the fallible operations.
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
@@ -4767,15 +4813,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                let transition = publish_incomplete_replay_tail_access(store, get_ctx).await;
+                let transition = publish_incomplete_replay_tail(access).await;
                 if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
                     self.finished = true;
                     return Err(error);
                 }
                 self.prepare_incomplete_live_repair(
                     |initiation_region, repairable_when_incomplete| {
-                        store.with(|mut access| {
-                            let state = &mut get_ctx(access.data_mut()).state;
+                        access.with_ctx(|ctx| {
+                            let state = &mut ctx.state;
                             let lease = register_live_repair_atomic_lease(
                                 &mut state.active_atomic_regions,
                                 initiation_region,
@@ -4786,7 +4832,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     },
                 )?;
                 let synchronization = if self.requires_agent_authority {
-                    match agent_auth_ctx_at_serialized_access(store, get_ctx).await {
+                    match access.agent_auth_ctx().await {
                         Ok(auth_ctx) => {
                             self.agent_auth_ctx = Some(auth_ctx);
                             Ok(())
