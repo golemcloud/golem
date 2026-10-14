@@ -1,0 +1,17 @@
+[package]
+name = "golem_it_promise_agent_rust"
+version = "0.0.1"
+edition = "2024"
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }

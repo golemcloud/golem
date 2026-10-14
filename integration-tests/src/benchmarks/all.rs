@@ -22,16 +22,26 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder,
     BenchmarkResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult,
+    BenchmarkSuiteResult, ChaosAction, ChaosScenarioArg, DensityAction, DensityAgentModeArg,
+    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
+    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
     BenchmarkCliParameters, BenchmarkTestDependencies, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::benchmarks::density::agent::{CellConfig, ExecutorProbe, Scenario};
+use integration_tests::benchmarks::density::prep::{PrepManifest, run_prep};
+use integration_tests::benchmarks::density::{
+    AgentMode, ComponentSharing, DensitySection, PromiseRuntime, PromiseTopology,
+    PromiseWaiterPresence,
+};
 use integration_tests::benchmarks::{
     self, cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
+use integration_tests::chaos;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -197,9 +207,16 @@ async fn main() {
                 // no else: we already validated all names above
             }
 
-            // Attach the run_id to result metadata (cloud mode only).
+            // Attach the run_id and run_metadata to result metadata (cloud mode only).
             if let Some(run_id) = cloud_bench_run_id() {
                 suite_result.run_id = Some(format!("bench-{run_id}"));
+
+                // Read GOLEM_BENCH_* env vars set by the buildspec before invoking
+                // the binary. Missing vars produce None rather than failing the run.
+                let metadata = RunMetadata::from_env();
+                if !metadata.is_empty() {
+                    suite_result.run_metadata = Some(metadata);
+                }
             }
 
             if let Some(path) = save_to_json {
@@ -221,6 +238,87 @@ async fn main() {
                 println!("{}", suite_result.view());
             }
             suite_result.failure_count()
+        }
+        BenchmarkConfig::Density {
+            action,
+            section,
+            prep_manifest,
+            scenario,
+            agent_mode,
+            sharing,
+            snapshotting,
+            active_fraction,
+            prefill,
+            ramp,
+            schedule_target_residency,
+            schedule_context_spans,
+            schedule_target_pattern,
+            schedule_rate_period_secs,
+            promise_payload_size,
+            promise_waiter_presence,
+            promise_topology,
+            promise_runtime,
+            executor_pod_name,
+            executor_namespace,
+            save_to_json,
+            ..
+        } => {
+            run_density(
+                params.benchmark_config.mode(),
+                params.service_verbosity(),
+                params.otlp,
+                *action,
+                map_section(*section),
+                prep_manifest,
+                scenario.map(map_scenario),
+                agent_mode.map(map_agent_mode),
+                sharing.map(map_sharing),
+                map_snapshotting(*snapshotting),
+                *active_fraction,
+                *prefill,
+                ramp.clone(),
+                schedule_target_residency.map(map_schedule_target_residency),
+                *schedule_context_spans,
+                schedule_target_pattern.map(map_schedule_target_pattern),
+                *schedule_rate_period_secs,
+                *promise_payload_size,
+                promise_waiter_presence.map(map_promise_waiter_presence),
+                promise_topology.map(map_promise_topology),
+                promise_runtime.map(map_promise_runtime),
+                executor_pod_name.clone(),
+                executor_namespace.clone(),
+                save_to_json.clone(),
+                params.json,
+            )
+            .await;
+            0
+        }
+        BenchmarkConfig::Chaos {
+            action,
+            scenario,
+            suite,
+            prep_manifest,
+            signal_dir,
+            save_to_json,
+            save_history_to_json,
+            allow_disabled,
+            ..
+        } => {
+            run_chaos(
+                params.benchmark_config.mode(),
+                params.service_verbosity(),
+                params.otlp,
+                *action,
+                *scenario,
+                suite.clone(),
+                prep_manifest,
+                signal_dir.clone(),
+                save_to_json.clone(),
+                save_history_to_json.clone(),
+                *allow_disabled,
+            )
+            .await;
+            0
         }
     };
 
@@ -742,4 +840,419 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
     deps.kill_all().await;
 
     info!("Cloud pre-flight warmup complete.");
+}
+
+// ── Chaos subcommand handling ─────────────────────────────────────────────────
+
+/// Runs one chaos action: the one-time prep, or one scenario end to end.
+///
+/// The driver never injects the fault itself. `--signal-dir` is where the
+/// workflow tells it the fault is active and, later, cleared; see
+/// [`integration_tests::chaos::signal`] for the contract.
+#[allow(clippy::too_many_arguments)]
+async fn run_chaos(
+    mode: &TestMode,
+    verbosity: Level,
+    otlp: bool,
+    action: ChaosAction,
+    scenario: Option<ChaosScenarioArg>,
+    suite: Option<std::path::PathBuf>,
+    prep_manifest_path: &std::path::Path,
+    signal_dir: Option<std::path::PathBuf>,
+    save_to_json: Option<std::path::PathBuf>,
+    save_history_to_json: Option<std::path::PathBuf>,
+    allow_disabled: bool,
+) {
+    if !matches!(mode, TestMode::Cloud { .. }) {
+        panic!("chaos scenarios require cloud mode");
+    }
+
+    let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
+
+    match action {
+        ChaosAction::Prep => {
+            let manifest = chaos::prep::run_prep(&deps)
+                .await
+                .expect("chaos-prep failed");
+            manifest
+                .save(prep_manifest_path)
+                .expect("failed to write chaos prep manifest");
+            info!("Chaos-prep manifest written to {prep_manifest_path:?}");
+        }
+        ChaosAction::Scenario => {
+            let scenario = scenario.expect("--scenario is required for --action scenario");
+            let suite_path = suite.expect("--suite is required for --action scenario");
+            let signal_dir = signal_dir.expect("--signal-dir is required for --action scenario");
+
+            let suite = chaos::ChaosSuite::load(&suite_path).expect("failed to load chaos suite");
+            let code = match scenario {
+                ChaosScenarioArg::S1 => chaos::ScenarioCode::S1,
+                ChaosScenarioArg::S8 => chaos::ScenarioCode::S8,
+                ChaosScenarioArg::S5 => chaos::ScenarioCode::S5,
+                ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
+                ChaosScenarioArg::S13 => chaos::ScenarioCode::S13,
+                ChaosScenarioArg::S10 => chaos::ScenarioCode::S10,
+                ChaosScenarioArg::S11 => chaos::ScenarioCode::S11,
+                ChaosScenarioArg::S3 => chaos::ScenarioCode::S3,
+                ChaosScenarioArg::S2 => chaos::ScenarioCode::S2,
+                ChaosScenarioArg::S4 => chaos::ScenarioCode::S4,
+                ChaosScenarioArg::Mf2 => chaos::ScenarioCode::MF2,
+                ChaosScenarioArg::S7 => chaos::ScenarioCode::S7,
+                ChaosScenarioArg::S6 => chaos::ScenarioCode::S6,
+                ChaosScenarioArg::S9 => chaos::ScenarioCode::S9,
+                ChaosScenarioArg::S16 => chaos::ScenarioCode::S16,
+                ChaosScenarioArg::S22 => chaos::ScenarioCode::S22,
+                ChaosScenarioArg::S14 => chaos::ScenarioCode::S14,
+                ChaosScenarioArg::S18 => chaos::ScenarioCode::S18,
+                ChaosScenarioArg::S17 => chaos::ScenarioCode::S17,
+                ChaosScenarioArg::S15 => chaos::ScenarioCode::S15,
+                ChaosScenarioArg::S15A => chaos::ScenarioCode::S15A,
+                ChaosScenarioArg::S15B => chaos::ScenarioCode::S15B,
+                ChaosScenarioArg::S15C => chaos::ScenarioCode::S15C,
+                ChaosScenarioArg::S23 => chaos::ScenarioCode::S23,
+                ChaosScenarioArg::Mf1 => chaos::ScenarioCode::MF1,
+                ChaosScenarioArg::Mf1b => chaos::ScenarioCode::MF1B,
+                ChaosScenarioArg::S21 => chaos::ScenarioCode::S21,
+                ChaosScenarioArg::S19 => chaos::ScenarioCode::S19,
+            };
+            let config = suite
+                .scenario(code, allow_disabled)
+                .expect("scenario is missing or disabled in the suite")
+                .clone();
+
+            let manifest = chaos::prep::ChaosPrepManifest::load(prep_manifest_path)
+                .expect("failed to load chaos prep manifest");
+            let signals =
+                chaos::signal::FaultSignals::new(&signal_dir).expect("failed to open signal dir");
+            let outputs = chaos::scenarios::OutputPaths {
+                result: save_to_json,
+                history: save_history_to_json,
+            };
+
+            let result = match code {
+                chaos::ScenarioCode::S1 => {
+                    chaos::scenarios::s1::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S8 => {
+                    chaos::scenarios::s8::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S5 => {
+                    chaos::scenarios::s5::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S12 => {
+                    chaos::scenarios::s12::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S13 => {
+                    chaos::scenarios::s13::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S10 => {
+                    chaos::scenarios::s10::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S11 => {
+                    chaos::scenarios::s11::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S3 => {
+                    chaos::scenarios::s3::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S19 => {
+                    chaos::scenarios::s19::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                code @ (chaos::ScenarioCode::S4 | chaos::ScenarioCode::MF2) => {
+                    chaos::scenarios::dns_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+                code @ (chaos::ScenarioCode::S2 | chaos::ScenarioCode::S21) => {
+                    chaos::scenarios::relay_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+                chaos::ScenarioCode::S7 => {
+                    chaos::scenarios::s7::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S6 => {
+                    chaos::scenarios::s6::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S9 => {
+                    chaos::scenarios::s9::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                code @ (chaos::ScenarioCode::S14
+                | chaos::ScenarioCode::S15
+                | chaos::ScenarioCode::S15A
+                | chaos::ScenarioCode::S15B
+                | chaos::ScenarioCode::S15C
+                | chaos::ScenarioCode::S16
+                | chaos::ScenarioCode::S17
+                | chaos::ScenarioCode::S18
+                | chaos::ScenarioCode::S22
+                | chaos::ScenarioCode::S23
+                | chaos::ScenarioCode::MF1
+                | chaos::ScenarioCode::MF1B) => {
+                    chaos::scenarios::storage_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+            };
+
+            deps.kill_all().await;
+
+            let result = result.expect("chaos scenario failed to produce a result");
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+
+            // The exit code is what the workflow branches on. Only the narrow
+            // set of unambiguous failures in `TerminationReason` gets here — a
+            // read-back finding is reported for an operator to judge, not
+            // turned into a red run.
+            if !result.completed {
+                eprintln!(
+                    "Chaos scenario {} did not complete: {:?}",
+                    result.scenario_code, result.termination_reason
+                );
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
+
+    deps.kill_all().await;
+}
+
+// ── Density subcommand handling ───────────────────────────────────────────────
+
+fn map_section(arg: DensitySectionArg) -> DensitySection {
+    match arg {
+        DensitySectionArg::Agent => DensitySection::Agent,
+        DensitySectionArg::Schedule => DensitySection::Schedule,
+        DensitySectionArg::Promise => DensitySection::Promise,
+    }
+}
+
+fn map_scenario(arg: DensityScenarioArg) -> Scenario {
+    match arg {
+        DensityScenarioArg::CreateOnly => Scenario::CreateOnly,
+        DensityScenarioArg::CreateWithActive => Scenario::CreateWithActiveFraction,
+        DensityScenarioArg::ConcurrentActive => Scenario::ConcurrentActive,
+        DensityScenarioArg::ResumeUnderSaturation => Scenario::ResumeUnderSaturation,
+    }
+}
+
+fn map_agent_mode(arg: DensityAgentModeArg) -> AgentMode {
+    match arg {
+        DensityAgentModeArg::Durable => AgentMode::Durable,
+        DensityAgentModeArg::Ephemeral => AgentMode::Ephemeral,
+    }
+}
+
+fn map_sharing(arg: DensitySharingArg) -> ComponentSharing {
+    match arg {
+        DensitySharingArg::Shared => ComponentSharing::Shared,
+        DensitySharingArg::PerAgent => ComponentSharing::PerAgent,
+    }
+}
+
+fn map_snapshotting(arg: DensitySnapshottingArg) -> bool {
+    match arg {
+        DensitySnapshottingArg::Disabled => false,
+        DensitySnapshottingArg::Enabled => true,
+    }
+}
+
+fn map_schedule_target_residency(
+    arg: DensityScheduleTargetResidencyArg,
+) -> integration_tests::benchmarks::density::ScheduleTargetResidency {
+    match arg {
+        DensityScheduleTargetResidencyArg::Warm => {
+            integration_tests::benchmarks::density::ScheduleTargetResidency::Warm
+        }
+        DensityScheduleTargetResidencyArg::Cold => {
+            integration_tests::benchmarks::density::ScheduleTargetResidency::Cold
+        }
+    }
+}
+
+fn map_schedule_target_pattern(
+    arg: DensityScheduleTargetPatternArg,
+) -> integration_tests::benchmarks::density::ScheduleTargetPattern {
+    match arg {
+        DensityScheduleTargetPatternArg::Spread => {
+            integration_tests::benchmarks::density::ScheduleTargetPattern::Spread
+        }
+        DensityScheduleTargetPatternArg::Realistic => {
+            integration_tests::benchmarks::density::ScheduleTargetPattern::Realistic
+        }
+    }
+}
+
+fn map_promise_waiter_presence(arg: DensityPromiseWaiterPresenceArg) -> PromiseWaiterPresence {
+    match arg {
+        DensityPromiseWaiterPresenceArg::Cold => PromiseWaiterPresence::Cold,
+        DensityPromiseWaiterPresenceArg::Warm => PromiseWaiterPresence::Warm,
+        DensityPromiseWaiterPresenceArg::Mixed => PromiseWaiterPresence::Mixed,
+    }
+}
+
+fn map_promise_topology(arg: DensityPromiseTopologyArg) -> PromiseTopology {
+    match arg {
+        DensityPromiseTopologyArg::OnePod => PromiseTopology::OnePod,
+        DensityPromiseTopologyArg::TwoPod => PromiseTopology::TwoPod,
+    }
+}
+
+fn map_promise_runtime(arg: DensityPromiseRuntimeArg) -> PromiseRuntime {
+    match arg {
+        DensityPromiseRuntimeArg::Rust => PromiseRuntime::Rust,
+        DensityPromiseRuntimeArg::Ts => PromiseRuntime::Ts,
+    }
+}
+
+/// Runs one density action: either the one-time prep (writing the manifest) or
+/// a single cell (using a previously-written manifest).
+#[allow(clippy::too_many_arguments)]
+async fn run_density(
+    mode: &TestMode,
+    verbosity: Level,
+    otlp: bool,
+    action: DensityAction,
+    section: DensitySection,
+    prep_manifest_path: &std::path::Path,
+    scenario: Option<Scenario>,
+    agent_mode: Option<AgentMode>,
+    sharing: Option<ComponentSharing>,
+    snapshotting: bool,
+    active_fraction: Option<u32>,
+    prefill: Option<u32>,
+    ramp: Option<Vec<u32>>,
+    schedule_target_residency: Option<
+        integration_tests::benchmarks::density::ScheduleTargetResidency,
+    >,
+    schedule_context_spans: Option<u32>,
+    schedule_target_pattern: Option<integration_tests::benchmarks::density::ScheduleTargetPattern>,
+    schedule_rate_period_secs: Option<u64>,
+    promise_payload_size: Option<usize>,
+    promise_waiter_presence: Option<PromiseWaiterPresence>,
+    promise_topology: Option<PromiseTopology>,
+    promise_runtime: Option<PromiseRuntime>,
+    executor_pod_name: Option<String>,
+    executor_namespace: String,
+    save_to_json: Option<std::path::PathBuf>,
+    json: bool,
+) {
+    if !matches!(mode, TestMode::Cloud { .. }) {
+        panic!("density benchmarks require cloud mode");
+    }
+
+    let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
+
+    match action {
+        DensityAction::Prep => {
+            let manifest = run_prep(&deps, section).await.expect("density-prep failed");
+            manifest
+                .save(prep_manifest_path)
+                .expect("failed to write prep manifest");
+            info!("Density-prep manifest written to {prep_manifest_path:?}");
+        }
+        DensityAction::Cell => {
+            let manifest =
+                PrepManifest::load(prep_manifest_path).expect("failed to load prep manifest");
+
+            let probe = ExecutorProbe::new(executor_pod_name, executor_namespace).await;
+            let result = match section {
+                DensitySection::Agent => {
+                    let config = CellConfig {
+                        scenario: scenario.expect("--scenario required for --action cell"),
+                        mode: agent_mode.expect("--agent-mode required for --action cell"),
+                        sharing: sharing.expect("--sharing required for --action cell"),
+                        snapshotting,
+                        active_fraction,
+                        prefill_n: prefill,
+                        ramp: ramp.unwrap_or_else(|| {
+                            integration_tests::benchmarks::density::DEFAULT_AGENT_RAMP.to_vec()
+                        }),
+                    };
+                    integration_tests::benchmarks::density::agent::run_cell(
+                        &config, &manifest, &deps, &probe,
+                    )
+                    .await
+                    .expect("density agent cell failed")
+                }
+                DensitySection::Schedule => {
+                    let config = integration_tests::benchmarks::density::schedule::CellConfig {
+                        residency: schedule_target_residency
+                            .expect("--schedule-target-residency required for schedule cells"),
+                        context_spans: schedule_context_spans
+                            .expect("--schedule-context-spans required for schedule cells"),
+                        target_pattern: schedule_target_pattern
+                            .expect("--schedule-target-pattern required for schedule cells"),
+                        rate_period: std::time::Duration::from_secs(
+                            schedule_rate_period_secs.unwrap_or_else(|| {
+                                integration_tests::benchmarks::density::schedule::DEFAULT_RATE_PERIOD
+                                    .as_secs()
+                            }),
+                        ),
+                    };
+                    integration_tests::benchmarks::density::schedule::run_cell(
+                        &config,
+                        ramp.as_deref(),
+                        &manifest,
+                        &deps,
+                        &probe,
+                    )
+                    .await
+                    .expect("density schedule cell failed")
+                }
+                DensitySection::Promise => {
+                    let config = integration_tests::benchmarks::density::promise::CellConfig {
+                        payload_size: promise_payload_size
+                            .expect("--promise-payload-size required for promise cells"),
+                        waiter_presence: promise_waiter_presence
+                            .expect("--promise-waiter-presence required for promise cells"),
+                        topology: promise_topology
+                            .expect("--promise-topology required for promise cells"),
+                        runtime: promise_runtime
+                            .expect("--promise-runtime required for promise cells"),
+                    };
+                    integration_tests::benchmarks::density::promise::run_cell(
+                        &config,
+                        ramp.as_deref(),
+                        &manifest,
+                        &deps,
+                    )
+                    .await
+                    .expect("density promise cell failed")
+                }
+            };
+
+            // Emit the cell result as a single-result suite so the JSON shape
+            // matches cloud-perf (BenchmarkSuiteResultCollection), and the
+            // buildspec can upload it directly to golem-bench-results.
+            let mut suite_result = BenchmarkSuiteResult::new(&format!("density-{section}"));
+            suite_result.add(result);
+            if let Some(run_id) = cloud_bench_run_id() {
+                suite_result.run_id = Some(format!("bench-{run_id}"));
+                let metadata = RunMetadata::from_env();
+                if !metadata.is_empty() {
+                    suite_result.run_metadata = Some(metadata);
+                }
+            }
+
+            if let Some(path) = &save_to_json {
+                suite_result
+                    .save_to_json(path)
+                    .expect("Failed to save density cell JSON result");
+            }
+
+            if json {
+                let str = serde_json::to_string(&suite_result)
+                    .expect("Failed to serialize density cell result");
+                println!("{str}");
+            } else {
+                println!("{}", suite_result.view());
+            }
+        }
+    }
+
+    deps.kill_all().await;
 }
