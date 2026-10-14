@@ -1113,7 +1113,8 @@ dependencies = ["build-registry-service-non-ci"]
 script = '''
 target_dir=$(cargo metadata --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
 mkdir -pv ./target/data
-"$target_dir/debug/golem-registry-service" --dump-openapi-yaml > ./target/golem-registry-service.yaml
+GOLEM__DB__CONFIG__DATABASE=./target/data/golem_registry_service.db \
+  "$target_dir/debug/golem-registry-service" --dump-openapi-yaml > ./target/golem-registry-service.yaml
 '''
 
 [tasks.generate-worker-service-openapi]
