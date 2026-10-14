@@ -137,6 +137,7 @@ fn fixture() -> Tool {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn named_process_status_drives_shell_status_and_conditionals() {
     struct Invoker(Catalog);
     struct Prepared(Invocation);
