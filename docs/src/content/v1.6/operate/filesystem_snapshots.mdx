@@ -8,8 +8,8 @@ Filesystem snapshots are disabled by default. A disabled executor does not save 
 
 ## Requirements
 
-- The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink: `ManagedXfs` (with project quotas) or `ReflinkXfs` (without project quotas). Each executor has its own XFS filesystem. See [Prepare XFS storage](#prepare-xfs-storage).
-- With `ManagedXfs`, the executor process must be able to change XFS project quotas. `ReflinkXfs` needs no capability.
+- The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink, in `ReflinkXfs` mode. Each executor has its own XFS filesystem. `ReflinkXfs` needs no capability. See [Prepare XFS storage](#prepare-xfs-storage).
+- Use `ManagedXfs` instead only when you also need per-agent disk quotas or filesystem metering. It needs a volume with project quotas and `CAP_SYS_ADMIN` in the executor process.
 - All executors that can run the same agents enable filesystem snapshots, and use the same blob storage and the same `repository_key`.
 - With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
@@ -24,46 +24,17 @@ Filesystem snapshots are disabled by default. A disabled executor does not save 
 
 Filesystem snapshots need storage that makes copy-on-write copies: a capture and a restore copy each file by reflink, so they take time for the number of files and not for their bytes. Two storage modes do that. Both use a dedicated XFS filesystem with reflink.
 
-| | `ManagedXfs` | `ReflinkXfs` |
+| | `ReflinkXfs` | `ManagedXfs` |
 | --- | --- | --- |
-| Per-agent disk limit (`max_disk_space_per_worker`) | Enforced by a project quota of each agent | Not enforced. The executor logs this at startup |
-| Filesystem metering (`resource_usage_metering.filesystem`) | Supported | Refused at startup |
+| Per-agent disk limit (`max_disk_space_per_worker`) | Not enforced. The executor logs this at startup | Enforced by a project quota of each agent |
+| Filesystem metering (`resource_usage_metering.filesystem`) | Refused at startup | Supported |
 | Free-space checks of the volume, capture admission, write pressure recovery | Yes | Yes |
-| Mount option | `prjquota` | no quota option for projects (`noquota`) |
-| Privilege | `CAP_SYS_ADMIN`, host user namespace | No capability |
+| Mount option | no quota option for projects (`noquota`) | `prjquota` |
+| Privilege | No capability | `CAP_SYS_ADMIN`, host user namespace |
 
-Use `ManagedXfs` when the executor must limit or meter the disk space of each agent. Use `ReflinkXfs` when per-agent disk limits are not needed or are enforced another way.
+Use `ReflinkXfs`: it gives filesystem snapshots and needs no capability. Use `ManagedXfs` only when the executor must also limit or meter the disk space of each agent.
 
 The storage mode is one setting, `[filesystem_storage.mode]`. It also has the development modes `Temporary` (the default, a temporary directory for each agent) and `Directory` (plain directories under a root). The development modes do not make copy-on-write copies, and filesystem snapshots refuse them.
-
-#### Managed XFS storage (`ManagedXfs`)
-
-Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
-
-```shell
-mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
-mount -t xfs -o prjquota /dev/<device> /var/lib/golem/agents
-```
-
-Make the mount persist across reboots, for example with a line in `/etc/fstab`:
-
-```text
-/dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
-```
-
-The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. In a container, run the executor as a privileged container or add `CAP_SYS_ADMIN`, and mount the XFS filesystem into the container. Linux changes the project of a directory only for a process in the initial user namespace, so the container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`.
-
-Set the storage mode to `ManagedXfs`, with the mount point as the root:
-
-```toml
-[filesystem_storage.mode]
-type = "ManagedXfs"
-
-[filesystem_storage.mode.config]
-root = "/var/lib/golem/agents"
-```
-
-The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
 
 #### XFS storage without project quotas (`ReflinkXfs`)
 
@@ -80,10 +51,10 @@ Make the mount persist across reboots, for example with a line in `/etc/fstab`:
 /dev/<device>  /var/lib/golem/agents  xfs  noquota  0 0
 ```
 
-Give the root directory of the filesystem to the user that runs the executor, so that the executor can make directories in it:
+Give the root directory of the filesystem to the user that runs the executor, so that the executor can make directories in it. The executor image runs as uid and gid 65534:
 
 ```shell
-chown <executor-user>:<executor-group> /var/lib/golem/agents
+chown 65534:65534 /var/lib/golem/agents
 ```
 
 The executor needs no capability. It never changes the project id or the flags of the root. The root must have no XFS project: when an earlier tool set a project or the project-inherit flag on it, clear them once as root, for example with `xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents`.
@@ -104,6 +75,87 @@ What `ReflinkXfs` does not give:
 
 - **No per-agent disk limit.** The kernel enforces no limit for one agent. The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup, and an agent can fill the volume. The free-space targets of `[filesystem_storage.pressure]` still apply to the whole volume: when a write finds the volume full, the executor unloads idle agents and tries the write again, and capture admission skips a snapshot while the volume is below its targets. When the unload frees too little space, the write fails with an out-of-space error. An agent never gets a quota error on `ReflinkXfs`.
 - **No filesystem metering.** The executor measures the disk usage of each agent only through project quotas. An executor with `ReflinkXfs` and `[resource_usage_metering] filesystem = true` does not start: `filesystem metering requires XFS storage with project quotas`.
+
+#### Managed XFS storage (`ManagedXfs`)
+
+Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
+
+```shell
+mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
+mount -t xfs -o prjquota /dev/<device> /var/lib/golem/agents
+```
+
+Make the mount persist across reboots, for example with a line in `/etc/fstab`:
+
+```text
+/dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
+```
+
+The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. Linux changes the project of a directory only for a process in the initial user namespace, so a container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`. See [Run the executor in a container](#run-the-executor-in-a-container) for the container settings.
+
+Set the storage mode to `ManagedXfs`, with the mount point as the root:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+
+#### Run the executor in a container
+
+The executor image runs as the user `golem`, uid and gid 65534. The executor binary `/app/worker-executor` has the file capability `cap_sys_admin+p`: `CAP_SYS_ADMIN` is permitted, not effective. Linux grants a file capability only when the container's bounding set holds the capability and privilege escalation is allowed, so in a container that does not add `SYS_ADMIN`, or that sets `no_new_privs`, the binary gets nothing from it. At startup, before it starts any thread, the executor raises `CAP_SYS_ADMIN` to effective in `ManagedXfs` mode, and removes it from all of its capability sets in every other mode.
+
+**`ReflinkXfs`, and every mode except `ManagedXfs`.** The executor needs no capability. Drop all of them and set `no_new_privs`:
+
+```shell
+docker run --cap-drop ALL --security-opt no-new-privileges \
+  --mount type=bind,source=/var/lib/golem/agents,target=/var/lib/golem/agents \
+  -e GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs \
+  -e GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents \
+  golemservices/golem-worker-executor:<version>
+```
+
+```yaml
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+```
+
+The volume must be XFS with reflink, and must not be mounted with `prjquota` or `pqnoenforce`: `ReflinkXfs` refuses a volume that accounts project quotas. Its root must belong to uid 65534.
+
+**`ManagedXfs`.** Use it only when the executor must limit or meter the disk space of each agent. The container needs:
+
+- `CAP_SYS_ADMIN` in its bounding set, and no other capability: `--cap-drop ALL --cap-add SYS_ADMIN` with Docker, `capabilities: {drop: [ALL], add: [SYS_ADMIN]}` in Kubernetes. The container runtime gives a non-root process no capability from these settings alone; the executor gets `CAP_SYS_ADMIN` only through the file capability of its binary.
+- Privilege escalation allowed: no `--security-opt no-new-privileges` with Docker, `allowPrivilegeEscalation: true` in Kubernetes. With `no_new_privs`, Linux ignores the file capability.
+- The host user namespace: with Docker, `--userns host` when the daemon remaps user namespaces; in Kubernetes, do not set `hostUsers: false`.
+- A volume mounted with `prjquota`, as described in [Managed XFS storage](#managed-xfs-storage-managedxfs).
+- A seccomp profile that allows `quotactl_fd` and nothing else that `CAP_SYS_ADMIN` would open. The default profiles of Docker and containerd allow `quotactl_fd` only to a container with `CAP_SYS_ADMIN`, and then they also allow `mount`, `umount2`, `unshare`, `setns`, `bpf`, `fsopen`, `fsmount`, `move_mount`, `open_tree`, `perf_event_open`, `quotactl`, `syslog`, `sethostname`, `setdomainname`, and `clone` with namespace flags. Start from the profile that the runtime gives a container without `CAP_SYS_ADMIN`, add `quotactl_fd`, and make the profile refuse the mount, namespace, BPF, key and kernel module calls.
+
+```yaml
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  allowPrivilegeEscalation: true
+  capabilities:
+    drop: [ALL]
+    add: [SYS_ADMIN]
+  seccompProfile:
+    type: Localhost
+    localhostProfile: <profile>.json
+```
+
+When the container does not give the executor `CAP_SYS_ADMIN`, the executor stops at startup with the error `ManagedXfs filesystem storage needs CAP_SYS_ADMIN, which the executor process is not permitted`, followed by the settings to add.
+
+`ManagedXfs` puts `CAP_SYS_ADMIN` into the process that runs the guest Wasm of the agents. `CAP_SYS_ADMIN` does not bypass the permission checks of `open` (that is `CAP_DAC_OVERRIDE`), but it allows the XFS handle ioctls, and `XFS_IOC_OPEN_BY_HANDLE` opens a file on the volume, also for writing, without a permission check. So an escape from the Wasm sandbox into the executor process can write the read-only initial files of agents on the volume, set any project quota, and freeze or shut down the volume. Without a seccomp profile like the one above, it can also mount filesystems and make namespaces. A later release moves the quota calls into a separate helper process and removes `CAP_SYS_ADMIN` from the executor. Use `ReflinkXfs` when you do not need per-agent disk limits or filesystem metering.
 
 #### Both XFS modes
 
