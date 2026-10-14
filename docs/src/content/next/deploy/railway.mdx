@@ -1,0 +1,97 @@
+import { Callout, Steps } from "nextra/components"
+
+# Deploy on Railway
+
+Railway runs the [all-in-one image](/next/deploy/server#container-image) in the [single node](/next/deploy/modes#single-node) and [managed Postgres](/next/deploy/modes#managed-postgres) modes. A project has three or four resources:
+
+| Resource | Runs |
+| --- | --- |
+| `golem` | A service from the `golemservices/golem` image, with a volume at `/var/lib/golem` |
+| Bucket | A Railway Storage Bucket for the blobs and, in mode 1, the Litestream replica |
+| Postgres | Railway Postgres, in mode 2 only |
+
+Go through the [production checklist](/next/deploy/production-checklist) too.
+
+## What Railway decides
+
+- **Deploys.** A service with a volume stops its old deployment before it starts the new one. That is what the [one shard manager](/next/deploy/modes#one-shard-manager) rule needs. Without a volume, Railway starts the new deployment and stops the old one only after the new one is active, and two servers then run on the same database for a while. **Attach a volume in both modes**, also in mode 2, where it holds only caches.
+- **Replicas.** A service with a volume cannot have replicas. Run one server; it scales vertically.
+- **Volume size.** Volumes are limited by the plan: 0.5 GB on the free and trial plans, 5 GB on Hobby and 50 GB on Pro. The trial volume is too small for real use.
+- **Backups.** Railway backs up volumes once a day, so a lost volume can lose up to a day of the SQLite state. Turn on [Litestream](/next/deploy/server#litestream) in mode 1, or use mode 2.
+- **Streams.** Railway's edge closes an HTTP request after 15 minutes even while data flows, and after 5 minutes without data. Server-sent event streams, such as MCP streams, therefore end after at most 15 minutes, and clients reconnect. WebSocket connections have no limit.
+- **Forwarded headers.** Railway's edge sets `X-Forwarded-Proto` and `X-Forwarded-Host`, but it does not document the addresses it connects from, so the server cannot trust them. The server routes by the `Host` header and sees `http` as the scheme. This affects the URLs it builds from the request, such as the address an OIDC login returns to.
+
+## Single node
+
+<Steps>
+
+### Create the bucket
+
+In a new Railway project, add a **Bucket**. Its credentials are the variables `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION` and `ENDPOINT` of the bucket resource. The steps below refer to the bucket resource as `Bucket`; use the name of yours.
+
+### Write the variables
+
+Run the [`generate-env.sh` script](/next/deploy/server#environment-file) with Railway's variable references as values, so that the variables follow the bucket:
+
+```shell filename="Terminal" copy
+curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/single-node/generate-env.sh
+chmod +x generate-env.sh
+umask 077
+GOLEM_S3_BUCKET='${{Bucket.BUCKET}}' \
+GOLEM_S3_REGION='${{Bucket.REGION}}' \
+GOLEM_S3_ENDPOINT='${{Bucket.ENDPOINT}}' \
+  ./generate-env.sh > golem.env
+cat >> golem.env <<'EOF'
+AWS_ACCESS_KEY_ID=${{Bucket.ACCESS_KEY_ID}}
+AWS_SECRET_ACCESS_KEY=${{Bucket.SECRET_ACCESS_KEY}}
+GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+GOLEM_LITESTREAM=true
+GOLEM_LITESTREAM_REPLICA_URL=s3://${{Bucket.BUCKET}}/litestream?endpoint=${{Bucket.ENDPOINT}}&region=${{Bucket.REGION}}
+EOF
+```
+
+`golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
+
+### Create the service
+
+Add a service from the Docker image `golemservices/golem:<version>`. Before the first deploy:
+
+- **Variables.** Open the Raw Editor and paste `golem.env`.
+- **Volume.** Attach a volume with the mount path `/var/lib/golem`.
+- **Health check.** Set the healthcheck path to `/healthcheck`. The first start downloads the built-in plugins and tools, which takes about a minute.
+
+### Add the domains
+
+In the service's networking settings, add the management host (`golem.example.com`) as a custom domain, with the target port `9881`. Add each domain of an HTTP API or MCP deployment the same way. Railway shows the DNS records to create and gets the certificates.
+
+### Deploy an application
+
+Deploy the service, check `https://golem.example.com/healthcheck`, and deploy an application with the admin token. See [Connect the CLI](/next/deploy/server#connect-the-cli).
+
+</Steps>
+
+To upgrade, change the image tag of the service. To restore after the loss of the volume, attach a new volume at the same path and redeploy: the image restores the databases from the Litestream replica before the server starts.
+
+## Managed Postgres
+
+Add **Postgres** to the project, and pass its variables to the script as well:
+
+```shell filename="Terminal" copy
+GOLEM_S3_BUCKET='${{Bucket.BUCKET}}' \
+GOLEM_S3_REGION='${{Bucket.REGION}}' \
+GOLEM_S3_ENDPOINT='${{Bucket.ENDPOINT}}' \
+GOLEM_POSTGRES_HOST='${{Postgres.PGHOST}}' \
+GOLEM_POSTGRES_PORT='${{Postgres.PGPORT}}' \
+GOLEM_POSTGRES_DB='${{Postgres.PGDATABASE}}' \
+GOLEM_POSTGRES_USER='${{Postgres.PGUSER}}' \
+GOLEM_POSTGRES_PASSWORD='${{Postgres.PGPASSWORD}}' \
+  ./generate-env.sh > golem.env
+```
+
+Leave out the Litestream variables: the state is in Postgres. **Keep the volume at `/var/lib/golem`**: it makes Railway stop the old deployment before it starts the new one. For backups of the database, see Railway's [point-in-time recovery](https://docs.railway.com/volumes/point-in-time-recovery).
+
+## Fixed cluster
+
+<Callout type="warning">
+  A [fixed cluster](/next/deploy/cluster) on Railway needs verification. The shard manager records the source address of each executor's registration, and Railway does not document whether its private network keeps that address. Railway environments created before 16 October 2025 have an IPv6-only private network, which needs `GOLEM__BIND_ADDRESS=::` on every service.
+</Callout>

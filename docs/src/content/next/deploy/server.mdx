@@ -4,15 +4,23 @@ import { Callout } from "nextra/components"
 
 `golem server run` runs every Golem service in one process: the registry service, the shard manager, the worker service, the component compilation service and the worker executor. Without a configuration file it is the [local development server](/next/how-to-guides/common/golem-local-dev-server). With a configuration file it runs the [single node](/next/deploy/modes#single-node) and [managed Postgres](/next/deploy/modes#managed-postgres) deployment modes.
 
-This page describes the configuration. For the steps on a machine, see [VM](/next/deploy/vm).
+This page describes the configuration of the `golem` binary and of the [`golemservices/golem` image](#container-image), which runs the binary. For the steps on a platform, see [VM](/next/deploy/vm), [Railway](/next/deploy/railway), [Render](/next/deploy/render), [Fly.io](/next/deploy/fly) or [AWS ECS](/next/deploy/ecs#managed-postgres-with-the-all-in-one-image).
 
 ## Listeners
 
 | Listener | Default address | Serves |
 | --- | --- | --- |
-| `router.address`, `router.port` | `127.0.0.1:9881` | The management API: the registry and worker service APIs, which the `golem` CLI uses |
+| `router.address`, `router.port` | `127.0.0.1:9881` | The management API: the registry and worker service APIs, which the `golem` CLI uses. With `router.management_host`, also the HTTP API and MCP deployments: see [One port](#one-port) |
 | `worker_service.bind_address`, `worker_service.custom_request_port` | `127.0.0.1:9006` | HTTP API deployments and MCP deployments, chosen by the request's host |
 | `worker_service.bind_address`, `worker_service.mcp_port` | `127.0.0.1:9007` | MCP deployments only |
+
+## One port
+
+Set `router.management_host` (`GOLEM__ROUTER__MANAGEMENT_HOST`) to the host name of the management API, for example `golem.example.com`. The main API port then routes each request by its host: requests for the management host reach the management API, and requests for every other host reach the HTTP API and MCP deployments of that host. So one port serves everything, and a reverse proxy or a platform that routes one port per service can send all host names to it. The server also adds the management host to `registry_service.domain_registration.reserved_domains`, so that no environment can register it as a deployment domain.
+
+The custom request and MCP ports still serve the deployments. Leave them on `127.0.0.1` when the main API port serves everything.
+
+## Internal listeners
 
 The services also bind gRPC and metrics listeners on ports that the operating system selects, each on the `bind_address` of its service. They do not authenticate their callers. Keep every `bind_address` at `127.0.0.1` unless a proxy on another machine must reach the listener, and then expose only the three ports above.
 
@@ -94,8 +102,8 @@ max_jitter_factor = 0.15
 # component_compilation_service: [worker_service.blob_storage],
 # [worker_service.blob_storage.config], [worker_service.blob_storage.config.retries], and so on.
 
-[registry_service.domain_registration]
-reserved_domains = ["golem.example.com"]
+[router]
+management_host = "golem.example.com"
 
 [worker_service.route_resolver]
 trusted_ingress_addresses = ["127.0.0.1"]
@@ -104,7 +112,7 @@ trusted_ingress_addresses = ["127.0.0.1"]
 - `namespace_prefixes = true` lets all blob kinds share one bucket. Choose it before the first start and do not change it later. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
 - For an S3-compatible service, add `aws_endpoint_url = "https://<endpoint>"` and, if the service needs it, `aws_path_style = true` to each `blob_storage.config`.
 - The S3 client reads its credentials from the standard AWS sources: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment file, or the role of the machine.
-- `reserved_domains` keeps any environment from registering the management host as a deployment domain.
+- `management_host` makes the main API port serve the HTTP API and MCP deployments of every other host. See [One port](#one-port).
 - `trusted_ingress_addresses` makes the worker service take the public scheme and host from the `X-Forwarded-Proto` and `X-Forwarded-Host` headers of a reverse proxy on the same host. A request from a trusted address without both headers fails, so a request sent directly to the custom request port from that host does too.
 
 ## Managed Postgres
@@ -193,6 +201,57 @@ The services create their schemas and tables at startup, so the database user mu
 <Callout type="warning">
   Run exactly one server on one database, and deploy it stop-then-start. Two servers on the same database each run a shard manager in SQL mode, and the same agent can run twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
 </Callout>
+
+## Container image
+
+The `golemservices/golem` image runs `golem server run`. It serves everything on one port, `9881`, and these are its defaults:
+
+| Variable | Value in the image |
+| --- | --- |
+| `GOLEM__DATA_DIR` | `/var/lib/golem`, a volume |
+| `GOLEM__ROUTER__ADDRESS` | `::`, which accepts IPv6 and IPv4 |
+| `GOLEM__ROUTER__PORT` | `9881` |
+
+The router listens on all addresses, so the server does not start until the [secrets](#secrets) have secret values. Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. The image arguments are the arguments of `golem`, `server run` by default, so a `--config` file still works; on a platform without files, configure everything with environment variables.
+
+`/healthcheck` answers `503` while the server starts and `200` once it serves requests. Use it as the health check of the platform: the first start downloads the built-in plugins and tools and takes about a minute.
+
+### Environment file
+
+The [`generate-env.sh` script](https://github.com/golemcloud/golem/blob/main/docker-examples/single-node/generate-env.sh) prints new secrets and the S3 configuration of every service as environment variables. With `GOLEM_POSTGRES_HOST`, it also prints the Postgres configuration of every store, with the schemas of the [managed Postgres](#managed-postgres) mode:
+
+```shell filename="Terminal" copy
+curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/single-node/generate-env.sh
+chmod +x generate-env.sh
+
+# Single node: the state in SQLite on the volume, the blobs in S3
+GOLEM_S3_BUCKET=my-bucket GOLEM_S3_REGION=eu-central-1 ./generate-env.sh > golem.env
+
+# Managed Postgres: the state in Postgres, the blobs in S3
+GOLEM_S3_BUCKET=my-bucket GOLEM_S3_REGION=eu-central-1 \
+GOLEM_POSTGRES_HOST=db.example.internal GOLEM_POSTGRES_PASSWORD=<password> \
+  ./generate-env.sh > golem.env
+```
+
+For an S3-compatible service, also set `GOLEM_S3_ENDPOINT` and, if the service needs it, `GOLEM_S3_PATH_STYLE=true`. Add the credentials of the bucket, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, unless the platform gives the container a role. Load the file into the secret store of the platform: each platform guide says how. The file contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`; keep it secret.
+
+### Litestream
+
+In the single node mode, the state is only as durable as the volume. With `GOLEM_LITESTREAM=true`, the image runs [Litestream](https://litestream.io/), which copies every change of the SQLite databases to S3 within seconds:
+
+| Variable | Description |
+| --- | --- |
+| `GOLEM_LITESTREAM` | `true` to replicate the databases; `false` by default |
+| `GOLEM_LITESTREAM_REPLICA_URL` | Where the replica is: `s3://<bucket>/<path>`. The query applies to every database, for example `s3://my-bucket/litestream?endpoint=https://s3.example.com&region=auto` for an S3-compatible service |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | The credentials of the replica's bucket. `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY` work too |
+| `LITESTREAM_S3_ENDPOINT` | The endpoint of an S3-compatible service, when the URL has no `endpoint` |
+
+Litestream replicates the databases of the services in the data directory and the agent databases in `kv-store`, including the databases of agents created later. Before the server starts, the image restores every database that the replica has and the volume does not have. So after the loss of a volume, attach an empty volume and start the container again: it restores the state that Litestream had copied, which lags the volume by seconds.
+
+- The replica can be in the bucket of the blobs, under its own path, such as `litestream`. Do not give it the path of a blob kind, such as `component_store`.
+- One replica belongs to one server. Two servers that replicate to the same path overwrite each other's databases.
+- Litestream replicates only SQLite. Keep the blobs in S3.
+- Take the data directory from `GOLEM__DATA_DIR`: do not set `data_dir` in a `--config` file, because Litestream does not read it.
 
 ## Connect the CLI
 

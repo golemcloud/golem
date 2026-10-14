@@ -15,7 +15,7 @@ Golem runs in one of four shapes, from one process on one machine to a cluster o
 
 One `golem server run` process runs every service. Each service keeps its state in a SQLite database in the data directory, so the data directory must be on a volume that outlives the process. The blobs go to S3 or an S3-compatible service.
 
-Mode 1 is only as durable as its volume. What lives only in SQLite is the registry, the shard state, agent status, promises, schedules and the newest oplog entries. Archived oplogs, large payloads and component binaries are in S3. On a platform whose volume is on one physical server, or whose volume backups run once a day, a lost volume can lose a day of the SQLite state. Use mode 2 when that loss is not acceptable.
+Mode 1 is only as durable as its volume. What lives only in SQLite is the registry, the shard state, agent status, promises, schedules and the newest oplog entries. Archived oplogs, large payloads and component binaries are in S3. On a platform whose volume is on one physical server, or whose volume backups run once a day, a lost volume can lose a day of the SQLite state. The [all-in-one image](/next/deploy/server#container-image) can run [Litestream](/next/deploy/server#litestream), which copies the SQLite changes to S3 within seconds and restores them onto a new volume. Use Litestream where the volume itself is not replicated, or use mode 2.
 
 Deploys stop the old process before they start the new one. See [One shard manager](#one-shard-manager).
 
@@ -45,11 +45,13 @@ In etcd mode, any number of shard manager replicas can run, and one of them is e
 | Platform | 1. Single node | 2. Managed Postgres | 3. Fixed cluster | Deciding constraint |
 | --- | --- | --- | --- | --- |
 | [VM](/next/deploy/vm) (Hetzner, DigitalOcean, EC2, on-premises) | Yes | Yes | Yes, with Docker Compose on one host | systemd or Docker, with Caddy for TLS |
-| Railway | Yes | Yes | Needs verification | A volume blocks replicas and forces stop-then-start deploys; one S3-compatible bucket per bucket resource |
-| Render | Yes | Yes | Needs verification | A disk blocks scaling and zero-downtime deploys; no object storage, so bring S3 or R2 |
-| Fly.io | Yes | Yes | Not yet | A volume belongs to one machine; the private network is IPv6-only |
+| [Railway](/next/deploy/railway) | Yes | Yes, with a volume | Needs verification | Only a service with a volume deploys stop-then-start; a volume blocks replicas; the edge ends HTTP streams after 15 minutes |
+| [Render](/next/deploy/render) | Yes | Yes, with a disk | Needs verification | Only a service with a disk deploys stop-then-start; a disk blocks scaling; no object storage, so bring S3 or R2 |
+| [Fly.io](/next/deploy/fly) | Yes | Yes | Not yet | One Machine with the `rolling` strategy; a volume belongs to one server; the private network is IPv6-only |
 | [AWS ECS on Fargate](/next/deploy/ecs) | No | Yes | Yes | Service EBS volumes are deleted when the task stops; task IP addresses are routable inside the VPC |
-| Google Cloud Run | No | Yes | No | NFS volumes have no locks, so SQLite is not safe on them; instances are not individually addressable |
+| [Google Cloud Run](/next/deploy/cloud-run) | No | Not yet | No | Every deploy overlaps the old and the new instance; NFS volumes have no locks; instances are not individually addressable |
+
+On Railway and Render, the managed Postgres mode needs a volume or a disk too, although the server keeps no state on it: without one, those platforms start the new deployment before they stop the old one. Cloud Run cannot keep one instance at a time, so the managed Postgres mode waits for the shard manager to be fenced with a database lock.
 
 The fixed cluster column depends on one property of the network: the shard manager records the source IP address of each executor's registration, and the worker services dial that address. This holds on Docker networks, on Kubernetes and on ECS with `awsvpc` networking. Where the network translates source addresses, set `grpc.advertised_ip` on each executor; see [Network Addresses](/next/deploy#network-addresses). Railway and Render do not document how their private networks treat source addresses, so the fixed cluster on them needs verification.
 

@@ -1,0 +1,84 @@
+import { Callout, Steps } from "nextra/components"
+
+# Deploy on Render
+
+Render runs the [all-in-one image](/next/deploy/server#container-image) as a web service in the [single node](/next/deploy/modes#single-node) and [managed Postgres](/next/deploy/modes#managed-postgres) modes. Render has no object storage, so bring an S3 bucket, for example from AWS S3 or Cloudflare R2. Go through the [production checklist](/next/deploy/production-checklist) too.
+
+## What Render decides
+
+- **Deploys.** A service with a persistent disk stops its old instance before it starts the new one. That is what the [one shard manager](/next/deploy/modes#one-shard-manager) rule needs. Without a disk, Render keeps the old instance running for 60 seconds after the new one takes traffic, and two servers then run on the same database. **Attach a disk in both modes**, also in mode 2, where it holds only caches. Disks need a paid instance type.
+- **Scaling.** A service with a disk cannot scale beyond one instance. Run one server; it scales vertically.
+- **Backups.** Render snapshots disks once a day and keeps the snapshots for at least seven days, so a lost disk can lose up to a day of the SQLite state. Turn on [Litestream](/next/deploy/server#litestream) in mode 1, or use mode 2.
+- **Forwarded headers.** Render does not document the addresses its load balancer connects from or the forwarded headers it sets, so the server does not trust them. The server routes by the `Host` header and sees `http` as the scheme. This affects the URLs it builds from the request, such as the address an OIDC login returns to.
+- **Architecture.** Render runs prebuilt images for `linux/amd64` only.
+
+## Single node
+
+<Steps>
+
+### Create the bucket
+
+Create an S3 bucket and an access key that can list, read, write and delete its objects. For Cloudflare R2, the endpoint is `https://<account id>.r2.cloudflarestorage.com` and the region is `auto`.
+
+### Write the environment file
+
+Run the [`generate-env.sh` script](/next/deploy/server#environment-file):
+
+```shell filename="Terminal" copy
+curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/single-node/generate-env.sh
+chmod +x generate-env.sh
+umask 077
+GOLEM_S3_BUCKET=my-bucket GOLEM_S3_REGION=auto \
+GOLEM_S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com \
+  ./generate-env.sh > golem.env
+cat >> golem.env <<'EOF'
+AWS_ACCESS_KEY_ID=<access key>
+AWS_SECRET_ACCESS_KEY=<secret key>
+PORT=9881
+GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+GOLEM_LITESTREAM=true
+GOLEM_LITESTREAM_REPLICA_URL=s3://my-bucket/litestream?endpoint=https://<account id>.r2.cloudflarestorage.com&region=auto
+EOF
+```
+
+Render routes to the port that the service listens on, and `PORT=9881` names that port. The server listens on `::`, which accepts IPv4 connections too. `golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
+
+### Create the web service
+
+Create a web service from the existing image `golemservices/golem:<version>`, with a paid instance type. Before the first deploy:
+
+- **Environment.** Add the variables with **Add from .env** and paste `golem.env`.
+- **Disk.** Add a persistent disk with the mount path `/var/lib/golem`.
+- **Health check.** Set the health check path to `/healthcheck`. The first start downloads the built-in plugins and tools, which takes about a minute.
+
+### Add the domains
+
+Add the management host (`golem.example.com`) and each domain of an HTTP API or MCP deployment as custom domains of the service. Render shows the DNS records to create and gets the certificates.
+
+### Deploy an application
+
+Check `https://golem.example.com/healthcheck`, and deploy an application with the admin token. See [Connect the CLI](/next/deploy/server#connect-the-cli).
+
+</Steps>
+
+To upgrade, change the image tag of the service. To restore after the loss of the disk, start the service with an empty disk: the image restores the databases from the Litestream replica before the server starts.
+
+## Managed Postgres
+
+Create a Render Postgres database in the region of the service, and pass the host name of its internal connection URL and its credentials to the script:
+
+```shell filename="Terminal" copy
+GOLEM_S3_BUCKET=my-bucket GOLEM_S3_REGION=auto \
+GOLEM_S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com \
+GOLEM_POSTGRES_HOST=<internal host name> GOLEM_POSTGRES_DB=<database> \
+GOLEM_POSTGRES_USER=<user> GOLEM_POSTGRES_PASSWORD=<password> \
+  ./generate-env.sh > golem.env
+```
+
+Leave out the Litestream variables: the state is in Postgres. **Keep the disk at `/var/lib/golem`**: it makes Render stop the old instance before it starts the new one. Point-in-time recovery of the database needs a paid Postgres instance.
+
+## Fixed cluster
+
+<Callout type="warning">
+  A [fixed cluster](/next/deploy/cluster) on Render needs verification. The shard manager records the source address of each executor's registration, and Render does not document whether its private network keeps that address.
+</Callout>

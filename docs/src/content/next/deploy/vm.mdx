@@ -5,9 +5,10 @@ import { Callout, Steps } from "nextra/components"
 A Linux virtual machine or server (Hetzner, DigitalOcean, EC2, on-premises) runs every [deployment mode](/next/deploy/modes) except Kubernetes:
 
 - [Single node and managed Postgres](#all-in-one-server-with-systemd-and-caddy): the `golem` binary as a systemd service, with Caddy for TLS.
+- [Single node and managed Postgres in Docker](#all-in-one-image-with-docker-compose): the `golemservices/golem` image in Docker Compose, with Caddy for TLS and optionally Litestream.
 - [Fixed cluster](#fixed-cluster-with-docker-compose): the per-service images in Docker Compose on one host, with Caddy for TLS.
 
-Both setups need DNS names that point at the machine: one for the management API, such as `golem.example.com`, and one for each HTTP API or MCP deployment, such as `api.example.com`. Open ports 80 and 443 in the firewall, and keep every other port closed. Go through the [production checklist](/next/deploy/production-checklist) too.
+All setups need DNS names that point at the machine: one for the management API, such as `golem.example.com`, and one for each HTTP API or MCP deployment, such as `api.example.com`. Open ports 80 and 443 in the firewall, and keep every other port closed. Go through the [production checklist](/next/deploy/production-checklist) too.
 
 ## All-in-one server with systemd and Caddy
 
@@ -77,16 +78,12 @@ systemd stops the old process before it starts the new one, which is what the [o
 
 ### Put Caddy in front
 
-[Install Caddy](https://caddyserver.com/docs/install) and route the management host to the management API and the deployment domains to the custom request port:
+[Install Caddy](https://caddyserver.com/docs/install) and send the management host and the deployment domains to the main API port. With `router.management_host` set, the server routes them by host:
 
 ```text filename="/etc/caddy/Caddyfile" copy
-golem.example.com {
+# The management host and the domains of HTTP API and MCP deployments.
+golem.example.com, api.example.com, mcp.example.com {
 	reverse_proxy 127.0.0.1:9881
-}
-
-# The domains of HTTP API and MCP deployments.
-api.example.com, mcp.example.com {
-	reverse_proxy 127.0.0.1:9006
 }
 ```
 
@@ -108,6 +105,52 @@ Add an environment with `server.url: https://golem.example.com` and the admin to
 To upgrade, replace `/usr/local/bin/golem` with the new release and run `sudo systemctl restart golem`.
 
 In mode 2, the database provider backs up the state. In mode 1, the state is in the SQLite files under `/var/lib/golem`. A snapshot of the disk while the server runs is not guaranteed to be consistent; stop the service for the snapshot, or use mode 2 when you cannot accept the downtime.
+
+## All-in-one image with Docker Compose
+
+This setup runs [modes 1 and 2](/next/deploy/server) from the [`golemservices/golem` image](/next/deploy/server#container-image), with Caddy in front. The [`single-node` example](https://github.com/golemcloud/golem/tree/main/docker-examples/single-node) contains the Compose file, the Caddyfile and the script that writes the environment file.
+
+<Steps>
+
+### Download the example
+
+Install [Docker Engine](https://docs.docker.com/engine/install/) with the Compose plugin, and download the example:
+
+```shell filename="Terminal" copy
+mkdir golem && cd golem
+for f in compose.yaml Caddyfile .env.example generate-env.sh; do
+  curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/single-node/$f
+done
+chmod +x generate-env.sh
+cp .env.example .env
+```
+
+### Write the configuration
+
+Set the image version and the host names in `.env`. Then write the secrets, the bucket and, for mode 2, the database to `golem.env`, and add the credentials of the bucket:
+
+```shell filename="Terminal" copy
+umask 077
+GOLEM_S3_BUCKET=my-bucket GOLEM_S3_REGION=eu-central-1 ./generate-env.sh > golem.env
+echo "AWS_ACCESS_KEY_ID=<access key>" >> golem.env
+echo "AWS_SECRET_ACCESS_KEY=<secret key>" >> golem.env
+```
+
+For mode 2, also pass `GOLEM_POSTGRES_HOST` and `GOLEM_POSTGRES_PASSWORD` to the script. See [Environment file](/next/deploy/server#environment-file).
+
+In mode 1, set `GOLEM_LITESTREAM=true` and `GOLEM_LITESTREAM_REPLICA_URL` in `.env` to replicate the SQLite databases to the bucket. See [Litestream](/next/deploy/server#litestream).
+
+### Start the server
+
+```shell filename="Terminal" copy
+docker compose up -d
+docker compose logs -f golem
+curl https://golem.example.com/healthcheck
+```
+
+</Steps>
+
+Caddy has a fixed address on the Compose network, `172.31.0.10`, which the server trusts for `X-Forwarded-Proto` and `X-Forwarded-Host`. Only Caddy publishes ports. In mode 1, the SQLite databases are in the `golem_data` volume. To upgrade, change `GOLEM_IMAGE_VERSION` and run `docker compose up -d`: Compose stops the old container before it starts the new one.
 
 ## Fixed cluster with Docker Compose
 

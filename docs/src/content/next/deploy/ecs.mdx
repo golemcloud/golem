@@ -1,12 +1,47 @@
-import { Callout, Steps } from "nextra/components"
+import { Callout } from "nextra/components"
 
 # Deploy on AWS ECS
 
-Amazon ECS on Fargate runs the [fixed cluster](/next/deploy/cluster): the per-service images, a fixed number of worker executors, RDS for PostgreSQL and one S3 bucket. Fargate cannot run the [single node](/next/deploy/modes#single-node) mode, because a service's EBS volume is deleted when its task stops.
+Amazon ECS on Fargate runs two [deployment modes](/next/deploy/modes), both with RDS for PostgreSQL and one S3 bucket:
 
-Read [Fixed cluster](/next/deploy/cluster) for the settings of each service, and the [production checklist](/next/deploy/production-checklist). This page describes what is particular to ECS. The [`production-cluster` Compose file](https://github.com/golemcloud/golem/blob/main/docker-examples/production-cluster/compose.yaml) has the complete environment of each service, which the task definitions can copy.
+- [Managed Postgres](#managed-postgres-with-the-all-in-one-image): one task of the all-in-one image.
+- [Fixed cluster](#fixed-cluster): the per-service images, with a fixed number of worker executors.
 
-## Architecture
+Fargate cannot run the [single node](/next/deploy/modes#single-node) mode, because a service's EBS volume is deleted when its task stops. Go through the [production checklist](/next/deploy/production-checklist) too.
+
+## Shared infrastructure
+
+Both modes need:
+
+- **Network.** Fargate tasks use `awsvpc` networking: each task has its own IP address in the VPC, without address translation. Run the tasks in private subnets, and put them in one security group that allows all TCP traffic from itself.
+- **Database.** One RDS for PostgreSQL database. The user of the services must be able to create schemas in it.
+- **Bucket.** One S3 bucket, with `namespace_prefixes = true` on every service. Give the task role `s3:ListBucket` on the bucket and `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on its objects. The S3 client takes the credentials of the task role, so no access keys are needed.
+- **Load balancer.** An internet-facing Application Load Balancer in public subnets, with an HTTPS listener and a certificate from ACM for the management host and the deployment domains. Redirect HTTP to HTTPS. Set its idle timeout to 3600 seconds: WebSocket connections and server-sent event streams that are quiet for longer than the idle timeout are closed. The default is 60 seconds.
+
+The load balancer keeps the `Host` header. It does not send `X-Forwarded-Host`, and its addresses change, so the services cannot trust it for forwarded headers; see [Forwarded headers](#forwarded-headers).
+
+## Managed Postgres with the all-in-one image
+
+One ECS service runs one task of the [`golemservices/golem` image](/next/deploy/server#container-image), which serves the management API, the HTTP APIs and MCP on port 9881.
+
+| Setting | Value |
+| --- | --- |
+| Desired count | **1** |
+| Deployment | Minimum healthy 0%, maximum 100% |
+| Container port | 9881 |
+| Environment | The output of [`generate-env.sh`](/next/deploy/server#environment-file) with `GOLEM_POSTGRES_HOST`, and `GOLEM__ROUTER__MANAGEMENT_HOST` set to the management host |
+| Target group | Port 9881, health check `/healthcheck`, a grace period of at least 120 seconds |
+| Listener | The default action of the HTTPS listener forwards to the target group |
+
+The deployment settings make ECS stop the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two servers would run on the same database, which can run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager). Do not use the AWS access key variables: the task role gives the S3 client its credentials.
+
+The first start downloads the built-in plugins and tools, which takes about a minute, so give the service a health check grace period. To move to a fixed cluster later, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
+
+## Fixed cluster
+
+Read [Fixed cluster](/next/deploy/cluster) for the settings of each service. This section describes what is particular to ECS. The [`production-cluster` Compose file](https://github.com/golemcloud/golem/blob/main/docker-examples/production-cluster/compose.yaml) has the complete environment of each service, which the task definitions can copy.
+
+### Architecture
 
 ```text
               ┌───────────────────────────────────┐
@@ -27,13 +62,10 @@ Read [Fixed cluster](/next/deploy/cluster) for the settings of each service, and
   all services ──► RDS for PostgreSQL, S3 bucket
 ```
 
-- **Network.** Fargate tasks use `awsvpc` networking: each task has its own IP address in the VPC, without address translation. The shard manager records each executor's real address, so `grpc.advertised_ip` is not needed. Run the tasks in private subnets, and put them in one security group that allows all TCP traffic from itself.
+- **Executor addresses.** The shard manager records each executor's real task IP address, so `grpc.advertised_ip` is not needed.
 - **Service discovery.** Create a Cloud Map private DNS namespace, for example `golem.internal`, and register the registry service, the shard manager, the worker service and the component compilation service in it with A records and a short TTL, such as 10 seconds. The executors need no DNS name: the shard manager learns their addresses when they register.
-- **Database.** Create one RDS for PostgreSQL database. The user of the services must be able to create schemas in it.
-- **Bucket.** Create one S3 bucket and set `namespace_prefixes = true` on every service. Give the task role of the registry service, the worker service, the component compilation service and the worker executor `s3:ListBucket` on the bucket and `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on its objects. The S3 client takes the credentials of the task role, so no access keys are needed.
-- **Secrets.** Store the tokens and keys in AWS Secrets Manager or SSM Parameter Store, and reference them in the `secrets` of the container definitions.
 
-## Services
+### Services
 
 | ECS service | Desired count | Deployment | Service discovery | Load balancer target groups |
 | --- | --- | --- | --- | --- |
@@ -45,7 +77,7 @@ Read [Fixed cluster](/next/deploy/cluster) for the settings of each service, and
 
 Point the hosts of the services at each other with their DNS names: `GOLEM__REGISTRY_SERVICE__HOST=registry-service.golem.internal` and so on, as the Compose file does with its service names.
 
-### Shard manager
+#### Shard manager
 
 Run exactly one shard manager task, in Postgres mode. With minimum healthy 0% and maximum 100%, ECS stops the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two shard managers could run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
 
@@ -53,17 +85,13 @@ Do not run a second replica in etcd mode as a standby on ECS. A standby keeps it
 
 Set `GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS` on the executors high enough that an executor that starts during a shard manager restart keeps retrying its registration.
 
-### Worker executors
+#### Worker executors
 
 Change the desired count to scale. A task that ECS stops gets `SIGTERM` and deregisters, so its shards move at once. Give the executor task enough memory, and set `GOLEM__MEMORY__SYSTEM_MEMORY_OVERRIDE` to a number of bytes below the task memory if the executor detects more memory than the task has.
 
-## Load balancer
+### Load balancer rules
 
-Create an internet-facing Application Load Balancer in public subnets, with an HTTPS listener and a certificate from ACM for the management host and the deployment domains. Redirect HTTP to HTTPS. Point the management host and every deployment domain at the load balancer in DNS.
-
-Set the load balancer's idle timeout to 3600 seconds: WebSocket connections and server-sent event streams that are quiet for longer than the idle timeout are closed. The default is 60 seconds.
-
-Add these rules to the HTTPS listener, in this order:
+Point the management host and every deployment domain at the load balancer in DNS. Add these rules to the HTTPS listener, in this order:
 
 | Priority | Conditions | Target group |
 | --- | --- | --- |
@@ -74,15 +102,25 @@ Add these rules to the HTTPS listener, in this order:
 
 Reserve the management host with `GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS='["golem.example.com"]'` on the registry service.
 
-### Forwarded headers
+### Deploy the cluster
 
-The load balancer keeps the `Host` header, so the worker service finds the deployment of each domain. It does not send `X-Forwarded-Host`, and its addresses change, so do not list it in `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`. The worker service then sees the scheme of its own listener, `http`. This affects the URLs that it builds from the request, such as the address an [OIDC login](/next/how-to-guides/common/golem-configure-api-domain) returns to.
+1. Create the [shared infrastructure](#shared-infrastructure) and the Cloud Map namespace.
+2. Create the task definitions and the ECS services in this order: registry service, shard manager, component compilation service, worker service, worker executors. Use the same image version for all of them.
+3. Check the shard manager's log: it logs each executor that registers, with its task IP address. Call `https://golem.example.com/healthcheck`, then deploy an application with the admin token, as [Connect the CLI](/next/deploy/server#connect-the-cli) describes.
 
-To give the worker service the public scheme, run Caddy as a second container in the worker service task, and point the port 9006 target group at Caddy's port instead. Build the image from this Caddyfile:
+<Callout type="info">
+  To move an [all-in-one server on Postgres](/next/deploy/server#managed-postgres), on ECS or elsewhere, to a fixed cluster, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
+</Callout>
+
+## Forwarded headers
+
+The load balancer keeps the `Host` header, so the server finds the deployment of each domain. It does not send `X-Forwarded-Host`, and its addresses change, so do not list it in the trusted ingress addresses. The server then sees the scheme of its own listener, `http`. This affects the URLs that it builds from the request, such as the address an [OIDC login](/next/how-to-guides/common/golem-configure-api-domain) returns to.
+
+To give the server the public scheme, run Caddy as a second container in the task that the load balancer reaches, and point the target group at Caddy's port instead. Build the image from this Caddyfile, with the port of the upstream: `9881` for the all-in-one image, `9006` for the worker service of a fixed cluster:
 
 ```text filename="Caddyfile" copy
 :8006 {
-	reverse_proxy 127.0.0.1:9006 {
+	reverse_proxy 127.0.0.1:9881 {
 		header_up X-Forwarded-Proto https
 		header_up X-Forwarded-Host {host}
 	}
@@ -94,26 +132,4 @@ FROM caddy:2
 COPY Caddyfile /etc/caddy/Caddyfile
 ```
 
-Caddy replaces the forwarded headers of every request with the host of the request and `https`, which is correct when the load balancer accepts HTTPS only. The containers of a task share one network namespace, so set `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["127.0.0.1"]'` on the worker service.
-
-## Deploy
-
-<Steps>
-
-### Create the infrastructure
-
-Create the VPC, the security groups, the RDS database, the S3 bucket, the Cloud Map namespace, the secrets and the load balancer.
-
-### Create the services
-
-Create the task definitions and the ECS services in this order: registry service, shard manager, component compilation service, worker service, worker executors. Use the same image version for all of them.
-
-### Check the cluster
-
-The shard manager logs each executor that registers, with its task IP address. Call `https://golem.example.com/healthcheck`, then deploy an application with the admin token, as [Connect the CLI](/next/deploy/server#connect-the-cli) describes.
-
-</Steps>
-
-<Callout type="info">
-  To move an existing [all-in-one server on Postgres](/next/deploy/server#managed-postgres) to ECS, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
-</Callout>
+Caddy replaces the forwarded headers of every request with the host of the request and `https`, which is correct when the load balancer accepts HTTPS only. The containers of a task share one network namespace, so trust `127.0.0.1`: set `GOLEM__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["127.0.0.1"]'` on the all-in-one image, or `GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["127.0.0.1"]'` on the worker service.
