@@ -64,6 +64,16 @@ async fn build_and_deploy_all_templates_for_moonbit() {
 }
 
 #[test]
+async fn build_and_deploy_all_templates_for_go() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Go).await;
+}
+
+#[test]
+async fn go_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Go).await;
+}
+
+#[test]
 async fn rust_streaming_template_builds() {
     streaming_template_builds_for_lang(GuestLanguage::Rust).await;
 }
@@ -320,6 +330,23 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
                 "expected multi-component MoonBit layout: moon.mod.json should remain at the app root"
             );
         }
+        GuestLanguage::Go => {
+            // Unlike Scala/MoonBit, NOTHING stays behind: each Go component is
+            // its own module, and componentize-go only resolves the SDK's WIT
+            // when it runs from a module root.
+            assert!(
+                !app_root.join("go.mod").exists(),
+                "expected multi-component Go layout: go.mod should no longer be at the app root"
+            );
+            let has_go_at_root = std::fs::read_dir(app_root)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("go"));
+            assert!(
+                !has_go_at_root,
+                "expected multi-component Go layout: no *.go files should remain at the app root"
+            );
+        }
         _ => {}
     }
 }
@@ -376,4 +403,55 @@ async fn build_mixed_language_app() {
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+}
+
+// Verifies that Go templates can be added after the first build, whose
+// `go mod tidy` has rewritten go.mod and go.sum: an agent template to the
+// existing component, then a second component, which also moves the first into
+// its own directory. The application builds after each step, and a rebuild with
+// no change does not run tidy.
+#[test]
+async fn go_templates_added_after_a_build_build() {
+    let mut ctx = TestContext::new();
+    let app_name = "go-templates-after-build";
+    let second_component = format!("{app_name}:go-second");
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go/json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "go",
+            flag::COMPONENT_NAME,
+            &second_component,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert_multi_component_layout(ctx.cwd_path(), GuestLanguage::Go);
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    // Nothing changed since: the build does not run go mod tidy again, so
+    // nothing a build writes counts as a change to the module's sources.
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stdout_contains("go mod tidy"));
 }

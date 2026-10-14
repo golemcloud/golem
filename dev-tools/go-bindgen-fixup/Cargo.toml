@@ -1,0 +1,14 @@
+[package]
+name = "go-bindgen-fixup"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+description = "Works around a wit-bindgen crates/go codegen bug in the generated Go SDK bindings"
+
+# No dependencies — std only, on purpose (see dev-tools/README.md). Tests use plain
+# `cargo test` (libtest), so there are no dev-dependencies either.
+
+[[bin]]
+name = "go-bindgen-fixup"
+test = false

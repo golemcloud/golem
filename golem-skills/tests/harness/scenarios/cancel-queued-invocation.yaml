@@ -35,6 +35,7 @@ steps:
         that increments the counter value and then sleeps for 100 milliseconds using
         @monotonic_clock.subscribe_duration(100000000).block(). Make sure the project builds
         and deploys successfully.
+      go: "In the test-app project, add a new method called `runForever` to the CounterAgent that takes no arguments and returns nothing (golem.Unit). It should run an infinite for loop that increments the counter value and then sleeps for 100 milliseconds using time.Sleep(100 * time.Millisecond). Make sure the project builds and deploys successfully."
     verify:
       build: true
       deploy: true
@@ -47,12 +48,14 @@ steps:
         ts: 'CounterAgent("c1")'
         scala: 'CounterAgent("c1")'
         moonbit: 'CounterAgent("c1")'
+        go: 'CounterAgent("c1")'
       method:
         rust: "run_forever"
         ts: "runForever"
         effect: "runForever"
         scala: "runForever"
         moonbit: "run_forever"
+        go: "runForever"
 
   - id: "wait-for-agent-to-start"
     sleep: 3
@@ -66,6 +69,14 @@ steps:
         effect: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "Counter(\"c1\")", "increment"]
         scala: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
         moonbit: ["agent", "invoke", "--trigger", "--idempotency-key", "cancel-me", "CounterAgent(\"c1\")", "increment"]
+        go:
+          - "agent"
+          - "invoke"
+          - "--trigger"
+          - "--idempotency-key"
+          - "cancel-me"
+          - "CounterAgent(\"c1\")"
+          - "increment"
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -82,6 +93,7 @@ steps:
         ts: *get-counter-agent
         scala: *get-counter-agent
         moonbit: *get-counter-agent
+        go: *get-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -98,6 +110,7 @@ steps:
       ts: *cancel-counter-agent
       scala: *cancel-counter-agent
       moonbit: *cancel-counter-agent
+      go: *cancel-counter-agent
     expectedSkills:
       - "golem-cancel-queued-invocation"
 
@@ -110,6 +123,7 @@ steps:
         ts: *get-counter-agent
         scala: *get-counter-agent
         moonbit: *get-counter-agent
+        go: *get-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -124,6 +138,7 @@ steps:
         ts: *delete-counter-agent
         scala: *delete-counter-agent
         moonbit: *delete-counter-agent
+        go: *delete-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0
