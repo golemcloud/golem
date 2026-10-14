@@ -51,6 +51,13 @@
 // previous one on return. A common split: manifest for operator-tunable base
 // rules, [Set] in the constructor for code-owned rules, [With] for per-call tweaks.
 //
+// # Retrying the agent's own code
+//
+// A rule retries host operations. To retry a piece of the agent's own code,
+// run a policy in the agent: [Policy.Schedule] checks it, and [Schedule.Retry]
+// calls an operation until it succeeds or the policy gives up, sleeping
+// durably between the attempts.
+//
 // # Concurrency
 //
 // [Set], [Remove] and [With] apply at the worker level — the retry scope is per
