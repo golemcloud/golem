@@ -167,7 +167,7 @@ pub fn parse_polymorphic_permission(
     )
 }
 
-fn parse_polymorphic_permission_fields(
+pub(crate) fn parse_polymorphic_permission_fields(
     class: &str,
     owner: &str,
     recipient: &str,

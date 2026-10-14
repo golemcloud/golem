@@ -264,7 +264,6 @@ use golem_common::model::{
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
-use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -2262,9 +2261,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &mut self.state.invocation_scope_handles,
         );
         for rep in handles {
-            let _ = self
-                .table()
-                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+            permissions::retire_invocation_scope_handle(self.table(), rep);
         }
         self.state.invocation_scope_card = scope_card;
         self.state.invocation_scope_root_cards = root_cards
@@ -2282,9 +2279,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &mut self.state.invocation_scope_handles,
         );
         for rep in handles {
-            let _ = self
-                .table()
-                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+            permissions::retire_invocation_scope_handle(self.table(), rep);
         }
         if scope_changed {
             self.state.invocation_scope_root_cards.clear();
@@ -2308,9 +2303,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             card_ids,
         );
         for rep in handles {
-            let _ = self
-                .table()
-                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+            permissions::retire_invocation_scope_handle(self.table(), rep);
         }
         if scope_changed {
             self.state.invocation_scope_root_cards.clear();

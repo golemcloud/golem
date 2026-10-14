@@ -150,6 +150,23 @@ fn monomorphize_polymorphic_card_for_agent(
     }
 }
 
+/// Parses a requested grant whose owner or resource may contain slot variables and resolves the
+/// slots for the agent identified by `context`, the same way a template card held by that agent
+/// is resolved.
+pub fn resolve_requested_permission_for_agent(
+    class: &str,
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+    context: &AgentPermissionMonomorphizationContext,
+) -> Result<PermissionPattern, super::CardParseError> {
+    let permission = super::parsing::parse_polymorphic_permission_fields(
+        class, owner, recipient, verb, resource,
+    )?;
+    Ok(monomorphize_permission(&permission, context))
+}
+
 pub fn card_matches_agent_recipient(
     card: &StoredCard,
     context: &AgentPermissionMonomorphizationContext,

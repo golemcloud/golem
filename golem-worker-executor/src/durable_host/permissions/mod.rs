@@ -89,7 +89,10 @@ enum PermissionCardEntry {
     },
     Scope {
         card: ScopeCard,
-        invocation_key: IdempotencyKey,
+        /// The invocation that minted the card, or `None` once its scope ended. A retired entry
+        /// stays in the table until the guest drops its handle, so the handle never names another
+        /// entry, but it can no longer be attached or used as a parent.
+        invocation_key: Option<IdempotencyKey>,
     },
 }
 
@@ -111,7 +114,7 @@ impl PermissionCardEntry {
     fn from_scope(card: ScopeCard, invocation_key: IdempotencyKey) -> Self {
         Self::Scope {
             card,
-            invocation_key,
+            invocation_key: Some(invocation_key),
         }
     }
 
@@ -136,14 +139,34 @@ impl PermissionCardEntry {
         }
     }
 
-    fn scope_card(&self) -> Option<(&ScopeCard, &IdempotencyKey)> {
+    fn scope_card(&self) -> Option<(&ScopeCard, Option<&IdempotencyKey>)> {
         match self {
             Self::Persistent { .. } => None,
             Self::Scope {
                 card,
                 invocation_key,
-            } => Some((card, invocation_key)),
+            } => Some((card, invocation_key.as_ref())),
         }
+    }
+
+    fn retire(&mut self) {
+        if let Self::Scope { invocation_key, .. } = self {
+            *invocation_key = None;
+        }
+    }
+}
+
+/// Retires the guest's scope-card handle when its scope ends. The table entry is kept until the
+/// guest drops the handle, so a stale handle cannot name a reused table slot.
+pub(crate) fn retire_invocation_scope_handle(
+    table: &mut wasmtime::component::ResourceTable,
+    rep: u32,
+) {
+    let handle = Resource::<PermissionCardHandleRep>::new_borrow(rep);
+    if let Ok(entry) = table.get_mut(&handle)
+        && let Some(entry) = entry.downcast_mut::<PermissionCardEntry>()
+    {
+        entry.retire();
     }
 }
 
@@ -297,12 +320,12 @@ fn permission_card_cached_card<Ctx: WorkerCtx>(
 fn permission_card_scope_card<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: &Resource<PermissionCardHandleRep>,
-) -> Result<Option<(ScopeCard, IdempotencyKey)>, WorkerExecutorError> {
+) -> Result<Option<(ScopeCard, Option<IdempotencyKey>)>, WorkerExecutorError> {
     let rep = ctx.table().get(handle).map_err(invalid_handle_error)?;
     Ok(rep
         .downcast_ref::<PermissionCardEntry>()
         .and_then(PermissionCardEntry::scope_card)
-        .map(|(card, invocation_key)| (card.clone(), invocation_key.clone())))
+        .map(|(card, invocation_key)| (card.clone(), invocation_key.cloned())))
 }
 
 pub(crate) fn resolve_invocation_scope_card<Ctx: WorkerCtx>(
@@ -319,16 +342,16 @@ pub(crate) fn resolve_invocation_scope_card<Ctx: WorkerCtx>(
 }
 
 fn resolve_owned_scope_card(
-    scope_card: Option<(ScopeCard, IdempotencyKey)>,
+    scope_card: Option<(ScopeCard, Option<IdempotencyKey>)>,
     invocation_key: &IdempotencyKey,
 ) -> Result<ScopeCard, String> {
     let Some((card, owner_invocation_key)) = scope_card else {
         return Err("the scope-card argument must be a scope card".to_string());
     };
-    if &owner_invocation_key == invocation_key {
+    if owner_invocation_key.as_ref() == Some(invocation_key) {
         Ok(card)
     } else {
-        Err("the scope-card handle belongs to a different invocation".to_string())
+        Err("the scope-card handle is not valid in this invocation".to_string())
     }
 }
 
@@ -419,6 +442,35 @@ fn parse_pattern_grant(
 ) -> Result<PermissionPattern, permissions_types::PermissionError> {
     parse_permission_fields(&g.class, &g.owner, &g.recipient, &g.verb, &g.resource_id)
         .map_err(permission_error_from_parse)
+}
+
+/// Resolves slot variables (`?agent`, `?env`, ...) in requested grants for the calling agent,
+/// so a grant read from a template card with `inspect-card` can be passed back to a derive call.
+fn resolve_requested_grant_slots<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    sets: [&mut Vec<permissions_types::PatternGrant>; 4],
+) -> Result<(), permissions_types::PermissionError> {
+    let context = super::owner_monomorphization_context(
+        ctx.owner_component_metadata(),
+        &ctx.owned_agent_id,
+        &ctx.state.owner_context,
+    );
+    for grant in sets.into_iter().flatten() {
+        if !grant.owner.contains('?') && !grant.resource_id.contains('?') {
+            continue;
+        }
+        let resolved = golem_common::model::card::resolve_requested_permission_for_agent(
+            &grant.class,
+            &grant.owner,
+            &grant.recipient,
+            &grant.verb,
+            &grant.resource_id,
+            &context,
+        )
+        .map_err(permission_error_from_parse)?;
+        *grant = concrete_pattern_grant(&resolved)?;
+    }
+    Ok(())
 }
 
 async fn normalize_tool_grants<Ctx: WorkerCtx>(
@@ -866,9 +918,9 @@ async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
         if let Some((card, owner_invocation_key)) =
             permission_card_scope_card(ctx, handle).map_err(worker_error_to_permission_error)?
         {
-            if &owner_invocation_key != invocation_key {
+            if owner_invocation_key.as_ref() != Some(invocation_key) {
                 return Err(permissions_types::PermissionError::NotPermitted(
-                    "scope-card parent belongs to a different invocation".to_string(),
+                    "scope-card parent is not valid in this invocation".to_string(),
                 ));
             }
             parents.push(ScopeDerivationParent::scope(&card));
@@ -2598,6 +2650,17 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
+        if let Err(error) = resolve_requested_grant_slots(
+            self,
+            [
+                &mut lower_positive_to_retain,
+                &mut lower_negative_to_add,
+                &mut upper_positive_to_retain,
+                &mut upper_negative_to_add,
+            ],
+        ) {
+            return Ok(Err(error));
+        }
         if let Err(error) = normalize_tool_grants(
             self,
             [
@@ -2676,6 +2739,17 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
             "derive-from-wallet",
         );
 
+        if let Err(error) = resolve_requested_grant_slots(
+            self,
+            [
+                &mut lower_positive,
+                &mut lower_negative,
+                &mut upper_positive,
+                &mut upper_negative,
+            ],
+        ) {
+            return Ok(Err(error));
+        }
         if let Err(error) = normalize_tool_grants(
             self,
             [
@@ -2742,6 +2816,17 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive-scope");
 
+        if let Err(error) = resolve_requested_grant_slots(
+            self,
+            [
+                &mut lower_positive,
+                &mut lower_negative,
+                &mut upper_positive,
+                &mut upper_negative,
+            ],
+        ) {
+            return Ok(Err(error));
+        }
         if let Err(error) = normalize_tool_grants(
             self,
             [
@@ -3162,15 +3247,19 @@ mod tests {
         );
 
         assert_eq!(
-            resolve_owned_scope_card(Some((card.clone(), owner.clone())), &owner).unwrap(),
+            resolve_owned_scope_card(Some((card.clone(), Some(owner.clone()))), &owner).unwrap(),
             card
         );
         assert!(
             resolve_owned_scope_card(
-                Some((card, owner)),
+                Some((card.clone(), Some(owner.clone()))),
                 &IdempotencyKey::new("different-invocation".to_string()),
             )
             .is_err()
+        );
+        assert!(
+            resolve_owned_scope_card(Some((card, None)), &owner).is_err(),
+            "a retired scope card must not be accepted, even in the invocation that minted it"
         );
     }
 
@@ -3948,6 +4037,24 @@ mod tests {
         assert!(
             derive_grant_sets(&parent, std::slice::from_ref(&own_read), &[], &ceiling, &[]).is_ok()
         );
+        let requested_with_slot = concrete_pattern_grant(
+            &golem_common::model::card::resolve_requested_permission_for_agent(
+                "filesystem",
+                "?agent",
+                "alice@example.com/shop/prod/cart-svc/CartAgent",
+                "read",
+                "/data/**",
+                &wallet_derivation_context(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            (&requested_with_slot.owner, &requested_with_slot.resource_id),
+            (&own_read.owner, &own_read.resource_id),
+            "a requested grant with a slot resolves like the template held by the caller"
+        );
+
         let sibling = permissions_types::PatternGrant {
             owner: own_read.owner.replace("cart-1", "cart-2"),
             ..own_read.clone()
