@@ -2628,9 +2628,11 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                 Ok(authorized) => authorized,
                 Err(error) => return Ok(Err(error)),
             };
+            // Resolving a received card may query the card store, whose answer is not recorded,
+            // so its failures trap and are retried instead of reaching the guest.
             let parent = match resolve_permission_card_handle(self, &parent)
-                .await
-                .and_then(|parent| parent.into_persistent("derive"))
+                .await?
+                .into_persistent("derive")
             {
                 Ok(parent) => parent,
                 Err(error) => return Ok(Err(error)),

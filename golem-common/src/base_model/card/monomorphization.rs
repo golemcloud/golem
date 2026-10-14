@@ -176,10 +176,11 @@ pub(crate) fn resolve_permissions_for_agent_context(
 /// Resolves a template's lower-bound grants for one holder.
 ///
 /// Slots name the holder that uses a grant, so a template resolved for a holder contributes only
-/// the positive grants addressed to that holder: a grant for other holders would resolve to
-/// resources the template never granted to them. The holder's own surface is unaffected, because
-/// it only uses grants addressed to the holder. Ceilings and denials are kept, because they can
-/// only narrow what the remaining grants allow.
+/// the positive grants addressed to that holder. The template's denials and ceilings for other
+/// holders are resolved for this holder too, so they cannot be relied on to bound grants passed on
+/// to those holders; dropping such grants keeps derivation and installation within what the
+/// template grants. The holder's own surface is unaffected, because it only uses grants addressed
+/// to the holder. Ceilings and denials are kept, because they can only narrow.
 fn resolve_lower_positives_for_agent_context(
     permissions: &[PolymorphicPermissionPattern],
     context: &AgentPermissionMonomorphizationContext,

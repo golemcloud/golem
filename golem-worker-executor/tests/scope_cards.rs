@@ -990,6 +990,24 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         "unexpected wallet derivation denial: {denial}"
     );
 
+    drop(caller_worker);
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let replayed_denial = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "derive_from_wallet_denial",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Option<String>>()?;
+    assert!(
+        replayed_denial.is_some(),
+        "the caller must replay its earlier denials and stay denied after recovery"
+    );
+
     let oplog = executor
         .get_oplog(&caller_worker, OplogIndex::INITIAL)
         .await?;
