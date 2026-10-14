@@ -24,6 +24,7 @@ steps:
         the CLI operation with the Effect SDK's in-agent typed client.
       scala: *non-effect-trigger-agent-prompt
       moonbit: *non-effect-trigger-agent-prompt
+      go: *non-effect-trigger-agent-prompt
     expectedSkills:
       rust:
         - "golem-trigger-agent-rust"
@@ -35,6 +36,8 @@ steps:
         - "golem-trigger-agent-scala"
       moonbit:
         - "golem-trigger-agent-moonbit"
+      go:
+        - "golem-trigger-agent-go"
 
   - id: "wait-for-trigger"
     sleep: 2
@@ -47,6 +50,7 @@ steps:
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
+        go: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:

@@ -33,6 +33,7 @@ use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
 
+pub const DEFAULT_LOCAL_ROUTER_ADDR: &str = "127.0.0.1";
 pub const DEFAULT_LOCAL_ROUTER_PORT: u16 = 9881;
 pub const DEFAULT_LOCAL_CUSTOM_REQUEST_PORT: u16 = 9006;
 pub const DEFAULT_LOCAL_MCP_PORT: u16 = 9007;

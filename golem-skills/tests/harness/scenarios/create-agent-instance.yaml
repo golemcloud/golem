@@ -21,6 +21,7 @@ steps:
         invoking any method on it.
       scala: *non-effect-create-agent-instance-prompt
       moonbit: *non-effect-create-agent-instance-prompt
+      go: *non-effect-create-agent-instance-prompt
     expectedSkills:
       rust:
         - "golem-create-agent-instance-rust"
@@ -32,6 +33,8 @@ steps:
         - "golem-create-agent-instance-scala"
       moonbit:
         - "golem-create-agent-instance-moonbit"
+      go:
+        - "golem-create-agent-instance-go"
 
   - id: "verify-agent-created"
     shell:
@@ -42,6 +45,7 @@ steps:
         effect: ["agent", "get", 'Counter("c1")']
         scala: *non-effect-created-agent-args
         moonbit: *non-effect-created-agent-args
+        go: *non-effect-created-agent-args
       cwd: "test-app"
     expect:
       rust: &non-effect-created-agent-expect
@@ -53,3 +57,4 @@ steps:
         stdout_contains: "c1"
       scala: *non-effect-created-agent-expect
       moonbit: *non-effect-created-agent-expect
+      go: *non-effect-created-agent-expect

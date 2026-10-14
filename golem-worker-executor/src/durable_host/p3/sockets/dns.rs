@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::dns_target;
-use crate::durable_host::concurrent::authorize_live_permissions_at_serialized_access;
+use crate::durable_host::concurrent::{
+    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
+};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, run_read_access_classified, wasi_sockets_view,
@@ -35,6 +37,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         store: &Accessor<U, Self>,
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
+        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
         let live = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .state

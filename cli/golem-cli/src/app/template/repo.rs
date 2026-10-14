@@ -439,6 +439,7 @@ mod tests {
         assert_eq!(
             languages,
             BTreeMap::from([
+                ("go", GuestLanguage::Go),
                 ("effect", GuestLanguage::Effect),
                 ("moonbit", GuestLanguage::MoonBit),
                 ("rust", GuestLanguage::Rust),

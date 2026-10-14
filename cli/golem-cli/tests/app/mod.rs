@@ -26,6 +26,13 @@ mod directory_source_ifs;
 mod effect_http_router;
 mod effect_source_conformance;
 mod external_durable_streams;
+mod go_agent_ops;
+mod go_guest_streams;
+mod go_http_router;
+mod go_mcp_import;
+mod go_native_tool;
+mod go_principal;
+mod go_tools;
 mod mcp_import;
 mod mcp_oauth;
 mod moonbit_guest_streams;
@@ -46,6 +53,7 @@ mod scala_tool_middleware;
 mod scala_tool_sources;
 mod secrets;
 mod self_identity;
+mod server_config;
 mod ssh;
 mod tool_metadata_conformance;
 mod tool_middleware;
@@ -94,6 +102,13 @@ tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
 tag_suite!(effect_http_router, deploy);
 tag_suite!(external_durable_streams, agents_streaming);
+tag_suite!(go_agent_ops, deploy);
+tag_suite!(go_guest_streams, agents_guest_bridge);
+tag_suite!(go_http_router, deploy);
+tag_suite!(go_mcp_import, agents_guest_bridge);
+tag_suite!(go_native_tool, agents_guest_bridge);
+tag_suite!(go_principal, deploy);
+tag_suite!(go_tools, agents_guest_bridge);
 tag_suite!(mcp_import, agents_guest_bridge);
 tag_suite!(mcp_oauth, agents_guest_bridge);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
@@ -546,6 +561,7 @@ struct TestContext {
     startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
     server_log: Option<PathBuf>,
+    server_args: Vec<String>,
     env: HashMap<String, String>,
 }
 
@@ -635,6 +651,7 @@ impl TestContext {
             ports_file: working_dir.join("golem-server-ports.json"),
             working_dir,
             startup_ports: None,
+            server_args: Vec::new(),
             server_process: None,
             server_log,
             env,
@@ -1177,26 +1194,9 @@ impl TestContext {
             });
         }
 
-        let args = vec![
-            "server",
-            "run",
-            "--config-dir",
-            self.config_dir.path().to_str().unwrap(),
-            "--data-dir",
-            self.data_dir.path().to_str().unwrap(),
-            "--router-port",
-            "0",
-            "--custom-request-port",
-            "0",
-            "--mcp-port",
-            "0",
-            "--ports-file",
-            self.ports_file.to_str().unwrap(),
-        ];
-
         let mut command = Command::new(&self.golem_path);
         command
-            .args(&args)
+            .args(self.server_run_args())
             .current_dir(&self.working_dir)
             .envs(&self.env);
 
@@ -1316,6 +1316,69 @@ impl TestContext {
                 tokio::time::sleep(sleep_interval).await;
             }
         }
+    }
+
+    /// The arguments of `golem server run` that `start_server` passes, with the ones added by
+    /// `add_server_args` at the end.
+    fn server_run_args(&self) -> Vec<String> {
+        let mut args: Vec<String> = [
+            "server",
+            "run",
+            "--config-dir",
+            self.config_dir.path().to_str().unwrap(),
+            "--data-dir",
+            self.data_dir.path().to_str().unwrap(),
+            "--router-port",
+            "0",
+            "--custom-request-port",
+            "0",
+            "--mcp-port",
+            "0",
+            "--ports-file",
+            self.ports_file.to_str().unwrap(),
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        args.extend(self.server_args.iter().cloned());
+        args
+    }
+
+    #[allow(dead_code)]
+    fn add_server_args<I: IntoIterator<Item = S>, S: Into<String>>(&mut self, args: I) {
+        self.server_args.extend(args.into_iter().map(Into::into));
+    }
+
+    #[allow(dead_code)]
+    async fn stop_server(&mut self) {
+        if let Some(mut server_process) = self.server_process.take() {
+            server_process.kill().await.unwrap();
+        }
+        self.startup_ports = None;
+    }
+
+    /// Runs `golem server run` with the arguments of `start_server` and expects it to exit
+    /// before startup completes.
+    #[allow(dead_code)]
+    async fn run_server_expecting_startup_failure(&self) -> std::process::Output {
+        assert!(self.server_process.is_none(), "server is already running");
+        let output = tokio::time::timeout(
+            Duration::from_secs(60),
+            Command::new(&self.golem_path)
+                .args(self.server_run_args())
+                .current_dir(&self.working_dir)
+                .envs(&self.env)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("golem server run did not exit")
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "golem server run unexpectedly succeeded"
+        );
+        output
     }
 
     fn enable_native_conformance_tool(&mut self) {
@@ -1934,4 +1997,13 @@ fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
     let updated_manifest = edit::golem_yaml::merge_documents(&manifest, update)?;
     fs::write_str(path, updated_manifest)?;
     Ok(())
+}
+
+/// The Go component directory `golem new` created: the one holding go.mod.
+fn go_component_dir(ctx: &TestContext) -> std::path::PathBuf {
+    std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .find(|path| path.join("go.mod").exists())
+        .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
 }

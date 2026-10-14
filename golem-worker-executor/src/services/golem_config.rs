@@ -1404,6 +1404,17 @@ impl SafeDisplay for IndexedStoragePostgresConfig {
     }
 }
 
+impl IndexedStoragePostgresConfig {
+    pub fn new(postgres: DbPostgresConfig) -> Self {
+        Self {
+            postgres,
+            drop_prefix_delete_batch_size:
+                default_indexed_storage_postgres_drop_prefix_delete_batch_size(),
+            max_concurrent_ops: None,
+        }
+    }
+}
+
 fn default_indexed_storage_postgres_drop_prefix_delete_batch_size() -> u64 {
     1024
 }

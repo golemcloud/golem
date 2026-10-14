@@ -68,6 +68,7 @@ steps:
         preserve existing manifest entries, and make sure the project builds and deploys.
       scala: *non-effect-add-todo-agent-with-http-prompt
       moonbit: *non-effect-add-todo-agent-with-http-prompt
+      go: *non-effect-add-todo-agent-with-http-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
@@ -79,6 +80,8 @@ steps:
         - "golem-add-http-endpoint-scala"
       moonbit:
         - "golem-add-http-endpoint-moonbit"
+      go:
+        - "golem-add-http-endpoint-go"
     verify:
       build: true
       deploy: true

@@ -8,9 +8,9 @@ This page covers streams hosted outside the agent invocation protocol. For opera
 
 ## Read and write
 
-All five SDKs support JSON-message streams and byte streams. JSON appends are batches of complete logical values. Byte streams expose a sequence of bytes; HTTP batch and append boundaries are not preserved. In the examples, `url` identifies an already-created, open `application/json` stream; constructing an SDK reader or writer does not create the provider stream.
+All six SDKs support JSON-message streams and byte streams. JSON appends are batches of complete logical values. Byte streams expose a sequence of bytes; HTTP batch and append boundaries are not preserved. In the examples, `url` identifies an already-created, open `application/json` stream; constructing an SDK reader or writer does not create the provider stream.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -108,6 +108,33 @@ for ;; {
 
 Use `byte_reader` and `byte_writer` for bytes. `retry_pending()` retries the retained request exactly; `close()` consumes a sequence for a close-only append.
   </Tabs.Tab>
+  <Tabs.Tab>
+```go
+import (
+    "log/slog"
+
+    "github.com/golemcloud/golem/sdks/go/golem"
+    "github.com/golemcloud/golem/sdks/go/golem/durablestreams"
+)
+
+writer := golem.Must(durablestreams.NewWriter(url, "application/json", durablestreams.WriteOptions{}))
+golem.Must(durablestreams.AppendJSON(writer, []string{"first", "second"}, true))
+
+reader := durablestreams.ReadJSON[string](url, durablestreams.ReadOptions{
+    Checkpoint: durablestreams.Start,
+})
+for {
+    value, ok, err := reader.Next()
+    golem.Must0(err)
+    if !ok {
+        break
+    }
+    slog.Info(value)
+}
+```
+
+Use `durablestreams.ReadBytes` and `writer.AppendBytes` for bytes. `reader.Checkpoint()` returns the last fully drained checkpoint. A writer retains an uncertain append; call `writer.RetryPending()` before new data, and `writer.Close()` for a close-only append.
+  </Tabs.Tab>
 </Tabs>
 
 ## Checkpoints and offsets
@@ -119,7 +146,7 @@ A checkpoint contains a server-generated `offset` and optional transport `cursor
 - The SDK starts in catch-up mode, advances to the returned checkpoint only after the entire batch is consumed, then switches to long polling or SSE at the tail.
 - A pending or partially consumed batch does not promote its checkpoint. A still-live reader may retain the batch, but cancellation or close can discard it, and cancellation need not immediately abort the underlying HTTP request.
 
-Rust and MoonBit expose the last fully drained checkpoint. TypeScript, Effect, and Scala high-level readers do not expose it; restart those readers from an application-supplied offset. An Effect stream is a reusable description, and each execution creates a new reader from its options. During ordinary durable-agent recovery, Golem reconstructs progress by replay; do not snapshot native resource handles.
+Rust, MoonBit, and Go expose the last fully drained checkpoint. TypeScript, Effect, and Scala high-level readers do not expose it; restart those readers from an application-supplied offset. An Effect stream is a reusable description, and each execution creates a new reader from its options. During ordinary durable-agent recovery, Golem reconstructs progress by replay; do not snapshot native resource handles.
 
 ## Producer identity and idempotency
 

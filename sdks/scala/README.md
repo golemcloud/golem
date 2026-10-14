@@ -19,6 +19,26 @@ automatically derive all the serialization, RPC bindings, and metadata generatio
 - **Transaction helpers** - Both fallible and infallible transaction patterns with automatic rollback
 - **Snapshot integration** - Simple hooks for state persistence across component instances
 
+## Metadata permissions
+
+`AgentHostApi.getSelfMetadata()` requires view permission on the running agent.
+The `BaseAgent` identity getters (`agentId`, `agentType`, and `agentName`) use this
+operation and therefore require the same permission. Snapshot loading also reads
+self metadata unconditionally. Ordinary agent initialization does not read self
+metadata unless application code calls an identity getter or a metadata operation.
+`AgentHostApi.getAgentMetadata(agentId)` requires view permission on the target agent.
+
+If metadata access is denied, check the effective permission card and the
+`initialCard` upper bound. The effective card must grant the required view permission;
+it cannot exceed that upper bound. The SDK propagates the original host exception
+without replacing its tagged payload or retrying with broader permissions.
+
+**Self-view is not identity-only.** Metadata returns the stored environment and
+configuration without the per-key WASI environment or configuration filters.
+Granting view permission can expose those values even when filtered WASI access
+does not expose them. Do not grant self-view only to enable identity getters without
+considering this broader access.
+
 ## Runtime tool reflection
 
 `golem.reflection.Reflection.getToolType(name)` and `getAllToolTypes()` discover tools visible to

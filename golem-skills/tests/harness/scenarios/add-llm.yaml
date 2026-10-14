@@ -1,4 +1,7 @@
 name: "add-llm"
+# The Go SDK has no LLM support.
+skip_if:
+  language: "go"
 semanticRequirements:
   effect:
     - The Effect implementation must call the configured provider through Effect AI LanguageModel and an Effect AI provider layer; direct fetch and stubbed responses are not substitutes.

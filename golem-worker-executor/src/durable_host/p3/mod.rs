@@ -31,6 +31,7 @@
 //! [`Accessor`](wasmtime::component::Accessor) onto the built-in view via the bridge getters
 //! below.
 
+pub(crate) use crate::durable_host::concurrent::reserve_invocation_id_before_await;
 use std::any::{Any, type_name};
 use std::future::Future;
 use std::marker::PhantomData;
