@@ -2633,6 +2633,20 @@ impl ReplayState {
             .map_err(|error| {
                 WorkerExecutorError::runtime(format!("invalid attachment body: {error:?}"))
             })?;
+        if let golem_common::model::oplog::attachment::ToolAttachmentReadOutcome::TypedChunk(end) =
+            read.outcome
+        {
+            let write = &current.history.writes[&end.0];
+            let request = current.requests.get(&write.start).ok_or_else(|| {
+                WorkerExecutorError::runtime("missing accepted attachment write request")
+            })?;
+            if !request.matches_input(bytes.as_deref().expect("validated typed payload")) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "attachment body matching the accepted write digest",
+                    format!("attachment observation at {source} differs from its accepted write"),
+                ));
+            }
+        }
         Ok((source, requested_read, bytes))
     }
 
@@ -2692,15 +2706,40 @@ impl ReplayState {
         bytes: &[u8],
     ) -> Result<(), WorkerExecutorError> {
         use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
-        let reads = self
-            .cursor
-            .tool_attachment_reconstruction
-            .lock()
-            .unwrap()
-            .source_observations
-            .get(&source.0)
-            .cloned()
-            .unwrap_or_default();
+        let reads = {
+            let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+            let write =
+                index.history.writes.get(&source.0).ok_or_else(|| {
+                    WorkerExecutorError::runtime("missing accepted attachment write")
+                })?;
+            let request = index.requests.get(&write.start).ok_or_else(|| {
+                WorkerExecutorError::runtime("missing accepted attachment write request")
+            })?;
+            if !write.retained || !request.matches_input(bytes) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "regenerated attachment bytes matching the retained accepted write",
+                    format!(
+                        "regenerated attachment differs from accepted write at {}",
+                        source.0
+                    ),
+                ));
+            }
+            // Typed payloads authenticate themselves against this same request during
+            // consumer hydration. Only partial raw slices require the regenerated argument.
+            index
+                .source_observations
+                .get(&source.0)
+                .into_iter()
+                .flatten()
+                .filter(|read| {
+                    matches!(
+                        index.history.observations[read].outcome,
+                        ToolAttachmentReadOutcome::RawBytes { .. }
+                    )
+                })
+                .copied()
+                .collect::<Vec<_>>()
+        };
         for index in reads {
             let (_, read, payload) = self.hydrate_tool_attachment_observation(index).await?;
             let expected = match read.outcome {
@@ -2743,6 +2782,9 @@ impl ReplayState {
             tokio::pin!(progress);
             progress.as_mut().enable();
             let end = self.accepted_tool_attachment_write_end(start)?;
+            if self.last_replayed_index() >= end.0 {
+                return Ok(end);
+            }
             self.run_owned_cursor_op(move |state| async move {
                 state
                     .with_tx(async |tx| {

@@ -3766,12 +3766,34 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
     let replay = test_replay_state(test_agent_id(), oplog.clone(), DeletedRegions::new(), None)
         .await
         .unwrap();
+    replay
+        .validate_tool_attachment_regenerated_bytes(
+            golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(
+                OplogIndex::from_u64(3),
+            ),
+            b"abc",
+        )
+        .await
+        .expect("typed regeneration must not download a consumer payload");
     assert!(
         replay
             .hydrate_tool_attachment_observation(OplogIndex::from_u64(4))
             .await
             .is_err()
     );
+    oplog.external_payloads.lock().await.push((
+        id.clone(),
+        hash.clone(),
+        golem_common::serialization::serialize(&b"abd".to_vec()).unwrap(),
+    ));
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4))
+            .await
+            .is_err(),
+        "same-length corrupted bytes must fail before consumer delivery"
+    );
+    oplog.external_payloads.lock().await.clear();
     oplog.external_payloads.lock().await.push((
         id,
         hash,
@@ -3825,6 +3847,62 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
         replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
         None
     );
+}
+
+#[test]
+async fn attachment_index_validates_raw_slice_against_regenerated_argument() {
+    use golem_common::model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentReadOutcome,
+    };
+    let accepted = AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3));
+    for (body, valid) in [(b"b", true), (b"x", false)] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(body.to_vec())));
+        let OplogEntry::ToolAttachmentRead { observation, .. } = &mut entries[3] else {
+            unreachable!()
+        };
+        observation.outcome = ToolAttachmentReadOutcome::RawBytes {
+            end: accepted,
+            offset: 1,
+            length: 1,
+        };
+        *oplog.entries.lock().unwrap() = entries;
+        let replay = test_replay_state(test_agent_id(), oplog, DeletedRegions::new(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            replay
+                .validate_tool_attachment_regenerated_bytes(accepted, b"abc")
+                .await
+                .is_ok(),
+            valid
+        );
+    }
+}
+
+#[test]
+async fn attachment_index_crossed_acceptance_does_not_wait_for_cursor() {
+    use golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd;
+
+    let oplog = Arc::new(InMemoryOplog::new());
+    *oplog.entries.lock().unwrap() =
+        attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+    let replay = test_replay_state(test_agent_id(), oplog, DeletedRegions::new(), None)
+        .await
+        .unwrap();
+    let start = OplogIndex::from_u64(2);
+    let end = AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3));
+    assert!(replay.last_replayed_index() < end.0);
+    replay
+        .await_tool_attachment_acceptance(start)
+        .await
+        .unwrap();
+    let _gate = replay.cursor.advance_gate.clone().lock_owned().await;
+    let mut acceptance = Box::pin(replay.await_tool_attachment_acceptance(start));
+    assert!(matches!(
+        futures::poll!(acceptance.as_mut()),
+        std::task::Poll::Ready(Ok(actual)) if actual == end
+    ));
 }
 
 #[test]
@@ -3884,7 +3962,7 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
             .validate_tool_attachment_regenerated_bytes(accepted, b"abd")
             .await
             .is_err(),
-        "growing the replay horizon must restore read-payload validation"
+        "growing the replay horizon must restore producer-request validation"
     );
     assert!(
         replay
