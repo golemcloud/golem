@@ -341,16 +341,6 @@ async fn resolve_permission_card<Ctx: WorkerCtx>(
             "invalid permission-card handle: {error}"
         ))
     })?;
-    if ctx
-        .state
-        .revoked_card_ids
-        .contains(&CardId(snapshot.card_id))
-    {
-        return Err(permissions_types::PermissionError::CardRevoked(format!(
-            "permission card {} is revoked",
-            snapshot.card_id
-        )));
-    }
 
     if let Some(card) = permission_card_cached_card(ctx, handle).map_err(|error| {
         permissions_types::PermissionError::NotPermitted(format!(

@@ -14,9 +14,8 @@ interface derive {
     /// Derive a child card from `parent`, narrowing the grant lattice.
     ///
     /// A template parent (one whose grants carry slot variables) must be in
-    /// the caller's wallet and is resolved against the caller's identity. A
-    /// grant the template addresses to other holders can be retained only when
-    /// it resolves to the same resources for them.
+    /// the caller's wallet and is resolved against the caller's identity.
+    /// Only its grants addressed to the caller can be retained.
     derive: func(
         parent: borrow<permission-card>,
         lower-positive-to-retain: list<pattern-grant>,

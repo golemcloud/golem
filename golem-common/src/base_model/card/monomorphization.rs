@@ -175,11 +175,11 @@ pub(crate) fn resolve_permissions_for_agent_context(
 
 /// Resolves a template's lower-bound grants for one holder.
 ///
-/// Slots name the holder that uses a grant, and template validation only proves the envelope of
-/// each grant over its own recipients. A grant whose recipients cover the holder is always kept.
-/// A grant addressed to other holders is kept only when its resolution for `context` stays inside
-/// that envelope, so a holder cannot derive or install authority the template never granted to
-/// anyone. Ceilings and denials are resolved unchanged, because they can only narrow.
+/// Slots name the holder that uses a grant, so a template resolved for a holder contributes only
+/// the positive grants addressed to that holder: a grant for other holders would resolve to
+/// resources the template never granted to them. The holder's own surface is unaffected, because
+/// it only uses grants addressed to the holder. Ceilings and denials are kept, because they can
+/// only narrow what the remaining grants allow.
 fn resolve_lower_positives_for_agent_context(
     permissions: &[PolymorphicPermissionPattern],
     context: &AgentPermissionMonomorphizationContext,
@@ -187,20 +187,8 @@ fn resolve_lower_positives_for_agent_context(
     let holder = agent_recipient_pattern(context);
     permissions
         .iter()
-        .filter_map(|permission| {
-            let resolved = monomorphize_permission(permission, context);
-            if permission.recipient().subsumes(&holder) {
-                return Some(resolved);
-            }
-            let envelopes = super::envelope::permission_envelopes_for_recipient_patterns(
-                std::slice::from_ref(permission),
-            )
-            .ok()?;
-            envelopes
-                .iter()
-                .any(|envelope| envelope.subsumes(&resolved))
-                .then_some(resolved)
-        })
+        .filter(|permission| permission.recipient().subsumes(&holder))
+        .map(|permission| monomorphize_permission(permission, context))
         .collect()
 }
 

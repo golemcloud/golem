@@ -1196,26 +1196,27 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 payload.ephemeral_logical_agent_id.clone(),
             )
         };
-        let scope_card = match scope_card {
-            Ok(scope_card) => scope_card,
-            Err(details) => {
-                discard_owned_rpc_input(input, self);
-                return persist_async_invoke_denial(
-                    self,
-                    &this,
-                    logical_remote_agent_id,
-                    method_name,
-                    RpcError::Denied(details),
-                )
-                .await;
-            }
-        };
-
         if ephemeral_logical_agent_id.is_none() && logical_remote_agent_id == own_agent_id {
             return Err(anyhow::anyhow!(
                 "RPC calls to the same agent are not supported"
             ));
         }
+
+        let scope_card = match scope_card {
+            Ok(scope_card) => scope_card,
+            Err(details) => {
+                discard_owned_rpc_input(input, self);
+                return persist_async_validation_rejection(
+                    self,
+                    &connection_span_id,
+                    &logical_remote_agent_id,
+                    ephemeral_logical_agent_id.as_ref(),
+                    &method_name,
+                    InternalRpcError::Denied { details },
+                )
+                .await;
+            }
+        };
 
         // Resolve the method and lift the input before opening the remote invocation. A rejection
         // is recorded as its own short local operation so its invocation span closes when the

@@ -522,6 +522,17 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
         "async-invoke-and-await must deny a persistent scope-card argument without trapping"
     );
 
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let wallet_cards = executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert!(
+        wallet_cards > 0,
+        "the caller must recover by replaying the recorded async scope-card denial"
+    );
+
     for (method, caller_name) in [
         ("schedule_scope", "schedule-caller"),
         ("schedule_cancelable_scope", "cancelable-schedule-caller"),

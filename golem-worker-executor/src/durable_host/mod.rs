@@ -2540,7 +2540,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         queued_event_index: OplogIndex,
         is_live: bool,
     ) -> Result<(), WorkerExecutorError> {
-        self.state.revoked_card_ids.insert(card_id);
         let was_in_wallet = remove_wallet_card(
             &mut self.state.agent_wallet_cards,
             &mut self.state.wallet_generation,
@@ -2582,7 +2581,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        self.state.revoked_card_ids.extend(card_ids.iter().copied());
         let wallet_changed = remove_wallet_cards(
             &mut self.state.agent_wallet_cards,
             &mut self.state.wallet_generation,
@@ -5215,7 +5213,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         count = card_ids.len(),
                         "Applying replayed card revocation cascade"
                     );
-                    self.state.revoked_card_ids.extend(card_ids.iter().copied());
                     let wallet_changed = remove_wallet_cards(
                         &mut self.state.agent_wallet_cards,
                         &mut self.state.wallet_generation,
@@ -11119,9 +11116,6 @@ struct PrivateDurableWorkerState {
     /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
     /// surfaces instead of relying on draining every event itself.
     owner_revoked_card_ids: HashSet<CardId>,
-    /// Cards whose revocation this Store applied from its own oplog. Handles that still name one
-    /// of them resolve to `card-revoked`. Replay rebuilds the set from the same oplog entries.
-    revoked_card_ids: HashSet<CardId>,
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
     card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
@@ -11536,7 +11530,6 @@ impl PrivateDurableWorkerState {
             invocation_scope_handles: HashMap::new(),
             inherited_invocation_scope: None,
             owner_revoked_card_ids: HashSet::new(),
-            revoked_card_ids: HashSet::new(),
             wallet_id_hash,
             wallet_generation,
             card_event_boundary_lock,
