@@ -7797,6 +7797,259 @@ async fn retained_tool_attachments_block_snapshot_until_released(
     retained_tool_output_reconstruction(last_unique_id, deps, provider, caller, true).await
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn retained_tool_output_fork_survives_source_deletion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    retained_tool_output_fork(last_unique_id, deps, provider, caller, false).await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn reverted_tool_output_reobserves_after_fork_and_source_deletion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    retained_tool_output_fork(last_unique_id, deps, provider, caller, true).await
+}
+
+async fn retained_tool_output_fork(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    reobserve: bool,
+) -> anyhow::Result<()> {
+    use crate::fork::start_with_local_resume_and;
+    use golem_common::model::AgentId;
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+    use golem_common::model::oplog::attachment::ToolAttachmentReadObservation;
+    use golem_common::model::oplog::{OplogEntry, OplogPayload};
+    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.retry.max_attempts = 0;
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+            config.oplog.max_payload_size = 1;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_local_resume_and(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let parent_name = agent_id!("ToolStreamingCaller", "retained-output-fork-parent");
+    let parent = executor
+        .start_agent(&caller_component.id, parent_name.clone())
+        .await?;
+    let consumed: Vec<u8> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &parent_name,
+            "retain_tool_output",
+            data_value!(false, false, false),
+        )
+        .await?
+        .into_typed()?;
+    assert!(consumed.is_empty());
+    let history = executor.get_oplog(&parent, OplogIndex::INITIAL).await?;
+    let mut cut = history
+        .last()
+        .expect("completed producer history")
+        .oplog_index;
+    if reobserve {
+        let bytes: Vec<u8> = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &parent_name,
+                "consume_retained_tool_output",
+                data_value!(),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(
+            bytes,
+            [vec![0, 255, 19], b"retained-tail".to_vec()].concat()
+        );
+        executor
+            .revert(
+                &parent,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cut,
+                }),
+            )
+            .await?;
+        cut = executor
+            .get_oplog(&parent, OplogIndex::INITIAL)
+            .await?
+            .last()
+            .expect("reverted history")
+            .oplog_index;
+    }
+    let stored = executor.stored_oplog(&parent).await;
+    let original_payloads = stored
+        .iter()
+        .filter_map(|entry| match entry {
+            OplogEntry::ToolAttachmentRead {
+                observation,
+                payload: Some(payload),
+                ..
+            } if matches!(
+                observation.observation,
+                StreamConsumerObservation::Guest {
+                    parent_start_index: None
+                }
+            ) =>
+            {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(original_payloads.len(), if reobserve { 3 } else { 1 });
+    assert!(
+        original_payloads
+            .iter()
+            .all(|payload| matches!(payload, OplogPayload::External { .. })),
+        "fork recovery must exercise external payload ownership"
+    );
+    let child_name = agent_id!("ToolStreamingCaller", "retained-output-fork-child");
+    let child = AgentId {
+        component_id: caller_component.id,
+        agent_id: child_name.to_string(),
+    };
+    executor.fork_worker(&parent, &child.agent_id, cut).await?;
+    executor.delete_worker(&parent).await?;
+    drop(executor);
+
+    let executor = start_with_local_resume_and(deps, &context, overrides.clone()).await?;
+    assert_eq!(executor.instance_load_count(&child), 0);
+    let bytes: Vec<u8> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &child_name,
+            "consume_retained_tool_output",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        bytes,
+        [vec![0, 255, 19], b"retained-tail".to_vec()].concat()
+    );
+    assert!(executor.instance_load_count(&child) > 0);
+    drop(executor);
+
+    let executor = start_with_local_resume_and(deps, &context, overrides).await?;
+    let _: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &child_name,
+            "replay_probe",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    let history = executor.get_oplog(&child, OplogIndex::INITIAL).await?;
+    let reads = history
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::ToolAttachmentRead(read) => {
+                let observation =
+                    ToolAttachmentReadObservation::from_value(read.observation.value())
+                        .expect("attachment observation");
+                matches!(
+                    observation.observation,
+                    StreamConsumerObservation::Guest {
+                        parent_start_index: None
+                    }
+                )
+                .then_some((entry.oplog_index, observation, read.payload.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reads.len(),
+        if reobserve { 7 } else { 4 },
+        "three original chunks and EOF, plus reference-only replacement observations"
+    );
+    assert_eq!(
+        reads
+            .iter()
+            .take(4)
+            .map(|(_, _, payload)| payload.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(b"marker:".to_vec()),
+            Some(vec![0, 255, 19]),
+            Some(b"retained-tail".to_vec()),
+            None,
+        ]
+    );
+    for (ordinal, (_, read, _)) in reads.iter().take(4).enumerate() {
+        assert_eq!(read.ordinal, ordinal as u64);
+        assert_eq!(read.attachment, reads[0].1.attachment);
+        assert!(read.reobserves.is_none());
+    }
+    for ((_, read, payload), (original_index, original, _)) in
+        reads.iter().skip(4).zip(reads.iter().skip(1))
+    {
+        assert_eq!(read.reobserves, Some(*original_index));
+        assert_eq!(read.attachment, original.attachment);
+        assert_eq!(read.logical_invocation, original.logical_invocation);
+        assert_eq!(read.ordinal, original.ordinal);
+        assert_eq!(read.outcome, original.outcome);
+        assert!(
+            payload.is_none(),
+            "re-observation must not copy original bytes"
+        );
+    }
+    executor.delete_worker(&child).await?;
+    Ok(())
+}
+
 async fn retained_tool_output_reconstruction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
