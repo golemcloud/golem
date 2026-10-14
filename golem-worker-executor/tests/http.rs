@@ -2633,7 +2633,6 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
 }
 
 #[test]
-#[ignore = "flaky on main and on this branch: the replayed invocation sometimes hangs"]
 #[tracing::instrument]
 async fn outgoing_http_post_cancel_before_replay_start_admission(
     last_unique_id: &LastUniqueId,
@@ -2691,8 +2690,13 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
     drop(executor);
     let executor = start(deps, &context).await?;
 
-    let mut gate =
+    let mut send_admission =
         executor.gate_next_replay_access_admission(&worker_id, "client::send", Stage::AfterScope);
+    let mut cancel_timer = executor.gate_next_replay_access_admission(
+        &worker_id,
+        "monotonic-clock::wait-for",
+        Stage::BeforeScope,
+    );
     let invocation = executor.invoke_and_await_agent(
         &component,
         &agent_id,
@@ -2700,9 +2704,11 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
         data_value!(),
     );
     let coordinate = async {
-        gate.entered().await;
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        gate.release();
+        // The replayed timer can finish before the send reaches its admission gate.
+        // Hold cancellation until both calls reach their gates, then keep send admission
+        // blocked through invocation completion so only guest cancellation can settle it.
+        tokio::join!(send_admission.entered(), cancel_timer.entered());
+        cancel_timer.release();
     };
     let (result2, ()) = timeout(Duration::from_secs(30), async {
         tokio::join!(invocation, coordinate)

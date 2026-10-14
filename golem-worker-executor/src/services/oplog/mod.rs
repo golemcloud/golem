@@ -14,6 +14,7 @@
 
 use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::model::ExecutionStatus;
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageNamespace, ScanResume,
@@ -1445,13 +1446,13 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
 ) -> Result<T, anyhow::Error> {
-    tokio::task::spawn_blocking(move || {
+    join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
         golem_common::serialization::try_deserialize(&bytes)
             .map_err(anyhow::Error::msg)?
             .ok_or_else(|| {
                 anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
             })
-    })
+    }))
     .await
     .map_err(anyhow::Error::new)?
 }

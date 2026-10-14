@@ -16,6 +16,7 @@ use super::*;
 use crate::durable_host::durability::reserve_invocation_id;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
+use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
 use golem_common::model::oplog::DurableInvocationId;
@@ -5350,22 +5351,23 @@ async fn upload_partial_response<Resp: Into<HostResponse> + Send + 'static>(
     match partial {
         Some(partial) => {
             let partial = Box::new(partial);
-            let prepared = tokio::task::spawn_blocking(move || {
-                let host_response: HostResponse = (*partial).into();
-                let bytes = golem_common::serialization::serialize(&host_response)?;
-                Ok::<_, String>(Box::new((bytes, Arc::new(host_response))))
-            })
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "partial durable call response encoding task failed: {err}"
-                ))
-            })?
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to serialize partial durable call response: {err}"
-                ))
-            })?;
+            let prepared =
+                join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
+                    let host_response: HostResponse = (*partial).into();
+                    let bytes = golem_common::serialization::serialize(&host_response)?;
+                    Ok::<_, String>(Box::new((bytes, Arc::new(host_response))))
+                }))
+                .await
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "partial durable call response encoding task failed: {err}"
+                    ))
+                })?
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to serialize partial durable call response: {err}"
+                    ))
+                })?;
             let (bytes, cached) = *prepared;
             let raw_payload = oplog.upload_raw_payload(bytes).await.map_err(|err| {
                 WorkerExecutorError::runtime(format!(
@@ -5497,13 +5499,15 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
     let prepared = if response_has_bounded_encoding_stack::<Pair::Resp>() {
         encode_response(response)
     } else {
-        tokio::task::spawn_blocking(move || encode_response(response))
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "durable call response encoding task failed: {err}"
-                ))
-            })?
+        join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
+            encode_response(response)
+        }))
+        .await
+        .map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "durable call response encoding task failed: {err}"
+            ))
+        })?
     }
     .map_err(|err| {
         WorkerExecutorError::runtime(format!("failed to serialize durable call response: {err}"))
