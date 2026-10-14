@@ -8267,6 +8267,13 @@ mod tests {
                 },
                 SnapshotBoundaryBlocker::InFlightHostCall,
             ),
+            (
+                SnapshotBoundaryConditions {
+                    open_tool_attachment: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::OpenToolAttachment,
+            ),
         ];
         for (conditions, expected) in cases {
             assert_eq!(
@@ -8279,15 +8286,16 @@ mod tests {
 
     #[test]
     fn snapshot_boundary_any_condition_combination_blocks() {
-        // Exhaustive truth table over the five conditions: a snapshot is admitted iff every
+        // Exhaustive truth table over the six conditions: a snapshot is admitted iff every
         // condition is clear, and the reported blocker is always one of the set conditions.
-        for bits in 0u32..32 {
+        for bits in 0u32..64 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
                 snapshotting: bits & 8 != 0,
                 in_flight_host_call: bits & 16 != 0,
+                open_tool_attachment: bits & 32 != 0,
             };
             let blocker = conditions.blocker();
             assert_eq!(
@@ -8302,6 +8310,7 @@ mod tests {
                     SnapshotBoundaryBlocker::OpenDurableScope => conditions.open_durable_scope,
                     SnapshotBoundaryBlocker::Snapshotting => conditions.snapshotting,
                     SnapshotBoundaryBlocker::InFlightHostCall => conditions.in_flight_host_call,
+                    SnapshotBoundaryBlocker::OpenToolAttachment => conditions.open_tool_attachment,
                 };
                 assert!(
                     named_condition_is_set,
@@ -8336,16 +8345,17 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_boundary_is_checkpoint_boundary_with_no_in_flight_host_call() {
+    fn snapshot_boundary_is_checkpoint_boundary_without_live_resources() {
         // The documented sync invariant between the two predicates: `blocker() == None` is
-        // equivalent to `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
-        for bits in 0u32..32 {
+        // equivalent to a clean checkpoint without in-flight calls or open tool attachments.
+        for bits in 0u32..64 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
                 snapshotting: bits & 8 != 0,
                 in_flight_host_call: bits & 16 != 0,
+                open_tool_attachment: bits & 32 != 0,
             };
             let at_checkpoint_boundary = PrivateDurableWorkerState::clean_checkpoint_boundary(
                 conditions.replaying,
@@ -8355,8 +8365,10 @@ mod tests {
             );
             assert_eq!(
                 conditions.blocker().is_none(),
-                at_checkpoint_boundary && !conditions.in_flight_host_call,
-                "snapshot admission must equal checkpoint admission plus no in-flight host call; \
+                at_checkpoint_boundary
+                    && !conditions.in_flight_host_call
+                    && !conditions.open_tool_attachment,
+                "snapshot admission requires a checkpoint without live calls or attachments; \
                  conditions: {conditions:?}"
             );
         }
@@ -11768,11 +11780,11 @@ impl PrivateDurableWorkerState {
     /// post-snapshot replay never sees (the orphan terminal is drained harmlessly, but the call
     /// itself cannot be restored from the snapshot). Snapshots are therefore only taken at a
     /// clean checkpoint boundary (no open atomic regions or durable scopes, and no snapshotting)
-    /// with no durable host call in flight.
+    /// with no durable host call in flight or tool attachment needing the skipped history.
     ///
     /// The sampled conditions must stay in sync with [`Self::at_clean_checkpoint_boundary`]:
     /// `blocker() == None` is equivalent to
-    /// `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
+    /// a clean checkpoint with no in-flight host call or open tool attachment.
     pub fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         SnapshotBoundaryConditions {
             replaying: !self.is_live(),
@@ -11780,6 +11792,7 @@ impl PrivateDurableWorkerState {
             open_durable_scope: !self.active_durable_scopes.is_empty(),
             snapshotting: self.snapshotting_mode,
             in_flight_host_call: self.has_in_flight_live_host_calls(),
+            open_tool_attachment: self.replay_state.has_open_tool_attachments(),
         }
         .blocker()
     }
@@ -11838,6 +11851,8 @@ struct SnapshotBoundaryConditions {
     /// A live durable host call is in flight: its `Start` may precede the cut while its
     /// terminal entry lands after it.
     in_flight_host_call: bool,
+    /// Attachment endpoints or pending regeneration need history that the snapshot would skip.
+    open_tool_attachment: bool,
 }
 
 impl SnapshotBoundaryConditions {
@@ -11854,6 +11869,8 @@ impl SnapshotBoundaryConditions {
             Some(SnapshotBoundaryBlocker::Snapshotting)
         } else if self.in_flight_host_call {
             Some(SnapshotBoundaryBlocker::InFlightHostCall)
+        } else if self.open_tool_attachment {
+            Some(SnapshotBoundaryBlocker::OpenToolAttachment)
         } else {
             None
         }
@@ -11869,6 +11886,7 @@ pub enum SnapshotBoundaryBlocker {
     OpenDurableScope,
     Snapshotting,
     InFlightHostCall,
+    OpenToolAttachment,
 }
 
 impl Display for SnapshotBoundaryBlocker {
@@ -11879,6 +11897,9 @@ impl Display for SnapshotBoundaryBlocker {
             Self::OpenDurableScope => write!(f, "a durable scope is still open"),
             Self::Snapshotting => write!(f, "a snapshot function call is already in progress"),
             Self::InFlightHostCall => write!(f, "a durable host call is still in flight"),
+            Self::OpenToolAttachment => {
+                write!(f, "a tool attachment still requires replay history")
+            }
         }
     }
 }

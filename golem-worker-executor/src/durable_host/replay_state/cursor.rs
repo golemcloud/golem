@@ -2771,6 +2771,19 @@ impl ReplayState {
         attachments.refresh_controller(identity)
     }
 
+    pub(crate) fn has_open_tool_attachments(&self) -> bool {
+        let attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        attachments
+            .resident
+            .values()
+            .filter_map(|controller| controller.upgrade())
+            .any(|controller| controller.has_open_endpoints())
+            || attachments
+                .pending_writes
+                .values()
+                .any(|writes| !writes.is_empty())
+    }
+
     /// Marks an accepted output write's regenerated arguments validated and its resident
     /// output restored. This must precede the write's acknowledgment delivery gate.
     pub fn complete_tool_attachment_reconstruction(

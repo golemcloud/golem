@@ -635,7 +635,7 @@ pub struct TypedInputEvidence {
     pub ordinal: u32,
 }
 
-#[agent_definition]
+#[agent_definition(snapshotting = "enabled")]
 pub trait ToolStreamingCaller {
     fn new(name: String, #[agent_config] config: Config<ToolStreamingCallerConfig>) -> Self;
 
@@ -706,6 +706,9 @@ pub trait ToolStreamingCaller {
     async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
     async fn recover_piped_unread_output(&self, chunk_size: u32, cancel_read: bool) -> Vec<u8>;
     async fn recover_direct_stdin(&self) -> Vec<u8>;
+    fn retain_stdin_closed(&self);
+    async fn wait_retained_stdin_closed(&self) -> String;
+    fn drop_retained_stdin_closed(&self);
     async fn drop_direct_stdin_write_and_spin(&self);
     async fn fail_direct_stdin_without_tool(&self);
     async fn direct_stdin_wait_order(&self) -> Vec<String>;
@@ -769,6 +772,7 @@ pub trait ToolStreamingCaller {
 
 struct ToolStreamingCallerImpl {
     retained_output: std::cell::RefCell<Option<InputStream>>,
+    retained_stdin_closed: std::cell::RefCell<Option<tool_host::ToolStdinClosed>>,
 }
 
 #[agent_definition]
@@ -1383,7 +1387,22 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         );
         Self {
             retained_output: std::cell::RefCell::new(None),
+            retained_stdin_closed: std::cell::RefCell::new(None),
         }
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            retained_output: std::cell::RefCell::new(None),
+            retained_stdin_closed: std::cell::RefCell::new(None),
+        })
     }
 
     fn record_native_order(&self, marker: String) -> String {
@@ -3620,6 +3639,28 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let output = read_all(stdout).await;
         raw_result(&invocation).await.expect("sink result");
         output
+    }
+
+    fn retain_stdin_closed(&self) {
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        drop(writer);
+        drop(stdin);
+        *self.retained_stdin_closed.borrow_mut() = Some(closed);
+    }
+
+    async fn wait_retained_stdin_closed(&self) -> String {
+        let closed = self
+            .retained_stdin_closed
+            .borrow_mut()
+            .take()
+            .expect("retained closure watcher");
+        let cause = closed.wait().await;
+        *self.retained_stdin_closed.borrow_mut() = Some(closed);
+        format!("{cause:?}")
+    }
+
+    fn drop_retained_stdin_closed(&self) {
+        self.retained_stdin_closed.borrow_mut().take();
     }
 
     async fn recover_piped_unread_output(&self, chunk_size: u32, cancel_read: bool) -> Vec<u8> {

@@ -2145,6 +2145,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
     <label class="check"><input type="checkbox" id="sb-scope"> durable scope open</label>
     <label class="check"><input type="checkbox" id="sb-snapshotting"> save/load already in progress</label>
     <label class="check"><input type="checkbox" id="sb-inflight"> live host call in flight</label>
+    <label class="check"><input type="checkbox" id="sb-attachment"> tool attachment retained</label>
   </div>
   <div class="result js-only" id="sb-result" aria-live="polite"></div>
   <div class="table-wrap">
@@ -2156,6 +2157,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
       <tr><td>3</td><td><code>OpenDurableScope</code></td><td>Its <code>Start</code>/<code>End</code> pair would straddle the snapshot cut.</td></tr>
       <tr><td>4</td><td><code>Snapshotting</code></td><td>A save/load call is already in progress.</td></tr>
       <tr><td>5</td><td><code>InFlightHostCall</code></td><td>A live call's <code>Start</code> may precede the cut while its terminal lands after it.</td></tr>
+      <tr><td>6</td><td><code>OpenToolAttachment</code></td><td>A registered attachment producer, consumer, guest stdin-closure watcher or pending regeneration still needs the history that the snapshot would skip. Internal observers alone do not block.</td></tr>
     </tbody>
   </table>
   </div>
@@ -2699,13 +2701,13 @@ Fork input:   [A, B] ── cut ── [X, Y]
   retry();
 
   /* ---------- snapshot boundary ---------- */
-  var sb = [['#sb-replaying', 'Replaying', 'Snapshots are taken only in live mode.'], ['#sb-atomic', 'OpenAtomicRegion', 'A later trap could append a <code>Jump</code> that deletes the oplog tip the snapshot points at.'], ['#sb-scope', 'OpenDurableScope', 'The scope\u2019s <code>Start</code>/<code>End</code> pair would straddle the cut.'], ['#sb-snapshotting', 'Snapshotting', 'A save/load is already in progress.'], ['#sb-inflight', 'InFlightHostCall', 'A live call\u2019s <code>Start</code> may precede the cut while its terminal lands after it.']];
+  var sb = [['#sb-replaying', 'Replaying', 'Snapshots are taken only in live mode.'], ['#sb-atomic', 'OpenAtomicRegion', 'A later trap could append a <code>Jump</code> that deletes the oplog tip the snapshot points at.'], ['#sb-scope', 'OpenDurableScope', 'The scope\u2019s <code>Start</code>/<code>End</code> pair would straddle the cut.'], ['#sb-snapshotting', 'Snapshotting', 'A save/load is already in progress.'], ['#sb-inflight', 'InFlightHostCall', 'A live call\u2019s <code>Start</code> may precede the cut while its terminal lands after it.'], ['#sb-attachment', 'OpenToolAttachment', 'A registered attachment endpoint, guest stdin-closure watcher or pending regeneration still needs replay history.']];
   var sbRes = $('#sb-result');
   function snapshot() {
     if (!sbRes) return;
     for (var i = 0; i < sb.length; i++) {
       var el = $(sb[i][0]);
-      if (el && el.checked) return setResult(sbRes, 'bad', 'Blocked: <code>' + sb[i][1] + '</code>', '<p>' + sb[i][2] + ' Reported as the first blocker in precedence order (' + (i + 1) + ' of 5); the snapshot request is rejected and nothing is written.</p>');
+      if (el && el.checked) return setResult(sbRes, 'bad', 'Blocked: <code>' + sb[i][1] + '</code>', '<p>' + sb[i][2] + ' Reported as the first blocker in precedence order (' + (i + 1) + ' of ' + sb.length + '); the snapshot request is rejected and nothing is written.</p>');
     }
     setResult(sbRes, 'ok', 'Safe boundary \u2014 snapshot may be taken', '<p><code>SnapshotBoundaryConditions::blocker</code> returns <code>None</code>. The guest\u2019s <code>save-snapshot</code> export runs, the blob is stored and a <code>Snapshot</code> hint records the index and component revision; later reconstructions may start there.</p>');
   }

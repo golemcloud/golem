@@ -408,6 +408,7 @@ struct AttachmentState {
     terminal_item_delivered: bool,
     producer_active: bool,
     consumer_active: bool,
+    guest_watchers: usize,
     reader_waker: Option<Waker>,
 }
 
@@ -446,6 +447,7 @@ impl ByteAttachment {
                 terminal_item_delivered: false,
                 producer_active: true,
                 consumer_active: true,
+                guest_watchers: 0,
                 reader_waker: None,
             }),
             changed: Notify::new(),
@@ -477,6 +479,7 @@ impl ByteAttachment {
                 terminal_item_delivered: false,
                 producer_active: true,
                 consumer_active: false,
+                guest_watchers: 0,
                 reader_waker: None,
             }),
             changed: Notify::new(),
@@ -1323,6 +1326,7 @@ impl AttachmentProducer {
     pub(crate) fn observer(&self) -> AttachmentObserver {
         AttachmentObserver {
             attachment: self.attachment.clone(),
+            guest_watcher: None,
         }
     }
 }
@@ -1576,9 +1580,24 @@ impl Drop for AttachmentConsumer {
 #[derive(Clone)]
 pub(crate) struct AttachmentObserver {
     attachment: Arc<ByteAttachment>,
+    guest_watcher: Option<Arc<GuestAttachmentWatcher>>,
+}
+
+struct GuestAttachmentWatcher(Arc<ByteAttachment>);
+
+impl Drop for GuestAttachmentWatcher {
+    fn drop(&mut self) {
+        self.0.state.lock().unwrap().guest_watchers -= 1;
+    }
 }
 
 impl AttachmentObserver {
+    pub(crate) fn into_guest_watcher(mut self) -> Self {
+        self.attachment.state.lock().unwrap().guest_watchers += 1;
+        self.guest_watcher = Some(Arc::new(GuestAttachmentWatcher(self.attachment.clone())));
+        self
+    }
+
     pub(crate) fn identity(&self) -> Option<ToolAttachmentId> {
         self.attachment.state.lock().unwrap().identity
     }
@@ -1633,6 +1652,11 @@ impl WeakAttachmentController {
 impl AttachmentController {
     pub(crate) fn downgrade(&self) -> WeakAttachmentController {
         WeakAttachmentController(Arc::downgrade(&self.attachment))
+    }
+
+    pub(crate) fn has_open_endpoints(&self) -> bool {
+        let state = self.attachment.state.lock().unwrap();
+        state.producer_active || state.consumer_active || state.guest_watchers != 0
     }
 
     pub(crate) fn restore_control(
@@ -1792,6 +1816,7 @@ impl AttachmentController {
     pub(crate) fn observer(&self) -> AttachmentObserver {
         AttachmentObserver {
             attachment: self.attachment.clone(),
+            guest_watcher: None,
         }
     }
 
@@ -2128,7 +2153,10 @@ pub(crate) fn attachment_pair(
         AttachmentConsumer {
             attachment: attachment.clone(),
         },
-        AttachmentObserver { attachment },
+        AttachmentObserver {
+            attachment,
+            guest_watcher: None,
+        },
     )
 }
 

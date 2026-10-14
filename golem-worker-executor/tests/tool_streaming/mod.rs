@@ -7781,6 +7781,29 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    retained_tool_output_reconstruction(last_unique_id, deps, provider, caller, false).await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn retained_tool_attachments_block_snapshot_until_released(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    retained_tool_output_reconstruction(last_unique_id, deps, provider, caller, true).await
+}
+
+async fn retained_tool_output_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    snapshots: bool,
+) -> anyhow::Result<()> {
     use golem_common::model::durable_stream::StreamConsumerObservation;
     use golem_common::model::oplog::attachment::ToolAttachmentReadObservation;
 
@@ -7808,7 +7831,15 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
         environment_state_service: Some(environment_state.clone()),
-        configure: Some(Arc::new(|config| config.retry.max_attempts = 0)),
+        configure: Some(Arc::new(move |config| {
+            config.retry.max_attempts = 0;
+            if snapshots {
+                config.oplog.default_snapshotting =
+                    golem_worker_executor::services::golem_config::SnapshotPolicy::EveryNInvocation {
+                        count: 1,
+                    };
+            }
+        })),
         ..Default::default()
     };
     let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
@@ -7935,6 +7966,24 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
                 "only consumed chunks own read records"
             );
             assert_eq!(reads[0].1.as_deref(), Some(b"marker:".as_slice()));
+            if snapshots {
+                executor
+                    .invoke_and_await_agent(
+                        &caller_component,
+                        &agent,
+                        "replay_probe",
+                        data_value!(),
+                    )
+                    .await?;
+                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                assert!(
+                    !entries.iter().any(|entry| {
+                        entry.oplog_index > reads[0].0.attachment.creation_start
+                            && matches!(entry.entry, PublicOplogEntry::Snapshot(_))
+                    }),
+                    "an unread attachment must prevent a snapshot from cutting its constructor"
+                );
+            }
             if crash_before_read {
                 drop(executor);
                 executor = start_with_overrides(deps, &context, overrides.clone()).await?;
@@ -7959,6 +8008,21 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
             );
             if crash_before_read {
                 assert!(executor.instance_load_count(&worker) > 0);
+            }
+            if snapshots {
+                tokio::time::timeout(Duration::from_secs(30), async {
+                    loop {
+                        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                        if entries.iter().any(|entry| {
+                            entry.oplog_index > reads[0].0.attachment.creation_start
+                                && matches!(entry.entry, PublicOplogEntry::Snapshot(_))
+                        }) {
+                            break Ok::<_, anyhow::Error>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await??;
             }
             drop(executor);
             executor = start_with_overrides(deps, &context, overrides.clone()).await?;
@@ -8041,6 +8105,79 @@ async fn tool_output_retained_across_invocations_survives_reconstruction(
             reads.last().unwrap().0.outcome,
             ToolAttachmentReadOutcome::Eof { .. }
         ));
+        executor.delete_worker(&worker).await?;
+    }
+    if snapshots {
+        let agent = agent_id!("ToolStreamingCaller", "retained-stdin-closed");
+        let worker = executor
+            .start_agent(&caller_component.id, agent.clone())
+            .await?;
+        executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "retain_stdin_closed",
+                data_value!(),
+            )
+            .await?;
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let constructor = entries
+            .iter()
+            .find_map(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::host::create-stdin")
+                .then_some(entry.oplog_index)
+            })
+            .expect("stdin constructor");
+        for method in ["replay_probe", "wait_retained_stdin_closed"] {
+            let result: String = executor
+                .invoke_and_await_agent(&caller_component, &agent, method, data_value!())
+                .await?
+                .into_typed()?;
+            if method == "wait_retained_stdin_closed" {
+                assert_eq!(
+                    result,
+                    "ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned)"
+                );
+                executor
+                    .invoke_and_await_agent(
+                        &caller_component,
+                        &agent,
+                        "replay_probe",
+                        data_value!(),
+                    )
+                    .await?;
+            }
+            let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert!(
+                !entries.iter().any(|entry| entry.oplog_index > constructor
+                    && matches!(entry.entry, PublicOplogEntry::Snapshot(_))),
+                "a retained closure watcher must prevent snapshots even after it resolves"
+            );
+            drop(executor);
+            executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        }
+        executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "drop_retained_stdin_closed",
+                data_value!(),
+            )
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if entries.iter().any(|entry| {
+                    entry.oplog_index > constructor
+                        && matches!(entry.entry, PublicOplogEntry::Snapshot(_))
+                }) {
+                    break Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
         executor.delete_worker(&worker).await?;
     }
     assert!(

@@ -287,6 +287,22 @@ pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
 
+Explicit attachment constructors register owner-relative identities in the shared replay state.
+Their producer calls use ordinary durable-call envelopes with lengths, digests and exact outcomes,
+not byte bodies. `AttachmentInputProducer` records consumed payloads through
+`PrepareInputObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
+actual consumption; host pipe reads commit their observation before handing bytes to transport.
+The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
+stdin uses the same producer adapter. Raw and native handles require their own routing; a plain
+`AttachmentConsumer::read_next` or `AttachmentWriter` does not itself journal bytes or operations.
+
+Replay serves historical reads from their payloads and validates regenerated producer arguments
+against metadata. Accepted unread output is restored before acknowledgment delivery and before
+completed-cancelled entity destruction. Crossing a read reconciles its resident ranges; scan-ahead
+alone grants no capacity. Snapshot eligibility uses the same attachment registry: open producers,
+consumers, guest stdin-closure watchers and pending regeneration block a cut that would skip their
+history. Cloned asynchronous watcher waits retain that lifetime; internal observers alone do not.
+
 Before constructing any Store, `RunningWorker::create_instance` normalizes incomplete atomic
 regions against a fixed committed horizon and the effective snapshot/skipped prefix. It preserves
 the earliest unmatched Begin and deletes the complete suffix, moving the boundary backward across

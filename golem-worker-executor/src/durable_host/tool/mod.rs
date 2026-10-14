@@ -6170,7 +6170,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
         let closed = match self.table().push(ToolStdinClosedEntry {
-            observer,
+            observer: observer.into_guest_watcher(),
             next_operation_ordinal: 0,
         }) {
             Ok(closed) => closed,
